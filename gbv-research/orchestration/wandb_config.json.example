@@ -1,0 +1,6 @@
+{
+  "_instructions": "Copy this file to wandb_config.json (same directory) and fill in your details. wandb_config.json is gitignored so your key is never committed.",
+  "api_key": "wandb_v1_PASTE_YOUR_KEY_HERE",
+  "entity":  "your-wandb-username",
+  "project": "specdist-gbv"
+}

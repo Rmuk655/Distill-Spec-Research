@@ -73,3 +73,5 @@ desktop.ini
 *.key
 wandb_api_key*
 secrets.yaml
+# Per-user WandB config (copy from wandb_config.json.example, never commit)
+orchestration/wandb_config.json
