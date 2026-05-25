@@ -396,6 +396,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
             tokenizer.pad_token = tokenizer.eos_token
 
         student_model = teacher_model = None
+        _load_4bit = getattr(args, "load_in_4bit", False)
         for attempt in range(2):
             try:
                 student_model = AutoModelForCausalLM.from_pretrained(
@@ -403,10 +404,28 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                     attn_implementation=_ATTN_IMPL,
                 ).to(device).eval()
                 same = (student_path == teacher_path)
-                teacher_model = student_model if same else AutoModelForCausalLM.from_pretrained(
-                    teacher_path, dtype=dtype, low_cpu_mem_usage=True,
-                    attn_implementation=_ATTN_IMPL,
-                ).to(device).eval()
+                if same:
+                    teacher_model = student_model
+                elif _load_4bit:
+                    # QLoRA mode: frozen teacher in 4-bit NF4 — fits 8B on T4 (15 GB)
+                    try:
+                        from transformers import BitsAndBytesConfig as _BnB
+                    except ImportError:
+                        raise SystemExit("bitsandbytes required for --load_in_4bit. "
+                                         "Run: pip install bitsandbytes")
+                    _bnb = _BnB(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                bnb_4bit_compute_dtype=torch.bfloat16,
+                                bnb_4bit_use_double_quant=True)
+                    teacher_model = AutoModelForCausalLM.from_pretrained(
+                        teacher_path, quantization_config=_bnb, device_map="auto",
+                        attn_implementation=_ATTN_IMPL,
+                    ).eval()
+                    print(f"  [alpha] Teacher loaded in 4-bit NF4")
+                else:
+                    teacher_model = AutoModelForCausalLM.from_pretrained(
+                        teacher_path, dtype=dtype, low_cpu_mem_usage=True,
+                        attn_implementation=_ATTN_IMPL,
+                    ).to(device).eval()
                 break
             except torch.cuda.OutOfMemoryError:
                 if device == "cpu":
@@ -540,7 +559,8 @@ def run_be(student_path: str, teacher_path: str,
 def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                  modes: list, Ks: list, temps: list,
                  L: int, max_new_tokens: int,
-                 _device: str = "cuda") -> dict:
+                 _device: str = "cuda",
+                 load_in_4bit: bool = False) -> dict:
     """
     Run all (mode, K, temp) combos in ONE GBV subprocess — models load once.
 
@@ -575,6 +595,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         "--device",   _device,
         "--dtype",    "bf16",      # explicit bf16 — avoids silent fp32 fallback on CUDA GPUs
     ]
+    if load_in_4bit:
+        cmd.append("--load_in_4bit")   # GBV/main.py loads teacher in 4-bit NF4 on Colab T4
     # PYTHONUNBUFFERED=1 forces line-by-line flushing inside the subprocess so
     # be_progress.log updates in real time rather than in large chunks.
     _sub_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
@@ -607,7 +629,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
             print(f"    [OOM] GBV batch subprocess OOM — retrying on CPU (slower)")
             torch.cuda.empty_cache()
             return run_be_batch(student_path, teacher_path, data_path,
-                                modes, Ks, temps, L, max_new_tokens, _device="cpu")
+                                modes, Ks, temps, L, max_new_tokens, _device="cpu",
+                                load_in_4bit=load_in_4bit)
 
         # Parse tagged output: "Block efficiency (mode=gbv, K=3, T=1.0): 2.345678"
         results: dict = {}
@@ -967,6 +990,12 @@ def main():
     p.add_argument("--dry_run", action="store_true",
                    help="Print experiment plan without running anything")
     # ── W&B ──────────────────────────────────────────────────────────────────
+    p.add_argument("--load_in_4bit", action="store_true",
+                   help="Load the teacher (target) model in 4-bit NF4 using bitsandbytes. "
+                        "Required for --config colab (free T4, 15 GB VRAM): Qwen3-8B in "
+                        "bfloat16 is ~16 GB and OOMs; 4-bit reduces it to ~5 GB. "
+                        "Requires: pip install bitsandbytes. "
+                        "The student (draft) model is always loaded in bfloat16.")
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable W&B logging for this eval run.")
     p.add_argument("--wandb_project", default="distillspec",
@@ -1220,6 +1249,7 @@ def main():
                 args.student, args.teacher, data_path,
                 modes_list, Ks_list, Ts_list,
                 args.L, args.max_tokens,
+                load_in_4bit=getattr(args, "load_in_4bit", False),
             )
             for (m, k, t), be in batch_res.items():
                 _be_cache[(ds, m, k, t)] = be

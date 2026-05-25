@@ -50,7 +50,18 @@ def load_models(
     device: str = "cuda",
     dtype: str = "bf16",
     compile_draft: bool = False,
+    load_in_4bit: bool = False,
 ):
+    """Load target (p_model) and draft (q_model) for speculative decoding.
+
+    load_in_4bit=True: load the TARGET model (p_model) in 4-bit NF4 using
+    bitsandbytes.  Required for running Qwen3-8B on a free Colab T4 (15 GB):
+      - 8B in bfloat16  = ~16 GB → OOM
+      - 8B in 4-bit NF4 =  ~5 GB → fits with draft + activations
+    The DRAFT (q_model) is always loaded in the requested dtype — it is small
+    enough that quantisation is never necessary.
+    Requires: pip install bitsandbytes
+    """
     dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
     tok = AutoTokenizer.from_pretrained(p_name, use_fast=False)
     if tok.pad_token_id is None:
@@ -68,14 +79,39 @@ def load_models(
         # Fallback: use bf16 on CUDA, fp32 on CPU — avoids silent float32 OOM on small GPUs
         torch_dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
-    p_model = AutoModelForCausalLM.from_pretrained(
-        p_name,
-        trust_remote_code=True,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-        device_map=None,
-        use_safetensors=True
-    ).to(dev)
+    if load_in_4bit:
+        # QLoRA-style: load the large target model in 4-bit NF4 so it fits on a T4.
+        # device_map="auto" is required for quantised models (cannot call .to(dev)).
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError:
+            raise SystemExit(
+                "bitsandbytes is required for --load_in_4bit.\n"
+                "Install with:  pip install bitsandbytes"
+            )
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        p_model = AutoModelForCausalLM.from_pretrained(
+            p_name,
+            trust_remote_code=True,
+            quantization_config=bnb_cfg,
+            device_map="auto",
+            use_safetensors=True,
+        )
+        print(f"[INFO] Target model loaded in 4-bit NF4 (QLoRA mode).")
+    else:
+        p_model = AutoModelForCausalLM.from_pretrained(
+            p_name,
+            trust_remote_code=True,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+            device_map=None,
+            use_safetensors=True
+        ).to(dev)
     p_model.eval()
 
     q_model = AutoModelForCausalLM.from_pretrained(

@@ -28,15 +28,19 @@
       "note": "elapsed=117s"
     },
     "train_rev_kl_gsm8k": {
-      "status": "running",
-      "ts": "2026-05-25T19:29:23.329371Z",
-      "note": ""
+      "status": "done",
+      "ts": "2026-05-25T19:42:55.964114Z",
+      "note": "elapsed=813s"
     },
     "merge_rev_kl_gsm8k": {
-      "status": "pending"
+      "status": "done",
+      "ts": "2026-05-25T19:44:57.864103Z",
+      "note": "elapsed=122s"
     },
     "train_jsd_gsm8k": {
-      "status": "pending"
+      "status": "running",
+      "ts": "2026-05-25T19:44:57.872605Z",
+      "note": ""
     },
     "merge_jsd_gsm8k": {
       "status": "pending"

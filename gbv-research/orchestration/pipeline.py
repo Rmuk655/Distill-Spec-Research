@@ -207,11 +207,17 @@ CONFIGS = {
         "draft":  "Qwen/Qwen3-0.6B",
         "target": "Qwen/Qwen3-8B",
         "desc":   "Server/A100: Qwen3-0.6B draft -> Qwen3-8B target",
+        # A100/3090 (24 GB+): 8B in bfloat16 fits fine — no quantisation needed.
     },
     "colab": {
         "draft":  "Qwen/Qwen3-0.6B",
         "target": "Qwen/Qwen3-8B",
-        "desc":   "Google Colab A100: Qwen3-0.6B draft -> Qwen3-8B target",
+        "desc":   "Google Colab free T4 (15 GB): 8B teacher in 4-bit NF4 + 0.6B draft in bfloat16",
+        # Free Colab T4 has 15 GB VRAM.  Qwen3-8B in bfloat16 = ~16 GB → OOM.
+        # Loading the frozen teacher in 4-bit NF4 (bitsandbytes QLoRA) reduces it
+        # to ~5 GB; total with draft + activations ≈ 8–9 GB → comfortable T4 fit.
+        # The draft is trained in bfloat16 as normal — only the frozen teacher is quantised.
+        "load_in_4bit": True,
     },
 }
 
@@ -288,7 +294,8 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
     return cmd
 
 
-def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
+def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
+                load_in_4bit=False):
     """Build the STEPS list for a given draft/target model pair.
 
     Pipeline structure (same for both smoke and full — only numbers differ):
@@ -328,13 +335,17 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
     _temps         = "0.6" if smoke else "0.6,1.0"
     # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
     _modes = "alpha,bv,gbv,traversal,specinfer,naive"
+    # 4-bit flag appended to every training/eval command when load_in_4bit=True.
+    # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
+    _4bit = ["--load_in_4bit"] if load_in_4bit else []
 
     def _ec(student_path, label, datasets="gsm8k", task_score=False):
         """Shorthand: eval cmd with smoke-aware parameters."""
-        return _eval_cmd(student_path, label, target,
-                         datasets=datasets, modes=_modes, Ks=_Ks, temps=_temps,
-                         n=_n, max_tokens=_max_tok,
-                         task_score=task_score, experiment_tag=experiment_tag)
+        cmd = _eval_cmd(student_path, label, target,
+                        datasets=datasets, modes=_modes, Ks=_Ks, temps=_temps,
+                        n=_n, max_tokens=_max_tok,
+                        task_score=task_score, experiment_tag=experiment_tag)
+        return cmd + _4bit  # append --load_in_4bit for colab config
 
     return [
         # -------------------------------------------------------------------
@@ -373,7 +384,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("kl-gsm8k"),
-            ],
+            ] + _4bit,
             "done_check": os.path.join(_ckpt("kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -398,7 +409,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("ebe-gsm8k"),
-            ],
+            ] + _4bit,
             "done_check": os.path.join(_ckpt("ebe-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -422,7 +433,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("rev_kl-gsm8k"),
-            ],
+            ] + _4bit,
             "done_check": os.path.join(_ckpt("rev_kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -446,7 +457,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("jsd-gsm8k"),
-            ],
+            ] + _4bit,
             "done_check": os.path.join(_ckpt("jsd-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -470,7 +481,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("l1-gsm8k"),
-            ],
+            ] + _4bit,
             "done_check": os.path.join(_ckpt("l1-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -497,7 +508,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
                 "--kl_method", "forward_kl",
                 "--lr", "3e-4",
                 "--max_new_tokens", "128",
-            ],
+            ] + _4bit,
             "done_check": os.path.join(_ckpt("online-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -1170,9 +1181,11 @@ def main():
 
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
+    _load_4bit = cfg.get("load_in_4bit", False)
     if args.status or args.dry_run:
         STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
-                            smoke=args.smoke, eagle=args.eagle)
+                            smoke=args.smoke, eagle=args.eagle,
+                            load_in_4bit=_load_4bit)
         _print_header(cfg, draft, target, args)
         state = load_state()
         for step in STEPS:                          # sync done_check files
@@ -1197,7 +1210,8 @@ def main():
     _acquire_lock()
 
     STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
-                        smoke=args.smoke, eagle=args.eagle)
+                        smoke=args.smoke, eagle=args.eagle,
+                        load_in_4bit=_load_4bit)
 
     _print_header(cfg, draft, target, args)
 

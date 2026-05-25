@@ -458,15 +458,36 @@ def load_prompts(path: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def load_models(args: argparse.Namespace, device: torch.device):
-    """Load target (frozen) and draft (LoRA-wrapped, trainable) models."""
+    """Load target (frozen) and draft (LoRA-wrapped, trainable) models.
+
+    When args.load_in_4bit is True the FROZEN TARGET is loaded in 4-bit NF4
+    (bitsandbytes QLoRA).  Use on Colab free T4 (15 GB) with Qwen3-8B:
+      bfloat16 ~16 GB → OOM;  4-bit NF4 ~5 GB → comfortable fit.
+    The draft is always loaded in full dtype (bfloat16) — only the frozen
+    teacher is quantised so training quality is unaffected.
+    """
     dtype = getattr(torch, args.dtype)
 
     log.info("Loading target model: %s", args.target)
-    target_model = AutoModelForCausalLM.from_pretrained(
-        args.target,
-        torch_dtype=dtype,
-        device_map=device,
-    )
+    if getattr(args, "load_in_4bit", False):
+        try:
+            from transformers import BitsAndBytesConfig as _BnB
+        except ImportError:
+            raise SystemExit("bitsandbytes required for --load_in_4bit. "
+                             "Run: pip install bitsandbytes")
+        _bnb = _BnB(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_use_double_quant=True)
+        target_model = AutoModelForCausalLM.from_pretrained(
+            args.target, quantization_config=_bnb, device_map="auto",
+        )
+        log.info("Target loaded in 4-bit NF4 (QLoRA mode)")
+    else:
+        target_model = AutoModelForCausalLM.from_pretrained(
+            args.target,
+            torch_dtype=dtype,
+            device_map=device,
+        )
     target_model.eval()
     for p in target_model.parameters():
         p.requires_grad_(False)
@@ -593,6 +614,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None,
                         help="cuda / cpu (auto-detected if not set)")
+    parser.add_argument("--load_in_4bit", action="store_true",
+                        help="Load the target model in 4-bit NF4 (bitsandbytes). "
+                             "Required for --config colab with Qwen3-8B on a free T4 (15 GB). "
+                             "Requires: pip install bitsandbytes.")
     args = parser.parse_args()
 
     # --- Reproducibility ---

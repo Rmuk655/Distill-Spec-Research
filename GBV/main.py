@@ -239,6 +239,12 @@ def parse_args():
                          "draft model to cut Python→CUDA dispatch overhead.  Draft-only: "
                          "target uses a custom tree-attention mask incompatible with compile. "
                          "First 1-2 prompts are slower (warm-up); subsequent ones are faster.")
+    ap.add_argument("--load_in_4bit", action="store_true",
+                    help="Load the TARGET (p_model) in 4-bit NF4 via bitsandbytes. "
+                         "Use on Colab free T4 (15 GB VRAM) with Qwen3-8B: "
+                         "bfloat16 is ~16 GB (OOM), 4-bit NF4 is ~5 GB (fits). "
+                         "Requires: pip install bitsandbytes. "
+                         "The draft (q_model) is always loaded in the requested --dtype.")
     args = ap.parse_args()
     return args
 
@@ -258,6 +264,7 @@ if __name__ == "__main__":
     tok, p_model, q_model = load_models(
         args.p_model, args.q_model, device=args.device, dtype=args.dtype,
         compile_draft=args.compile,
+        load_in_4bit=getattr(args, "load_in_4bit", False),
     )
 
     # Load prompts.
