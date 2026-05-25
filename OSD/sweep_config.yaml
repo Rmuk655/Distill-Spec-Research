@@ -1,0 +1,84 @@
+# DistillSpec — Weights & Biases Hyperparameter Sweep Configuration
+#
+# Runs a Bayesian sweep over learning rate, LoRA rank, and loss type.
+# Each trial trains a draft model for --steps steps and W&B minimises val_loss.
+#
+# SETUP
+#   pip install wandb
+#   wandb login
+#
+# LAUNCH (from the OSD/ directory)
+#   # 1. Create the sweep — prints a sweep ID like "user/distillspec/abc123xy"
+#   wandb sweep sweep_config.yaml
+#
+#   # 2. Start one or more agents (each agent runs one trial at a time)
+#   wandb agent <sweep_id>
+#
+#   # To run N parallel trials on the same machine (N processes share the GPU
+#   # — only safe if each trial fits independently in VRAM):
+#   for i in $(seq 1 4); do wandb agent <sweep_id> & done
+#
+#   # To distribute across multiple machines / Colab notebooks:
+#   # Copy-paste the same "wandb agent <sweep_id>" command on each node.
+#
+# VIEW RESULTS
+#   Open https://wandb.ai/<entity>/distillspec/sweeps/<sweep_id>
+#   The "Parallel Coordinates" plot shows which lr/lora_r/loss combinations
+#   achieve the lowest val_loss.
+#
+# COST ESTIMATE (laptop, Qwen2.5-0.5B draft + Qwen3-0.6B target)
+#   ~4 min / trial × default 20 trials = ~80 min total
+#   Server (A100, 8B target, --steps 500): ~25 min / trial
+
+program: train_qwen3.py
+
+method: bayes          # Bayesian optimisation — smarter than random for <30 trials
+metric:
+  name: val/loss       # minimise validation loss
+  goal: minimize
+
+early_terminate:        # stop clearly bad trials early (saves ~30% wall-clock time)
+  type: hyperband
+  min_iter: 5          # must have at least 5 val checks before pruning
+
+parameters:
+  # ── Learning rate ──────────────────────────────────────────────────────────
+  # Log-uniform over 3 orders of magnitude.
+  # Typical sweet spot for LoRA KD: 5e-5 to 5e-4.
+  lr:
+    distribution: log_uniform_values
+    min: 1.0e-5
+    max: 1.0e-3
+
+  # ── LoRA rank ──────────────────────────────────────────────────────────────
+  # Larger rank = more capacity but more VRAM and slower steps.
+  # r=8 is the default for laptop; r=32 for server runs.
+  lora_r:
+    values: [4, 8, 16, 32]
+
+  # ── Loss function ──────────────────────────────────────────────────────────
+  # forward_kl  : standard DistillSpec loss (recommended baseline)
+  # jsd         : Jensen-Shannon divergence (often slightly lower val loss)
+  # ebe         : Expected Block Efficiency surrogate (novel objective)
+  loss:
+    values: ["forward_kl", "jsd", "ebe"]
+
+  # ── Fixed (not swept, but listed here so each trial's config is complete) ──
+  # These are passed to train_qwen3.py as-is.
+  steps:
+    value: 200          # keep short for sweep trials; use 1000 for the best config
+  dataset:
+    value: "data/gsm8k_train.jsonl"
+  val_every:
+    value: 20           # frequent val checks give W&B more signal to prune early
+  log_every:
+    value: 10
+  health_every:
+    value: 50
+  ppl_check_every:
+    value: 100
+
+# ── Sweep-level W&B settings ────────────────────────────────────────────────
+# Override these at launch time if needed:
+#   wandb sweep sweep_config.yaml --project my_project --entity my_team
+project: distillspec

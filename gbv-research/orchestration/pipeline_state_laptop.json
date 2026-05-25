@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "config": "laptop",
+  "steps": {
+    "merge_ebe_lr1e-5": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.150043Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_lr3e-5": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.153041Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_lr1e-4": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.155040Z",
+      "note": "auto-detected from done_check"
+    },
+    "eval_baseline_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:24:44.739336Z",
+      "note": "elapsed=1123s"
+    },
+    "eval_kl200_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T07:09:40.920768Z",
+      "note": "elapsed=2696s"
+    },
+    "eval_ebe200_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T07:34:44.929028Z",
+      "note": "elapsed=1504s"
+    },
+    "eval_ebe_lr1e5_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T07:55:17.272256Z",
+      "note": "elapsed=1232s"
+    },
+    "eval_ebe_lr3e5_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T08:13:37.158212Z",
+      "note": "elapsed=1100s"
+    },
+    "eval_ebe_lr1e4_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T08:48:15.019596Z",
+      "note": "elapsed=2078s"
+    },
+    "train_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.158054Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.160056Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.162055Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.164112Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.166061Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.168065Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.171570Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:06:02.173631Z",
+      "note": "auto-detected from done_check"
+    },
+    "online_adapt_gsm8k": {
+      "status": "running",
+      "ts": "2026-05-25T05:42:25.750591Z",
+      "note": ""
+    },
+    "merge_online_gsm8k": {
+      "status": "pending"
+    },
+    "eval_kl1000_gsm8k": {
+      "status": "pending"
+    },
+    "eval_ebe1000_gsm8k": {
+      "status": "pending"
+    },
+    "eval_rev_kl1000_gsm8k": {
+      "status": "pending"
+    },
+    "eval_jsd1000_gsm8k": {
+      "status": "pending"
+    },
+    "eval_online1000_gsm8k": {
+      "status": "pending"
+    },
+    "eval_baseline_all": {
+      "status": "pending"
+    },
+    "eval_kl1000_all": {
+      "status": "pending"
+    },
+    "eval_ebe1000_all": {
+      "status": "pending"
+    },
+    "eval_rev_kl1000_all": {
+      "status": "pending"
+    },
+    "eval_jsd1000_all": {
+      "status": "pending"
+    },
+    "eval_online_all": {
+      "status": "pending"
+    }
+  }
+}

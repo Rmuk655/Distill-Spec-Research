@@ -1,0 +1,30 @@
+{"prompt": "Find the sum of all positive integers n such that n^2 - 19n + 99 is a perfect square."}
+{"prompt": "Let a, b, c be positive real numbers such that a + b + c = 1. Prove that a^2/(b+c) + b^2/(a+c) + c^2/(a+b) >= 1/2."}
+{"prompt": "How many positive integers less than 1000 are divisible by 2, 3, or 5?"}
+{"prompt": "Find the number of ways to write 10 as an ordered sum of positive integers."}
+{"prompt": "What is the probability that two randomly chosen integers from 1 to 100 have no common factor greater than 1?"}
+{"prompt": "Solve: |2x - 3| + |x + 1| = 6"}
+{"prompt": "Find all complex numbers z such that z^4 = -4."}
+{"prompt": "A regular hexagon has side length 2. What is its area?"}
+{"prompt": "If log_2(x) + log_4(x) + log_8(x) = 11, find x."}
+{"prompt": "Find the area of the region bounded by y = x^2 and y = x + 2."}
+{"prompt": "How many ways can 8 people be seated around a circular table if two particular people must not sit adjacent?"}
+{"prompt": "Compute the sum of the infinite series 1 + 2/3 + 3/9 + 4/27 + ..."}
+{"prompt": "If the roots of x^3 - 6x^2 + 11x - 6 = 0 are a, b, c, find a^2 + b^2 + c^2."}
+{"prompt": "A fair die is rolled 4 times. What is the probability that the product of the results is even?"}
+{"prompt": "Find the largest prime factor of 2^15 - 1."}
+{"prompt": "A triangle has sides 13, 14, 15. Find its area."}
+{"prompt": "Evaluate: integral from 0 to pi of x*sin(x) dx"}
+{"prompt": "Find the number of integer solutions to |x| + |y| + |z| = 10."}
+{"prompt": "What is the smallest n such that n! is divisible by 10^6?"}
+{"prompt": "Find all real solutions of sqrt(x + sqrt(x + 11)) + sqrt(x - sqrt(x + 11)) = 4."}
+{"prompt": "If z = 3 + 4i, compute |z^3|."}
+{"prompt": "How many 4-digit palindromes are divisible by 9?"}
+{"prompt": "Find the distance from the point (1, 2, 3) to the plane 2x - y + 2z = 5."}
+{"prompt": "Compute the determinant of the 3x3 matrix [[1,2,3],[4,5,6],[7,8,9]]."}
+{"prompt": "If f(x) = x^2 + 1 and g(x) = sqrt(x), find all x where f(g(x)) = g(f(x))."}
+{"prompt": "A circle with radius 5 is centered at (0,0). How many lattice points are inside or on the circle?"}
+{"prompt": "Find the remainder when 7^100 is divided by 50."}
+{"prompt": "Solve the differential equation dy/dx = y*cos(x), y(0) = 1."}
+{"prompt": "Find all values of k for which the system x + 2y = 3, 2x + ky = 6 has no solution."}
+{"prompt": "What is the coefficient of x^5 in the expansion of (1 + x + x^2)^10?"}

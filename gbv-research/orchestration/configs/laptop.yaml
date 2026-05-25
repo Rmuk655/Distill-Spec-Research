@@ -1,0 +1,50 @@
+# Laptop configuration — Mukund's machine, RTX 500 Ada, 6 GB VRAM
+# Qwen2.5-0.5B draft (494 M)  →  Qwen3-0.6B target (600 M)
+# Both fit in ~3 GB VRAM.  No 4-bit quantisation needed.
+
+hardware:
+  device: cuda
+  load_in_4bit: false
+  compile: false               # torch.compile has limited support on Windows
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen2.5-0.5B
+  target: Qwen/Qwen3-0.6B
+
+training:
+  steps: 1000
+  lr: 3.0e-5
+  lora_r: 8
+  lora_alpha: 16
+  max_new_tokens: 80
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: capsules/datasets/raw/gsm8k_train.jsonl
+  val:   capsules/datasets/raw/gsm8k_30.jsonl    # fixed 30-prompt eval set
+
+checkpointing:
+  save_every: 100
+  milestone_every: 200
+  max_checkpoints: 5
+  output_root: db/checkpoints
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: laptop-gsm8k
+
+health:
+  val_every: 50
+  ppl_check_every: 200
+  ppl_threshold: 1.25
+  nan_action: stop
+  early_stop_patience: 3
+
+evaluation:
+  modes: [alpha, specinfer, traversal, gbv]
+  K_values: [1, 3, 5, 8]
+  L: 8
+  n_prompts: 30

@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "steps": {
+    "eval_baseline_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T05:43:22.405905Z",
+      "note": "elapsed=94s"
+    },
+    "eval_kl200_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T05:44:44.520572Z",
+      "note": "elapsed=82s"
+    },
+    "eval_ebe200_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T05:45:59.934411Z",
+      "note": "elapsed=75s"
+    },
+    "eval_ebe_lr1e5_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T05:49:28.373536Z",
+      "note": "elapsed=123s"
+    },
+    "eval_ebe_lr3e5_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T05:52:01.306628Z",
+      "note": "elapsed=153s"
+    },
+    "eval_ebe_lr1e4_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:03:45.345652Z",
+      "note": "elapsed=148s"
+    },
+    "merge_ebe_lr1e-5": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.148787Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_lr3e-5": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.153787Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_lr1e-4": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.158791Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.163791Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.168791Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.174300Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.179909Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.182418Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.184922Z",
+      "note": "auto-detected from done_check"
+    },
+    "train_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.188926Z",
+      "note": "auto-detected from done_check"
+    },
+    "merge_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-05-24T06:00:17.193463Z",
+      "note": "auto-detected from done_check"
+    }
+  }
+}

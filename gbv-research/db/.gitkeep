@@ -1,0 +1,9 @@
+# This file keeps the db/ directory in git even though its contents are gitignored.
+# db/ holds all generated run artifacts:
+#   checkpoints/   LoRA adapters and merged models (large — gitignored)
+#   wandb/         W&B local run logs (gitignored)
+#   results.db     SQLite experiment database (gitignored — regenerate with db/analyze_results.py)
+#   logs/          pipeline and training logs (gitignored)
+#
+# Re-generate results.db from W&B or pipeline state:
+#   python db/analyze_results.py --rebuild
