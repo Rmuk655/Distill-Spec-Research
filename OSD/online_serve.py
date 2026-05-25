@@ -64,6 +64,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import random
 import sys
 from collections import deque
@@ -90,6 +91,11 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+_OSD_DIR = os.path.dirname(os.path.abspath(__file__))
+_SUMMER_DIR = os.path.dirname(_OSD_DIR)
+_GBV_DIR = os.path.join(_SUMMER_DIR, "gbv-research")
+_WANDB_DIR = os.path.join(_GBV_DIR, "db", "wandb")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -603,10 +609,12 @@ def main():
     # --- wandb ---
     use_wandb = WANDB_AVAILABLE and args.wandb_project
     if use_wandb:
+        os.makedirs(_WANDB_DIR, exist_ok=True)
         _wandb.init(
             project=args.wandb_project,
             config=vars(args),
             name=f"osd-K{args.K}-r{args.lora_r}-{args.kl_method}",
+            dir=_WANDB_DIR,
         )
     else:
         if not WANDB_AVAILABLE:

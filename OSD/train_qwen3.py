@@ -455,7 +455,7 @@ def ebe_loss(student_logits, teacher_logits, token_ids, kl_weight=0.1,
     # This matches inference where each target call sees exactly block_len draft tokens.
     T = alpha.shape[0]
     n_blocks = max(1, T // block_len)
-    ebe = torch.zeros(1, device=alpha.device, dtype=alpha.dtype)
+    ebe = torch.zeros((), device=alpha.device, dtype=alpha.dtype)  # 0-dim scalar
     for b in range(n_blocks):
         blk = alpha[b * block_len : (b + 1) * block_len]   # [≤ block_len]
         ebe = ebe - (1.0 + torch.cumprod(blk, dim=0).sum())

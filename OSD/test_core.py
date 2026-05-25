@@ -96,14 +96,20 @@ def test_ebe_perfect_student_has_low_loss():
     print("  PASS test_ebe_perfect_student_has_low_loss")
 
 
-def test_ebe_loss_positive():
-    """EBE loss is always non-negative (weighted NLL)."""
+def test_ebe_loss_finite_and_scalar():
+    """
+    EBE loss = -(block efficiency) + λ·KL.
+    It is intentionally negative when training is going well (minimising = maximising
+    block efficiency), so we only assert finite + scalar, not non-negativity.
+    """
     from train_qwen3 import ebe_loss
     for seed in range(5):
         s, t, ids = _make_logits(seed=seed)
-        loss, _ = ebe_loss(s, t, ids)
-        assert loss.item() >= 0, f"EBE loss negative ({loss.item():.4f}) seed={seed}"
-    print("  PASS test_ebe_loss_positive")
+        loss, aw = ebe_loss(s, t, ids)
+        assert loss.shape == torch.Size([]), f"loss must be 0-dim scalar, got shape {loss.shape}"
+        assert torch.isfinite(loss), f"EBE loss is not finite ({loss.item():.4f}) seed={seed}"
+        assert 0.0 <= aw <= 1.0, f"accept_weight mean out of [0,1]: {aw}"
+    print("  PASS test_ebe_loss_finite_and_scalar")
 
 
 # ---------------------------------------------------------------------------
@@ -232,21 +238,18 @@ def test_gbv_k1_equals_bv_distribution():
 # 3. Inference util sanity (no GPU required — uses random tensors)
 # ---------------------------------------------------------------------------
 
-def test_ebe_token_shape_mismatch_raises():
-    """
-    s_log and t_log must have matching shapes. If token_ids have wrong length,
-    the gather will either raise or produce nonsense. We check that normal usage
-    with matching shapes doesn't raise.
-    """
+def test_ebe_output_types():
+    """Normal usage returns (scalar_tensor, float) — check types and shapes."""
     from train_qwen3 import ebe_loss
     V, T = 32, 10
     s = torch.randn(T, V)
     t = torch.randn(T, V)
     ids = torch.randint(0, V, (T,))
     loss, aw = ebe_loss(s, t, ids)
-    assert loss.shape == torch.Size([]), "loss should be a scalar"
-    assert isinstance(aw, float), "accept_weight mean should be float"
-    print("  PASS test_ebe_token_shape_mismatch_raises")
+    assert loss.shape == torch.Size([]), f"loss must be 0-dim scalar, got {loss.shape}"
+    assert isinstance(aw, float), f"accept_weight mean should be float, got {type(aw)}"
+    assert torch.isfinite(loss), f"loss should be finite, got {loss.item()}"
+    print("  PASS test_ebe_output_types")
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +260,8 @@ _ALL_TESTS = [
     test_ebe_accept_weight_range,
     test_ebe_gradient_only_through_log_p,
     test_ebe_perfect_student_has_low_loss,
-    test_ebe_loss_positive,
-    test_ebe_token_shape_mismatch_raises,
+    test_ebe_loss_finite_and_scalar,
+    test_ebe_output_types,
     test_verifier_bv,
     test_verifier_gbv,
     test_verifier_traversal,
