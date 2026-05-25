@@ -14,8 +14,20 @@ pip install -r requirements.txt
 ```
 
 GPU requirements:
-- **Laptop config** (Qwen2.5-0.5B → Qwen3-0.6B): 4 GB VRAM minimum
-- **Server config** (Qwen3-0.6B → Qwen3-8B): 24 GB VRAM (A10G / A100 / 3090)
+
+| Config | Models | VRAM needed | Notes |
+|--------|--------|-------------|-------|
+| `laptop` | Qwen2.5-0.5B → Qwen3-0.6B | 4 GB | RTX 500 / any modern laptop GPU |
+| `colab`  | Qwen3-0.6B → Qwen3-8B (4-bit) | 9 GB | Free Colab T4 (15 GB) — teacher in 4-bit NF4 |
+| `server` | Qwen3-0.6B → Qwen3-8B (bf16) | 24 GB | A10G / A100 / 3090 — full precision |
+
+**Colab free T4 note**: Qwen3-8B in bfloat16 = ~16 GB → OOM on T4 (15 GB).
+The `colab` config automatically loads the frozen teacher in **4-bit NF4** via
+`bitsandbytes` (~5 GB), bringing total VRAM to ~9 GB. Install the extra dep:
+
+```bash
+pip install bitsandbytes
+```
 
 ---
 
@@ -165,18 +177,84 @@ Both `pipeline_state_laptop.json` and `pipeline_state_laptop_smoke.json` are res
 
 ## 8. Colab / Kaggle setup
 
-On ephemeral compute (no persistent disk):
+### 8a. Free Colab T4 (recommended starting point)
 
-1. Clone the repo at session start
-2. `pip install -r requirements.txt`
-3. Set `WANDB_API_KEY` as a Colab secret or `os.environ` line (no file needed)
-4. Datasets are in the repo (`core/datasets/raw/*.jsonl`) — no re-download needed for eval sets
-5. For training: download `gsm8k_train.jsonl` via `fetch_datasets.py`
+The `colab` config uses `--load_in_4bit` on every step automatically —
+no extra flags needed.
 
-Checkpoints and WandB logs are lost when the session dies — that's expected.
-The pipeline state file (`pipeline_state_server.json`) is also lost.
-Always run `--yes` on Colab to skip interactive prompts.
+```python
+# Cell 1 — install + clone
+!pip install bitsandbytes          # required for 4-bit teacher loading
+!pip install -r requirements.txt   # rest of deps
+
+# Cell 2 — W&B auth (use Colab Secrets or paste key directly)
+import os
+os.environ["WANDB_API_KEY"] = "wandb_v1_..."   # your key
+os.environ["WANDB_ENTITY"]  = "your-username"
+os.environ["WANDB_PROJECT"] = "specdist-gbv"
+
+# Cell 3 — fetch training data (eval sets already in repo)
+!python OSD/fetch_datasets.py --datasets gsm8k
+
+# Cell 4 — run (--yes skips interactive prompts)
+!python orchestration/pipeline.py --config colab --yes
+```
+
+**VRAM breakdown on T4 (15 GB):**
+- Qwen3-8B teacher in 4-bit NF4: ~5 GB
+- Qwen3-0.6B draft in bfloat16: ~1.2 GB
+- LoRA + optimizer + activations: ~2.5 GB
+- **Total: ~8–9 GB** → 6 GB headroom
+
+**Session survival tips:**
+- Mount Google Drive and point `--output` there:
+  ```python
+  # Add to your pipeline.py invocation or set manually:
+  # db/checkpoints/ → /content/drive/MyDrive/specdist/checkpoints/
+  from google.colab import drive
+  drive.mount('/content/drive')
+  ```
+  The pipeline writes checkpoints to `db/checkpoints/` by default. Symlink
+  or set `_CKPT_ROOT` in pipeline.py to a Drive path to survive session death.
+- Run `--smoke` first (~45 min) to verify no crashes before the overnight run.
+- Colab disconnects after ~90 min idle — keep the tab active or use Colab Pro.
+
+### 8b. Colab Pro / Kaggle / any A100 (24 GB+)
+
+Use `--config server` — loads the 8B teacher in full bfloat16, no quantisation:
 
 ```bash
-WANDB_API_KEY="wandb_v1_..." python orchestration/pipeline.py --config server --yes
+# Kaggle: attach your repo as a dataset, then in a notebook cell:
+!WANDB_API_KEY="wandb_v1_..." python orchestration/pipeline.py --config server --yes
 ```
+
+### 8c. Manual standalone run (no pipeline orchestrator)
+
+If you want to run a single training step directly:
+
+```bash
+# Colab free T4 — must pass --load_in_4bit manually:
+python OSD/train_qwen3.py \
+    --draft  Qwen/Qwen3-0.6B \
+    --target Qwen/Qwen3-8B \
+    --loss   forward_kl \
+    --load_in_4bit \
+    --steps  1000 \
+    --output /content/drive/MyDrive/specdist/checkpoints/kl-8b
+
+# Server / A100 — no 4-bit flag needed:
+python OSD/train_qwen3.py \
+    --draft  Qwen/Qwen3-0.6B \
+    --target Qwen/Qwen3-8B \
+    --loss   forward_kl \
+    --steps  1000 \
+    --output ./db/checkpoints/kl-8b
+```
+
+**General notes for all ephemeral sessions:**
+- Checkpoints and W&B logs are lost when the session dies — expected.
+- The pipeline state file (`pipeline_state_colab.json`) is also lost.
+  Re-running `pipeline.py --yes` auto-skips steps whose `done_check` file
+  exists on disk (i.e. in Drive), so progress is preserved if checkpoints
+  are on Drive.
+- Always pass `--yes` on Colab/Kaggle to skip interactive prompts.
