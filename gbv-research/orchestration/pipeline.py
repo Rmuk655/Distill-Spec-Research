@@ -43,6 +43,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "pipeline_state_laptop.json")  # overridden in main()
 
 # ---------------------------------------------------------------------------
+# Per-user WandB config (gitignored, never committed)
+#
+# Each researcher creates orchestration/wandb_config.json on their own machine:
+#   {
+#     "api_key": "wandb_v1_...",        # from wandb.ai/settings → API Keys
+#     "entity":  "my-wandb-username",   # or team name
+#     "project": "specdist-gbv"         # optional, defaults to "distillspec"
+#   }
+#
+# On startup the pipeline sets WANDB_API_KEY / WANDB_ENTITY / WANDB_PROJECT
+# env vars, which every subprocess (train + eval) inherits automatically.
+# If the file is absent the pipeline falls back to whatever `wandb login`
+# stored in ~/.netrc — so CI / Colab runs work without any file.
+# ---------------------------------------------------------------------------
+
+def _load_wandb_config():
+    """Load wandb_config.json if present and apply as environment variables."""
+    cfg_path = os.path.join(HERE, "wandb_config.json")
+    if not os.path.exists(cfg_path):
+        return  # fall back to cached wandb login (~/.netrc)
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            wc = json.load(f)
+        if wc.get("api_key"):
+            os.environ["WANDB_API_KEY"] = wc["api_key"]
+        if wc.get("entity"):
+            os.environ["WANDB_ENTITY"] = wc["entity"]
+        if wc.get("project"):
+            os.environ["WANDB_PROJECT"] = wc["project"]
+        entity = wc.get("entity", "(from login)")
+        project = wc.get("project", "distillspec")
+        print(f"  [wandb] Loaded config: entity={entity}  project={project}")
+    except Exception as e:
+        print(f"  [wandb] Warning: could not read wandb_config.json: {e}")
+
+# ---------------------------------------------------------------------------
 # Zombie / concurrent-invocation prevention
 #
 # Root cause of the "same step ran 3 times" problem:
@@ -255,27 +291,46 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
 def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
     """Build the STEPS list for a given draft/target model pair.
 
-    smoke=True: n=5 prompts, max_tokens=30, K=3, modes=gbv+specinfer, temp=0.6
-                ~25 sec/eval step → entire pipeline in ~10 min on laptop.
-                Use to verify the code is working before launching on Colab.
+    Pipeline structure (same for both smoke and full — only numbers differ):
 
-    Default:    n=10 prompts, max_tokens=50, K=3+5, all 4 modes, temps=0.6+1.0
-                ~10-15 min/eval step → ~2-3 hr on laptop for all eval steps.
-                Run with n=30/max_tokens=100 on Colab T4 for paper-quality results.
+        Phase 1 — Baseline
+            eval_baseline_gsm8k   (always first; establishes the untrained reference)
 
-    eagle=True: Append Phase 5 — EAGLE Benchmark (gen→train→eval on target model).
-                Must be rerun for each new target model or compute environment.
-                Adds ~3-6 hours on A100; ~1 hr on laptop (0.6B target, 500 prompts).
+        Phase 2 — Training   (smoke: 50 steps · full: 1000 steps)
+            forward_kl · ebe · reverse_kl · jsd · l1 · online
+            Each loss: train → merge (sequential pairs)
+
+        Phase 3 — GSM8K Eval   (smoke: n=5 · full: n=10, all 6 verifier modes)
+            eval every trained model + baseline on gsm8k
+
+        Phase 4 — Multi-dataset   (always skipped in smoke; slow)
+            eval top models on humaneval, math500, mtbench, alpaca
+
+    smoke=True:   50 steps/training · 50 online prompts · n=5 eval prompts ·
+                  max_tokens=30 · K=3 · all 6 verifier modes · temp=0.6.
+                  Exercises every loss + every verifier in ~30–40 min on laptop.
+                  Purpose: catch crashes / NaN / shape errors before overnight run.
+                  Uses a SEPARATE state file (pipeline_state_<config>_smoke.json)
+                  so smoke "done" marks never block the real pipeline.
+
+    smoke=False:  1000 steps/training · n=10 eval prompts · max_tokens=50 ·
+                  K=3+5 · all 6 verifier modes · temps=0.6+1.0.
+                  ~6–8 hrs total on laptop; use Colab/server for paper results.
+
+    eagle=True:   Append Phase 5 — EAGLE Benchmark.  Only meaningful with
+                  --config server/colab (Qwen3-8B target).
     """
-    if smoke:
-        _n, _max_tok  = 5, 30
-        _Ks, _modes, _temps = "3", "gbv,specinfer", "0.6"
-    else:
-        _n, _max_tok  = 10, 50
-        _Ks, _modes, _temps = "3,5", "alpha,specinfer,gbv,traversal", "0.6,1.0"
+    _steps         = 50    if smoke else 1000
+    _online_steps  = 50    if smoke else 500
+    _n             = 5     if smoke else 10
+    _max_tok       = 30    if smoke else 50
+    _Ks            = "3"   if smoke else "3,5"
+    _temps         = "0.6" if smoke else "0.6,1.0"
+    # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
+    _modes = "alpha,bv,gbv,traversal,specinfer,naive"
 
     def _ec(student_path, label, datasets="gsm8k", task_score=False):
-        """Shorthand: eval cmd with smoke-aware n / max_tokens / K / modes / temps."""
+        """Shorthand: eval cmd with smoke-aware parameters."""
         return _eval_cmd(student_path, label, target,
                          datasets=datasets, modes=_modes, Ks=_Ks, temps=_temps,
                          n=_n, max_tokens=_max_tok,
@@ -283,334 +338,284 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
 
     return [
         # -------------------------------------------------------------------
-        # Phase 0: Merge existing LR-sweep LoRA checkpoints (~5 min each)
-        # -------------------------------------------------------------------
-        {
-            "id": "merge_ebe_lr1e-5",
-            "group": "Phase 0 — Merge",
-            "desc": "Merge EBE lr=1e-5 LoRA adapter",
-            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("ebe_lr1e-5"), "--draft", draft],
-            "done_check": os.path.join(_merged("ebe_lr1e-5"), "config.json"),
-        },
-        {
-            "id": "merge_ebe_lr3e-5",
-            "group": "Phase 0 — Merge",
-            "desc": "Merge EBE lr=3e-5 LoRA adapter",
-            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("ebe_lr3e-5"), "--draft", draft],
-            "done_check": os.path.join(_merged("ebe_lr3e-5"), "config.json"),
-        },
-        {
-            "id": "merge_ebe_lr1e-4",
-            "group": "Phase 0 — Merge",
-            "desc": "Merge EBE lr=1e-4 LoRA adapter",
-            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("ebe_lr1e-4"), "--draft", draft],
-            "done_check": os.path.join(_merged("ebe_lr1e-4"), "config.json"),
-        },
-
-        # -------------------------------------------------------------------
-        # Phase 1: Quick eval — baseline + LR-sweep on gsm8k
+        # Phase 1 — Baseline
+        # Run first every time so the untrained draft model's block efficiency
+        # is in results.db before any trained model is evaluated.  This is the
+        # comparison anchor for all Phase 3/4 results.
         # -------------------------------------------------------------------
         {
             "id": "eval_baseline_gsm8k",
-            "group": "Phase 1 — Quick Eval",
-            "desc": "Eval baseline (no training) on gsm8k",
+            "group": "Phase 1 — Baseline",
+            "desc": "Eval unmodified draft on gsm8k (all 6 verifier modes)",
             "cmd": _ec(draft, "baseline", datasets="gsm8k", task_score=True),
             "done_check": None,
         },
-        {
-            "id": "eval_kl200_gsm8k",
-            "group": "Phase 1 — Quick Eval",
-            "desc": "Eval kl200 (KL 200 steps, diverse) on gsm8k",
-            "cmd": _ec(_merged("kl200"), "kl200", datasets="gsm8k", task_score=True),
-            "done_check": None,
-        },
-        {
-            "id": "eval_ebe200_gsm8k",
-            "group": "Phase 1 — Quick Eval",
-            "desc": "Eval ebe200 (EBE 200 steps, diverse) on gsm8k",
-            "cmd": _ec(_merged("ebe200"), "ebe200", datasets="gsm8k", task_score=True),
-            "done_check": None,
-        },
-        {
-            "id": "eval_ebe_lr1e5_gsm8k",
-            "group": "Phase 1 — Quick Eval",
-            "desc": "Eval EBE lr=1e-5 on gsm8k",
-            "cmd": _ec(_merged("ebe_lr1e-5"), "ebe_lr1e-5", datasets="gsm8k", task_score=True),
-            "done_check": None,
-        },
-        {
-            "id": "eval_ebe_lr3e5_gsm8k",
-            "group": "Phase 1 — Quick Eval",
-            "desc": "Eval EBE lr=3e-5 on gsm8k",
-            "cmd": _ec(_merged("ebe_lr3e-5"), "ebe_lr3e-5", datasets="gsm8k", task_score=True),
-            "done_check": None,
-        },
-        {
-            "id": "eval_ebe_lr1e4_gsm8k",
-            "group": "Phase 1 — Quick Eval",
-            "desc": "Eval EBE lr=1e-4 on gsm8k",
-            "cmd": _ec(_merged("ebe_lr1e-4"), "ebe_lr1e-4", datasets="gsm8k", task_score=True),
-            "done_check": None,
-        },
 
         # -------------------------------------------------------------------
-        # Phase 2: Real-data training (~5 hours each)
-        # smoke_skip=True → skipped when --smoke; saves the ~10 hr training
-        # cost.  The regular run (no --smoke) will execute these normally.
-        # A separate state file (pipeline_state_laptop_smoke.json) prevents
-        # smoke's "done" records from blocking the real pipeline's training.
+        # Phase 2 — Training
+        #
+        # smoke: 50 steps each — just enough to hit the first checkpoint,
+        #        trigger the health check, and verify no NaN / OOM / shape error.
+        # full:  1000 steps each (~1 hr/loss on laptop, ~15 min on A100).
+        #
+        # Losses covered: forward_kl · ebe · reverse_kl · jsd · l1 · online
+        # All use lr=3e-5.  EBE / revKL / JSD / L1 use --nan_action skip +
+        # --early_stop_patience 3 as a safety net for unstable losses.
         # -------------------------------------------------------------------
         {
             "id": "train_kl_gsm8k",
-            "group": "Phase 2 — Real-Data Training",
-            "desc": "Train KL distillation, 1000 steps, on gsm8k_train.jsonl",
+            "group": "Phase 2 — Training",
+            "desc": f"Train forward_kl, {_steps} steps, gsm8k_train",
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "forward_kl",
-                "--steps", "1000",
-                "--lr", "3e-5",
-                "--draft", draft,
-                "--target", target,
+                "--steps", str(_steps), "--lr", "3e-5",
+                "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
-                "--output", _ckpt("kl1000-gsm8k"),
+                "--output", _ckpt("kl-gsm8k"),
             ],
-            "done_check": os.path.join(_ckpt("kl1000-gsm8k"), "adapter_model.safetensors"),
-            "smoke_skip": smoke,
-            "retryable": True,   # training resumes from ckpt_latest on retry
+            "done_check": os.path.join(_ckpt("kl-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
         },
         {
             "id": "merge_kl_gsm8k",
-            "group": "Phase 2 — Real-Data Training",
-            "desc": "Merge kl1000-gsm8k LoRA",
+            "group": "Phase 2 — Training",
+            "desc": "Merge kl-gsm8k LoRA",
             "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("kl1000-gsm8k"), "--draft", draft],
-            "done_check": os.path.join(_merged("kl1000-gsm8k"), "config.json"),
-            "smoke_skip": smoke,
+                    "--adapter", _ckpt("kl-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("kl-gsm8k"), "config.json"),
         },
         {
             "id": "train_ebe_gsm8k",
-            "group": "Phase 2 — Real-Data Training",
-            "desc": "Train EBE distillation, 1000 steps, on gsm8k_train.jsonl",
+            "group": "Phase 2 — Training",
+            "desc": f"Train ebe, {_steps} steps, gsm8k_train",
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "ebe",
-                "--steps", "1000",
-                "--lr", "3e-5",
-                # EBE uses cumprod(alpha) which can produce NaN/Inf on small model
-                # pairs (e.g. 0.5B→0.6B laptop) when accept weights fluctuate near 0.
-                # --nan_action skip discards those bad batches and continues rather
-                # than stopping, giving EBE the best chance to converge.
-                # If EBE still stops early (exception), train_qwen3.py now saves the
-                # partial model and exits 0 → pipeline continues to merge+eval.
+                "--steps", str(_steps), "--lr", "3e-5",
                 "--nan_action", "skip",
-                # Stop after 3 consecutive val checks with no improvement.
-                # ckpt_best/ is saved on every improvement, so the best weights
-                # are preserved and promoted to root at the end regardless of
-                # when early stopping fires.
                 "--early_stop_patience", "3",
-                "--draft", draft,
-                "--target", target,
+                "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
-                "--output", _ckpt("ebe1000-gsm8k"),
+                "--output", _ckpt("ebe-gsm8k"),
             ],
-            "done_check": os.path.join(_ckpt("ebe1000-gsm8k"), "adapter_model.safetensors"),
-            "smoke_skip": smoke,
-            "retryable": True,   # training resumes from ckpt_latest on retry
+            "done_check": os.path.join(_ckpt("ebe-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
         },
         {
             "id": "merge_ebe_gsm8k",
-            "group": "Phase 2 — Real-Data Training",
-            "desc": "Merge ebe1000-gsm8k LoRA",
+            "group": "Phase 2 — Training",
+            "desc": "Merge ebe-gsm8k LoRA",
             "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("ebe1000-gsm8k"), "--draft", draft],
-            "done_check": os.path.join(_merged("ebe1000-gsm8k"), "config.json"),
-            "smoke_skip": smoke,
+                    "--adapter", _ckpt("ebe-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
-
-        # -------------------------------------------------------------------
-        # Phase 2b: KL Variant Comparison — reverse KL and JSD
-        # These reuse the same train_qwen3.py infrastructure, different --loss flag.
-        # Gives a principled comparison: forward KL (mode-covering) vs reverse KL
-        # (mode-seeking) vs JSD (symmetric). DistillSpec uses forward KL; we test all 3.
-        # -------------------------------------------------------------------
         {
             "id": "train_rev_kl_gsm8k",
-            "group": "Phase 2b — KL Variant Comparison",
-            "desc": "Train Reverse KL distillation, 1000 steps, on gsm8k_train.jsonl",
-            "cmd": [sys.executable, _TRAIN_SCRIPT,
-                    "--loss", "reverse_kl",
-                    "--steps", "1000", "--lr", "3e-5",
-                    "--nan_action", "skip",
-                    "--early_stop_patience", "3",
-                    "--draft", draft, "--target", target,
-                    "--dataset", _data("gsm8k_train.jsonl"),
-                    "--output", _ckpt("rev_kl1000-gsm8k")],
-            "done_check": os.path.join(_ckpt("rev_kl1000-gsm8k"), "adapter_model.safetensors"),
-            "smoke_skip": smoke,
+            "group": "Phase 2 — Training",
+            "desc": f"Train reverse_kl, {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "reverse_kl",
+                "--steps", str(_steps), "--lr", "3e-5",
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("rev_kl-gsm8k"),
+            ],
+            "done_check": os.path.join(_ckpt("rev_kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
         {
             "id": "merge_rev_kl_gsm8k",
-            "group": "Phase 2b — KL Variant Comparison",
-            "desc": "Merge rev_kl1000-gsm8k LoRA",
+            "group": "Phase 2 — Training",
+            "desc": "Merge rev_kl-gsm8k LoRA",
             "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("rev_kl1000-gsm8k"), "--draft", draft],
-            "done_check": os.path.join(_merged("rev_kl1000-gsm8k"), "config.json"),
-            "smoke_skip": smoke,
+                    "--adapter", _ckpt("rev_kl-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
         },
         {
             "id": "train_jsd_gsm8k",
-            "group": "Phase 2b — KL Variant Comparison",
-            "desc": "Train JSD distillation, 1000 steps, on gsm8k_train.jsonl",
-            "cmd": [sys.executable, _TRAIN_SCRIPT,
-                    "--loss", "jsd",
-                    "--steps", "1000", "--lr", "3e-5",
-                    "--nan_action", "skip",
-                    "--early_stop_patience", "3",
-                    "--draft", draft, "--target", target,
-                    "--dataset", _data("gsm8k_train.jsonl"),
-                    "--output", _ckpt("jsd1000-gsm8k")],
-            "done_check": os.path.join(_ckpt("jsd1000-gsm8k"), "adapter_model.safetensors"),
-            "smoke_skip": smoke,
+            "group": "Phase 2 — Training",
+            "desc": f"Train jsd, {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "jsd",
+                "--steps", str(_steps), "--lr", "3e-5",
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("jsd-gsm8k"),
+            ],
+            "done_check": os.path.join(_ckpt("jsd-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
         {
             "id": "merge_jsd_gsm8k",
-            "group": "Phase 2b — KL Variant Comparison",
-            "desc": "Merge jsd1000-gsm8k LoRA",
+            "group": "Phase 2 — Training",
+            "desc": "Merge jsd-gsm8k LoRA",
             "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
-                    "--adapter", _ckpt("jsd1000-gsm8k"), "--draft", draft],
-            "done_check": os.path.join(_merged("jsd1000-gsm8k"), "config.json"),
-            "smoke_skip": smoke,
+                    "--adapter", _ckpt("jsd-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("jsd-gsm8k"), "config.json"),
         },
-
-        # -------------------------------------------------------------------
-        # Phase 2c: Online Speculative Decoding adaptation
-        # Trains draft model continuously while serving, using only rejection positions
-        # as training signal. See online_serve.py and arxiv.org/abs/2310.07177.
-        # -------------------------------------------------------------------
+        {
+            "id": "train_l1_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train l1, {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "l1",
+                "--steps", str(_steps), "--lr", "3e-5",
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("l1-gsm8k"),
+            ],
+            "done_check": os.path.join(_ckpt("l1-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_l1_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge l1-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("l1-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("l1-gsm8k"), "config.json"),
+        },
         {
             "id": "online_adapt_gsm8k",
-            "group": "Phase 2c — Online Adaptation",
-            "desc": "Online OSD adaptation (forward_kl, K=4), 500 prompts, gsm8k",
-            "cmd": [sys.executable, _ONLINE_SCRIPT,
-                    "--prompts", _data("gsm8k_train.jsonl"),
-                    "--draft", draft, "--target", target,
-                    "--output", _ckpt("online-gsm8k"),
-                    "--steps", "500",
-                    "--update_every", "4",
-                    "--K", "4",
-                    "--kl_method", "forward_kl",
-                    "--lr", "3e-4",
-                    "--max_new_tokens", "128"],
+            "group": "Phase 2 — Training",
+            "desc": f"Online OSD adaptation (forward_kl, K=4), {_online_steps} prompts, gsm8k",
+            "cmd": [
+                sys.executable, _ONLINE_SCRIPT,
+                "--prompts", _data("gsm8k_train.jsonl"),
+                "--draft", draft, "--target", target,
+                "--output", _ckpt("online-gsm8k"),
+                "--steps", str(_online_steps),
+                "--update_every", "4",
+                "--K", "4",
+                "--kl_method", "forward_kl",
+                "--lr", "3e-4",
+                "--max_new_tokens", "128",
+            ],
             "done_check": os.path.join(_ckpt("online-gsm8k"), "adapter_model.safetensors"),
-            "smoke_skip": smoke,
             "retryable": True,
         },
         {
             "id": "merge_online_gsm8k",
-            "group": "Phase 2c — Online Adaptation",
+            "group": "Phase 2 — Training",
             "desc": "Merge online-gsm8k LoRA",
             "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
                     "--adapter", _ckpt("online-gsm8k"), "--draft", draft],
             "done_check": os.path.join(_merged("online-gsm8k"), "config.json"),
-            "smoke_skip": smoke,
         },
 
         # -------------------------------------------------------------------
-        # Phase 3: Full eval — real-data trained models on gsm8k
-        # smoke_skip=True because these depend on Phase 2 training output.
+        # Phase 3 — GSM8K Eval
+        # All 6 verifier modes (alpha · bv · gbv · traversal · specinfer · naive)
+        # smoke: n=5 prompts, max_tokens=30, K=3, temp=0.6
+        # full:  n=10 prompts, max_tokens=50, K=3+5, temps=0.6+1.0
+        # task_score=True records answer-level accuracy alongside block efficiency.
         # -------------------------------------------------------------------
         {
-            "id": "eval_kl1000_gsm8k",
-            "group": "Phase 3 — Full Eval",
-            "desc": "Eval kl1000-gsm8k on gsm8k",
-            "cmd": _ec(_merged("kl1000-gsm8k"), "kl1000-gsm8k", datasets="gsm8k", task_score=True),
+            "id": "eval_kl_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval kl-gsm8k on gsm8k",
+            "cmd": _ec(_merged("kl-gsm8k"), "kl", datasets="gsm8k", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
         },
         {
-            "id": "eval_ebe1000_gsm8k",
-            "group": "Phase 3 — Full Eval",
-            "desc": "Eval ebe1000-gsm8k on gsm8k",
-            "cmd": _ec(_merged("ebe1000-gsm8k"), "ebe1000-gsm8k", datasets="gsm8k", task_score=True),
+            "id": "eval_ebe_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval ebe-gsm8k on gsm8k",
+            "cmd": _ec(_merged("ebe-gsm8k"), "ebe", datasets="gsm8k", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
         },
         {
-            "id": "eval_rev_kl1000_gsm8k",
-            "group": "Phase 3 — Full Eval",
-            "desc": "Eval rev_kl1000-gsm8k on gsm8k",
-            "cmd": _ec(_merged("rev_kl1000-gsm8k"), "rev_kl1000-gsm8k", datasets="gsm8k", task_score=True),
+            "id": "eval_rev_kl_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval rev_kl-gsm8k on gsm8k",
+            "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl", datasets="gsm8k", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
         },
         {
-            "id": "eval_jsd1000_gsm8k",
-            "group": "Phase 3 — Full Eval",
-            "desc": "Eval jsd1000-gsm8k on gsm8k",
-            "cmd": _ec(_merged("jsd1000-gsm8k"), "jsd1000-gsm8k", datasets="gsm8k", task_score=True),
+            "id": "eval_jsd_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval jsd-gsm8k on gsm8k",
+            "cmd": _ec(_merged("jsd-gsm8k"), "jsd", datasets="gsm8k", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
         },
         {
-            "id": "eval_online1000_gsm8k",
-            "group": "Phase 3 — Full Eval",
+            "id": "eval_l1_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval l1-gsm8k on gsm8k",
+            "cmd": _ec(_merged("l1-gsm8k"), "l1", datasets="gsm8k", task_score=True),
+            "done_check": None,
+        },
+        {
+            "id": "eval_online_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-gsm8k"), "online-gsm8k", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("online-gsm8k"), "online", datasets="gsm8k", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
         },
 
         # -------------------------------------------------------------------
-        # Phase 4: Multi-dataset eval — top models + baseline on all datasets
-        # smoke_skip=True for kl/ebe (depend on training); baseline_all
-        # also smoke_skipped to keep smoke focused on Phase 1 verification.
+        # Phase 4 — Multi-Dataset Eval
+        # Always skipped in smoke (too slow; smoke already verified the eval path
+        # in Phase 3).  In full mode, evaluates every trained model on four
+        # additional datasets for the paper's cross-dataset table.
         # -------------------------------------------------------------------
         {
             "id": "eval_baseline_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval baseline on humaneval, math500, mtbench, alpaca",
+            "desc": "Eval baseline on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(draft, "baseline",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
         },
         {
-            "id": "eval_kl1000_all",
+            "id": "eval_kl_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval kl1000-gsm8k on humaneval, math500, mtbench, alpaca",
-            "cmd": _ec(_merged("kl1000-gsm8k"), "kl1000-gsm8k",
+            "desc": "Eval kl on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("kl-gsm8k"), "kl",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
         },
         {
-            "id": "eval_ebe1000_all",
+            "id": "eval_ebe_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval ebe1000-gsm8k on humaneval, math500, mtbench, alpaca",
-            "cmd": _ec(_merged("ebe1000-gsm8k"), "ebe1000-gsm8k",
+            "desc": "Eval ebe on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("ebe-gsm8k"), "ebe",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
         },
         {
-            "id": "eval_rev_kl1000_all",
+            "id": "eval_rev_kl_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval rev_kl1000-gsm8k on humaneval, math500, mtbench, alpaca",
-            "cmd": _ec(_merged("rev_kl1000-gsm8k"), "rev_kl1000-gsm8k",
+            "desc": "Eval rev_kl on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
         },
         {
-            "id": "eval_jsd1000_all",
+            "id": "eval_jsd_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval jsd1000-gsm8k on humaneval, math500, mtbench, alpaca",
-            "cmd": _ec(_merged("jsd1000-gsm8k"), "jsd1000-gsm8k",
+            "desc": "Eval jsd on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("jsd-gsm8k"), "jsd",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+            "done_check": None,
+            "smoke_skip": smoke,
+        },
+        {
+            "id": "eval_l1_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval l1 on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("l1-gsm8k"), "l1",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
@@ -618,8 +623,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False):
         {
             "id": "eval_online_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval online-gsm8k on humaneval, math500, mtbench, alpaca",
-            "cmd": _ec(_merged("online-gsm8k"), "online-gsm8k",
+            "desc": "Eval online on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("online-gsm8k"), "online",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
@@ -1076,6 +1081,41 @@ def run_step(step, state, dry_run=False):
 # Main
 # ---------------------------------------------------------------------------
 
+def _print_header(cfg, draft, target, args):
+    """Print the startup header (config, GPU, smoke/eagle flags)."""
+    print(f"  Config : {cfg['desc']}")
+    print(f"  Draft  : {draft}")
+    print(f"  Target : {target}")
+    print(f"  State  : {os.path.basename(STATE_FILE)}")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info(0)
+            print(f"  GPU    : {torch.cuda.get_device_name(0)}  "
+                  f"{free/1024**3:.1f} GB free / {total/1024**3:.1f} GB total")
+            if free / 1024**3 < 2.0:
+                print("  [WARN] Less than 2 GB VRAM free. "
+                      "run_all.py will fall back to CPU automatically on OOM.")
+        else:
+            print("  GPU    : None — all steps will run on CPU (slow but correct)")
+    except Exception:
+        print("  GPU    : (torch not available yet — checked per step)")
+    if args.experiment_tag:
+        print(f"  Tag    : {args.experiment_tag}")
+    if args.smoke:
+        print(f"  Mode   : SMOKE TEST  n=5 · max_tokens=30 · K=3 · modes=all-6-verifiers · temp=0.6")
+        print(f"           (6 losses × 50 steps + 6 evals — exercises every code path; ~30-40 min)")
+    if args.eagle:
+        if args.config == "laptop":
+            print(f"\n  [WARN] --eagle with --config laptop makes no sense for the paper.")
+            print(f"         The EAGLE head trains on the TARGET model's hidden states.")
+            print(f"         A head built on Qwen3-0.6B hidden states is NOT a useful")
+            print(f"         comparison baseline.  Run with --config server or colab")
+            print(f"         (Qwen3-8B target) on Colab/Kaggle/Modal instead.\n")
+        print(f"  Eagle  : Phase 5 included — EAGLE head train+eval on {target}")
+        print(f"           (rerun per Colab/Kaggle session — ephemeral disk loses checkpoints)")
+
+
 def main():
     p = argparse.ArgumentParser(description="SpecDist pipeline with crash-safe resume")
     p.add_argument("--config", default="laptop", choices=list(CONFIGS.keys()),
@@ -1101,8 +1141,8 @@ def main():
                         "its own unique run_tag timestamp.")
     p.add_argument("--smoke", action="store_true",
                    help="Quick sanity-check mode: n=5 prompts, max_tokens=30, K=3, "
-                        "modes=gbv+specinfer, temp=0.6.  Runs each eval step in ~25 sec "
-                        "so you can verify correctness before launching on Colab/server.")
+                        "modes=alpha+bv+gbv+traversal+specinfer+naive, temp=0.6.  "
+                        "Exercises every loss + every verifier.  ~30-40 min total on laptop.")
     p.add_argument("--no_smoke_first", action="store_true",
                    help="Skip the automatic 2-prompt preflight smoke check that normally "
                         "runs before the first eval step on laptop config.  Use this if "
@@ -1128,6 +1168,29 @@ def main():
     _smoke_tag = "_smoke" if args.smoke else ""
     STATE_FILE = os.path.join(HERE, f"pipeline_state_{args.config}{_smoke_tag}.json")
 
+    # --status and --dry_run are read-only: build steps + print plan, then exit.
+    # Do NOT acquire the lock (that kills any running pipeline process!).
+    if args.status or args.dry_run:
+        STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
+                            smoke=args.smoke, eagle=args.eagle)
+        _print_header(cfg, draft, target, args)
+        state = load_state()
+        for step in STEPS:                          # sync done_check files
+            if step.get("done_check") and os.path.exists(step["done_check"]):
+                if state["steps"].get(step["id"], {}).get("status") != "done":
+                    mark_step(state, step["id"], "done", "auto-detected from done_check")
+        print_plan(STEPS, state)
+        if args.status:
+            done    = sum(1 for s in STEPS if step_status(s, state) == "done")
+            pending = sum(1 for s in STEPS if step_status(s, state) == "pending")
+            failed  = sum(1 for s in STEPS if step_status(s, state) == "failed")
+            print(f"  Summary: {done} done, {pending} pending, {failed} failed / {len(STEPS)} total\n")
+        return
+
+    # Load per-user WandB config (sets WANDB_API_KEY / WANDB_ENTITY / WANDB_PROJECT
+    # env vars so all subprocesses inherit them; falls back to wandb login if absent).
+    _load_wandb_config()
+
     # Acquire lock: kills any previously orphaned pipeline + child processes
     # before we load models, preventing GPU VRAM conflicts and duplicate runs.
     os.makedirs(_DB_LOGS, exist_ok=True)   # ensure db/logs/ exists before first log write
@@ -1136,39 +1199,7 @@ def main():
     STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                         smoke=args.smoke, eagle=args.eagle)
 
-    print(f"  Config : {cfg['desc']}")
-    print(f"  Draft  : {draft}")
-    print(f"  Target : {target}")
-    print(f"  State  : {os.path.basename(STATE_FILE)}")
-
-    # GPU diagnostics — printed once at startup so remote runs have a clear record
-    try:
-        import torch
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info(0)
-            print(f"  GPU    : {torch.cuda.get_device_name(0)}  "
-                  f"{free/1024**3:.1f} GB free / {total/1024**3:.1f} GB total")
-            if free / 1024**3 < 2.0:
-                print("  [WARN] Less than 2 GB VRAM free. "
-                      "run_all.py will fall back to CPU automatically on OOM.")
-        else:
-            print("  GPU    : None — all steps will run on CPU (slow but correct)")
-    except Exception:
-        print("  GPU    : (torch not available yet — checked per step)")
-    if args.experiment_tag:
-        print(f"  Tag    : {args.experiment_tag}")
-    if args.smoke:
-        print(f"  Mode   : SMOKE TEST  n=5 · max_tokens=30 · K=3 · modes=gbv,specinfer · temp=0.6")
-        print(f"           (~25 sec/eval step — use to verify correctness before Colab)")
-    if args.eagle:
-        if args.config == "laptop":
-            print(f"\n  [WARN] --eagle with --config laptop makes no sense for the paper.")
-            print(f"         The EAGLE head trains on the TARGET model's hidden states.")
-            print(f"         A head built on Qwen3-0.6B hidden states is NOT a useful")
-            print(f"         comparison baseline.  Run with --config server or colab")
-            print(f"         (Qwen3-8B target) on Colab/Kaggle/Modal instead.\n")
-        print(f"  Eagle  : Phase 5 included — EAGLE head train+eval on {target}")
-        print(f"           (rerun per Colab/Kaggle session — ephemeral disk loses checkpoints)")
+    _print_header(cfg, draft, target, args)
 
     state = load_state()
 
@@ -1282,6 +1313,14 @@ def main():
         status = step_status(step, state)
         if status == "done":
             print(f"  {TICK} [{sid}] already done — skipping")
+            continue
+
+        # Auto-skip steps whose input checkpoint doesn't exist (pre-pipeline artifacts).
+        # This keeps clean-from-scratch runs non-blocking without manual state edits.
+        skip_path = step.get("skip_if_missing")
+        if skip_path and not os.path.exists(skip_path):
+            print(f"  [skip] [{sid}] prerequisite missing ({os.path.basename(skip_path)}) — auto-skipped")
+            mark_step(state, sid, "done", f"auto-skipped: {os.path.basename(skip_path)} not found")
             continue
 
         # Prompt before each step (unless --yes)
