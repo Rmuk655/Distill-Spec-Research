@@ -14,12 +14,25 @@ Endpoints:
 """
 
 import glob, os, re, sys, json, argparse
-sys.path.insert(0, os.path.dirname(__file__))
+
+# ── Path layout ────────────────────────────────────────────────────────────────
+# viz_server.py lives in OSD/ (a sibling of gbv-research/).
+# All run artefacts live under gbv-research/db/; state files are in
+# gbv-research/orchestration/.  Insert gbv-research/db/ at the FRONT of sys.path
+# so `import results_db` finds gbv-research/db/results_db.py (not OSD/results_db.py).
+_OSD_DIR      = os.path.dirname(os.path.abspath(__file__))
+_GBV_RESEARCH = os.path.normpath(os.path.join(_OSD_DIR, "..", "gbv-research"))
+_DB_DIR       = os.path.join(_GBV_RESEARCH, "db")
+_ORCH_DIR     = os.path.join(_GBV_RESEARCH, "orchestration")
+_CKPT_DIR_GBV = os.path.join(_DB_DIR, "checkpoints")
+
+sys.path.insert(0, _DB_DIR)          # gbv-research/db/results_db.py wins over OSD/
+sys.path.insert(1, _OSD_DIR)         # OSD/ second (for any other local imports)
 import results_db
 
-HERE          = os.path.dirname(os.path.abspath(__file__))
-_BE_LOG       = os.path.join(HERE, "be_progress.log")       # written by run_be_batch()
-_PIPELINE_LOG = os.path.join(HERE, "pipeline_output.log")   # written by pipeline.py run_step()
+HERE          = _OSD_DIR
+_BE_LOG       = os.path.join(_DB_DIR, "logs", "be_progress.log")
+_PIPELINE_LOG = os.path.join(_DB_DIR, "logs", "pipeline_output.log")
 
 try:
     from flask import Flask, jsonify, request, render_template_string
@@ -74,7 +87,7 @@ def api_train_curves():
 def api_pipeline_status():
     """Read all pipeline_state_*.json files and return live progress."""
     state_files = sorted(
-        glob.glob(os.path.join(HERE, "pipeline_state_*.json")),
+        glob.glob(os.path.join(_ORCH_DIR, "pipeline_state_*.json")),
         key=os.path.getmtime, reverse=True,
     )
     if not state_files:
@@ -88,65 +101,76 @@ def api_pipeline_status():
         return jsonify({"found": False, "error": str(e)})
 
     steps = state.get("steps", {})
-    # Ordered step IDs (matches pipeline.py build_steps ordering)
+    # Ordered step IDs — must match pipeline.py build_steps() ordering exactly.
     STEP_ORDER = [
-        "merge_ebe_lr1e-5", "merge_ebe_lr3e-5", "merge_ebe_lr1e-4",
-        "eval_baseline_gsm8k", "eval_kl200_gsm8k", "eval_ebe200_gsm8k",
-        "eval_ebe_lr1e5_gsm8k", "eval_ebe_lr3e5_gsm8k", "eval_ebe_lr1e4_gsm8k",
-        "train_kl_gsm8k", "merge_kl_gsm8k", "train_ebe_gsm8k", "merge_ebe_gsm8k",
+        # Phase 1 — Baseline
+        "eval_baseline_gsm8k",
+        # Phase 2 — Training (6 losses: kl, ebe, rev_kl, jsd, l1, online)
+        "train_kl_gsm8k",     "merge_kl_gsm8k",
+        "train_ebe_gsm8k",    "merge_ebe_gsm8k",
         "train_rev_kl_gsm8k", "merge_rev_kl_gsm8k",
-        "train_jsd_gsm8k", "merge_jsd_gsm8k",
+        "train_jsd_gsm8k",    "merge_jsd_gsm8k",
+        "train_l1_gsm8k",     "merge_l1_gsm8k",
         "online_adapt_gsm8k", "merge_online_gsm8k",
-        "eval_kl1000_gsm8k", "eval_ebe1000_gsm8k",
-        "eval_rev_kl1000_gsm8k", "eval_jsd1000_gsm8k", "eval_online1000_gsm8k",
-        "eval_baseline_all", "eval_kl1000_all", "eval_ebe1000_all",
-        "eval_rev_kl1000_all", "eval_jsd1000_all", "eval_online_all",
+        # Phase 3 — GSM8K Eval
+        "eval_kl_gsm8k", "eval_ebe_gsm8k",
+        "eval_rev_kl_gsm8k", "eval_jsd_gsm8k",
+        "eval_l1_gsm8k", "eval_online_gsm8k",
+        # Phase 4 — Multi-Dataset (smoke_skip in smoke runs)
+        "eval_baseline_all", "eval_kl_all",
+        "eval_ebe_all", "eval_rev_kl_all",
+        "eval_jsd_all", "eval_l1_all", "eval_online_all",
+        # Phase 5 — EAGLE (optional --eagle flag)
+        "eagle_gen", "eagle_train", "eagle_eval",
     ]
     PHASE_LABELS = {
-        "merge_ebe_lr1e-5": "Phase 0 — Merge",
-        "merge_ebe_lr3e-5": "Phase 0 — Merge",
-        "merge_ebe_lr1e-4": "Phase 0 — Merge",
-        "eval_baseline_gsm8k": "Phase 1 — Quick Eval",
-        "eval_kl200_gsm8k":    "Phase 1 — Quick Eval",
-        "eval_ebe200_gsm8k":   "Phase 1 — Quick Eval",
-        "eval_ebe_lr1e5_gsm8k":"Phase 1 — Quick Eval",
-        "eval_ebe_lr3e5_gsm8k":"Phase 1 — Quick Eval",
-        "eval_ebe_lr1e4_gsm8k":"Phase 1 — Quick Eval",
-        "train_kl_gsm8k":  "Phase 2 — Training",
-        "merge_kl_gsm8k":  "Phase 2 — Training",
-        "train_ebe_gsm8k": "Phase 2 — Training",
-        "merge_ebe_gsm8k": "Phase 2 — Training",
-        "train_rev_kl_gsm8k":    "Phase 2b — KL Variants",
-        "merge_rev_kl_gsm8k":    "Phase 2b — KL Variants",
-        "train_jsd_gsm8k":       "Phase 2b — KL Variants",
-        "merge_jsd_gsm8k":       "Phase 2b — KL Variants",
-        "online_adapt_gsm8k":    "Phase 2c — Online Adapt",
-        "merge_online_gsm8k":    "Phase 2c — Online Adapt",
-        "eval_kl1000_gsm8k":  "Phase 3 — Full Eval",
-        "eval_ebe1000_gsm8k": "Phase 3 — Full Eval",
-        "eval_rev_kl1000_gsm8k": "Phase 3 — Full Eval",
-        "eval_jsd1000_gsm8k":    "Phase 3 — Full Eval",
-        "eval_online1000_gsm8k": "Phase 3 — Full Eval",
-        "eval_baseline_all":  "Phase 4 — Multi-Dataset",
-        "eval_kl1000_all":    "Phase 4 — Multi-Dataset",
-        "eval_ebe1000_all":   "Phase 4 — Multi-Dataset",
-        "eval_rev_kl1000_all":   "Phase 4 — Multi-Dataset",
-        "eval_jsd1000_all":      "Phase 4 — Multi-Dataset",
+        "eval_baseline_gsm8k":   "Phase 1 — Baseline",
+        "train_kl_gsm8k":        "Phase 2 — Training",
+        "merge_kl_gsm8k":        "Phase 2 — Training",
+        "train_ebe_gsm8k":       "Phase 2 — Training",
+        "merge_ebe_gsm8k":       "Phase 2 — Training",
+        "train_rev_kl_gsm8k":    "Phase 2 — Training",
+        "merge_rev_kl_gsm8k":    "Phase 2 — Training",
+        "train_jsd_gsm8k":       "Phase 2 — Training",
+        "merge_jsd_gsm8k":       "Phase 2 — Training",
+        "train_l1_gsm8k":        "Phase 2 — Training",
+        "merge_l1_gsm8k":        "Phase 2 — Training",
+        "online_adapt_gsm8k":    "Phase 2 — Training",
+        "merge_online_gsm8k":    "Phase 2 — Training",
+        "eval_kl_gsm8k":         "Phase 3 — GSM8K Eval",
+        "eval_ebe_gsm8k":        "Phase 3 — GSM8K Eval",
+        "eval_rev_kl_gsm8k":     "Phase 3 — GSM8K Eval",
+        "eval_jsd_gsm8k":        "Phase 3 — GSM8K Eval",
+        "eval_l1_gsm8k":         "Phase 3 — GSM8K Eval",
+        "eval_online_gsm8k":     "Phase 3 — GSM8K Eval",
+        "eval_baseline_all":     "Phase 4 — Multi-Dataset",
+        "eval_kl_all":           "Phase 4 — Multi-Dataset",
+        "eval_ebe_all":          "Phase 4 — Multi-Dataset",
+        "eval_rev_kl_all":       "Phase 4 — Multi-Dataset",
+        "eval_jsd_all":          "Phase 4 — Multi-Dataset",
+        "eval_l1_all":           "Phase 4 — Multi-Dataset",
         "eval_online_all":       "Phase 4 — Multi-Dataset",
+        "eagle_gen":             "Phase 5 — EAGLE",
+        "eagle_train":           "Phase 5 — EAGLE",
+        "eagle_eval":            "Phase 5 — EAGLE",
     }
 
     # Training steps that stopped early (NaN, exception) but produced a partial
     # checkpoint are not real failures — the pipeline can still merge + eval them.
     # Remap their status from "failed" → "stopped" so the badge shows orange
     # ("STOPPED") rather than red ("FAILED").
-    TRAIN_STEP_IDS = {"train_kl_gsm8k", "train_ebe_gsm8k",
-                      "train_rev_kl_gsm8k", "train_jsd_gsm8k", "online_adapt_gsm8k"}
-    CKPT_DIR = os.path.join(HERE, "checkpoints")
+    TRAIN_STEP_IDS = {
+        "train_kl_gsm8k", "train_ebe_gsm8k",
+        "train_rev_kl_gsm8k", "train_jsd_gsm8k",
+        "train_l1_gsm8k", "online_adapt_gsm8k",
+    }
+    CKPT_DIR = _CKPT_DIR_GBV  # gbv-research/db/checkpoints
     _CKPT_SUFFIXES = {
-        "train_kl_gsm8k":     "kl1000-gsm8k",
-        "train_ebe_gsm8k":    "ebe1000-gsm8k",
-        "train_rev_kl_gsm8k": "rev_kl1000-gsm8k",
-        "train_jsd_gsm8k":    "jsd1000-gsm8k",
+        "train_kl_gsm8k":     "kl-gsm8k",
+        "train_ebe_gsm8k":    "ebe-gsm8k",
+        "train_rev_kl_gsm8k": "rev_kl-gsm8k",
+        "train_jsd_gsm8k":    "jsd-gsm8k",
+        "train_l1_gsm8k":     "l1-gsm8k",
         "online_adapt_gsm8k": "online-gsm8k",
     }
 
@@ -820,35 +844,61 @@ let HW_TIER_FILTER = new Set(['laptop', 'colab', 'a100']);
 
 // ---- Step descriptions (shown as tooltips and in panel) ----
 const STEP_DESC = {
-  'merge_ebe_lr1e-5':    'Phase 0 — Merge: Fuse LoRA adapter (EBE loss, lr=1e-5) into the base draft model',
-  'merge_ebe_lr3e-5':    'Phase 0 — Merge: Fuse LoRA adapter (EBE loss, lr=3e-5) into the base draft model',
-  'merge_ebe_lr1e-4':    'Phase 0 — Merge: Fuse LoRA adapter (EBE loss, lr=1e-4) into the base draft model',
-  'eval_baseline_gsm8k': 'Phase 1 — Quick Eval: Run alpha/BE/PPL on the UNTRAINED baseline draft model — this is the reference point all trained models are compared against',
-  'eval_kl200_gsm8k':    'Phase 1 — Quick Eval: Eval KL-distilled draft (200 steps on diverse data) vs baseline on GSM8K',
-  'eval_ebe200_gsm8k':   'Phase 1 — Quick Eval: Eval EBE-distilled draft (200 steps on diverse data) — EBE is the novel loss; compare vs KL here',
-  'eval_ebe_lr1e5_gsm8k':'Phase 1 — Quick Eval: LR sensitivity check — EBE draft trained with lr=1e-5',
-  'eval_ebe_lr3e5_gsm8k':'Phase 1 — Quick Eval: LR sensitivity check — EBE draft trained with lr=3e-5',
-  'eval_ebe_lr1e4_gsm8k':'Phase 1 — Quick Eval: LR sensitivity check — EBE draft trained with lr=1e-4',
-  'train_kl_gsm8k':      'Phase 2 — Training: Train KL-distillation for 1000 steps on real GSM8K data (overnight, ~5h on laptop)',
-  'merge_kl_gsm8k':      'Phase 2 — Training: Merge the KL-1000 LoRA into base model',
-  'train_ebe_gsm8k':     'Phase 2 — Training: Train EBE-distillation for 1000 steps on real GSM8K data (overnight, ~5h on laptop)',
-  'merge_ebe_gsm8k':     'Phase 2 — Training: Merge the EBE-1000 LoRA into base model',
-  'eval_kl1000_gsm8k':   'Phase 3 — Full Eval: Full eval of KL-1000 draft on GSM8K — key result for the paper',
-  'eval_ebe1000_gsm8k':  'Phase 3 — Full Eval: Full eval of EBE-1000 draft on GSM8K — KEY result: does EBE beat KL?',
-  'eval_baseline_all':   'Phase 4 — Multi-Dataset: Baseline eval on HumanEval, MATH-500, MTBench, Alpaca (robustness check)',
-  'eval_kl1000_all':     'Phase 4 — Multi-Dataset: KL-1000 eval across all 4 datasets',
-  'eval_ebe1000_all':    'Phase 4 — Multi-Dataset: EBE-1000 eval across all 4 datasets — proves cross-domain generalization',
+  // Phase 1 — Baseline
+  'eval_baseline_gsm8k':  'Phase 1 — Baseline: Run all 6 verifiers on the UNTRAINED draft — this is the reference point all trained models are compared against',
+  // Phase 2 — Training (6 losses)
+  'train_kl_gsm8k':       'Phase 2 — Training: Train forward-KL distillation on GSM8K (DistillSpec baseline)',
+  'merge_kl_gsm8k':       'Phase 2 — Training: Fuse KL LoRA adapter into base draft model',
+  'train_ebe_gsm8k':      'Phase 2 — Training: Train EBE loss on GSM8K (novel contribution — optimises block efficiency directly)',
+  'merge_ebe_gsm8k':      'Phase 2 — Training: Fuse EBE LoRA adapter into base draft model',
+  'train_rev_kl_gsm8k':   'Phase 2 — Training: Train reverse-KL (mode-seeking ablation) on GSM8K',
+  'merge_rev_kl_gsm8k':   'Phase 2 — Training: Fuse reverse-KL LoRA into base draft model',
+  'train_jsd_gsm8k':      'Phase 2 — Training: Train Jensen-Shannon divergence (symmetric ablation) on GSM8K',
+  'merge_jsd_gsm8k':      'Phase 2 — Training: Fuse JSD LoRA into base draft model',
+  'train_l1_gsm8k':       'Phase 2 — Training: Train L1 / total-variation loss (ablation) on GSM8K',
+  'merge_l1_gsm8k':       'Phase 2 — Training: Fuse L1 LoRA into base draft model',
+  'online_adapt_gsm8k':   'Phase 2 — Training: Online OSD adaptation on GSM8K (no offline teacher sampling)',
+  'merge_online_gsm8k':   'Phase 2 — Training: Fuse online-OSD LoRA into base draft model',
+  // Phase 3 — GSM8K Eval
+  'eval_kl_gsm8k':        'Phase 3 — GSM8K Eval: Full eval of KL draft — all 6 verifiers, K=3+5, temps 0.6+1.0',
+  'eval_ebe_gsm8k':       'Phase 3 — GSM8K Eval: Full eval of EBE draft — KEY result: does EBE beat KL?',
+  'eval_rev_kl_gsm8k':    'Phase 3 — GSM8K Eval: Full eval of reverse-KL draft',
+  'eval_jsd_gsm8k':       'Phase 3 — GSM8K Eval: Full eval of JSD draft',
+  'eval_l1_gsm8k':        'Phase 3 — GSM8K Eval: Full eval of L1 draft',
+  'eval_online_gsm8k':    'Phase 3 — GSM8K Eval: Full eval of online-OSD draft',
+  // Phase 4 — Multi-Dataset
+  'eval_baseline_all':    'Phase 4 — Multi-Dataset: Baseline on HumanEval, MATH-500, MTBench, Alpaca (robustness check)',
+  'eval_kl_all':          'Phase 4 — Multi-Dataset: KL draft across all 4 datasets',
+  'eval_ebe_all':         'Phase 4 — Multi-Dataset: EBE draft across all 4 datasets — proves cross-domain generalisation',
+  'eval_rev_kl_all':      'Phase 4 — Multi-Dataset: Reverse-KL draft across all 4 datasets',
+  'eval_jsd_all':         'Phase 4 — Multi-Dataset: JSD draft across all 4 datasets',
+  'eval_l1_all':          'Phase 4 — Multi-Dataset: L1 draft across all 4 datasets',
+  'eval_online_all':      'Phase 4 — Multi-Dataset: Online-OSD draft across all 4 datasets',
+  // Phase 5 — EAGLE (optional)
+  'eagle_gen':            'Phase 5 — EAGLE: Generate EAGLE training data',
+  'eagle_train':          'Phase 5 — EAGLE: Train EAGLE draft head',
+  'eagle_eval':           'Phase 5 — EAGLE: Eval EAGLE vs GBV methods',
 };
 
-// Phases grouped for the panel
+// Phases grouped for the pipeline status bar
 const PHASE_GROUPS = [
-  { label: 'Ph 0 — Merge',        steps: ['merge_ebe_lr1e-5','merge_ebe_lr3e-5','merge_ebe_lr1e-4'] },
-  { label: 'Ph 1 — Quick Eval',   steps: ['eval_baseline_gsm8k','eval_kl200_gsm8k','eval_ebe200_gsm8k','eval_ebe_lr1e5_gsm8k','eval_ebe_lr3e5_gsm8k','eval_ebe_lr1e4_gsm8k'] },
-  { label: 'Ph 2 — Training',     steps: ['train_kl_gsm8k','merge_kl_gsm8k','train_ebe_gsm8k','merge_ebe_gsm8k'] },
-  { label: 'Ph 2b — KL Variants', steps: ['train_rev_kl_gsm8k','merge_rev_kl_gsm8k','train_jsd_gsm8k','merge_jsd_gsm8k'] },
-  { label: 'Ph 2c — Online',      steps: ['online_adapt_gsm8k','merge_online_gsm8k'] },
-  { label: 'Ph 3 — Full Eval',    steps: ['eval_kl1000_gsm8k','eval_ebe1000_gsm8k','eval_rev_kl1000_gsm8k','eval_jsd1000_gsm8k','eval_online1000_gsm8k'] },
-  { label: 'Ph 4 — Multi-DS',     steps: ['eval_baseline_all','eval_kl1000_all','eval_ebe1000_all','eval_rev_kl1000_all','eval_jsd1000_all','eval_online_all'] },
+  { label: 'Ph 1 — Baseline',
+    steps: ['eval_baseline_gsm8k'] },
+  { label: 'Ph 2 — Training',
+    steps: ['train_kl_gsm8k','merge_kl_gsm8k',
+            'train_ebe_gsm8k','merge_ebe_gsm8k',
+            'train_rev_kl_gsm8k','merge_rev_kl_gsm8k',
+            'train_jsd_gsm8k','merge_jsd_gsm8k',
+            'train_l1_gsm8k','merge_l1_gsm8k',
+            'online_adapt_gsm8k','merge_online_gsm8k'] },
+  { label: 'Ph 3 — GSM8K Eval',
+    steps: ['eval_kl_gsm8k','eval_ebe_gsm8k','eval_rev_kl_gsm8k',
+            'eval_jsd_gsm8k','eval_l1_gsm8k','eval_online_gsm8k'] },
+  { label: 'Ph 4 — Multi-DS',
+    steps: ['eval_baseline_all','eval_kl_all','eval_ebe_all',
+            'eval_rev_kl_all','eval_jsd_all','eval_l1_all','eval_online_all'] },
+  { label: 'Ph 5 — EAGLE',
+    steps: ['eagle_gen','eagle_train','eagle_eval'] },
 ];
 
 // Show a "no data yet" placeholder inside a chart div
@@ -865,13 +915,12 @@ function showNoData(divId, msg) {
 
 const COLORS = {
   baseline:  '#6c757d',
-  kl200:     '#fd7e14',
-  ebe200:    '#0d6efd',
   kl:        '#fd7e14',    // forward KL — orange
-  ebe:       '#0d6efd',    // EBE — blue
+  ebe:       '#0d6efd',    // EBE — blue (novel contribution)
   rev_kl:    '#dc3545',    // reverse KL — red
   reverse_kl:'#dc3545',
   jsd:       '#198754',    // JSD — green
+  l1:        '#e91e63',    // L1 / total-variation — pink
   online:    '#9c27b0',    // online OSD — purple
 };
 const MODE_SYMBOLS = { specinfer: 'circle', gbv: 'square', traversal: 'diamond', bv: 'triangle-up' };
@@ -1324,7 +1373,7 @@ function renderInteractionHeatmap() {
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.K === K);
   if (dataset) runs = runs.filter(r => r.dataset === dataset);
   if (selTemp) runs = runs.filter(r => String(r.temperature) === selTemp);
-  if (!runs.length) { showNoData('chart-interaction-hm', 'Heatmap needs BE results for at least 2 models — appears after Phase 1 evals complete'); return; }
+  if (!runs.length) { showNoData('chart-interaction-hm', 'Heatmap needs BE results for at least 2 models — appears after Phase 3 (GSM8K Eval) steps complete'); return; }
 
   const modes  = [...new Set(runs.map(r => r.mode))].sort();
   const labels = [...new Set(runs.map(r => r.draft_label))].sort();
@@ -1362,7 +1411,7 @@ function renderGainOverBaseline() {
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.K === K);
   if (dataset) runs = runs.filter(r => r.dataset === dataset);
   if (selTemp) runs = runs.filter(r => String(r.temperature) === selTemp);
-  if (!runs.length) { showNoData('chart-gain', 'Gain chart needs BE results for trained models — appears after Phase 1 evals complete (at least baseline + one trained model)'); return; }
+  if (!runs.length) { showNoData('chart-gain', 'Gain chart needs BE results for trained models — appears after Phase 3 (GSM8K Eval) completes for at least one model'); return; }
 
   // Find baseline BE per (mode, temperature, dataset) combination
   const baselineRuns = runs.filter(r => r.draft_label === 'baseline');
@@ -1416,7 +1465,7 @@ function renderRobustness() {
 
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
   if (selTemp) runs = runs.filter(r => String(r.temperature) === selTemp);
-  if (!runs.length) { showNoData('chart-robustness', 'Dataset robustness needs Phase 4 multi-dataset evals — the last 3 steps of the pipeline'); return; }
+  if (!runs.length) { showNoData('chart-robustness', 'Dataset robustness needs Phase 4 (Multi-Dataset) evals — runs after all Phase 3 GSM8K evals complete'); return; }
 
   const datasets = [...new Set(runs.map(r => r.dataset))].sort();
   const labels   = [...new Set(runs.map(r => r.draft_label))].sort();
@@ -1494,7 +1543,7 @@ function renderTempGain() {
 
   const baselineRuns = runs.filter(r => r.draft_label === 'baseline');
   const nonBaseline  = runs.filter(r => r.draft_label !== 'baseline');
-  if (!baselineRuns.length) { showNoData('chart-temp-gain', 'Temperature gain needs baseline + trained model BE — appears after Phase 1 evals complete'); return; }
+  if (!baselineRuns.length) { showNoData('chart-temp-gain', 'Temperature gain needs baseline + trained model BE — appears after Phase 1 baseline and Phase 3 evals complete'); return; }
 
   const labels = [...new Set(nonBaseline.map(r => r.draft_label))];
   const temps  = [...new Set(runs.map(r => r.temperature))].sort((a,b)=>a-b);
@@ -1652,7 +1701,7 @@ const VAL_COLORS   = ['#ff7f0e','#d62728','#2ca02c','#9467bd','#e377c2','#bcbd22
 async function loadTrainingCurves() {
   const curves = await fetch('/api/train_curves').then(r=>r.json());
   if (!curves.length) {
-    showNoData('chart-training', 'Training loss curves appear during Phase 2 (train_kl_gsm8k and train_ebe_gsm8k steps). Train=solid line. Val=dashed line. If val rises while train falls → overfitting red flag.');
+    showNoData('chart-training', 'Training loss curves appear during Phase 2 Training steps (train_kl_gsm8k, train_ebe_gsm8k, etc). Train=solid line. Val=dashed line. If val rises while train falls — overfitting red flag.');
     return;
   }
 
