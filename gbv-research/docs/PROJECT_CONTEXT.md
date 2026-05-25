@@ -44,28 +44,46 @@ Rahul must NOT own: primary implementation, debugging, experiment tracking.
 
 ## Codebase Architecture
 
-Two separate repos, integrated via subprocess:
+Three components integrated via subprocess:
 
 ```
-OSD/                          ← training (KD + EBE loss)
-  train_qwen3.py              ← main training entrypoint
-  run_all.py                  ← orchestrator: train → merge → eval
-  fetch_datasets.py           ← saves datasets as JSONL with "prompt" field
-  data/
-    gsm8k_train.jsonl         ← 7,473 training prompts
-    gsm8k_30.jsonl            ← 30-prompt fixed eval set
+OSD/                          ← training + eval runner
+  train_qwen3.py              ← training loop; all 6 losses; crash-safe resume via ckpt_latest/
+  run_all.py                  ← eval subprocess called by pipeline.py; writes to results.db
+  results_db.py               ← SQLite schema; DB lives at gbv-research/db/results.db
+  viz_server.py               ← web dashboard; reads db/results.db + orchestration/pipeline_state_*.json
+  merge_lora.py               ← merge LoRA adapter into base weights
+  online_osd.py               ← online speculative distillation (Phase 2 ablation)
 
-GBV/                          ← evaluation (tree-based verification)
-  main.py                     ← eval entrypoint, called as subprocess
-  node.py                     ← OTLP solvers: specinfer, gbv, traversal, bv, nss
-  util.py                     ← JSONL loader, extracts "prompt" field
+GBV/                          ← verification algorithms (novel contribution)
+  verifier.py                 ← TreeVerifier; dispatches to all 6 modes
+  node.py                     ← OTLP solvers: specinfer, gbv, traversal, bv, alpha, naive
+  main.py                     ← eval entrypoint; called as subprocess by run_all.py
+
+orchestration/                ← pipeline coordination
+  pipeline.py                 ← crash-safe multi-step orchestrator; Phases 1-4 + optional EAGLE
+  run_all.py                  ← eval subprocess wrapper
+  clean_restart.py            ← wipe db/ + reset state files + optional relaunch
+  wandb_config.json.example   ← template; copy to wandb_config.json (gitignored)
+  pipeline_state_laptop.json  ← step states for full run (separate from smoke)
+  pipeline_state_laptop_smoke.json ← step states for smoke run
+
+core/datasets/raw/            ← data
+  gsm8k_train.jsonl           ← 7,473 training prompts (gitignored)
+  gsm8k_30.jsonl, gsm8k_5.jsonl ← fixed eval sets (tracked)
+
+db/                           ← all generated outputs (gitignored)
+  checkpoints/                ← LoRA adapters + merged models
+  results.db                  ← SQLite eval results
+  logs/                       ← pipeline_output.log, be_progress.log
+  wandb/                      ← W&B local sync
 ```
 
-**Integration pattern**: `run_all.py` calls `GBV/main.py` as a subprocess, passes `--q_model` (merged draft) and `--p_model` (target), parses `"Block efficiency: X.XXX"` from stdout. No deeper integration needed.
+**Integration pattern**: `pipeline.py` launches `train_qwen3.py` (training) and `run_all.py` (eval) as subprocesses. `run_all.py` calls `GBV/verifier.py` for block-efficiency measurement and writes results to `db/results.db`. No deeper integration needed.
 
-**Data format**: both pipelines read the same JSONL files with a `"prompt"` field. No conversion needed.
+**Data format**: all components read JSONL files with a `"prompt"` field.
 
-**Reference codebases** (for understanding, not copying):
+**Reference codebases** (read-only — for understanding, never imported):
 - OSD: https://github.com/LiuXiaoxuanPKU/OSD
 - GBV: https://anonymous.4open.science/r/GBV-BED8/README.md
 - AdaSpec: https://github.com/yuezhouhu/adaspec (optional ablation reference)
@@ -133,17 +151,20 @@ Eval always uses `data/gsm8k_30.jsonl` (30 fixed prompts).
 
 ## Verification Algorithms (GBV modes)
 
+All 6 modes are run in every eval step (both smoke and full pipeline).
+
 | Mode | Role | What it rewards in the draft |
 |---|---|---|
-| `naive` | Floor baseline — chain SD, no tree | Token-level acceptance rate α |
-| `specinfer` | Published multi-path baseline | Multi-path coverage, joint path probability |
-| `nss` | Sanity check — simplified chain | — |
-| `bv` | Block Verification — accepts/rejects entire blocks | Block-level acceptance |
-| `gbv` | Generalized BV — optimal transport over block prefixes, strictly > BV | Probability mass on accepted prefixes |
+| `alpha` | Token-level acceptance rate (chain SD floor) | Per-token α |
+| `naive` | Naive chain SD (explicit implementation of alpha) | Per-token acceptance |
+| `bv` | Block Verification — accept/reject entire blocks | Block-level acceptance |
+| `gbv` | **Generalised BV** — optimal transport over block prefixes, strictly > BV | Probability mass on accepted prefixes |
 | `traversal` | **Empirically best** — longest surviving path | Joint prob of best surviving path |
-| `spectr` | Transport coupling — include in table for completeness, don't tune for it | — |
+| `specinfer` | Published multi-path baseline | Multi-path coverage, joint path probability |
 
-**Primary eval verifiers**: `specinfer` (published baseline) + `traversal` (empirically best).
+**Primary comparison verifiers**: `specinfer` (published baseline) + `traversal` (empirically best) + `gbv` (novel contribution).
+
+**Deprecated / not in pipeline**: `nss`, `spectr` — removed from eval sweep; present in `GBV/node.py` for reference.
 
 ---
 
@@ -166,18 +187,28 @@ Any trained model must beat `specinfer K=3 = 2.520` to show improvement. Regress
 
 ## Experiment Structure
 
-Planned conditions (ordered by execution priority):
+Pipeline runs 4 phases. Phase 4 (multi-dataset) is skipped in smoke mode.
 
-| Condition | Draft | Target | Loss | Verifier | Hardware |
-|---|---|---|---|---|---|
-| `baseline` | Qwen2.5-0.5B untrained | Qwen3-0.6B | — | specinfer, traversal | Laptop |
-| `kl_200` | +LoRA 200 steps, diverse | Qwen3-0.6B | forward_kl | specinfer, traversal | Laptop |
-| `kl_gsm8k` | +LoRA 1000 steps, GSM8K | Qwen3-0.6B | forward_kl | specinfer, traversal | Laptop |
-| `ebe_gsm8k` | +LoRA 1000 steps, GSM8K | Qwen3-0.6B | ebe_token | specinfer, traversal | Laptop |
-| `kl_tree` | +LoRA, GSM8K | Qwen3-8B | forward_kl | all GBV modes, K=3,5 | Server |
-| `ebe_tree` | +LoRA, GSM8K | Qwen3-8B | ebe_block | all GBV modes, K=3,5 | Server |
+| Phase | Step IDs | What runs |
+|---|---|---|
+| **Phase 1 — Baseline** | `eval_baseline_gsm8k` | Untrained draft, all 6 verifiers, gsm8k |
+| **Phase 2 — Training** | `train_kl_gsm8k` + `merge_kl_gsm8k` ... × 6 losses | 1000 steps each (50 in smoke) |
+| **Phase 3 — GSM8K Eval** | `eval_kl_gsm8k`, `eval_ebe_gsm8k` ... × 6 losses | All 6 verifiers, K=3+5, temps=0.6+1.0 |
+| **Phase 4 — Multi-Dataset** | `eval_*_all` × 7 models | humaneval, math500, mtbench, alpaca |
 
-Recommended paper comparison (Phase 1): `baseline` / `kl_200` / `kl_gsm8k` / `ebe_gsm8k`.
+**Trained models** (Phase 2 outputs, checkpoint name → label):
+- `kl-gsm8k` → `kl` (forward_kl, DistillSpec baseline)
+- `ebe-gsm8k` → `ebe` (Expected Block Efficiency, **novel**)
+- `rev_kl-gsm8k` → `rev_kl` (reverse KL ablation)
+- `jsd-gsm8k` → `jsd` (Jensen-Shannon ablation)
+- `l1-gsm8k` → `l1` (L1 / total variation ablation)
+- `online-gsm8k` → `online` (online OSD adaptation)
+
+**Paper comparison table**: baseline / kl / ebe — with rev_kl, jsd, l1 as ablation rows.
+
+**State files** (in `orchestration/`):
+- `pipeline_state_laptop.json` — full 1000-step run state
+- `pipeline_state_laptop_smoke.json` — smoke 50-step run state (separate; smoke "done" never blocks full run)
 
 ---
 
@@ -190,7 +221,9 @@ Recommended paper comparison (Phase 1): `baseline` / `kl_200` / `kl_gsm8k` / `eb
 | Walltime (ms/tok) | End-to-end latency | Not comparable across hardware |
 | Task accuracy (GSM8K %) | Quality preservation / bug check | If this drops >2%, something is wrong |
 
-**W&B project**: `distillspec` (confirm with team). Tag runs by phase: `phase1`, `phase2`.
+**W&B project**: `specdist-gbv` (set in `orchestration/wandb_config.json` per machine).
+**W&B entity**: per-researcher — see `docs/SETUP.md` § 3 for multi-user credential setup.
+Runs are tagged by experiment_tag (auto-generated timestamp); filter by `draft_label` column in results.db.
 
 ---
 

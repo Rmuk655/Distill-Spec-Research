@@ -1,132 +1,170 @@
 # GBV Research — Speculative Decoding via Distillation
 
-Improving speculative decoding acceptance rates by training a small draft
-model to better match a large target model's token distribution.
+Train a small draft model to better match a large target model's token distribution,
+improving acceptance rates in speculative decoding.
+Novel contribution: **EBE loss** — directly optimises block efficiency instead of KL divergence.
 
 ## Directory layout
 
 ```
 gbv-research/
-├── capsules/                   Core research code (modular, by concern)
-│   ├── distillation/           Knowledge-distillation training
-│   │   ├── losses/             Pluggable loss objectives
-│   │   │   ├── forward_kl.py  DistillSpec baseline (recommended)
-│   │   │   ├── reverse_kl.py  Mode-seeking ablation
-│   │   │   ├── jsd.py         Jensen-Shannon ablation
-│   │   │   ├── l1.py          Total-variation ablation
-│   │   │   └── ebe.py         Expected Block Efficiency (novel)
-│   │   ├── model_families/     LLM-family-specific behaviour
-│   │   │   ├── qwen.py        Qwen2.5 / Qwen3 (active)
-│   │   │   └── gemma.py       Google Gemma (stub)
-│   │   └── trainer.py         Training loop (model-family-agnostic)
-│   │
-│   ├── verification/           Speculative decoding at inference time
-│   │   ├── algorithms/         All 8 verifier implementations
-│   │   ├── runner.py           Main speculative decoding loop
-│   │   ├── tree.py             Draft tree node abstractions
-│   │   └── draft_generator.py i.i.d. draft path construction
-│   │
-│   ├── datasets/               Dataset management
-│   │   ├── sources/            Per-dataset cleaning scripts
-│   │   ├── downloader.py       Fetch from HuggingFace Hub
-│   │   └── loader.py           Unified JSONL loader
-│   │
-│   └── dashboard/
-│       └── server.py           Flask web results dashboard
+├── OSD/                        Training framework (borrowed from OSD; heavily modified)
+│   ├── train_qwen3.py          Training loop — all loss functions (forward_kl, ebe, reverse_kl,
+│   │                             jsd, l1, online). Crash-safe resume via ckpt_latest/.
+│   ├── run_all.py              Eval runner: runs all verifier modes, writes to results.db
+│   ├── results_db.py           SQLite schema + query helpers
+│   ├── viz_server.py           Web dashboard (Flask, port 5000)
+│   ├── merge_lora.py           Merge LoRA adapter into base model weights
+│   └── online_osd.py           Online speculative distillation (Phase 2)
+│
+├── GBV/                        Verification algorithms (novel contribution)
+│   ├── verifier.py             TreeVerifier — dispatch to all 6 verifier modes
+│   ├── node.py                 Draft tree node + OTLP solvers
+│   └── main.py                 CLI eval entrypoint
 │
 ├── orchestration/              Pipeline coordination
-│   ├── pipeline.py             Crash-safe multi-step orchestrator
-│   ├── eval_pipeline.py        Evaluation runner
-│   ├── run_all.py              Full train→merge→eval pipeline
-│   └── configs/
-│       ├── laptop.yaml         RTX 500, Qwen2.5-0.5B → Qwen3-0.6B
-│       └── server.yaml         A100, Qwen3-0.6B → Qwen3-8B
+│   ├── pipeline.py             Crash-safe orchestrator (Phase 1→4 + optional EAGLE)
+│   ├── run_all.py              eval subprocess called by pipeline.py
+│   ├── clean_restart.py        Wipe outputs + reset state + relaunch
+│   ├── pipeline_state_laptop.json        State for full laptop run
+│   ├── pipeline_state_laptop_smoke.json  State for smoke test (separate, never blocks full run)
+│   └── wandb_config.json.example         Copy to wandb_config.json, fill in key (gitignored)
 │
-├── db/                         All generated run outputs (gitignored)
-│   ├── checkpoints/            LoRA adapters and merged models
-│   ├── wandb/                  W&B local logs
+├── core/
+│   └── datasets/raw/           JSONL eval + training sets
+│       ├── gsm8k_train.jsonl   7,473 training prompts (gitignored — large)
+│       ├── gsm8k_30.jsonl      30-prompt fixed eval set (tracked)
+│       └── gsm8k_5.jsonl       5-prompt smoke eval set (tracked)
+│
+├── db/                         All generated outputs (entirely gitignored)
+│   ├── checkpoints/            LoRA adapters + merged models
 │   ├── results.db              SQLite experiment database
-│   └── logs/                   Pipeline and training logs
-│
-├── paper/                      Publication artifacts
-│   ├── figures/                Generated plots
-│   ├── tables/                 Result tables
-│   └── plots/                  Plot generation scripts
-│
-├── references/                 Original borrowed codebases (read-only)
-│   ├── osd-original/           OSD (borrowed training framework)
-│   ├── gbv-original/           GBV algorithms (Thomas et al. 2026)
-│   └── adaspec/                AdaSpec reference implementation
+│   ├── wandb/                  W&B local logs
+│   └── logs/                   pipeline_output.log, be_progress.log
 │
 ├── docs/
-│   ├── ADDING_A_MODEL_FAMILY.md
-│   └── ADDING_A_LOSS.md
+│   ├── SETUP.md                First-time setup guide (WandB, smoke test, dashboard)
+│   ├── PROJECT_CONTEXT.md      Research context, decisions log, baselines
+│   ├── ADDING_A_LOSS.md        How to add a new loss objective
+│   ├── ADDING_AN_ALGORITHM.md  How to add a new verifier algorithm
+│   └── ADDING_A_MODEL_FAMILY.md
 │
-└── tests/                      Test suite
+├── references/                 Original borrowed codebases (read-only, never imported)
+│   ├── osd-original/
+│   ├── gbv-original/
+│   └── adaspec/
+│
+└── tests/
+    └── OSD/test_core.py        Unit tests: EBE loss properties, verifier invariants
 ```
 
 ## Quick start
 
-### Laptop (4 GB VRAM)
+See **[docs/SETUP.md](docs/SETUP.md)** for the full walkthrough including WandB setup.
+
+### 1. Install + download data
 
 ```bash
-cd gbv-research
-
-# 1. Install dependencies
 pip install -r requirements.txt
-
-# 2. Download datasets
-python -m capsules.datasets.downloader --datasets gsm8k
-
-# 3. Train (forward KL, 1000 steps, GSM8K)
-python -m capsules.distillation.trainer \
-    --loss forward_kl --steps 1000 \
-    --dataset capsules/datasets/raw/gsm8k_train.jsonl \
-    --val_dataset capsules/datasets/raw/gsm8k_30.jsonl
-
-# 4. Run full evaluation
-python orchestration/eval_pipeline.py \
-    --drafts db/checkpoints/forward_kl-qwen-1000steps/ckpt_best_merged \
-    --datasets gsm8k --modes traversal,gbv --K 1,3,5
-
-# 5. Open dashboard
-python -m capsules.dashboard.server   # → http://localhost:5000
+python OSD/fetch_datasets.py --datasets gsm8k
 ```
 
-### Server (A100 / Colab)
+### 2. Set up WandB credentials (one-time per machine)
 
 ```bash
-python -m capsules.distillation.trainer \
-    --model_family qwen \
-    --draft Qwen/Qwen3-0.6B --target Qwen/Qwen3-8B \
-    --loss ebe --steps 5000 \
-    --dataset capsules/datasets/raw/gsm8k_train.jsonl \
-    --load_in_4bit     # only if VRAM < 24 GB
+cp orchestration/wandb_config.json.example orchestration/wandb_config.json
+# Edit orchestration/wandb_config.json with your api_key, entity, project
 ```
 
-## Extending the framework
+### 3. Smoke test (~35 min — verify all losses + verifiers before overnight run)
 
-| Task | Guide |
-|---|---|
-| Add a new model family (Gemma, LLaMA, …) | [docs/ADDING_A_MODEL_FAMILY.md](docs/ADDING_A_MODEL_FAMILY.md) |
-| Add a new loss objective | [docs/ADDING_A_LOSS.md](docs/ADDING_A_LOSS.md) |
-| Add a new dataset | Drop JSONL in `capsules/datasets/raw/`, add an entry to `capsules/datasets/sources/` |
-| Add a new verifier algorithm | Implement in `capsules/verification/algorithms/registry.py` |
+```bash
+python orchestration/pipeline.py --config laptop --smoke --yes
+```
 
-## Current results (Laptop — Qwen2.5-0.5B → Qwen3-0.6B, GSM8K)
+### 4. Full pipeline (~6-8 hrs on laptop)
 
-| Model | Val KL loss | PPL | Notes |
-|---|---|---|---|
-| Baseline (no fine-tuning) | — | 19.76 | Pre-training PPL |
-| forward_kl 1000 steps | — | ~9.47 | DistillSpec baseline |
-| ebe 1000 steps | ~−8.44 | — | Novel EBE objective |
-| reverse_kl 1000 steps | ~9.21 | 26.05 | Mode-seeking; PPL inflated (cross-family artifact) |
-| jsd 1000 steps | ~0.12 | — | In progress |
+```bash
+python orchestration/pipeline.py --config laptop --yes
+```
 
-Full eval results with block efficiency and throughput: `db/results.db`
+### 5. Dashboard
+
+```bash
+python OSD/viz_server.py    # http://127.0.0.1:5000
+```
+
+## Pipeline structure
+
+The pipeline runs 4 phases in sequence:
+
+| Phase | Steps | Smoke | Full |
+|-------|-------|-------|------|
+| **1 — Baseline** | `eval_baseline_gsm8k`: unmodified draft, all 6 verifiers | 5 prompts | 10 prompts |
+| **2 — Training** | train + merge × 6 losses: kl, ebe, rev_kl, jsd, l1, online | 50 steps/loss | 1000 steps/loss |
+| **3 — GSM8K Eval** | eval every trained model, all 6 verifier modes | 5 prompts, K=3, temp=0.6 | 10 prompts, K=3+5, temps=0.6+1.0 |
+| **4 — Multi-Dataset** | eval on humaneval, math500, mtbench, alpaca | skipped | runs |
+
+Smoke uses a **separate state file** (`pipeline_state_laptop_smoke.json`) so smoke
+"done" marks never prevent the real pipeline from re-running Phase 2 training.
+
+### Useful commands while running
+
+```bash
+# Status check (safe — does NOT kill the running pipeline)
+python orchestration/pipeline.py --config laptop --smoke --status
+
+# Live log
+Get-Content db/logs/pipeline_output.log -Wait -Tail 40   # PowerShell
+tail -f db/logs/pipeline_output.log                      # bash/WSL
+```
+
+## Loss functions
+
+| Loss | Description | Status |
+|------|-------------|--------|
+| `forward_kl` | KL(target ∥ student). DistillSpec baseline. Mode-covering. | Baseline |
+| `ebe` | Expected Block Efficiency — directly optimises acceptance product. Novel. | Novel |
+| `reverse_kl` | KL(student ∥ target). Mode-seeking ablation. | Ablation |
+| `jsd` | Jensen-Shannon divergence. Symmetric ablation. | Ablation |
+| `l1` | L1 on probability distributions. Total-variation ablation. | Ablation |
+| `online` | Online speculative distillation (forward_kl on live SD outputs). | Ablation |
+
+## Verifier modes
+
+All 6 modes run in both smoke and full pipeline:
+
+| Mode | Description |
+|------|-------------|
+| `alpha` | Token-level acceptance rate (chain SD floor) |
+| `bv` | Block Verification — accept/reject whole blocks |
+| `gbv` | Generalised BV — optimal transport over block prefixes (novel, > BV) |
+| `traversal` | Longest surviving path — empirically best single-path verifier |
+| `specinfer` | SpecInfer published baseline — multi-path joint probability |
+| `naive` | Naive chain SD — same as alpha but explicit implementation |
+
+## Baseline numbers (Qwen2.5-0.5B → Qwen3-0.6B, gsm8k, untrained)
+
+| Verifier | K=3 BE | K=5 BE |
+|----------|--------|--------|
+| specinfer | 2.520 | 2.512 |
+| gbv | 2.797 | 2.786 |
+| traversal | 2.954 | 3.107 |
+
+Any trained model must beat `specinfer K=3 = 2.520`. Regression → investigate immediately.
+
+## Current results
+
+| Model | Loss | GSM8K BE (specinfer K=3) | Notes |
+|-------|------|--------------------------|-------|
+| Baseline | — | 2.520 | Pre-training reference |
+| forward_kl 1000 steps | forward_kl | TBD | DistillSpec baseline |
+| ebe 1000 steps | ebe | TBD | Novel EBE objective |
+
+Full results in `db/results.db`; visualise at http://127.0.0.1:5000.
 
 ## Team
 
-- **Mukund** (IIT Hyderabad) — student researcher
-- **Ram** (Adobe) — advisor
-- Target: ICLR mid-September 2026
+- **Mukund** (IIT Hyderabad) — implementation, experiments, benchmarking
+- **Ram** (Adobe) — research advisor
+- **Target**: ICLR mid-September 2026
