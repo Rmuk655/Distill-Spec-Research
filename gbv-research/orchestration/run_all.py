@@ -50,7 +50,7 @@ Outputs:
     DELIVERABLES.md     Updated with new results table
 """
 
-import sys, os, json, time, subprocess, re, argparse
+import sys, os, json, time, subprocess, re, argparse, threading
 from datetime import datetime
 
 # Windows terminals default to cp1252 which can't encode Unicode box-drawing or
@@ -698,19 +698,37 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
 
     try:
         # Open log for streaming — stderr merged into stdout so tqdm bars appear too.
+        # Output is teed to BOTH be_progress.log (for Dashboard / tail) AND our own
+        # stdout (which pipeline.py redirects to pipeline_output.log), so eval progress
+        # is visible in the main pipeline log without opening a second file.
         with open(_be_log, "w", encoding="utf-8", errors="replace") as _log_f:
             proc = subprocess.Popen(
-                cmd, stdout=_log_f, stderr=subprocess.STDOUT,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 cwd=_PARENT, env=_sub_env,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
             )
-            print(f"    GBV subprocess PID {proc.pid} — streaming to be_progress.log")
+            print(f"    GBV subprocess PID {proc.pid} — streaming to be_progress.log", flush=True)
+
+            def _tee(pipe):
+                """Write each line to be_progress.log AND pipeline_output.log."""
+                for line in pipe:
+                    _log_f.write(line)
+                    _log_f.flush()
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+
+            _tee_thread = threading.Thread(target=_tee, args=(proc.stdout,), daemon=True)
+            _tee_thread.start()
             try:
                 rc = proc.wait(timeout=7200)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait()
+                _tee_thread.join(timeout=5)
                 print(f"    [TIMEOUT] GBV batch subprocess timed out after 2 hours. "
                       f"Consider reducing --n or --max_tokens.")
                 return {}
+            _tee_thread.join(timeout=10)  # drain any last lines before closing the log
 
         # Read back the log for parsing (now the process has exited)
         with open(_be_log, encoding="utf-8", errors="replace") as f:

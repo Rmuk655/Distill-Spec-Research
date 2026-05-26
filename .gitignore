@@ -17,5 +17,8 @@ Thumbs.db
 *.zip
 *.log
 
+# Runtime SQLite databases (re-created on every run)
+**/results.db
+
 .claude/
 Claude/

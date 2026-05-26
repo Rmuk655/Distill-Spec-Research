@@ -6,56 +6,70 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
 
 ## Directory layout
 
+**Repository root** (`2026 summer/`) contains three top-level directories that
+`orchestration/pipeline.py` stitches together at runtime:
+
 ```
-gbv-research/
-├── OSD/                        Training framework (borrowed from OSD; heavily modified)
-│   ├── train_qwen3.py          Training loop — all loss functions (forward_kl, ebe, reverse_kl,
-│   │                             jsd, l1, online). Crash-safe resume via ckpt_latest/.
-│   ├── run_all.py              Eval runner: runs all verifier modes, writes to results.db
-│   ├── results_db.py           SQLite schema + query helpers
-│   ├── viz_server.py           Web dashboard (Flask, port 5000)
-│   ├── merge_lora.py           Merge LoRA adapter into base model weights
-│   └── online_osd.py           Online speculative distillation (Phase 2)
-│
-├── GBV/                        Verification algorithms (novel contribution)
-│   ├── verifier.py             TreeVerifier — dispatch to all 6 verifier modes
-│   ├── node.py                 Draft tree node + OTLP solvers
-│   └── main.py                 CLI eval entrypoint
-│
-├── orchestration/              Pipeline coordination
-│   ├── pipeline.py             Crash-safe orchestrator (Phase 1→4 + optional EAGLE)
-│   ├── run_all.py              eval subprocess called by pipeline.py
-│   ├── clean_restart.py        Wipe outputs + reset state + relaunch
-│   ├── pipeline_state_laptop.json        State for full laptop run
-│   ├── pipeline_state_laptop_smoke.json  State for smoke test (separate, never blocks full run)
-│   └── wandb_config.json.example         Copy to wandb_config.json, fill in key (gitignored)
-│
-├── core/
-│   └── datasets/raw/           JSONL eval + training sets
-│       ├── gsm8k_train.jsonl   7,473 training prompts (gitignored — large)
-│       ├── gsm8k_30.jsonl      30-prompt fixed eval set (tracked)
-│       └── gsm8k_5.jsonl       5-prompt smoke eval set (tracked)
-│
-├── db/                         All generated outputs (entirely gitignored)
-│   ├── checkpoints/            LoRA adapters + merged models
-│   ├── results.db              SQLite experiment database
-│   ├── wandb/                  W&B local logs
-│   └── logs/                   pipeline_output.log, be_progress.log
-│
-├── docs/
-│   ├── SETUP.md                First-time setup guide (WandB, smoke test, dashboard)
-│   ├── PROJECT_CONTEXT.md      Research context, decisions log, baselines
-│   ├── ADDING_A_LOSS.md        How to add a new loss objective
-│   ├── ADDING_AN_ALGORITHM.md  How to add a new verifier algorithm
-│   └── ADDING_A_MODEL_FAMILY.md
-│
-├── references/                 Original borrowed codebases (read-only, never imported)
-│   ├── osd-original/
-│   ├── gbv-original/
-│   └── adaspec/
-│
-└── tests/
-    └── OSD/test_core.py        Unit tests: EBE loss properties, verifier invariants
+2026 summer/                    <- git repo root
+|
++-- OSD/                        Training framework (borrowed; heavily modified)
+|   +-- train_qwen3.py          Training loop: all losses (forward_kl, ebe,
+|   |                             reverse_kl, jsd, l1, online). Used by pipeline.py.
+|   +-- online_serve.py         Online speculative distillation (Phase 2 loss)
+|   +-- merge_lora.py           Merge LoRA adapter into base model weights
+|
++-- GBV/                        Verification algorithms (novel contribution)
+|   +-- main.py                 CLI eval entrypoint (called by orchestration/run_all.py)
+|   +-- verifier.py             TreeVerifier -- dispatches all 6 verifier modes
+|   +-- node.py                 Draft tree node + OTLP solvers
+|   +-- util.py                 Model loading helpers
+|
++-- gbv-research/               Research project (this directory)
+    |
+    +-- algorithms/             New algorithm implementations (migration target for OSD)
+    |   +-- distillspec_gbv/    Novel EBE training code + verifier wrappers
+    |       +-- losses/         forward_kl, ebe, reverse_kl, jsd, l1 (class-based)
+    |       +-- trainer.py      Training loop (future replacement for OSD/train_qwen3.py)
+    |       +-- verifiers/      GBV verifier wrappers
+    |
+    +-- core/
+    |   +-- datasets/raw/       JSONL eval + training sets
+    |   |   +-- gsm8k_train.jsonl   7,473 training prompts (gitignored -- large)
+    |   |   +-- gsm8k_30.jsonl      30-prompt fixed eval set (tracked)
+    |   |   +-- gsm8k_5.jsonl       5-prompt smoke eval set (tracked)
+    |   +-- model_families/     Qwen/Gemma model-specific tokenizer helpers
+    |
+    +-- orchestration/          Pipeline coordination
+    |   +-- pipeline.py         Crash-safe orchestrator (Phase 1->4 + optional EAGLE)
+    |   +-- run_all.py          Eval subprocess -- calls GBV/main.py, writes to results.db
+    |   +-- clean_restart.py    Wipe outputs + reset state + relaunch
+    |   +-- pipeline_state_laptop.json        Full-run state (tracked in git)
+    |   +-- pipeline_state_laptop_smoke.json  Smoke state (separate, never blocks full run)
+    |   +-- wandb_config.json.example         Copy -> wandb_config.json (gitignored)
+    |
+    +-- db/                     All generated outputs (entirely gitignored)
+    |   +-- checkpoints/        LoRA adapters + merged models
+    |   +-- results.db          SQLite experiment database
+    |   +-- wandb/              W&B local run logs
+    |   +-- logs/               pipeline_output.log, be_progress.log
+    |
+    +-- dashboard/
+    |   +-- training_dashboard.py   Live training dashboard (Flask, port 5000)
+    |
+    +-- docs/
+    |   +-- SETUP.md                First-time setup guide (WandB, smoke test, dashboard)
+    |   +-- PROJECT_CONTEXT.md      Research context, decisions log, baselines
+    |   +-- ADDING_A_LOSS.md        How to add a new loss objective
+    |   +-- ADDING_AN_ALGORITHM.md  How to add a new verifier algorithm
+    |   +-- ADDING_A_MODEL_FAMILY.md
+    |
+    +-- references/             External code -- read-only, never imported by pipeline
+    |   +-- osd-original/
+    |   +-- gbv-original/
+    |   +-- adaspec/
+    |
+    +-- tests/
+        +-- test_core.py        Unit tests: EBE loss properties, verifier invariants
 ```
 
 ## Quick start
@@ -66,7 +80,7 @@ See **[docs/SETUP.md](docs/SETUP.md)** for the full walkthrough including WandB 
 
 ```bash
 pip install -r requirements.txt
-python OSD/fetch_datasets.py --datasets gsm8k
+python ../OSD/fetch_datasets.py --datasets gsm8k   # OSD/ is a sibling of gbv-research/
 ```
 
 ### 2. Set up WandB credentials (one-time per machine)
