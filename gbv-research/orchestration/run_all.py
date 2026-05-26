@@ -367,7 +367,7 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     for attempt in range(2):
         try:
             model = AutoModelForCausalLM.from_pretrained(
-                student_path, dtype=dtype, low_cpu_mem_usage=True,
+                student_path, torch_dtype=dtype, low_cpu_mem_usage=True,
                 attn_implementation=_ATTN_IMPL,
             ).to(device).eval()
             break
@@ -441,7 +441,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         for attempt in range(2):
             try:
                 student_model = AutoModelForCausalLM.from_pretrained(
-                    student_path, dtype=dtype, low_cpu_mem_usage=True,
+                    student_path, torch_dtype=dtype, low_cpu_mem_usage=True,
                     attn_implementation=_ATTN_IMPL,
                 ).to(device).eval()
                 same = (student_path == teacher_path)
@@ -464,7 +464,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                     print(f"  [alpha] Teacher loaded in 4-bit NF4")
                 else:
                     teacher_model = AutoModelForCausalLM.from_pretrained(
-                        teacher_path, dtype=dtype, low_cpu_mem_usage=True,
+                        teacher_path, torch_dtype=dtype, low_cpu_mem_usage=True,
                         attn_implementation=_ATTN_IMPL,
                     ).to(device).eval()
                 break
@@ -712,7 +712,7 @@ def measure_perplexity(model_path: str, prompts: list, max_tokens: int = 200) ->
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, dtype=dtype, low_cpu_mem_usage=True,
+        model_path, torch_dtype=dtype, low_cpu_mem_usage=True,
         attn_implementation=_ATTN_IMPL,
     ).to(device).eval()
 
@@ -1230,12 +1230,12 @@ def main():
         for _attempt in range(2):
             try:
                 _s_model = _AMLM.from_pretrained(
-                    args.student, dtype=_dtype, low_cpu_mem_usage=True,
+                    args.student, torch_dtype=_dtype, low_cpu_mem_usage=True,
                     attn_implementation=_ATTN_IMPL,
                 ).to(_device).eval()
                 _t_model = (_s_model if _same_models else
                             _AMLM.from_pretrained(
-                                args.teacher, dtype=_dtype, low_cpu_mem_usage=True,
+                                args.teacher, torch_dtype=_dtype, low_cpu_mem_usage=True,
                                 attn_implementation=_ATTN_IMPL,
                             ).to(_device).eval())
                 break
