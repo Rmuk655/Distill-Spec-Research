@@ -67,6 +67,9 @@ def api_dimensions():
     cols = ["draft_label", "loss_name", "dataset", "mode", "K", "temperature",
             "train_steps", "experiment_tag"]
     dims = {c: results_db.distinct_values(c) for c in cols}
+    # T=0.0 rows are perplexity-check placeholders (no real speculative-decoding run).
+    # Strip them so they never appear in the Temperature filter or dropdowns.
+    dims["temperature"] = [t for t in dims.get("temperature", []) if t != 0.0]
     return jsonify(dims)
 
 
