@@ -159,16 +159,10 @@ _patch_config_json_serialization()
 def _dtype_kwargs(dtype) -> dict:
     """Return the correct dtype kwarg for AutoModelForCausalLM.from_pretrained().
 
-    transformers ≥5.0  renamed  torch_dtype=  →  dtype=  (old name deprecated).
-    transformers <5.0  uses     torch_dtype=  (dtype= is unknown).
-    This helper returns the right dict so both versions work without warnings.
+    transformers >= 4.51 (required for Qwen3) supports dtype= and deprecates
+    torch_dtype=.  Always use dtype= — no version check needed.
     """
-    try:
-        import transformers as _tf
-        _major = int(_tf.__version__.split(".")[0])
-        return {"dtype": dtype} if _major >= 5 else {"torch_dtype": dtype}
-    except Exception:
-        return {"torch_dtype": dtype}  # safe fallback
+    return {"dtype": dtype}
 
 
 import results_db

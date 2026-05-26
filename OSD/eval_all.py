@@ -109,15 +109,13 @@ def _run_alpha(draft_label: str, draft_path: str, target_path: str,
     peak_vram_mb, per_prompt list.
     """
     import torch
-    import transformers
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from specInfer.generator import Generator
 
     def _dtype_kwargs(dt) -> dict:
-        try:
-            return {"dtype": dt} if int(transformers.__version__.split(".")[0]) >= 5 else {"torch_dtype": dt}
-        except Exception:
-            return {"torch_dtype": dt}
+        # transformers >= 4.51 (required for Qwen3) supports dtype= and
+        # deprecates torch_dtype=.  Always use dtype=.
+        return {"dtype": dt}
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16
