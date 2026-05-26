@@ -8,7 +8,7 @@ db/pipeline_state*.json
 
 # ── Orchestration runtime files (not experiment data) ─────────────────────────
 orchestration/.pipeline_lock
-orchestration/pipeline_state_*.json   # state files tracked intentionally — remove this line to gitignore them
+orchestration/pipeline_state_*.json   # runtime state — gitignored (git rm --cached applied)
 orchestration/wandb/                  # stale WandB runs from before db/wandb/ migration
 # Note: pipeline_output.log and be_progress.log now live in db/logs/ (above)
 

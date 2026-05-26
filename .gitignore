@@ -20,5 +20,9 @@ Thumbs.db
 # Runtime SQLite databases (re-created on every run)
 **/results.db
 
+# Pipeline runtime state (re-created by clean_restart.py on each run)
+gbv-research/orchestration/pipeline_state_*.json
+OSD/pipeline_state_*.json
+
 .claude/
 Claude/
