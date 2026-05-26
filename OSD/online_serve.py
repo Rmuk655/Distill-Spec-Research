@@ -128,35 +128,73 @@ def _kl_at_positions(
 
     Returns:
         Scalar loss averaged over the valid (rejected) positions.
-    """
-    # Cast to float32 before dividing by temperature to avoid fp16 overflow
-    s = student_logits.float() / temperature
-    t = teacher_logits.float() / temperature
 
-    log_s = F.log_softmax(s, dim=-1)
-    log_t = F.log_softmax(t, dim=-1)
-    p_t = t.softmax(dim=-1)
-    p_s = s.softmax(dim=-1)
+    Memory note
+    -----------
+    With V=151 936 (Qwen vocabulary) the naive approach of computing distributions
+    over the full (B, T, V) tensor before masking materialises ~1 GB per intermediate
+    tensor — easily 5–6 GB of temporaries before model weights.
+
+    Instead we **select rejected positions first** (flat index into B*T positions),
+    then compute distributions only on the much smaller (N_rejected, V) slice.
+    At alpha≈0.87 only ~13 % of tokens are rejected, so memory drops ~8×.
+    PyTorch fancy-index supports autograd, so gradients flow correctly.
+    """
+    B, T, V = student_logits.shape
+    mask_flat = wrong_mask.reshape(-1)           # (B*T,)
+
+    if mask_flat.sum() == 0:
+        # No rejected positions — return a differentiable zero so optimiser
+        # still has a valid grad (all zeros, no update).
+        return (student_logits * 0).sum()
+
+    # ── Select only rejected positions ──────────────────────────────────────
+    # student slice keeps the computation graph; teacher slice is detached
+    # (target_model already ran under torch.no_grad(), but .detach() is cheap
+    #  insurance against accidental grad leakage on teacher weights).
+    s_sel = student_logits.reshape(-1, V)[mask_flat].float() / temperature   # (N_rej, V) grad
+    t_sel = teacher_logits.reshape(-1, V)[mask_flat].detach().float() / temperature  # (N_rej, V) no grad
+
+    # Free the full (B, T, V) tensors before computing softmax distributions.
+    # student_logits retains its grad tape via s_sel; tgt can be freed completely.
+    del student_logits, teacher_logits
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # ── Compute distributions on the small (N_rejected, V) slices ────────────
+    log_s = F.log_softmax(s_sel, dim=-1)         # (N_rej, V) — needs grad
 
     if kl_method == "forward_kl":
-        # KL(target || student) — mode-covering, standard distillation
-        kl = (p_t * (log_t - log_s)).sum(dim=-1)  # (B, T)
+        # KL(target ∥ student) — mode-covering, standard distillation
+        # Only need p_t and log_s → skip materialising p_s entirely
+        with torch.no_grad():
+            log_t = F.log_softmax(t_sel, dim=-1)
+            p_t   = log_t.exp()
+        kl = (p_t * (log_t - log_s)).sum(dim=-1)              # (N_rej,)
+
     elif kl_method == "reverse_kl":
-        # KL(student || target) — mode-seeking
-        kl = (p_s * (log_s - log_t)).sum(dim=-1)  # (B, T)
+        # KL(student ∥ target) — mode-seeking
+        with torch.no_grad():
+            log_t = F.log_softmax(t_sel, dim=-1)
+        p_s = log_s.exp()
+        kl = (p_s * (log_s - log_t)).sum(dim=-1)              # (N_rej,)
+
     elif kl_method == "jsd":
         # Jensen-Shannon divergence — symmetric, bounded in [0, ln2]
-        m = 0.5 * (p_s + p_t)
+        with torch.no_grad():
+            log_t = F.log_softmax(t_sel, dim=-1)
+            p_t   = log_t.exp()
+        p_s   = log_s.exp()
+        m     = 0.5 * (p_s + p_t)
         log_m = (m + 1e-10).log()
         kl = (
             0.5 * (p_s * (log_s - log_m)).sum(dim=-1)
             + 0.5 * (p_t * (log_t - log_m)).sum(dim=-1)
-        )
+        )                                                       # (N_rej,)
     else:
         raise ValueError(f"Unknown kl_method: {kl_method!r}")
 
-    valid = wrong_mask.float()  # (B, T)
-    return (kl * valid).sum() / valid.sum().clamp(min=1)
+    return kl.mean()
 
 
 # ---------------------------------------------------------------------------
@@ -556,19 +594,28 @@ def update_step(
         log.debug("No rejected positions in buffer — skipping update")
         return 0.0
 
-    # Target forward (no grad)
+    # Target forward (no grad) — free activations immediately after to reclaim VRAM
     with torch.no_grad():
         tgt_logits = target_model(x).logits  # (B, T-1, V)
+    # Empty cache after target forward: KV-cache activations and intermediate
+    # activations from the target model are no longer needed.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # Draft forward (with grad)
     draft_model.train()
     stu_logits = draft_model(x).logits  # (B, T-1, V)
 
+    # _kl_at_positions selects rejected positions FIRST (N_rej ≪ B*T) and
+    # frees the full (B, T-1, V) logit tensors inside before softmax.
     loss = _kl_at_positions(stu_logits, tgt_logits, shifted_mask, kl_method, temperature)
     optimizer.zero_grad()
     loss.backward()
     torch.nn.utils.clip_grad_norm_(draft_model.parameters(), max_norm=1.0)
     optimizer.step()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # reclaim grad buffers before next speculative step
 
     return loss.item()
 
