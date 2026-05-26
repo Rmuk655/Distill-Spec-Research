@@ -21,14 +21,14 @@ Combining two ideas into one system:
 
 | Person | Role | Owns |
 |---|---|---|
-| Rahul | Columbia PhD Mentor / Research Lead | Research direction, novelty, EBE math, publication |
-| Mukund | Research Engineer | Implementation, experiments, benchmarking, logging |
+| Rahul Thomas | Columbia University PhD student / Research Lead | Research direction, novelty, EBE math, publication |
+| Krishnan R | IIT Hyderabad / Research Engineer | Implementation, experiments, benchmarking, logging |
 | PM | Research PM | Tracking, scope enforcement, coordination |
 
-**Rahul must approve all scope changes.** PM enforces no new directions after Week 2 scope lock.
+**Rahul Thomas must approve all scope changes.** PM enforces no new directions after Week 2 scope lock.
 
-Mukund must NOT own: publication positioning, novelty calibration, broad literature exploration.
-Rahul must NOT own: primary implementation, debugging, experiment tracking.
+Krishnan R must NOT own: publication positioning, novelty calibration, broad literature exploration.
+Rahul Thomas must NOT own: primary implementation, debugging, experiment tracking.
 
 ---
 
@@ -107,7 +107,7 @@ Architecture mismatch (0.5B Qwen2.5 vs 0.6B Qwen3) is fine — SD only requires 
 
 ## Hardware Environments
 
-### Laptop (Mukund's machine — RTX 500, 6GB VRAM)
+### Laptop (Krishnan R's machine — RTX 500, 6GB VRAM)
 - Fits: Qwen3-0.6B target + Qwen2.5-0.5B draft simultaneously (~2.4GB)
 - Does NOT fit: Qwen3-8B (~16GB)
 - Use for: Phase 1 smoke tests, fast iteration, pipeline verification
@@ -129,7 +129,7 @@ Architecture mismatch (0.5B Qwen2.5 vs 0.6B Qwen3) is fine — SD only requires 
 |---|---|---|
 | `forward_kl` | KL(target ∥ student). DistillSpec canonical (Section 3.1). Mode-covering. | Phase 1 baseline |
 | `ebe_token` | Acceptance-weighted MLE: `L = -Σ min(1,q/p).detach() × log p_draft(t)` | Phase 1 novel |
-| `ebe_block` | Analytic gradient through ∏αᵢ. Confirms with Rahul before implementing. | Phase 2 |
+| `ebe_block` | Analytic gradient through ∏αᵢ. Confirms with Rahul Thomas before implementing. | Phase 2 |
 | `reinforce` | Policy gradient with BE as reward. High variance. Needs server VRAM. | Phase 2+ |
 
 **KL direction**: forward KL — KL(target ∥ student). NOT reverse KL (mode-seeking, collapses to peaked draft).
@@ -231,13 +231,13 @@ Runs are tagged by experiment_tag (auto-generated timestamp); filter by `draft_l
 
 | Date | Decision | Owner | Rationale |
 |---|---|---|---|
-| — | KL direction: forward KL | Rahul | DistillSpec paper Section 3.1; mode-covering |
-| — | Do NOT use `wrong_token_ids` | Rahul | Distributional shift hurts acceptance rate |
-| — | Training mode: teacher-sample offline | Rahul | Targets actual inference distribution |
+| — | KL direction: forward KL | Rahul Thomas | DistillSpec paper Section 3.1; mode-covering |
+| — | Do NOT use `wrong_token_ids` | Rahul Thomas | Distributional shift hurts acceptance rate |
+| — | Training mode: teacher-sample offline | Rahul Thomas | Targets actual inference distribution |
 | — | Phase 1 target: Qwen3-0.6B (not 8B) | — | Only model fitting 6GB laptop |
-| — | Draft init: Qwen2.5-0.5B pre-trained | Rahul | Has language priors; converges faster than random |
-| — | GBV integration: subprocess only | Rahul | Draft is standard HF model; no deeper integration needed |
-| — | OSD online mode: keep but don't use Phase 1 | Rahul | May use for online SD in later phases |
+| — | Draft init: Qwen2.5-0.5B pre-trained | Rahul Thomas | Has language priors; converges faster than random |
+| — | GBV integration: subprocess only | Rahul Thomas | Draft is standard HF model; no deeper integration needed |
+| — | OSD online mode: keep but don't use Phase 1 | Rahul Thomas | May use for online SD in later phases |
 | — | EBE Phase 1: token-level surrogate | — | Differentiable, no verifier call; block-level is Phase 2 |
 | — | REINFORCE: defer to server | — | High variance; doubles VRAM; not feasible on laptop |
 
@@ -245,7 +245,7 @@ Runs are tagged by experiment_tag (auto-generated timestamp); filter by `draft_l
 
 ## Explicit Scope Exclusions
 
-The project SHALL NOT include (any of these appearing = flag to Rahul):
+The project SHALL NOT include (any of these appearing = flag to Rahul Thomas):
 - Diffusion drafting
 - Multi-device scheduling
 - MoE routing
@@ -262,10 +262,10 @@ The project SHALL NOT include (any of these appearing = flag to Rahul):
 | Phase | Target Week | Gate |
 |---|---|---|
 | Phase 1 | End of Week 3 | DistillSpec baseline + EBE token-level running on laptop; baseline numbers confirmed |
-| Phase 2 | End of Week 4 | Block-level EBE loss (Rahul provides math in Week 3 meeting); server runs with Qwen3-8B |
+| Phase 2 | End of Week 4 | Block-level EBE loss (Rahul Thomas provides math in Week 3 meeting); server runs with Qwen3-8B |
 | Phase 3 | Week 5+ | Online SD integration; robustness sweeps; EAGLE-3 comparison |
 
-**Scope lock**: end of Week 2. After that, no new directions without explicit Rahul decision.
+**Scope lock**: end of Week 2. After that, no new directions without explicit Rahul Thomas decision.
 
 ---
 
@@ -276,7 +276,7 @@ The project SHALL NOT include (any of these appearing = flag to Rahul):
 | GBV incompatible with Qwen3 | High | ✅ Resolved — upgrade transformers to ≥4.51 |
 | EBE loss non-differentiable | High | ✅ Resolved — token-level surrogate is differentiable; block-level confirmed differentiable via ∂αᵢ/∂θ |
 | Training diverges on Qwen3 | Medium | Fall back to lr=1e-5; reference AdaSpec |
-| EAGLE-3 already does this | Medium | Rahul to confirm novelty before Week 2 scope lock |
+| EAGLE-3 already does this | Medium | Rahul Thomas to confirm novelty before Week 2 scope lock |
 | Server not provisioned in time | Medium | Phase 1 (laptop) must be complete before requesting server |
 
 ---

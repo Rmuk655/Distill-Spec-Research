@@ -113,7 +113,7 @@ Deliverables achieved:
 
 **Goal**: determine whether distillation moves the needle; implement the correct EBE gradient.
 
-**Mukund**:
+**Krishnan R**:
 - Wait for KL-1000 and EBE-1000 pipeline runs to complete
 - Plot the 3×3 core matrix (Loss × Mode × K) from `viz_server.py`
 - Implement block-level analytic EBE in `train_qwen3.py` as `--loss block_ebe`
@@ -122,7 +122,7 @@ Deliverables achieved:
 - Run block_ebe-1000 on gsm8k, compare against token_ebe-1000
 - Deliverables: core result plots, block_ebe checkpoint, comparison table
 
-**Ram**:
+**Rahul Thomas**:
 - Review core 3×3 matrix results — is the EBE advantage on gbv/traversal visible?
 - Confirm whether block-level gradient is the intended Phase 2 loss, or REINFORCE
 - Decide: stay on token-level surrogate if results are already significant, or implement block-level
@@ -139,7 +139,7 @@ Deliverables achieved:
 
 **Goal**: reproduce Weeks 5 results at scale with the real target model.
 
-**Mukund**:
+**Krishnan R**:
 - Transfer `OSD/` + HF cache to server (use `SETUP.md` + `setup_download.py --config server`)
 - Re-run pipeline with `--config server` (Qwen3-0.6B draft → Qwen3-8B target)
 - Key rows to add to the experiment matrix:
@@ -148,7 +148,7 @@ Deliverables achieved:
 - Laptop qualifier for moving to server: kl1000 shows BE improvement ≥ 0.1 over baseline on specinfer
 - Deliverables: server BE numbers, comparison against laptop results
 
-**Ram**:
+**Rahul Thomas**:
 - Evaluate whether server results change the story
 - Decide on temperature and K sweep scope for the paper
 - Deliverables: go/no-go on current direction, paper scope confirmation
@@ -161,7 +161,7 @@ Deliverables achieved:
 
 **Goal**: establish the paper's comparison baseline and show distribution robustness.
 
-**Mukund**:
+**Krishnan R**:
 - Run EAGLE comparison using `eagle_bench.py` (already written):
   - Phase gen: extract hidden states from Qwen3-0.6B
   - Phase train: train EagleHead (1-layer transformer)
@@ -170,7 +170,7 @@ Deliverables achieved:
 - Dataset sweep: gsm8k → humaneval → math500 → mtbench → alpaca (robustness)
 - Deliverables: EAGLE BE numbers, temperature line plots, dataset robustness bar chart
 
-**Ram**:
+**Rahul Thomas**:
 - Confirm which EAGLE variant is the right comparison (EAGLE-1 or EAGLE-2, not EAGLE-3 since it uses Qwen3-specific hidden states)
 - Identify the key robustness claim: does our method degrade less than EAGLE under T shifts?
 - Deliverables: competition analysis, paper positioning
@@ -183,7 +183,7 @@ Deliverables achieved:
 
 **Goal**: make the evidence defensible at review.
 
-**Mukund**:
+**Krishnan R**:
 - Run 3 seeds for each key configuration (baseline, kl1000, block_ebe1000)
 - Report mean ± std on all BE numbers
 - Ablation table:
@@ -193,7 +193,7 @@ Deliverables achieved:
 - AdaSPEC ablation if time permits: train reference model, implement mask, compare
 - Deliverables: ablation table, variance analysis, confidence intervals
 
-**Ram**:
+**Rahul Thomas**:
 - Review claim strength: is block_ebe strictly better than KL on tree verifiers?
 - Identify any confounders (tokenization, prompt distribution, temperature)
 - Deliverables: claim validation, evidence review
@@ -204,7 +204,7 @@ Deliverables achieved:
 
 **Goal**: transform results into a paper narrative.
 
-**Mukund**:
+**Krishnan R**:
 - Write implementation + experiment sections
 - Produce all final figures (use `viz_server.py` charts as drafts, clean for paper):
   - Figure 1: Loss × Mode heatmap (3×3 core matrix)
@@ -214,7 +214,7 @@ Deliverables achieved:
   - Figure 5: Ablations table
 - Write appendix: hyperparameter details, reproducibility
 
-**Ram**:
+**Rahul Thomas**:
 - Introduction, method framing, related work
 - Novelty positioning: "we show that matching the training objective to the verifier's acceptance structure — via block-level EBE — provides gains that KL cannot, especially for tree-based verification"
 - Venue recommendation: ICLR Workshop on Efficient LLM Systems, or main track if results strong
@@ -226,13 +226,13 @@ Deliverables achieved:
 
 **Goal**: submission-ready paper.
 
-**Mukund**:
+**Krishnan R**:
 - Rerun any critical experiments flagged in Week 9 review
 - Clean the codebase (`OSD/` directory, remove dead code from `distill/` experiments)
 - Verify all results in DB match paper tables
 - Reproducibility checklist: `requirements.txt`, `SETUP.md`, `pipeline.py --dry_run`
 
-**Ram**:
+**Rahul Thomas**:
 - Final claim validation
 - Related work completeness check (Medusa, EAGLE, Sequoia, SpecTr, Traversal Verification)
 - Reviewer-proofing the novelty argument
@@ -277,15 +277,15 @@ Temperature sensitivity: run the above at T=0.6 and T=1.0. Show BE degrades less
 
 | Decision | Resolution | Owner | Date |
 |---|---|---|---|
-| KL direction | Forward KL (mode-covering, directly min. acceptance gap) | Ram | Week 2 |
-| Draft model | Qwen2.5-0.5B (pretrained, shared vocab with Qwen3) | Ram | Week 2 |
-| wrong_token_ids | Not used (DistillSpec trains on all positions) | Ram | Week 2 |
-| Sample source | Teacher-only (matches target's inference distribution) | Ram | Week 2 |
-| HF Trainer | Removed (plain PyTorch loop — simpler, sufficient) | Mukund | Week 3 |
-| AdaSPEC | Not in baseline; potential ablation in Week 8 | Ram | Week 3 |
-| Online mode | Excluded from Phase 1; revisit at Week 5 start | Ram | Week 3 |
-| EBE loss type | Token-level surrogate now; block-level analytic in Week 5 | Ram | Pending |
-| REINFORCE | Reserve for server; too expensive on laptop | Ram | Pending |
+| KL direction | Forward KL (mode-covering, directly min. acceptance gap) | Rahul Thomas | Week 2 |
+| Draft model | Qwen2.5-0.5B (pretrained, shared vocab with Qwen3) | Rahul Thomas | Week 2 |
+| wrong_token_ids | Not used (DistillSpec trains on all positions) | Rahul Thomas | Week 2 |
+| Sample source | Teacher-only (matches target's inference distribution) | Rahul Thomas | Week 2 |
+| HF Trainer | Removed (plain PyTorch loop — simpler, sufficient) | Krishnan R | Week 3 |
+| AdaSPEC | Not in baseline; potential ablation in Week 8 | Rahul Thomas | Week 3 |
+| Online mode | Excluded from Phase 1; revisit at Week 5 start | Rahul Thomas | Week 3 |
+| EBE loss type | Token-level surrogate now; block-level analytic in Week 5 | Rahul Thomas | Pending |
+| REINFORCE | Reserve for server; too expensive on laptop | Rahul Thomas | Pending |
 
 ---
 

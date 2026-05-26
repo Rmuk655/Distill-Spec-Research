@@ -78,8 +78,8 @@ work without any file.
 
 | Researcher | W&B username       | Notes                               |
 |------------|--------------------|-------------------------------------|
-| Ram        | `rkrishnaiyer`     | Uses `~/_netrc` cached login        |
-| Mukund     | `rmukund16`        | Needs `wandb_config.json` on laptop |
+| Krishnan R  | `rkrishnaiyer`     | Uses `~/_netrc` cached login        |
+| Rahul Thomas | `rmukund16`       | Needs `wandb_config.json` on laptop |
 
 ---
 

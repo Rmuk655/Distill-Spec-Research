@@ -165,6 +165,6 @@ Full results in `db/results.db`; visualise at http://127.0.0.1:5000.
 
 ## Team
 
-- **Krishnan R** (IIT Hyderabad) — implementation, experiments, benchmarking
-- **Rahul Thomas** (Phd Student, Columbia Univ) — research advisor
+- **Krishnan R** (IIT Hyderabad) — Research Engineer: implementation, experiments, benchmarking
+- **Rahul Thomas** (PhD Student, Columbia University) — Research Lead: direction, novelty, EBE math, publication
 - **Target**: ICLR mid-September 2026

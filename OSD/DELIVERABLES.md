@@ -1,5 +1,5 @@
 # DistillSpec + Tree Verification — Deliverables Report
-**Author:** Mukund R (implementation) / Ram (research decisions)  
+**Author:** Krishnan R (implementation) / Rahul Thomas (research decisions)  
 **Date:** 2026-05-21  
 **Direction:** Direction #1 — DistillSpec + SpecInfer / SpecTr / Traversal Verification  
 **Status:** Phase 1 complete on laptop hardware. Phase 2 (8B target) pending lab server access.
@@ -113,7 +113,7 @@ This is a differentiable surrogate for the per-token acceptance probability `min
 - **Dataset:** 170 diverse prompts (factual, coding, CS concepts, ML/AI, math, systems, DB, etc.)
 - **Teacher-sample mode:** frozen target generates 80-token continuations; both models score the full sequence. This matches the target's actual inference distribution rather than a static corpus.
 
-### 2.6 Assumptions Made (for Rahul to confirm)
+### 2.6 Assumptions Made (for Rahul Thomas to confirm)
 
 | Assumption | Basis | Confidence |
 |---|---|---|
@@ -123,7 +123,7 @@ This is a differentiable surrogate for the per-token acceptance probability `min
 | EBE loss = differentiable surrogate | Standard PyTorch autograd | High |
 | EBE replaces KL entirely (Phase 1) | Simpler, evaluate hybrid later | Medium |
 | 200 steps sufficient for proof-of-concept | Laptop constraint | Medium |
-| `wrong_token_ids` signal not used | Not in DistillSpec paper | Medium — confirm with Rahul |
+| `wrong_token_ids` signal not used | Not in DistillSpec paper | Medium — confirm with Rahul Thomas |
 
 ---
 
@@ -315,7 +315,7 @@ Current status: training loss convergence confirmed. Block efficiency directiona
 
 ---
 
-## 6. What We Need from Rahul (Open Items)
+## 6. What We Need from Rahul Thomas (Open Items)
 
 | Question | Our assumption | Needs confirmation |
 |---|---|---|
@@ -326,7 +326,7 @@ Current status: training loss convergence confirmed. Block efficiency directiona
 | Lab server GPU spec | Assumed A100 40GB | Need actual access |
 | Expected baseline BE on Qwen3-8B/0.6B | Projected 1.8–2.2 (untrained) | Need actual number for paper |
 | Publication target & deadline | Unknown | Needed for Week 2 scope lock |
-| Phase 2 "expected BE functions" | Our EBE surrogate | Rahul's meeting in Week 3 |
+| Phase 2 "expected BE functions" | Our EBE surrogate | Rahul Thomas's meeting in Week 3 |
 
 ---
 
