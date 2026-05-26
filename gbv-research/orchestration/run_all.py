@@ -103,10 +103,12 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)  # gbv-research/
 sys.path.insert(0, _HERE)
-sys.path.insert(0, os.path.join(_HERE, "distill"))
 # OSD/ — so `import fetch_datasets` resolves to OSD/fetch_datasets.py
 _OSD_DIR = os.path.join(os.path.dirname(_PARENT), "OSD")
 sys.path.insert(0, _OSD_DIR)
+# OSD/distill/ — so `from specInfer.generator import Generator` resolves correctly.
+# (specInfer package lives at OSD/distill/specInfer/, not at OSD/specInfer/)
+sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))
 # gbv-research/db/ MUST come LAST (position 0 wins) so `import results_db` resolves
 # to gbv-research/db/results_db.py — not OSD/results_db.py — and writes to db/results.db
 # which is where the dashboard reads from.

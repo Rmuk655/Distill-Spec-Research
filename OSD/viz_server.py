@@ -92,6 +92,26 @@ def api_runs():
     return jsonify(rows)
 
 
+@app.route("/api/purge_tag", methods=["POST"])
+def api_purge_tag():
+    """Delete all DB rows matching a specific experiment_tag.
+    POST body: {"tag": "ap-pf5pw4z6-20260525_2242-v1"}
+    Returns: {"deleted": N}
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    tag = data.get("tag", "").strip()
+    if not tag:
+        return jsonify({"error": "tag is required"}), 400
+    import sqlite3 as _sqlite3
+    con = _sqlite3.connect(results_db.DB_PATH)
+    cur = con.cursor()
+    cur.execute("DELETE FROM runs WHERE experiment_tag = ?", (tag,))
+    deleted = cur.rowcount
+    con.commit()
+    con.close()
+    return jsonify({"deleted": deleted, "tag": tag})
+
+
 @app.route("/api/dimensions")
 def api_dimensions():
     cols = ["draft_label", "loss_name", "dataset", "mode", "K", "temperature",
@@ -557,10 +577,22 @@ _HTML = r"""<!DOCTYPE html>
     <div id="f-train_steps"></div>
   </div>
   <div class="filter-section">
-    <label>Experiment Tag</label>
+    <label>Experiment Run</label>
+    <button class="btn btn-outline-primary btn-sm w-100 mb-1"
+            onclick="selectLatestTag()" title="Show only the most recent pipeline run">
+      ⟳ Latest run only
+    </button>
     <div id="f-experiment_tag"></div>
     <input type="text" id="etag-search" class="form-control form-control-sm mt-1"
            placeholder="search tags…" oninput="filterTagChips(this.value)">
+    <div id="purge-tag-panel" style="display:none;margin-top:4px">
+      <small class="text-muted">Selected tag:</small>
+      <div id="purge-tag-name" style="font-size:11px;word-break:break-all;color:#888"></div>
+      <button class="btn btn-outline-danger btn-sm w-100 mt-1"
+              onclick="purgeSelectedTag()" title="Permanently delete all DB rows for the selected tag">
+        🗑 Wipe this tag's data
+      </button>
+    </div>
   </div>
 
   <hr>
@@ -1019,6 +1051,18 @@ async function init() {
   startAutoRefresh(30);
 }
 
+/** Shorten "ap-pf5pw4z6-20260526_0915-v6" → "v6 · 05/26 09:15" */
+function shortTagLabel(tag) {
+  if (!tag) return '(untagged)';
+  // Format: ap-PREFIX-YYYYMMDD_HHMM-vN
+  const m = tag.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})-v(\d+)$/);
+  if (m) {
+    const [, y, mo, d, hh, mm, v] = m;
+    return `v${v} · ${mo}/${d} ${hh}:${mm}`;
+  }
+  return tag.slice(-16); // fallback: last 16 chars
+}
+
 function buildFilterChips() {
   const filterCols = ['draft_label','loss_name','dataset','mode','K','temperature','train_steps','experiment_tag'];
   filterCols.forEach(col => {
@@ -1027,13 +1071,66 @@ function buildFilterChips() {
     (DIMS[col] || []).forEach(val => {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      chip.textContent = val;
       chip.dataset.col = col;
       chip.dataset.val = val;
-      chip.onclick = () => toggleChip(chip);
+      if (col === 'experiment_tag') {
+        chip.textContent = shortTagLabel(val);
+        chip.title = val;  // full tag on hover
+      } else {
+        chip.textContent = val;
+      }
+      chip.onclick = () => {
+        toggleChip(chip);
+        updatePurgePanel();
+      };
       div.appendChild(chip);
     });
   });
+}
+
+/** Show/hide the purge panel based on how many experiment_tag chips are selected */
+function updatePurgePanel() {
+  const active = [...document.querySelectorAll('#f-experiment_tag .chip.active')];
+  const panel = document.getElementById('purge-tag-panel');
+  const nameEl = document.getElementById('purge-tag-name');
+  if (active.length === 1) {
+    panel.style.display = '';
+    nameEl.textContent = active[0].dataset.val;
+  } else {
+    panel.style.display = 'none';
+    nameEl.textContent = '';
+  }
+}
+
+/** Select only the most recently inserted experiment_tag */
+function selectLatestTag() {
+  const chips = [...document.querySelectorAll('#f-experiment_tag .chip')];
+  if (chips.length === 0) return;
+  // Tags embed timestamp; lexicographic max = latest
+  chips.forEach(c => c.classList.remove('active'));
+  const latest = chips.reduce((a, b) => a.dataset.val > b.dataset.val ? a : b);
+  latest.classList.add('active');
+  updatePurgePanel();
+  applyFilters();
+}
+
+/** Delete all DB rows for the single selected experiment_tag (with confirmation) */
+async function purgeSelectedTag() {
+  const active = [...document.querySelectorAll('#f-experiment_tag .chip.active')];
+  if (active.length !== 1) return;
+  const tag = active[0].dataset.val;
+  const label = shortTagLabel(tag);
+  if (!confirm(`Permanently delete ALL runs for:\n${label}\n(${tag})\n\nThis cannot be undone.`)) return;
+  const resp = await fetch('/api/purge_tag', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tag})
+  });
+  const result = await resp.json();
+  if (result.error) { alert('Error: ' + result.error); return; }
+  alert(`Deleted ${result.deleted} run(s) for ${label}.`);
+  // Reload page so chip list and DB counts reflect the deletion
+  window.location.reload();
 }
 
 function toggleChip(chip) {
@@ -1077,6 +1174,7 @@ function clearFilters() {
   // Reset HW_TIER_FILTER to all tiers selected
   HW_TIER_FILTER = new Set(['laptop', 'colab', 'a100']);
   document.querySelectorAll('.hw-tier-chip').forEach(c => c.classList.add('active'));
+  updatePurgePanel();
   applyFilters();
 }
 
@@ -1142,7 +1240,13 @@ async function loadData() {
   // Client-side filter for multi-select chips
   Object.entries(activeChips).forEach(([col, vals]) => {
     if (vals.length > 0) {
-      runs = runs.filter(r => vals.includes(String(r[col])));
+      runs = runs.filter(r => {
+        const v = r[col];
+        // experiment_tag: rows with NULL tag (perplexity/untagged) always pass through
+        // so that filtering by tag doesn't erase perplexity context rows.
+        if (col === 'experiment_tag' && v == null) return true;
+        return vals.includes(String(v));
+      });
     }
   });
 

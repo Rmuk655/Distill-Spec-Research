@@ -28,12 +28,14 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)   # gbv-research/
 sys.path.insert(0, _HERE)
-sys.path.insert(0, os.path.join(_HERE, "distill"))
 # gbv-research/db/ — so `import results_db` resolves to gbv-research/db/results_db.py
 sys.path.insert(0, os.path.join(_PARENT, "db"))
 # OSD/ — so `import fetch_datasets` resolves to OSD/fetch_datasets.py
 _OSD_DIR = os.path.join(os.path.dirname(_PARENT), "OSD")
 sys.path.insert(0, _OSD_DIR)
+# OSD/distill/ — so `from specInfer.generator import Generator` resolves correctly.
+# (specInfer package lives at OSD/distill/specInfer/, not at OSD/specInfer/)
+sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))
 
 import results_db
 import fetch_datasets as _fd
