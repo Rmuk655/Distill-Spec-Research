@@ -10,20 +10,23 @@ The code in this directory is the **OSD (Online Speculative Decoding)** codebase
 
 ## Files modified for this research project
 
-| File | Change |
-|---|---|
-| `train_qwen3.py` | Rewritten for Qwen3 models; added EBE, reverse-KL, JSD, L1 losses; added `--merge_only` flag for LoRA merging; added crash-safe checkpoint resume |
-| `online_serve.py` | Added OOM-safe logit masking before softmax to reduce peak VRAM on 4 GB GPUs |
+These files were modified and have since been moved to `gbv-research/algorithms/`
+(Phase 2 migration — commit `16f0560`). This directory now contains only the
+original, unmodified OSD codebase.
 
-All other files in this directory are unmodified from the original repository.
+| File | Change | Current location |
+|---|---|---|
+| `train_qwen3.py` | Rewritten for Qwen3 models; added EBE, reverse-KL, JSD, L1 losses; added `--merge_only` flag; added crash-safe checkpoint resume | `gbv-research/algorithms/train_qwen3.py` |
+| `online_serve.py` | Added OOM-safe logit masking before softmax to reduce peak VRAM on 4 GB GPUs | `gbv-research/algorithms/online_serve.py` |
 
-## Planned migration
+All files currently in this directory are unmodified from the original repository.
 
-Once the active pipeline run completes (Phase 2 of the research cleanup):
-1. `train_qwen3.py` and `online_serve.py` will be moved to `gbv-research/algorithms/`
-2. This directory will be converted to a **git submodule** pointing to the original repo:
-   ```
-   git submodule add https://github.com/LiuXiaoxuanPKU/OSD OSD
-   ```
-   This makes attribution machine-readable: `.gitmodules` will link directly to the
-   upstream repository and commit hash.
+## Future migration
+
+This directory will be converted to a **git submodule** pointing to the original repo
+after the current pipeline run completes:
+```
+git submodule add https://github.com/LiuXiaoxuanPKU/OSD OSD
+```
+This makes attribution machine-readable: `.gitmodules` will link directly to the
+upstream repository and commit hash.
