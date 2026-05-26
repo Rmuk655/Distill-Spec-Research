@@ -37,3 +37,5 @@ OSD/viz_server_*.log
 
 .claude/
 Claude/
+# EAGLE reference — untracked; pending submodule conversion (delete dir first, then git submodule add)
+EAGLE/

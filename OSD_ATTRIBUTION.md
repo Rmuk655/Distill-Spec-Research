@@ -1,6 +1,8 @@
 # Attribution
 
-The code in this directory is the **OSD (Online Speculative Decoding)** codebase.
+The code in the **`OSD/`** directory is the **OSD (Online Speculative Decoding)** codebase.
+This file lives at the repo root because `OSD/` is a git submodule (the submodule
+directory is owned by the upstream repo and cannot hold our custom files).
 
 | Field | Value |
 |---|---|
