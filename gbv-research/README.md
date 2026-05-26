@@ -165,6 +165,6 @@ Full results in `db/results.db`; visualise at http://127.0.0.1:5000.
 
 ## Team
 
-- **Mukund** (IIT Hyderabad) — implementation, experiments, benchmarking
-- **Ram** (Adobe) — research advisor
+- **Krishnan R** (IIT Hyderabad) — implementation, experiments, benchmarking
+- **Rahul Thomas** (Phd Student, Columbia Univ) — research advisor
 - **Target**: ICLR mid-September 2026
