@@ -1056,9 +1056,22 @@ def run_smoke_preflight(draft, target):
 
     t0 = time.time()
     PARENT = os.path.dirname(HERE)
-    proc = subprocess.Popen(smoke_cmd, cwd=PARENT, env=env)
+    # stdout/stderr explicitly piped so the traceback appears in the pipeline
+    # log even when pipeline.py runs detached (DETACHED_PROCESS on Windows
+    # does not reliably inherit file handles to grandchildren).
+    proc = subprocess.Popen(
+        smoke_cmd, cwd=PARENT, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        bufsize=1, universal_newlines=True,
+    )
     _child_popen = proc
     _write_lock(child_pid=proc.pid)
+
+    # Stream subprocess output directly to our stdout (which is the log file)
+    if proc.stdout:
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+        proc.stdout.close()
 
     try:
         rc = proc.wait(timeout=2400)          # 40-min safety cap
