@@ -209,62 +209,219 @@ Both `pipeline_state_laptop.json` and `pipeline_state_laptop_smoke.json` are res
 
 ---
 
-## 8. Colab / Kaggle setup
+## 8. Ephemeral compute — Colab, Kaggle, Modal
 
-### 8a. Free Colab T4 (recommended starting point)
+Colab, Kaggle, and Modal all wipe local `/content` or `/tmp` disk when the
+session ends.  **Without persistent storage you lose every checkpoint.**
+This section shows the exact commands for each platform.
 
-The `colab` config uses `--load_in_4bit` on every step automatically —
-no extra flags needed.
+---
+
+### 8a. Free Colab T4 — persistent checkpoints via Google Drive
+
+**Why Drive?**  Drive is the only storage that survives a Colab session restart.
+We pass `--ckpt_root` to pipeline.py so every checkpoint lands on Drive instead
+of the ephemeral local disk.
 
 ```python
-# Cell 1 — install + clone
-!pip install bitsandbytes          # required for 4-bit teacher loading
-!pip install -r requirements.txt   # rest of deps
+# ── Cell 1: mount Drive (do this FIRST, before anything else) ──────────────
+from google.colab import drive
+drive.mount('/content/drive')
 
-# Cell 2 — W&B auth (use Colab Secrets or paste key directly)
+# Create your persistent checkpoint directory once:
+import os
+DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
+os.makedirs(DRIVE_CKPT, exist_ok=True)
+print(f"Checkpoints will survive session restarts at: {DRIVE_CKPT}")
+
+# ── Cell 2: clone repo + install deps ──────────────────────────────────────
+!git clone https://github.com/Rmuk655/Distill-Spec-Research.git
+%cd Distill-Spec-Research/gbv-research
+!pip install -r requirements.txt
+!pip install bitsandbytes    # required for 4-bit teacher on T4
+
+# ── Cell 3: W&B auth (use Colab Secrets tab or paste key) ──────────────────
 import os
 os.environ["WANDB_API_KEY"] = "wandb_v1_..."   # your key
 os.environ["WANDB_ENTITY"]  = "your-username"
 os.environ["WANDB_PROJECT"] = "specdist-gbv"
 
-# Cell 3 — fetch training data (eval sets already in repo)
+# ── Cell 4: fetch training data (eval sets already in repo) ────────────────
 !python OSD/fetch_datasets.py --datasets gsm8k
 
-# Cell 4 — run (--yes skips interactive prompts)
-!python orchestration/pipeline.py --config colab --yes
+# ── Cell 5: run pipeline with Drive checkpoints ─────────────────────────────
+# --ckpt_root → all checkpoints go to Drive, not the ephemeral /content disk
+# --config colab → loads 8B teacher in 4-bit NF4 (fits on T4's 15 GB)
+# --yes → skip interactive prompts (required in notebooks)
+DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
+!python orchestration/pipeline.py \
+    --config colab \
+    --ckpt_root {DRIVE_CKPT} \
+    --yes
 ```
 
 **VRAM breakdown on T4 (15 GB):**
 - Qwen3-8B teacher in 4-bit NF4: ~5 GB
 - Qwen3-0.6B draft in bfloat16: ~1.2 GB
 - LoRA + optimizer + activations: ~2.5 GB
-- **Total: ~8–9 GB** → 6 GB headroom
+- **Total: ~8–9 GB** → 6 GB headroom on T4
 
-**Session survival tips:**
-- Mount Google Drive and point `--output` there:
-  ```python
-  # Add to your pipeline.py invocation or set manually:
-  # db/checkpoints/ → /content/drive/MyDrive/specdist/checkpoints/
-  from google.colab import drive
-  drive.mount('/content/drive')
-  ```
-  The pipeline writes checkpoints to `db/checkpoints/` by default. Symlink
-  or set `_CKPT_ROOT` in pipeline.py to a Drive path to survive session death.
+**Resuming after session death:**
+
+Colab sessions die after ~90 min idle (or sooner with free tier).  When you
+restart:
+
+```python
+# Cell 1: remount Drive (always first)
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Cell 2: re-run pipeline — it auto-skips steps whose done_check files exist on Drive
+DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
+!python orchestration/pipeline.py \
+    --config colab \
+    --ckpt_root {DRIVE_CKPT} \
+    --yes
+```
+
+The pipeline reads `adapter_model.safetensors` and `config.json` from Drive to
+detect completed steps — no manual bookkeeping needed.
+
+**Tips:**
 - Run `--smoke` first (~45 min) to verify no crashes before the overnight run.
-- Colab disconnects after ~90 min idle — keep the tab active or use Colab Pro.
+- Colab disconnects after ~90 min idle — keep the browser tab active or use
+  Colab Pro (persistent sessions up to 12 hours).
+- Drive writes are slow (~50 MB/s).  Milestone checkpoints (`--milestone_every`)
+  are what matter for resume — `ckpt_latest/` is overwritten each time.
+
+---
 
 ### 8b. Colab Pro / Kaggle / any A100 (24 GB+)
 
-Use `--config server` — loads the 8B teacher in full bfloat16, no quantisation:
+No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB:
 
-```bash
-# Kaggle: attach your repo as a dataset, then in a notebook cell:
-!WANDB_API_KEY="wandb_v1_..." python orchestration/pipeline.py --config server --yes
+```python
+# Colab Pro / A100: use server config (bf16 teacher, no quantisation)
+DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
+!python orchestration/pipeline.py \
+    --config server \
+    --ckpt_root {DRIVE_CKPT} \
+    --yes
 ```
 
-### 8c. Manual standalone run (no pipeline orchestrator)
+```bash
+# Kaggle: attach this repo as a dataset, point ckpt_root to /kaggle/working
+!python orchestration/pipeline.py \
+    --config server \
+    --ckpt_root /kaggle/working/specdist/checkpoints \
+    --yes
+```
 
-If you want to run a single training step directly:
+Kaggle sessions persist for the duration of the run (up to 12 hours) but
+checkpoints are NOT saved between sessions — download the output manually
+from the Kaggle session output panel when done.
+
+---
+
+### 8c. Modal (recommended for overnight / paper-quality runs)
+
+Modal gives on-demand A100 GPUs billed per second.  All checkpoints live in
+a **persistent Modal Volume** (`specdist-vol`) that survives container
+restarts — you never lose a checkpoint even if Modal preempts your run.
+
+The training script commits the volume every 5 minutes automatically.
+On restart, `train_qwen3.py` auto-resumes from `ckpt_latest/` — no flags
+needed.
+
+#### One-time setup
+
+```bash
+pip install modal
+modal token new          # opens browser for auth (one-time per machine)
+```
+
+#### First run — download models (~10 min, ~16 GB, free)
+
+```bash
+# Downloads Qwen3-0.6B and Qwen3-8B into the persistent volume's HF cache.
+# Run once; all subsequent training runs use the cached weights offline.
+modal run OSD/modal_train.py::download_models
+```
+
+#### Upload training data
+
+```bash
+# Copies OSD/data/gsm8k_train.jsonl (and any other .jsonl) to /vol/data/
+# Run after download_models and before any training.
+modal run OSD/modal_train.py::upload_dataset
+```
+
+#### Train individual losses
+
+```bash
+modal run OSD/modal_train.py::train_kl       # forward KL (DistillSpec baseline)
+modal run OSD/modal_train.py::train_ebe      # EBE block-level loss (novel)
+modal run OSD/modal_train.py::train_rev_kl   # reverse KL (ablation)
+modal run OSD/modal_train.py::train_jsd      # Jensen-Shannon (ablation)
+modal run OSD/modal_train.py::train_l1       # L1 total-variation (ablation)
+modal run OSD/modal_train.py::train_online   # Online OSD adaptation
+
+# Custom args — override steps, lr, dataset:
+modal run OSD/modal_train.py::run --loss ebe --steps 2000 --lr 1e-4
+modal run OSD/modal_train.py::run --loss forward_kl \
+    --dataset /vol/data/gsm8k_train.jsonl --steps 1000
+```
+
+#### Run the full pipeline (all 6 losses, ~2 hours on A100-40GB)
+
+```bash
+modal run OSD/modal_train.py::run_pipeline
+modal run OSD/modal_train.py::run_pipeline --steps 500   # shorter sweep
+```
+
+#### Monitor progress
+
+```bash
+# In a second terminal while training is running:
+modal app logs <app-id>     # tail live logs
+```
+
+#### Download checkpoints when done
+
+```bash
+# Convenience command (wraps modal volume get):
+modal run OSD/modal_train.py::download_checkpoints
+
+# Or manually:
+modal volume get specdist-vol /checkpoints ./local_checkpoints
+```
+
+#### Crash resume
+
+Modal containers can be preempted or OOM-killed.  The training script saves
+`ckpt_latest/` every 100 steps (configurable via `--save_every`), and the
+Modal volume is committed every 5 minutes.  To resume:
+
+```bash
+# Just re-run the same command — train_qwen3.py detects ckpt_latest/ and
+# resumes from the last saved step automatically.
+modal run OSD/modal_train.py::train_kl
+```
+
+#### GPU options
+
+| GPU | VRAM | Cost | Use case |
+|-----|------|------|----------|
+| `A10G` | 24 GB | ~$1.10/hr | Use with `--load_in_4bit` for 8B teacher |
+| `A100-40GB` | 40 GB | ~$2.50/hr | Default — 8B teacher in bfloat16 |
+| `A100-80GB` | 80 GB | ~$3.70/hr | Extra headroom, long sequences |
+
+To use a different GPU, edit `@app.function(gpu=...)` in `modal_train.py` or
+run with `run.with_options(gpu="A10G").local(...)`.
+
+---
+
+### 8d. Manual standalone run (single training step, no pipeline orchestrator)
 
 ```bash
 # Colab free T4 — must pass --load_in_4bit manually:
@@ -285,10 +442,10 @@ python OSD/train_qwen3.py \
     --output ./db/checkpoints/kl-8b
 ```
 
-**General notes for all ephemeral sessions:**
-- Checkpoints and W&B logs are lost when the session dies — expected.
-- The pipeline state file (`pipeline_state_colab.json`) is also lost.
-  Re-running `pipeline.py --yes` auto-skips steps whose `done_check` file
-  exists on disk (i.e. in Drive), so progress is preserved if checkpoints
-  are on Drive.
-- Always pass `--yes` on Colab/Kaggle to skip interactive prompts.
+**Notes for all ephemeral sessions:**
+- Always pass `--yes` on Colab/Kaggle/Modal to skip interactive prompts.
+- The pipeline state file (`pipeline_state_colab.json`) is on local disk and
+  lost on session death — but `--ckpt_root` on Drive/volume means `done_check`
+  files persist, so re-running `pipeline.py --yes` auto-skips completed steps.
+- W&B logs sync to the cloud in real time — they are always preserved even if
+  the session dies mid-run.

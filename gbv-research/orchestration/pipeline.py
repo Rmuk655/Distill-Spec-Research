@@ -301,7 +301,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
 
 
 def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
-                load_in_4bit=False):
+                load_in_4bit=False, ckpt_root=None):
     """Build the STEPS list for a given draft/target model pair.
 
     Pipeline structure (same for both smoke and full — only numbers differ):
@@ -344,6 +344,30 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
     _4bit = ["--load_in_4bit"] if load_in_4bit else []
+
+    # ── Checkpoint directory resolver ─────────────────────────────────────────
+    # --ckpt_root overrides the default gbv-research/db/checkpoints/ location.
+    # Use this for ephemeral compute (Colab, Modal, Kaggle) where local disk
+    # is wiped on session death and you want checkpoints on persistent storage:
+    #   Colab + Google Drive: --ckpt_root /content/drive/MyDrive/specdist/checkpoints
+    #   Modal:                set via modal_train.py (volume at /vol/checkpoints/)
+    #   Kaggle:               --ckpt_root /kaggle/working/specdist/checkpoints
+    #
+    # NOTE: _ckpt and _merged MUST be assigned in both branches of this if/else.
+    # Python marks any name assigned anywhere inside a function as "local" for
+    # the entire function body.  A one-sided `if ckpt_root: def _ckpt …` means
+    # _ckpt is local-but-unbound when ckpt_root is None → UnboundLocalError.
+    if ckpt_root:
+        os.makedirs(ckpt_root, exist_ok=True)
+        _ckpt   = lambda name: os.path.join(ckpt_root, name)           # noqa: E731
+        _merged = lambda name: os.path.join(ckpt_root, name + "_merged")  # noqa: E731
+        print(f"  [pipeline] Checkpoint root overridden: {ckpt_root}")
+    else:
+        # Fall back to the module-level helpers (gbv-research/db/checkpoints/ with
+        # OSD legacy fallback).  globals()["_ckpt"] is used instead of a bare `_ckpt`
+        # reference so that Python's local-variable detection doesn't complain.
+        _ckpt   = globals()["_ckpt"]    # noqa: E731 — module-level default
+        _merged = globals()["_merged"]  # noqa: E731
 
     def _ec(student_path, label, datasets="gsm8k", task_score=False):
         """Shorthand: eval cmd with smoke-aware parameters."""
@@ -1195,6 +1219,13 @@ def main():
                         "is not a useful paper baseline.  Must be rerun for each new "
                         "target model or ephemeral compute session (Kaggle/Colab lose "
                         "checkpoints on session restart).  Adds ~3-6 hours on A100.")
+    p.add_argument("--ckpt_root", default=None,
+                   help="Persistent checkpoint directory — overrides the default "
+                        "gbv-research/db/checkpoints/ location.  Use on ephemeral "
+                        "compute where local disk is wiped on session death. "
+                        "Colab + Google Drive: /content/drive/MyDrive/specdist/checkpoints  "
+                        "Modal: /vol/checkpoints (set automatically by modal_train.py)  "
+                        "Kaggle: /kaggle/working/specdist/checkpoints")
     args = p.parse_args()
 
     cfg = CONFIGS[args.config]
@@ -1214,7 +1245,8 @@ def main():
     if args.status or args.dry_run:
         STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                             smoke=args.smoke, eagle=args.eagle,
-                            load_in_4bit=_load_4bit)
+                            load_in_4bit=_load_4bit,
+                            ckpt_root=args.ckpt_root)
         _print_header(cfg, draft, target, args)
         state = load_state()
         for step in STEPS:                          # sync done_check files
@@ -1240,7 +1272,8 @@ def main():
 
     STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                         smoke=args.smoke, eagle=args.eagle,
-                        load_in_4bit=_load_4bit)
+                        load_in_4bit=_load_4bit,
+                        ckpt_root=args.ckpt_root)
 
     _print_header(cfg, draft, target, args)
 
