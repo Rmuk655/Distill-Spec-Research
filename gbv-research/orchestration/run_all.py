@@ -94,6 +94,47 @@ sys.path.insert(0, _OSD_DIR)
 # which is where the dashboard reads from.
 sys.path.insert(0, os.path.join(_PARENT, "db"))
 
+# ---------------------------------------------------------------------------
+# Transformers 4.55.x dtype-serialization bug-fix (applied once at import time)
+#
+# Root cause: Qwen configs store "dtype": "bfloat16" in config.json.
+# transformers 4.55.x converts that string to torch.bfloat16 (a torch.dtype
+# object) in from_dict(), then calls logger.info(f"Model config {config}").
+# The f-string evaluates config.__repr__() → to_json_string() → json.dumps(),
+# which crashes: "Object of type dtype is not JSON serializable".
+#
+# Fix: monkey-patch PretrainedConfig.to_json_string to convert torch.dtype
+# objects to strings before serialization.  The patch is idempotent and
+# applies globally — covers compute_perplexity(), run_alpha(), run_specinfer(),
+# and every other from_pretrained() call in this file.
+# ---------------------------------------------------------------------------
+def _patch_config_json_serialization():
+    try:
+        import json, torch
+        from transformers import PretrainedConfig
+        _orig = PretrainedConfig.to_json_string
+        if getattr(_orig, "_dtype_patch_applied", False):
+            return  # already patched (e.g. if run_all is imported twice)
+        def _safe(self, use_diff=True):
+            try:
+                return _orig(self, use_diff=use_diff)
+            except TypeError:
+                # Fallback: stringify any torch.dtype values before json.dumps
+                d = self.to_diff_dict() if use_diff else self.to_dict()
+                def _fix(o):
+                    if isinstance(o, dict):
+                        return {k: _fix(v) for k, v in o.items()}
+                    if isinstance(o, torch.dtype):
+                        return str(o).replace("torch.", "")
+                    return o
+                return json.dumps(_fix(d), indent=2, sort_keys=True) + "\n"
+        _safe._dtype_patch_applied = True
+        PretrainedConfig.to_json_string = _safe
+    except Exception:
+        pass   # transformers not installed yet — patch will be applied lazily
+
+_patch_config_json_serialization()
+
 import results_db
 import fetch_datasets as _fd
 # Override DATA_DIR so fetch_datasets reads from/writes to gbv-research/core/datasets/raw/
@@ -1176,6 +1217,9 @@ def main():
     if _has_alpha:
         import torch as _torch
         from transformers import AutoTokenizer as _ATok, AutoModelForCausalLM as _AMLM
+        # dtype-serialization patch already applied at module load time
+        # (see _patch_config_json_serialization() at top of this file)
+        _patch_config_json_serialization()   # no-op if already applied
         _device, _dtype = _pick_device()
         print(f"\n-- Pre-loading models for alpha eval (1 load shared across all datasets) --")
         _tok = _ATok.from_pretrained(args.teacher, use_fast=False)
