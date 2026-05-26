@@ -31,8 +31,14 @@ sys.path.insert(1, _OSD_DIR)         # OSD/ second (for any other local imports)
 import results_db
 
 HERE          = _OSD_DIR
-_BE_LOG       = os.path.join(_DB_DIR, "logs", "be_progress.log")
-_PIPELINE_LOG = os.path.join(_DB_DIR, "logs", "pipeline_output.log")
+# Logs are written by pipeline.py / run_all.py into orchestration/.
+# Fall back to db/logs/ copies for compatibility with older sessions.
+_BE_LOG       = os.path.join(_ORCH_DIR, "be_progress.log")
+_PIPELINE_LOG = os.path.join(_ORCH_DIR, "pipeline_output.log")
+if not os.path.exists(_BE_LOG):
+    _BE_LOG = os.path.join(_DB_DIR, "logs", "be_progress.log")
+if not os.path.exists(_PIPELINE_LOG):
+    _PIPELINE_LOG = os.path.join(_DB_DIR, "logs", "pipeline_output.log")
 
 try:
     from flask import Flask, jsonify, request, render_template_string
