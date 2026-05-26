@@ -36,6 +36,23 @@ import os
 import sys
 import time
 
+# ---------------------------------------------------------------------------
+# Results DB — wire to gbv-research/db/results.db (the canonical DB read by
+# viz_server.py).  Python auto-adds the script's directory (OSD/) as
+# sys.path[0], and OSD/results_db.py also exists — so without this explicit
+# prepend, `import results_db` would import the WRONG file and write to
+# OSD/results.db instead of gbv-research/db/results.db, making training
+# curves invisible in the dashboard.
+# ---------------------------------------------------------------------------
+_GBV_DB_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gbv-research", "db"))
+if os.path.isdir(_GBV_DB_DIR) and _GBV_DB_DIR not in sys.path:
+    sys.path.insert(0, _GBV_DB_DIR)
+try:
+    import results_db as _results_db          # gbv-research/db/results_db.py
+except ImportError:
+    _results_db = None                        # DB optional — training still works without it
+
 # Offline mode — prevents HF Hub network calls on cached / air-gapped setups.
 # Default is ON (safe for most runs where models are already downloaded).
 # First-time run on Kaggle / Colab where models haven't been cached yet?
@@ -1229,23 +1246,23 @@ def main():
                 if avg_aw     is not None: _wlog["train/accept_weight"] = avg_aw
                 if _gpu_util  is not None: _wlog["train/gpu_util_pct"]  = _gpu_util
                 _wandb.log(_wlog, step=step + 1)
-            # Save to results DB (train split)
-            try:
-                import sys as _sys
-                _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-                import results_db as _rdb
-                _rdb.insert_train_step(
-                    label=os.path.basename(args.output),
-                    loss_name=args.loss,
-                    step=step + 1,
-                    loss=avg_l,
-                    learning_rate=args.lr,
-                    lora_rank=args.lora_r,
-                    accept_weight=avg_aw,
-                    split="train",
-                )
-            except Exception:
-                pass  # DB logging is best-effort
+            # Save to results DB (train split) — uses _results_db imported at top of file.
+            # _results_db points to gbv-research/db/results_db.py → writes to
+            # gbv-research/db/results.db, the same DB the dashboard (viz_server.py) reads.
+            if _results_db is not None:
+                try:
+                    _results_db.insert_train_step(
+                        label=os.path.basename(args.output),
+                        loss_name=args.loss,
+                        step=step + 1,
+                        loss=avg_l,
+                        learning_rate=args.lr,
+                        lora_rank=args.lora_r,
+                        accept_weight=avg_aw,
+                        split="train",
+                    )
+                except Exception:
+                    pass  # DB logging is best-effort
 
         # ── Validation loss ───────────────────────────────────────────────────
         if (args.val_every > 0 and val_prompts
@@ -1262,22 +1279,20 @@ def main():
                 if val_aw is not None:
                     _vlog["val/accept_weight"] = val_aw
                 _wandb.log(_vlog, step=step + 1)
-            try:
-                import sys as _sys2
-                _sys2.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-                import results_db as _rdb2
-                _rdb2.insert_train_step(
-                    label=os.path.basename(args.output),
-                    loss_name=args.loss,
-                    step=step + 1,
-                    loss=val_loss,
-                    learning_rate=args.lr,
-                    lora_rank=args.lora_r,
-                    accept_weight=val_aw,
-                    split="val",
-                )
-            except Exception:
-                pass
+            if _results_db is not None:
+                try:
+                    _results_db.insert_train_step(
+                        label=os.path.basename(args.output),
+                        loss_name=args.loss,
+                        step=step + 1,
+                        loss=val_loss,
+                        learning_rate=args.lr,
+                        lora_rank=args.lora_r,
+                        accept_weight=val_aw,
+                        split="val",
+                    )
+                except Exception:
+                    pass
 
             # ── Health tracking: record val loss, update best, check patience ─
             if math.isfinite(val_loss):

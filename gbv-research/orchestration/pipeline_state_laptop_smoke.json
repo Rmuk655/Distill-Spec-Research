@@ -38,24 +38,34 @@
       "note": "elapsed=122s"
     },
     "train_jsd_gsm8k": {
-      "status": "running",
-      "ts": "2026-05-25T19:44:57.872605Z",
-      "note": ""
+      "status": "done",
+      "ts": "2026-05-25T19:58:06.355636Z",
+      "note": "elapsed=788s"
     },
     "merge_jsd_gsm8k": {
-      "status": "pending"
+      "status": "done",
+      "ts": "2026-05-25T19:59:54.116633Z",
+      "note": "elapsed=108s"
     },
     "train_l1_gsm8k": {
-      "status": "pending"
+      "status": "done",
+      "ts": "2026-05-25T20:12:43.427639Z",
+      "note": "elapsed=769s"
     },
     "merge_l1_gsm8k": {
-      "status": "pending"
+      "status": "done",
+      "ts": "2026-05-25T20:14:21.908499Z",
+      "note": "elapsed=98s"
     },
     "online_adapt_gsm8k": {
-      "status": "pending"
+      "status": "done",
+      "ts": "2026-05-25T20:52:08.262744Z",
+      "note": "elapsed=2266s"
     },
     "merge_online_gsm8k": {
-      "status": "pending"
+      "status": "done",
+      "ts": "2026-05-25T20:54:11.171129Z",
+      "note": "elapsed=123s"
     },
     "eval_kl_gsm8k": {
       "status": "pending"

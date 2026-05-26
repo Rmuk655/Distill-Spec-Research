@@ -1539,7 +1539,13 @@ function renderTempGain() {
   const dataset = document.getElementById('sel-dataset-tgain')?.value || '';
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
   if (dataset) runs = runs.filter(r => r.dataset === dataset);
-  if (!runs.length) { Plotly.purge('chart-temp-gain'); return; }
+  if (!runs.length) {
+    showNoData('chart-temp-gain',
+      'Temperature Gain vs Baseline needs BE results at T=0.6 and T=1.0 — ' +
+      'populates after Phase 3 GSM8K eval steps complete (full run uses --temps 0.6,1.0; ' +
+      'smoke uses T=0.6 only so this chart stays empty in smoke mode)');
+    return;
+  }
 
   const baselineRuns = runs.filter(r => r.draft_label === 'baseline');
   const nonBaseline  = runs.filter(r => r.draft_label !== 'baseline');
@@ -1587,7 +1593,12 @@ function renderSensitivity() {
   const groupCol = document.getElementById('sens-group').value;
 
   const runs = ALL_RUNS.filter(r => r[xCol] != null && r[yCol] != null);
-  if (!runs.length) return;
+  if (!runs.length) {
+    showNoData('chart-sensitivity',
+      'Sensitivity analysis needs eval data with the selected X/Y columns — ' +
+      'try switching X axis to K or Temperature once Phase 3 evals complete');
+    return;
+  }
 
   const groups = groupBy(runs, groupCol);
   const traces = Object.entries(groups).map(([grp, rows]) => {
@@ -1658,7 +1669,15 @@ async function renderCategory() {
 // ---- Throughput ----
 function renderThroughput() {
   const runs = ALL_RUNS.filter(r => r.throughput != null && r.throughput > 0);
-  if (!runs.length) return;
+  if (!runs.length) {
+    showNoData('chart-throughput',
+      'Throughput (tok/s) populates after Phase 3 GSM8K eval steps complete — ' +
+      'run_all.py records tok/s for every (model, mode, K, temperature) combo');
+    showNoData('chart-scatter',
+      'Alpha vs Throughput scatter populates after Phase 3 eval steps complete — ' +
+      'requires both alpha_mean and throughput in the same eval run');
+    return;
+  }
 
   const byLabel = groupBy(runs, 'draft_label');
   const tpTraces = Object.entries(byLabel).map(([label, rows]) => ({

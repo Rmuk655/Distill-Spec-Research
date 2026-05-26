@@ -725,10 +725,33 @@ def load_state():
 def save_state(state):
     # Atomic write: .tmp → os.replace() prevents a corrupt state file if the
     # process is killed mid-write (Colab session death, Modal timeout, OOM kill).
+    # Retry loop: OneDrive on Windows holds a brief sync lock on newly-written
+    # .tmp files, causing os.replace() to raise PermissionError (WinError 5).
+    # Retry up to 5 times with exponential backoff; fall back to a direct
+    # non-atomic write if all retries fail (still better than crashing).
     _tmp = STATE_FILE + ".tmp"
     with open(_tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
-    os.replace(_tmp, STATE_FILE)
+    for _attempt in range(5):
+        try:
+            os.replace(_tmp, STATE_FILE)
+            return
+        except PermissionError as _pe:
+            if _attempt == 4:
+                # All retries exhausted — write directly (non-atomic fallback)
+                print(f"  [state] WARNING: os.replace failed after 5 attempts "
+                      f"({_pe}). Writing state file directly (non-atomic).")
+                with open(STATE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2)
+                try:
+                    os.remove(_tmp)
+                except OSError:
+                    pass
+            else:
+                _delay = 0.3 * (2 ** _attempt)   # 0.3, 0.6, 1.2, 2.4 s
+                print(f"  [state] PermissionError on state rename (OneDrive?), "
+                      f"retry {_attempt + 1}/5 in {_delay:.1f}s…")
+                time.sleep(_delay)
 
 
 def _osd_equivalent(path: str) -> str | None:
