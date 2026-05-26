@@ -209,14 +209,24 @@ Pipeline runs 4 phases. Phase 4 (multi-dataset) is skipped in smoke mode.
 | **Phase 4 — Multi-Dataset** | `eval_*_all` × 7 models | humaneval, math500, mtbench, alpaca |
 
 **Trained models** (Phase 2 outputs, checkpoint name → label):
-- `kl-gsm8k` → `kl` (forward_kl, DistillSpec baseline)
-- `ebe-gsm8k` → `ebe` (Expected Block Efficiency, **novel**)
+- `kl-gsm8k` → `kl` (forward_kl offline, DistillSpec baseline)
+- `ebe-gsm8k` → `ebe` (block-level EBE offline; α≈0.99 → KL-equivalent, control condition)
 - `rev_kl-gsm8k` → `rev_kl` (reverse KL ablation)
 - `jsd-gsm8k` → `jsd` (Jensen-Shannon ablation)
 - `l1-gsm8k` → `l1` (L1 / total variation ablation)
-- `online-gsm8k` → `online` (online OSD adaptation)
+- `online-gsm8k` → `online` (online OSD — forward_kl at rejected positions, **benchmark**)
+- `online-ebe-gsm8k` → `online_ebe` (online EBE — block-level cumprod at rejected positions, **novel**)
 
-**Paper comparison table**: baseline / kl / ebe — with rev_kl, jsd, l1 as ablation rows.
+**Paper comparison table**:
+
+| Model | Training | Gradient signal | Paper role |
+|---|---|---|---|
+| baseline | none | — | Floor |
+| kl | offline teacher-sample | KL all tokens | DistillSpec replication |
+| ebe | offline teacher-sample | KL (EBE≈0, α≈1) | Control: shows offline EBE = KL |
+| online | online live SD | KL at rejected only | OSD replication |
+| **online_ebe** | online live SD | **Block EBE at rejected** | **Novel contribution** |
+| rev_kl, jsd, l1 | offline | ablation | Ablation rows |
 
 **State files** (in `orchestration/`):
 - `pipeline_state_laptop.json` — full 1000-step run state

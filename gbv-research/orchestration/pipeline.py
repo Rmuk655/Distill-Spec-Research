@@ -344,7 +344,8 @@ _LOSS_STEP_PREFIXES: dict = {
     "rev_kl": ("train_rev_kl_",  "merge_rev_kl_",  "eval_rev_kl_"),
     "jsd":    ("train_jsd_",     "merge_jsd_",     "eval_jsd_"),
     "l1":     ("train_l1_",      "merge_l1_",      "eval_l1_"),
-    "online": ("online_adapt_",  "merge_online_",  "eval_online_"),
+    "online":     ("online_adapt_",     "merge_online_",     "eval_online_"),
+    "online_ebe": ("online_ebe_adapt_", "merge_online_ebe_", "eval_online_ebe_"),
 }
 ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
@@ -360,7 +361,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             eval_baseline_gsm8k   (always first; establishes the untrained reference)
 
         Phase 2 — Training   (smoke: 50 steps · full: 1000 steps)
-            forward_kl · ebe · reverse_kl · jsd · l1 · online
+            forward_kl · ebe · reverse_kl · jsd · l1 · online · online_ebe
             Each loss: train → merge (sequential pairs)
 
         Phase 3 — GSM8K Eval   (smoke: n=5 · full: n=10, all 6 verifier modes)
@@ -490,7 +491,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         #        trigger the health check, and verify no NaN / OOM / shape error.
         # full:  1000 steps each (~1 hr/loss on laptop, ~15 min on A100).
         #
-        # Losses covered: forward_kl · ebe · reverse_kl · jsd · l1 · online
+        # Losses covered: forward_kl · ebe · reverse_kl · jsd · l1 · online · online_ebe
         # All use lr=3e-5.  EBE / revKL / JSD / L1 use --nan_action skip +
         # --early_stop_patience 3 as a safety net for unstable losses.
         # -------------------------------------------------------------------
@@ -647,6 +648,42 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                     "--adapter", _ckpt("online-gsm8k"), "--draft", draft],
             "done_check": os.path.join(_merged("online-gsm8k"), "config.json"),
         },
+        # -------------------------------------------------------------------
+        # online_ebe: same setup as online (forward_kl) but uses --kl_method ebe.
+        # Direct comparison: online_ebe vs online isolates whether block-level
+        # EBE gradient weighting improves over flat KL at rejected positions.
+        # Both see the same rejected tokens (real α < 1 events from live SD);
+        # only the loss function differs.
+        # -------------------------------------------------------------------
+        {
+            "id": "online_ebe_adapt_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Online EBE adaptation (ebe, K=4), {_online_steps} prompts, gsm8k",
+            "cmd": [
+                sys.executable, _ONLINE_SCRIPT,
+                "--prompts", _data("gsm8k_train.jsonl"),
+                "--draft", draft, "--target", target,
+                "--output", _ckpt("online-ebe-gsm8k"),
+                "--steps", str(_online_steps),
+                "--update_every", "4",
+                "--K", "4",
+                "--kl_method", "ebe",
+                "--ebe_block_len", "4",    # match --K
+                "--ebe_kl_weight", "0.1",
+                "--lr", "3e-4",
+                "--max_new_tokens", str(_online_max_tok),
+            ] + _4bit,
+            "done_check": os.path.join(_ckpt("online-ebe-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_online_ebe_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge online-ebe-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("online-ebe-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
+        },
 
         # -------------------------------------------------------------------
         # Phase 3 — GSM8K Eval
@@ -695,6 +732,13 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-gsm8k on gsm8k",
             "cmd": _ec(_merged("online-gsm8k"), "online", datasets="gsm8k", task_score=True),
+            "done_check": None,
+        },
+        {
+            "id": "eval_online_ebe_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval online-ebe-gsm8k on gsm8k",
+            "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", datasets="gsm8k", task_score=True),
             "done_check": None,
         },
 
@@ -763,6 +807,15 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("online-gsm8k"), "online",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+            "done_check": None,
+            "smoke_skip": smoke,
+        },
+        {
+            "id": "eval_online_ebe_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval online_ebe on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
