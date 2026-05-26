@@ -17,14 +17,15 @@ used as the verification backend during the current pipeline phase.
 GBV is **not** third-party or external borrowed code. It is original work by a
 co-author on this project.
 
-## Files modified for Windows / Qwen3 compatibility
+## Files modified from original version
 
 | File | Change |
 |---|---|
 | `main.py` | Added UTF-8 stdout/stderr reconfiguration for Windows; added `PYTORCH_CUDA_ALLOC_CONF` env-var to reduce CUDA allocator fragmentation on small GPUs |
 | `util.py` | Updated `from_pretrained()` dtype kwarg for transformers ≥ 4.51 compatibility |
+| `verifier.py` | Expanded module docstring with research findings (Thomas et al., 2026 empirical ordering; traversal vs OT-based analysis); no logic changes |
 
-All algorithm files (`verifier.py`, `node.py`) are unmodified from Rahul's original.
+`node.py` is unmodified.
 
 ## Evolved production version
 
@@ -36,7 +37,3 @@ A restructured, production-ready version of this codebase lives at
 
 The Phase 2 migration target is for `orchestration/run_all.py` to call
 `verifiers/runner.py` directly instead of shelling out to `GBV/main.py`.
-
-## Reference snapshot
-
-A read-only reference snapshot is preserved at `gbv-research/references/gbv-original/`.
