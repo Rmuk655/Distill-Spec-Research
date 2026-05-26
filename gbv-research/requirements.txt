@@ -31,6 +31,9 @@ huggingface-hub>=0.22.0
 pyyaml>=6.0                   # YAML config loading (orchestration/configs/*.yaml)
 wandb>=0.16.0                  # Experiment tracking + hyperparameter sweeps
 
+# Testing (required — pre-commit hook blocks commits if tests fail)
+pytest>=8.0.0
+
 # Original OSD deps (kept for compatibility)
 fschat==0.2.23
 packaging

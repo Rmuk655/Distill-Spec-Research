@@ -76,10 +76,11 @@ work without any file.
 
 ### Team credentials
 
-| Researcher | W&B username       | Notes                               |
-|------------|--------------------|-------------------------------------|
-| Krishnan R  | `rkrishnaiyer`     | Uses `~/_netrc` cached login        |
-| Rahul Thomas | `rmukund16`       | Needs `wandb_config.json` on laptop |
+| Researcher   | W&B username    | Notes                               |
+|--------------|-----------------|-------------------------------------|
+| Krishnan R   | `rkrishnaiyer`  | Uses `~/_netrc` cached login        |
+| Mukund R     | `rmukund16`     | Needs `wandb_config.json` on laptop |
+| Rahul Thomas | TBD             | Account not yet configured          |
 
 ---
 
@@ -123,26 +124,31 @@ python OSD/viz_server.py   # http://127.0.0.1:5000
 
 ---
 
-## 5. Unit tests (run before smoke — < 30 s)
+## 5. Unit tests (run before smoke — < 60 s)
 
-The unit test suite exercises every loss function, every verifier, all cache
-operations, pipeline step generation, and data loading — all on CPU with no
-model downloads.  Run it once on a new machine to verify the environment:
+**Required on every new machine before first commit.**  
+`pytest` must be installed (it is in `requirements.txt`) or the pre-commit hook
+silently skips and commits go through untested.
 
 ```bash
+# Verify pytest is installed
+pip install pytest            # or: pip install -r requirements.txt
+
 # From gbv-research/
-python tests/run_unit_tests.py          # full suite  (~15 s)
-python tests/run_unit_tests.py --fast   # skip slow tests  (~10 s)
+python -m pytest tests/unit/ -q     # full suite (~60 s on CPU, no GPU needed)
 ```
 
-Or directly with pytest:
-```bash
-python -m pytest tests/unit/ -v
-```
+The suite exercises every loss function, every verifier, all cache operations,
+pipeline step generation, and data loading — all on CPU with no model downloads.
+138 tests, expected output: `138 passed`.
 
-**Pre-commit hook** — automatically installed at `.git/hooks/pre-commit`.
-Every `git commit` runs the unit tests first; the commit is blocked if any test
-fails.  Bypass in an emergency only with `git commit --no-verify`.
+**Pre-commit hook** — lives at `.git/hooks/pre-commit`.
+Every `git commit` automatically runs `pytest tests/unit/` first.
+The commit is **blocked** if any test fails.
+
+⚠️ **The hook silently skips if pytest is not installed** — always verify
+`python -m pytest --version` works before making commits on a new machine.
+Bypass only in genuine emergencies: `git commit --no-verify`.
 
 Test coverage:
 
