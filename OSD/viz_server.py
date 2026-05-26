@@ -1060,6 +1060,9 @@ function getActiveChips() {
   const filters = {};
   document.querySelectorAll('.chip.active').forEach(c => {
     const col = c.dataset.col, val = c.dataset.val;
+    // HW-tier chips use data-tier (not data-col) — skip them here;
+    // they are handled separately by HW_TIER_FILTER.
+    if (!col) return;
     if (!filters[col]) filters[col] = [];
     filters[col].push(val);
   });
