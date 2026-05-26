@@ -123,7 +123,41 @@ python OSD/viz_server.py   # http://127.0.0.1:5000
 
 ---
 
-## 5. Full pipeline run (after smoke passes)
+## 5. Unit tests (run before smoke — < 30 s)
+
+The unit test suite exercises every loss function, every verifier, all cache
+operations, pipeline step generation, and data loading — all on CPU with no
+model downloads.  Run it once on a new machine to verify the environment:
+
+```bash
+# From gbv-research/
+python tests/run_unit_tests.py          # full suite  (~15 s)
+python tests/run_unit_tests.py --fast   # skip slow tests  (~10 s)
+```
+
+Or directly with pytest:
+```bash
+python -m pytest tests/unit/ -v
+```
+
+**Pre-commit hook** — automatically installed at `.git/hooks/pre-commit`.
+Every `git commit` runs the unit tests first; the commit is blocked if any test
+fails.  Bypass in an emergency only with `git commit --no-verify`.
+
+Test coverage:
+
+| Module | File | What's tested |
+|---|---|---|
+| Loss functions | `test_losses.py` | forward_kl, reverse_kl (NaN guard), jsd, l1, ebe (block split, gradient) |
+| Node OTLP solvers | `test_node_otlp.py` | naive, nss, specinfer, spectr, max — output range, acceptance rates |
+| Verifiers | `test_verifiers.py` | bv, gbv, traversal, specinfer, naive — depth/token range, tree structure |
+| KV-cache ops | `test_cache_ops.py` | slice_cache, expand_cache — shapes, content, round-trips |
+| Pipeline steps | `test_pipeline_steps.py` | step IDs, --steps counts, --load_in_4bit propagation, verifier modes |
+| Data loading | `test_data_loading.py` | JSONL parsing, missing keys, fallback keys, empty files |
+
+---
+
+## 6. Full pipeline run (after smoke passes)
 
 ```bash
 python orchestration/pipeline.py --config laptop --yes

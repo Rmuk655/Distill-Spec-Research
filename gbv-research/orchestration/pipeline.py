@@ -34,10 +34,16 @@ from datetime import datetime
 
 # Windows cp1252 stdout can't encode Unicode arrows/checkmarks used by subprocesses.
 # Reconfigure to UTF-8 with replacement so pipeline.py never dies on a stray character.
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+# Guard with __name__ == "__main__" so importing pipeline.py in tests doesn't break
+# pytest's stdout capture (which holds open file handles that get invalidated by
+# sys.stdout = io.TextIOWrapper(...) at module level).
+def _reconfigure_stdout_for_windows():
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "pipeline_state_laptop.json")  # overridden in main()
@@ -1374,4 +1380,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _reconfigure_stdout_for_windows()
     main()

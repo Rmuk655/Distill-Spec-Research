@@ -6,11 +6,15 @@ import argparse
 
 # Force UTF-8 stdout/stderr so Unicode characters in print() never crash on
 # Windows cp1252 terminals (or any other non-UTF-8 default encoding).
-try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-except AttributeError:
-    pass  # Python < 3.7 or non-text stream
+# Wrapped in a function so importing this module in tests does not break
+# pytest's stdout capture (which uses live file handles that get invalidated
+# when sys.stdout is replaced at module level).
+def _reconfigure_stdout_for_windows():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass  # Python < 3.7 or non-text stream
 
 # Reduce CUDA allocator fragmentation — important on small GPUs (T4, etc.).
 # Set automatically; override with PYTORCH_CUDA_ALLOC_CONF=<custom> in environment.
@@ -250,6 +254,7 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    _reconfigure_stdout_for_windows()
     args = parse_args()
     set_seed(args.seed)
 
