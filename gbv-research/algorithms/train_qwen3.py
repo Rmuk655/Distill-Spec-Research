@@ -135,6 +135,35 @@ _ATTN_IMPL = _pick_attn_impl()
 
 
 # ---------------------------------------------------------------------------
+# Hardware optimisations — called once at startup before any model load.
+# ---------------------------------------------------------------------------
+
+def _setup_hw_opts(device: torch.device) -> None:
+    """Enable free GPU-level optimisations that PyTorch leaves off by default.
+
+    TF32 (Ampere+ only — A100, RTX 30xx/40xx):
+      PyTorch ≥ 1.12 disabled TF32 by default after community feedback about
+      silent precision loss.  Re-enabling gives ~2× matmul throughput for
+      float32 ops with negligible training impact (19-bit vs 23-bit mantissa —
+      well above the noise floor for distillation).  No-op on older GPUs.
+
+    cuDNN benchmark:
+      Profiles available CUDA kernels for each (shape, op) pair and caches the
+      fastest.  One-time ~30 s overhead; pays off over 1000+ steps.
+    """
+    if device.type != "cuda":
+        return
+    torch.backends.cuda.matmul.allow_tf32 = True   # Ampere+ free speedup
+    torch.backends.cudnn.allow_tf32       = True
+    torch.backends.cudnn.benchmark        = True    # kernel autotuner
+    # Report so it's visible in logs
+    props = torch.cuda.get_device_properties(device)
+    tf32_active = props.major >= 8                  # Ampere = compute capability 8.x
+    print(f"  [hw] TF32={'on (Ampere+)' if tf32_active else 'set (no-op on this GPU)'}  "
+          f"cuDNN benchmark=on  GPU={props.name}")
+
+
+# ---------------------------------------------------------------------------
 # 200-prompt dataset — diverse enough to generalise across topic distributions
 # ---------------------------------------------------------------------------
 PROMPTS = [
@@ -894,6 +923,7 @@ def main():
         return
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    _setup_hw_opts(torch.device(device))
     training_mode = "full SFT" if args.no_lora else f"LoRA r={args.lora_r}"
     print(f"Device  : {device}")
     print(f"Draft   : {args.draft}  ({training_mode})")

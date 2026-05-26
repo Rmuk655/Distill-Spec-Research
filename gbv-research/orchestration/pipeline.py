@@ -248,9 +248,10 @@ def _load_config_yaml(config_name: str) -> dict:
         import yaml
         with open(yaml_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        training  = data.get("training", {})
-        health    = data.get("health", {})
+        training     = data.get("training", {})
+        health       = data.get("health", {})
         checkpointing = data.get("checkpointing", {})
+        hardware     = data.get("hardware", {})
         out = {
             "lr":                   training.get("lr", 3e-5),
             "lora_r":               training.get("lora_r", 8),
@@ -269,6 +270,12 @@ def _load_config_yaml(config_name: str) -> dict:
         # set persistent storage without a CLI flag every run.
         if checkpointing.get("storage_root"):
             out["storage_root"] = checkpointing["storage_root"]
+        # hardware.compile → compile flag passed to train_qwen3.py and online_serve.py.
+        # server.yaml: compile: true (Linux/A100 — torch.compile gives 10-30% speedup).
+        # colab.yaml:  compile: false (torch.compile unreliable in Colab environment).
+        # laptop.yaml: not set   (Windows — scripts skip compile automatically).
+        if "compile" in hardware:
+            out["compile"] = hardware["compile"]
         return out
     except Exception as exc:
         print(f"  [config] Warning: could not load {yaml_path}: {exc}")
@@ -423,6 +430,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--lora_alpha",   str(_h.get("lora_alpha", 16)),
         "--teacher_temp", str(_h.get("teacher_temp", 0.8)),
     ]
+    # --compile: passed to train_qwen3.py and online_serve.py when YAML sets
+    # hardware.compile: true (server/A100 Linux).  Both scripts skip compile
+    # automatically on Windows and PyTorch < 2.0 so this is always safe to pass.
+    _compile_flag = ["--compile"] if _h.get("compile") else []
 
     # Override step count if train_steps was specified via CLI
     if _h.get("train_steps") is not None:
@@ -518,7 +529,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("kl-gsm8k"),
                 *_train_hargs,
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -544,7 +555,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("ebe-gsm8k"),
                 *_train_hargs,
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("ebe-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -569,7 +580,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("rev_kl-gsm8k"),
                 *_train_hargs,
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("rev_kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -594,7 +605,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("jsd-gsm8k"),
                 *_train_hargs,
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("jsd-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -619,7 +630,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("l1-gsm8k"),
                 *_train_hargs,
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("l1-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -647,7 +658,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--lr", "3e-4",
                 # _online_max_tok: 30 smoke / YAML value full run (laptop=80, server=128, colab=64)
                 "--max_new_tokens", str(_online_max_tok),
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -683,7 +694,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--ebe_kl_weight", "0.1",
                 "--lr", "3e-4",
                 "--max_new_tokens", str(_online_max_tok),
-            ] + _4bit,
+            ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
         },
@@ -1511,6 +1522,9 @@ def main():
         # CLI --train_steps > YAML training.steps > None (smoke/full default)
         "train_steps":  args.train_steps or _yaml_cfg.get("train_steps"),
         "max_new_tokens": _yaml_cfg.get("max_new_tokens", 80),
+        # hardware.compile → passed to all training subprocesses as --compile.
+        # False by default (safe on Windows).  server.yaml sets True for A100.
+        "compile":        _yaml_cfg.get("compile", False),
     }
 
     # Parse --losses filter into a list; None = run all losses.

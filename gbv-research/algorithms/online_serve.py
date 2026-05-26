@@ -106,6 +106,23 @@ log = logging.getLogger("osd")
 
 
 # ---------------------------------------------------------------------------
+# Hardware optimisations (same set as train_qwen3.py)
+# ---------------------------------------------------------------------------
+
+def _setup_hw_opts(device: torch.device) -> None:
+    """TF32 + cuDNN benchmark — free on Ampere/A100, no-op elsewhere."""
+    if device.type != "cuda":
+        return
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32       = True
+    torch.backends.cudnn.benchmark        = True
+    props = torch.cuda.get_device_properties(device)
+    tf32_active = props.major >= 8
+    log.info("HW opts: TF32=%s  cuDNN-bench=on  GPU=%s",
+             "on (Ampere+)" if tf32_active else "set (no-op)", props.name)
+
+
+# ---------------------------------------------------------------------------
 # KL loss
 # ---------------------------------------------------------------------------
 
@@ -651,6 +668,19 @@ def load_models(args: argparse.Namespace, device: torch.device):
     draft_model.to(device)
     n_trainable = sum(p.numel() for p in draft_model.parameters() if p.requires_grad)
     log.info("Trainable draft params: %s", f"{n_trainable:,}")
+
+    # torch.compile — Linux/Colab/server only (Triton not available on Windows)
+    if getattr(args, "compile", False):
+        import platform
+        if platform.system() == "Windows":
+            log.warning("--compile skipped: torch.compile has limited support on Windows")
+        elif not hasattr(torch, "compile"):
+            log.warning("--compile skipped: PyTorch < 2.0")
+        else:
+            log.info("Compiling draft model (one-time ~60 s)...")
+            draft_model = torch.compile(draft_model, mode="reduce-overhead")
+            log.info("  Done.")
+
     return target_model, draft_model
 
 
@@ -793,6 +823,9 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default=None,
                         help="cuda / cpu (auto-detected if not set)")
+    parser.add_argument("--compile", action="store_true",
+                        help="torch.compile() the draft model (10-30%% speedup on Linux/Colab). "
+                             "Skipped automatically on Windows.")
     parser.add_argument("--load_in_4bit", action="store_true",
                         help="Load the target model in 4-bit NF4 (bitsandbytes). "
                              "Required for --config colab with Qwen3-8B on a free T4 (15 GB). "
@@ -809,6 +842,7 @@ def main():
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("Using device: %s", device)
+    _setup_hw_opts(device)
 
     # --- wandb ---
     use_wandb = WANDB_AVAILABLE and args.wandb_project
