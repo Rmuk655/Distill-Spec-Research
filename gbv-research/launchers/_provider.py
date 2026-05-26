@@ -6,11 +6,22 @@ underlying command:
 
     python orchestration/pipeline.py \
         --config  {provider.pipeline_config} \
-        --ckpt_root {provider.ckpt_root} \
+        --storage_root {provider.storage_root} \
         --yes
 
-This file defines what differs per provider: hardware config, checkpoint
-storage path, session limits, and cost.  To add a new provider:
+``storage_root`` is the single persistent directory that contains ALL
+experiment artifacts:
+    {storage_root}/
+        results.db           ← SQLite experiment DB
+        checkpoints/         ← LoRA adapters
+        logs/                ← pipeline + training logs
+        pipeline_state_*.json
+
+This makes every artifact relocatable: change ``storage_root`` and
+nothing else needs updating.
+
+This file defines what differs per provider: hardware config, storage
+path, session limits, and cost.  To add a new provider:
 
     1. Add a ProviderConfig entry to PROVIDERS below.
     2. Create launchers/my_provider.{ipynb,py,sh} that reads from PROVIDERS.
@@ -38,7 +49,7 @@ from typing import Optional
 class ProviderConfig:
     name: str                    # short identifier
     pipeline_config: str         # maps to orchestration/configs/{X}.yaml
-    ckpt_root: str               # persistent checkpoint storage path
+    storage_root: str            # persistent root: DB + checkpoints + logs live here
     hf_home: Optional[str]       # HF_HOME (None = platform default)
     gpu_vram_gb: float           # expected available VRAM in GB
     session_max_h: float         # hard session wall-clock limit in hours
@@ -48,6 +59,11 @@ class ProviderConfig:
     env_signal: tuple[str, ...] = field(default_factory=tuple)
     # env vars that uniquely identify this provider (used by detect_provider)
 
+    @property
+    def ckpt_root(self) -> str:
+        """Backward-compat shim — checkpoints live under storage_root."""
+        return os.path.join(self.storage_root, "checkpoints") if self.storage_root else ""
+
 
 # ---------------------------------------------------------------------------
 # Provider registry
@@ -55,7 +71,8 @@ class ProviderConfig:
 # Add a new entry here when you add a new provider launcher.
 # Column meanings:
 #   pipeline_config → which YAML under orchestration/configs/ to use
-#   ckpt_root       → where checkpoints are written (must survive session restart)
+#   storage_root    → PERSISTENT root dir: results.db + checkpoints/ + logs/
+#                     Must survive session restart (Drive / volume / /workspace)
 #   gpu_vram_gb     → usable VRAM in GB
 #   session_max_h   → hard wall-clock limit (0 = no limit)
 #   cost_per_hour   → USD (0 = free / included)
@@ -66,15 +83,15 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "colab": ProviderConfig(
         name             = "colab",
         pipeline_config  = "colab",
-        ckpt_root        = "/content/drive/MyDrive/specdist/checkpoints",
+        storage_root     = "/content/drive/MyDrive/specdist",
         hf_home          = None,            # Colab has no persistent HF cache; models dl each session
         gpu_vram_gb      = 15.0,            # free T4 = 15 GB
         session_max_h    = 1.5,             # free tier: ~90 min idle disconnect
         cost_per_hour    = 0.0,
         notes            = (
             "Free T4 (15 GB). Teacher loaded in 4-bit NF4 (colab.yaml). "
-            "Checkpoints go to Google Drive — survives session restart. "
-            "Mount Drive BEFORE cloning repo."
+            "All artifacts (DB, checkpoints, logs) on Google Drive — survive restart. "
+            "Mount Drive BEFORE running the launcher."
         ),
         env_signal       = ("COLAB_BACKEND_VERSION", "COLAB_RELEASE_TAG"),
     ),
@@ -82,7 +99,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "colab_pro": ProviderConfig(
         name             = "colab_pro",
         pipeline_config  = "server",        # A100 → full bf16, no 4-bit needed
-        ckpt_root        = "/content/drive/MyDrive/specdist/checkpoints",
+        storage_root     = "/content/drive/MyDrive/specdist",
         hf_home          = None,
         gpu_vram_gb      = 40.0,            # A100 40 GB
         session_max_h    = 12.0,            # Pro: up to 12 h
@@ -97,15 +114,15 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "kaggle": ProviderConfig(
         name             = "kaggle",
         pipeline_config  = "colab",         # same T4 hardware as free Colab
-        ckpt_root        = "/kaggle/working/specdist/checkpoints",
+        storage_root     = "/kaggle/working/specdist",
         hf_home          = "/kaggle/working/hf_cache",
         gpu_vram_gb      = 15.0,            # T4 or P100 depending on availability
         session_max_h    = 12.0,            # 12 h sessions, 30 h/week free
         cost_per_hour    = 0.0,
         notes            = (
             "Free Kaggle GPU (T4/P100, 30 h/week). Longer sessions than free Colab. "
-            "No Drive — checkpoints to /kaggle/working/. "
-            "Download checkpoint as Kaggle output after each session."
+            "No Drive — artifacts to /kaggle/working/specdist/. "
+            "Download results.db + checkpoints as Kaggle output after each session."
         ),
         env_signal       = ("KAGGLE_KERNEL_RUN_TYPE",),
     ),
@@ -114,14 +131,14 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "modal": ProviderConfig(
         name             = "modal",
         pipeline_config  = "server",        # A100 → full bf16 teacher
-        ckpt_root        = "/vol/checkpoints",
+        storage_root     = "/vol",          # Modal persistent volume mounted at /vol
         hf_home          = "/vol/hf_cache",
         gpu_vram_gb      = 40.0,            # A100-40GB default; switchable
         session_max_h    = 0.0,             # no hard limit; billed per second
         cost_per_hour    = 1.10,            # A100-40GB ~$1.10/h; A10G ~$0.76/h
         notes            = (
-            "Modal.com on-demand A100. Persistent Volume stores models + checkpoints "
-            "across container restarts. Best for overnight paper-quality runs."
+            "Modal.com on-demand A100. Persistent Volume at /vol stores all artifacts "
+            "(results.db, checkpoints, logs) across container restarts."
         ),
         env_signal       = ("MODAL_TASK_ID",),
     ),
@@ -129,7 +146,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "runpod": ProviderConfig(
         name             = "runpod",
         pipeline_config  = "server",
-        ckpt_root        = "/workspace/specdist/checkpoints",
+        storage_root     = "/workspace/specdist",
         hf_home          = "/workspace/hf_cache",
         gpu_vram_gb      = 24.0,            # RTX 3090 community (~$0.44/h)
         session_max_h    = 0.0,
@@ -144,7 +161,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "hf_spaces": ProviderConfig(
         name             = "hf_spaces",
         pipeline_config  = "colab",
-        ckpt_root        = "/data/checkpoints",  # HF persistent storage
+        storage_root     = "/data/specdist",  # HF persistent Space storage
         hf_home          = "/data/hf_cache",
         gpu_vram_gb      = 15.0,
         session_max_h    = 0.0,
@@ -161,7 +178,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "local_laptop": ProviderConfig(
         name             = "local_laptop",
         pipeline_config  = "laptop",
-        ckpt_root        = "",              # uses pipeline.py default (gbv-research/db/checkpoints)
+        storage_root     = "",              # empty → pipeline.py defaults (gbv-research/db/)
         hf_home          = None,
         gpu_vram_gb      = 4.0,
         session_max_h    = 0.0,
@@ -173,7 +190,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "local_server": ProviderConfig(
         name             = "local_server",
         pipeline_config  = "server",
-        ckpt_root        = "",
+        storage_root     = "",              # empty → pipeline.py defaults (gbv-research/db/)
         hf_home          = None,
         gpu_vram_gb      = 24.0,
         session_max_h    = 0.0,
@@ -226,8 +243,12 @@ def build_pipeline_cmd(
         "--config", provider.pipeline_config,
         "--yes",
     ]
-    if provider.ckpt_root:
-        cmd += ["--ckpt_root", provider.ckpt_root]
+    # storage_root pins all artifacts (DB, checkpoints, logs) to persistent storage.
+    # On cloud providers this must point to mounted persistent storage so artifacts
+    # survive session termination.  For local runs leave storage_root empty and
+    # pipeline.py will use its project-relative defaults.
+    if provider.storage_root:
+        cmd += ["--storage_root", provider.storage_root]
     if smoke:
         cmd.append("--smoke")
     if losses:
@@ -239,14 +260,15 @@ def build_pipeline_cmd(
 
 def print_provider_table() -> None:
     """Print a comparison table of all registered providers."""
-    header = f"{'Provider':<16} {'Config':<12} {'VRAM':>6} {'Session':>8} {'$/hr':>6}  Notes"
+    header = f"{'Provider':<16} {'Config':<12} {'VRAM':>6} {'Session':>8} {'$/hr':>6}  {'storage_root':<35}  Notes"
     print(header)
     print("-" * len(header))
     for p in PROVIDERS.values():
         session = f"{p.session_max_h:.0f}h" if p.session_max_h else "∞"
         cost    = f"${p.cost_per_hour:.2f}" if p.cost_per_hour else "free"
         vram    = f"{p.gpu_vram_gb:.0f}GB"
-        print(f"{p.name:<16} {p.pipeline_config:<12} {vram:>6} {session:>8} {cost:>6}  {p.notes[:60]}")
+        sr      = p.storage_root or "(project default)"
+        print(f"{p.name:<16} {p.pipeline_config:<12} {vram:>6} {session:>8} {cost:>6}  {sr:<35}  {p.notes[:50]}")
 
 
 if __name__ == "__main__":

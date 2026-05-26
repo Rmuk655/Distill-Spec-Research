@@ -84,11 +84,12 @@ image = (
 
 vol = modal.Volume.from_name("specdist-vol", create_if_missing=True)
 
-VOL_PATH   = "/vol"
-HF_CACHE   = f"{VOL_PATH}/hf_cache"
-CKPT_ROOT  = f"{VOL_PATH}/checkpoints"
-DATA_PATH  = f"{VOL_PATH}/data"
-RESULTS_DB = f"{VOL_PATH}/results.db"
+VOL_PATH      = "/vol"
+STORAGE_ROOT  = VOL_PATH          # all specdist artifacts live at volume root
+HF_CACHE      = f"{VOL_PATH}/hf_cache"
+CKPT_ROOT     = f"{STORAGE_ROOT}/checkpoints"   # derived; used in download hints
+DATA_PATH     = f"{VOL_PATH}/data"
+RESULTS_DB    = f"{STORAGE_ROOT}/results.db"
 
 # ---------------------------------------------------------------------------
 # App
@@ -130,6 +131,13 @@ def _setup_env(wandb_key: str | None = None, hf_token: str | None = None):
     os.environ["HF_HUB_OFFLINE"]       = "0"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 
+    # ── Specdist storage env vars ───────────────────────────────────────────
+    # pipeline.py reads these and propagates them to all subprocesses, so every
+    # tool (train, eval, online) writes to the same persistent volume paths.
+    os.environ["SPECDIST_STORAGE_ROOT"] = STORAGE_ROOT
+    os.environ["SPECDIST_DB_PATH"]       = RESULTS_DB
+    os.environ["SPECDIST_LOGS_ROOT"]     = os.path.join(STORAGE_ROOT, "logs")
+
     if wandb_key:
         os.environ["WANDB_API_KEY"] = wandb_key
     if hf_token:
@@ -140,6 +148,7 @@ def _setup_env(wandb_key: str | None = None, hf_token: str | None = None):
     os.makedirs(HF_CACHE,  exist_ok=True)
     os.makedirs(CKPT_ROOT, exist_ok=True)
     os.makedirs(DATA_PATH, exist_ok=True)
+    os.makedirs(os.environ["SPECDIST_LOGS_ROOT"], exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +263,8 @@ def run_pipeline(
     pipeline_cmd = [
         sys.executable,
         os.path.join(repo_dir, "orchestration", "pipeline.py"),
-        "--config",   config,
-        "--ckpt_root", CKPT_ROOT,
+        "--config",       config,
+        "--storage_root", STORAGE_ROOT,   # pins ALL artifacts to the persistent volume
         "--yes",
     ]
     if smoke:
@@ -265,10 +274,12 @@ def run_pipeline(
     pipeline_cmd += extra
 
     print(f"\n=== SpecDist pipeline on Modal ===")
-    print(f"  GPU     : {gpu}")
-    print(f"  Config  : {config}")
-    print(f"  Ckpts   : {CKPT_ROOT}")
-    print(f"  Cmd     : {' '.join(pipeline_cmd)}")
+    print(f"  GPU          : {gpu}")
+    print(f"  Config       : {config}")
+    print(f"  Storage root : {STORAGE_ROOT}")
+    print(f"  Results DB   : {RESULTS_DB}")
+    print(f"  Checkpoints  : {CKPT_ROOT}")
+    print(f"  Cmd          : {' '.join(pipeline_cmd)}")
     print()
 
     # Start volume commit daemon (crash safety)
@@ -287,8 +298,13 @@ def run_pipeline(
         raise SystemExit(f"Pipeline failed (exit code {result.returncode})")
 
     print("\n=== Pipeline complete ===")
-    print(f"  Checkpoints : {CKPT_ROOT}")
-    print(f"  To download : modal volume get specdist-vol /checkpoints ./local_checkpoints")
+    print(f"  Storage root : {STORAGE_ROOT}")
+    print(f"  Results DB   : {RESULTS_DB}")
+    print(f"  Checkpoints  : {CKPT_ROOT}")
+    print(f"  To download:")
+    print(f"    modal volume get specdist-vol results.db ./results.db")
+    print(f"    modal volume get specdist-vol checkpoints ./local_checkpoints")
+    print(f"    modal volume get specdist-vol logs ./logs")
 
 
 # ---------------------------------------------------------------------------

@@ -26,20 +26,20 @@
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-REPO_URL    ="https://github.com/Rmuk655/Distill-Spec-Research.git"
-REPO_DIR    ="/workspace/Distill-Spec-Research"
-GBV_DIR     ="${REPO_DIR}/gbv-research"
-CKPT_ROOT   ="/workspace/specdist/checkpoints"
-HF_HOME     ="/workspace/hf_cache"
-CONFIG      ="${SPECDIST_CONFIG:-server}"     # override: SPECDIST_CONFIG=colab bash runpod.sh
-SMOKE       ="${SPECDIST_SMOKE:-}"           # set to "--smoke" for a quick test
-LOSSES      ="${SPECDIST_LOSSES:-}"          # e.g. "kl,ebe" — leave empty for all
+REPO_URL     ="https://github.com/Rmuk655/Distill-Spec-Research.git"
+REPO_DIR     ="/workspace/Distill-Spec-Research"
+GBV_DIR      ="${REPO_DIR}/gbv-research"
+STORAGE_ROOT ="/workspace/specdist"          # ALL artifacts: DB + checkpoints + logs
+HF_HOME      ="/workspace/hf_cache"
+CONFIG       ="${SPECDIST_CONFIG:-server}"   # override: SPECDIST_CONFIG=colab bash runpod.sh
+SMOKE        ="${SPECDIST_SMOKE:-}"         # set to "--smoke" for a quick test
+LOSSES       ="${SPECDIST_LOSSES:-}"        # e.g. "kl,ebe" — leave empty for all
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 echo "=== SpecDist RunPod Setup ==="
-echo "  Repo       : ${REPO_DIR}"
-echo "  Checkpoints: ${CKPT_ROOT}"
-echo "  Config     : ${CONFIG}"
+echo "  Repo        : ${REPO_DIR}"
+echo "  Storage root: ${STORAGE_ROOT}"
+echo "  Config      : ${CONFIG}"
 echo ""
 
 # W&B (read from env var set in RunPod secrets)
@@ -61,6 +61,11 @@ export TRANSFORMERS_OFFLINE=0      # always online on RunPod (we're on fast clou
 export HF_HUB_OFFLINE=0
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
+# Specdist storage env vars — pipeline.py propagates these to all subprocesses
+export SPECDIST_STORAGE_ROOT="${STORAGE_ROOT}"
+export SPECDIST_DB_PATH="${STORAGE_ROOT}/results.db"
+export SPECDIST_LOGS_ROOT="${STORAGE_ROOT}/logs"
+
 # ── 1. Clone or update repo ───────────────────────────────────────────────────
 mkdir -p /workspace
 if [ ! -d "${REPO_DIR}/.git" ]; then
@@ -79,13 +84,15 @@ pip install -q -r requirements.txt bitsandbytes accelerate
 # flash-attn gives 2-4x speedup on A100/H100 — skip silently if build fails
 pip install -q flash-attn --no-build-isolation 2>/dev/null || echo "[setup] flash-attn skipped (using sdpa)"
 
-# ── 3. Create checkpoint directory ────────────────────────────────────────────
-mkdir -p "${CKPT_ROOT}"
+# ── 3. Create storage directory ───────────────────────────────────────────────
+mkdir -p "${STORAGE_ROOT}"
+mkdir -p "${STORAGE_ROOT}/checkpoints"
+mkdir -p "${STORAGE_ROOT}/logs"
 
 # ── 4. Run pipeline ───────────────────────────────────────────────────────────
 echo ""
 echo "[pipeline] Starting pipeline..."
-CMD="python orchestration/pipeline.py --config ${CONFIG} --ckpt_root ${CKPT_ROOT} --yes"
+CMD="python orchestration/pipeline.py --config ${CONFIG} --storage_root ${STORAGE_ROOT} --yes"
 [ -n "${SMOKE}" ]  && CMD="${CMD} ${SMOKE}"
 [ -n "${LOSSES}" ] && CMD="${CMD} --losses ${LOSSES}"
 echo "[pipeline] Command: ${CMD}"
@@ -95,9 +102,10 @@ ${CMD}
 
 echo ""
 echo "=== Pipeline complete ==="
-echo "  Checkpoints: ${CKPT_ROOT}"
-echo "  Results DB : ${GBV_DIR}/db/results.db"
+echo "  Storage root: ${STORAGE_ROOT}"
+echo "  Results DB  : ${STORAGE_ROOT}/results.db"
+echo "  Checkpoints : ${STORAGE_ROOT}/checkpoints/"
 echo ""
 echo "  To download results:"
-echo "    rsync -avz root@\$(runpodctl get pod \$RUNPOD_POD_ID | grep ip):${GBV_DIR}/db/results.db ."
-echo "    rsync -avz root@\$(runpodctl get pod \$RUNPOD_POD_ID | grep ip):${CKPT_ROOT} ./local_checkpoints/"
+echo "    rsync -avz root@\$(runpodctl get pod \$RUNPOD_POD_ID | grep ip | awk '{print \$NF}'):${STORAGE_ROOT}/results.db ."
+echo "    rsync -avz root@\$(runpodctl get pod \$RUNPOD_POD_ID | grep ip | awk '{print \$NF}'):${STORAGE_ROOT}/checkpoints/ ./local_checkpoints/"

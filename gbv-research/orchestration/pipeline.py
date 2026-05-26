@@ -389,6 +389,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _max_tok       = 30    if smoke else 50
     _Ks            = "3"   if smoke else "3,5"
     _temps         = "0.6" if smoke else "0.6,1.0"
+    # Online adapt: max_new_tokens controls KV-cache size during speculative decode.
+    # Smoke keeps this small (30).  Full run reads from YAML (laptop=80, server=128,
+    # colab=64).  The KL computation is now memory-efficient (rejects-only selection
+    # in _kl_at_positions) so the main remaining constraint is the KV cache.
+    _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
     # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
     _modes = "alpha,bv,gbv,traversal,specinfer,naive"
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
@@ -628,7 +633,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--K", "4",
                 "--kl_method", "forward_kl",
                 "--lr", "3e-4",
-                "--max_new_tokens", "128",
+                # _online_max_tok: 30 smoke / YAML value full run (laptop=80, server=128, colab=64)
+                "--max_new_tokens", str(_online_max_tok),
             ] + _4bit,
             "done_check": os.path.join(_ckpt("online-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -1140,6 +1146,14 @@ def run_step(step, state, dry_run=False):
     # is safer) and Colab (same).
     env["PYTHONIOENCODING"]  = "utf-8"
     env["PYTHONUNBUFFERED"]  = "1"   # flush every print() immediately — no more silent 5-min gaps
+    # Propagate storage paths so every child (train_qwen3, run_all, online_serve)
+    # writes to the same DB and logs directory regardless of where it runs from.
+    # These are already set on os.environ when --storage_root is active, so the
+    # copy above already includes them — but set them explicitly here as insurance
+    # (e.g., if a subprocess resets os.environ).
+    for _ekey in ("SPECDIST_DB_PATH", "SPECDIST_LOGS_ROOT", "SPECDIST_STORAGE_ROOT"):
+        if os.environ.get(_ekey):
+            env[_ekey] = os.environ[_ekey]
 
     # Open the pipeline log in append mode — one file for the whole pipeline run,
     # readable live from the dashboard Logs panel (http://127.0.0.1:5000/ → Logs button).
@@ -1318,13 +1332,22 @@ def main():
                         "is not a useful paper baseline.  Must be rerun for each new "
                         "target model or ephemeral compute session (Kaggle/Colab lose "
                         "checkpoints on session restart).  Adds ~3-6 hours on A100.")
+    p.add_argument("--storage_root", default=None,
+                   help="Root directory for ALL persistent artifacts: checkpoints, "
+                        "results DB, pipeline logs, and state file.  Prefer this over "
+                        "--ckpt_root — it moves everything to one place so nothing is "
+                        "silently left on ephemeral disk.  Sets SPECDIST_DB_PATH, "
+                        "SPECDIST_LOGS_ROOT, and SPECDIST_STORAGE_ROOT env vars for "
+                        "all child processes automatically.\n"
+                        "  Colab :  /content/drive/MyDrive/specdist\n"
+                        "  Modal :  /vol\n"
+                        "  Kaggle:  /kaggle/working/specdist\n"
+                        "  RunPod:  /workspace/specdist\n"
+                        "  Local :  (omit — defaults to gbv-research/db/)")
     p.add_argument("--ckpt_root", default=None,
-                   help="Persistent checkpoint directory — overrides the default "
-                        "gbv-research/db/checkpoints/ location.  Use on ephemeral "
-                        "compute where local disk is wiped on session death. "
-                        "Colab + Google Drive: /content/drive/MyDrive/specdist/checkpoints  "
-                        "Modal: /vol/checkpoints (set automatically by modal_train.py)  "
-                        "Kaggle: /kaggle/working/specdist/checkpoints")
+                   help="Persistent checkpoint directory only — use --storage_root "
+                        "instead when you also want DB and logs on persistent storage. "
+                        "Kept for backward compatibility.")
     # ── MLOps / sweep overrides ───────────────────────────────────────────────
     p.add_argument("--losses", default=None,
                    help="Comma-separated subset of losses to train/eval. "
@@ -1351,6 +1374,52 @@ def main():
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
 
+    # ── Storage root — single source of truth for all persistent paths ────────
+    # --storage_root moves checkpoints, DB, logs, and state file to one directory
+    # on persistent storage.  On ephemeral cloud (Colab/Kaggle/Modal) this MUST
+    # point at persistent storage; on a local machine omit it entirely.
+    #
+    # Layout under storage_root:
+    #   checkpoints/           trained LoRA adapters + merged models
+    #   results.db             SQLite experiment database
+    #   logs/                  pipeline_output.log + be_progress.log
+    #   hf_cache/              (optional) HuggingFace model cache
+    #   pipeline_state_*.json  crash-safe resume state
+    #
+    # Environment variables set for all child processes:
+    #   SPECDIST_STORAGE_ROOT  the root itself (informational)
+    #   SPECDIST_DB_PATH       full path to results.db
+    #   SPECDIST_LOGS_ROOT     full path to logs/ directory
+    global STATE_FILE, _DB_LOGS, _PIPELINE_LOG
+
+    _storage_root = args.storage_root or os.environ.get("SPECDIST_STORAGE_ROOT")
+
+    if _storage_root:
+        os.makedirs(_storage_root, exist_ok=True)
+        # All persistent artifacts under the one root
+        _effective_ckpt_root = args.ckpt_root or os.path.join(_storage_root, "checkpoints")
+        _effective_db_path   = os.path.join(_storage_root, "results.db")
+        _effective_logs_dir  = os.path.join(_storage_root, "logs")
+        _effective_state_dir = _storage_root
+        os.makedirs(_effective_logs_dir, exist_ok=True)
+        # Propagate to all child processes via env vars
+        os.environ["SPECDIST_STORAGE_ROOT"] = _storage_root
+        os.environ["SPECDIST_DB_PATH"]       = _effective_db_path
+        os.environ["SPECDIST_LOGS_ROOT"]     = _effective_logs_dir
+        # Redirect module-level log paths so this process also writes there
+        _DB_LOGS      = _effective_logs_dir
+        _PIPELINE_LOG = os.path.join(_effective_logs_dir, "pipeline_output.log")
+        print(f"  [storage] root       : {_storage_root}")
+        print(f"  [storage] checkpoints: {_effective_ckpt_root}")
+        print(f"  [storage] database   : {_effective_db_path}")
+        print(f"  [storage] logs       : {_effective_logs_dir}")
+    else:
+        # Local dev defaults — existing behavior, nothing changes
+        _effective_ckpt_root = args.ckpt_root   # may still be None (uses db/checkpoints/)
+        _effective_db_path   = None             # results_db.py uses its own default
+        _effective_logs_dir  = _DB_LOGS
+        _effective_state_dir = HERE
+
     # Load per-config YAML for training hyperparams (lr, lora_r, etc.)
     # CLI overrides (--lr, --lora_r, --teacher_temp) take priority over YAML values.
     _yaml_cfg = _load_config_yaml(args.config)
@@ -1360,6 +1429,7 @@ def main():
         "lora_alpha":                         _yaml_cfg.get("lora_alpha", 16),
         "teacher_temp": args.teacher_temp or _yaml_cfg.get("teacher_temp", 0.8),
         "train_steps":  args.train_steps,   # None = use smoke/full default
+        "max_new_tokens": _yaml_cfg.get("max_new_tokens", 80),
     }
 
     # Parse --losses filter into a list; None = run all losses.
@@ -1374,12 +1444,13 @@ def main():
                     f"Valid: {ALL_LOSSES}")
         print(f"  [pipeline] Loss filter: {_losses_to_run} (others skipped)")
 
-    # State file is config-scoped so laptop and server runs don't mix.
-    # Smoke gets its OWN state file so smoke's "done" marks never prevent the
-    # real pipeline from running Phase 2 training and Phase 3/4 evals.
-    global STATE_FILE
+    # State file: config-scoped so laptop and server runs don't mix.
+    # Smoke gets its OWN state file so smoke "done" marks never block the real run.
+    # When --storage_root is set, state file lives there (survives cloud restarts).
     _smoke_tag = "_smoke" if args.smoke else ""
-    STATE_FILE = os.path.join(HERE, f"pipeline_state_{args.config}{_smoke_tag}.json")
+    STATE_FILE = os.path.join(
+        _effective_state_dir, f"pipeline_state_{args.config}{_smoke_tag}.json"
+    )
 
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
@@ -1388,7 +1459,7 @@ def main():
         STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                             smoke=args.smoke, eagle=args.eagle,
                             load_in_4bit=_load_4bit,
-                            ckpt_root=args.ckpt_root,
+                            ckpt_root=_effective_ckpt_root,
                             train_hparams=train_hparams,
                             losses_to_run=_losses_to_run)
         _print_header(cfg, draft, target, args)
