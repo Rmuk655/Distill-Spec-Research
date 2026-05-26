@@ -2159,8 +2159,8 @@ Cloud examples:
     print(f"  DB          : {_db_path}")
 
     # ── Resolve log paths (CLI > env > auto) ───────────────────────────────
-    global _BE_LOG, _PIPELINE_LOG
-    _BE_LOG, _PIPELINE_LOG = _resolve_log_paths(args.logs_dir)
+    # _BE_LOG / _PIPELINE_LOG are module-level; reassign directly (no global needed at module scope)
+    _BE_LOG, _PIPELINE_LOG = _resolve_log_paths(args.logs_dir)  # noqa: F811
     print(f"  BE log      : {_BE_LOG}")
     print(f"  Pipeline log: {_PIPELINE_LOG}")
 
