@@ -20,10 +20,11 @@ _HERE          = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT     = os.path.dirname(_HERE)                              # gbv-research/
 _SUMMER_ROOT   = os.path.dirname(_REPO_ROOT)                        # 2026 summer/
 _GBV_SRC       = os.path.join(_SUMMER_ROOT, "GBV")                  # GBV/ algorithms
-_OSD_SRC       = os.path.join(_SUMMER_ROOT, "OSD")                  # OSD/ training
+_OSD_SRC       = os.path.join(_SUMMER_ROOT, "OSD")                  # OSD/ (original — still needed for distill/specInfer)
+_ALGORITHMS_SRC = os.path.join(_REPO_ROOT, "algorithms")            # gbv-research/algorithms/ — train_qwen3.py lives here (moved from OSD/ in Phase 2)
 _ORCH_SRC      = os.path.join(_REPO_ROOT, "orchestration")          # pipeline.py
 
-for _p in [_GBV_SRC, _OSD_SRC, _ORCH_SRC, _REPO_ROOT]:
+for _p in [_GBV_SRC, _OSD_SRC, _ALGORITHMS_SRC, _ORCH_SRC, _REPO_ROOT]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

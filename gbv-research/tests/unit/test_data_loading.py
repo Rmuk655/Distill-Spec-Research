@@ -3,7 +3,7 @@ test_data_loading.py — unit tests for dataset loading utilities.
 
 Functions under test:
   - GBV/util.py  : load_prompts_jsonl(path)
-  - OSD/train_qwen3.py : load_prompts(dataset_path)
+  - gbv-research/algorithms/train_qwen3.py : load_prompts(dataset_path)
 
 Tests verify:
   1. Correct prompts are loaded from {"prompt": ...} records

@@ -278,9 +278,9 @@ _GBV_RESEARCH = os.path.dirname(HERE)   # gbv-research/
 _OSD_DIR = os.path.join(os.path.dirname(_GBV_RESEARCH), "OSD")   # OSD/ (sibling)
 _GBV_SRC = os.path.join(os.path.dirname(_GBV_RESEARCH), "GBV")   # GBV/ (sibling)
 
-# Absolute paths to battle-tested OSD scripts (do NOT modify these originals)
-_TRAIN_SCRIPT  = os.path.join(_OSD_DIR, "train_qwen3.py")   # TODO: replace with algorithms.distillspec_gbv.trainer once import paths are fixed
-_ONLINE_SCRIPT = os.path.join(_OSD_DIR, "online_serve.py")
+# Training scripts — live in gbv-research/algorithms/ (moved from OSD/ in Phase 2)
+_TRAIN_SCRIPT  = os.path.join(_GBV_RESEARCH, "algorithms", "train_qwen3.py")
+_ONLINE_SCRIPT = os.path.join(_GBV_RESEARCH, "algorithms", "online_serve.py")
 
 
 def _ckpt(name):

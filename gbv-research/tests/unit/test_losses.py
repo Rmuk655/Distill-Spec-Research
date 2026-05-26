@@ -3,7 +3,7 @@ test_losses.py — unit tests for all 5 distillation loss functions.
 
 Tests run on CPU with tiny tensors.  No model loading required.
 
-Loss functions under test (all in OSD/train_qwen3.py):
+Loss functions under test (all in gbv-research/algorithms/train_qwen3.py):
   - forward_kl_loss   : KL(teacher ‖ student)
   - reverse_kl_loss   : KL(student ‖ teacher)  with -inf guard
   - jsd_loss          : Jensen-Shannon divergence
@@ -25,8 +25,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-# Import loss functions directly from OSD/train_qwen3.py.
-# conftest.py adds OSD/ to sys.path.
+# Import loss functions directly from gbv-research/algorithms/train_qwen3.py.
+# conftest.py adds gbv-research/algorithms/ to sys.path.
 import train_qwen3 as _t
 
 forward_kl_loss = _t.forward_kl_loss
