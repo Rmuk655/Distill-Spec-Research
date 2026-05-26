@@ -1671,8 +1671,10 @@ async function loadTrainingCurves() {
   let colorIdx = 0;
   let redFlagLabels = [];
 
-  const nowMs = Date.now();
-  const ACTIVE_WINDOW_MS = 600_000; // 10 minutes — only flag overfitting for currently-running label
+  // Only flag overfitting for the currently-active label (most recent DB write).
+  // Completed runs stay in the chart but never trigger the banner again.
+  // Uses most-recent-ts comparison so no wall-clock window is needed.
+  const globalMaxTsMs = Math.max(...curves.map(r => new Date(r.ts).getTime()));
 
   Object.entries(byLabel).forEach(([label, rows]) => {
     const trainColor = TRAIN_COLORS[colorIdx % TRAIN_COLORS.length];
@@ -1710,12 +1712,11 @@ async function loadTrainingCurves() {
         hovertemplate: 'step %{x}<br><b>val loss: %{y:.4f}</b><extra>' + label + ' val</extra>',
       });
 
-      // Red-flag detection: val loss rising after its minimum
-      // Only flag if this label is currently active (data written in the last 10 min).
-      // Completed runs stay in the chart but never trigger the banner again.
-      const labelMaxTs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
-      const isActive = (nowMs - labelMaxTs) < ACTIVE_WINDOW_MS;
-      if (valRows.length >= 2 && isActive) {
+      // Red-flag detection: val loss rising after its minimum.
+      // Only flag if this is the currently-active label (has the most recent write globally).
+      const labelMaxTsMs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
+      const isCurrentRun = labelMaxTsMs >= globalMaxTsMs - 2000; // within 2s of most-recent write
+      if (valRows.length >= 2 && isCurrentRun) {
         const valLosses = valRows.map(r => r.loss);
         const minVal = Math.min(...valLosses);
         const lastVal = valLosses[valLosses.length - 1];
