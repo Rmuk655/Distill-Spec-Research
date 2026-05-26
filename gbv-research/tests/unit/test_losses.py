@@ -284,17 +284,23 @@ class TestEBE:
         s, t, ids = self._make_ebe_inputs()
         result = ebe_loss(s, t, ids)
         assert isinstance(result, tuple) and len(result) == 2, \
-            "ebe_loss should return (loss, alpha_mean)"
+            "ebe_loss should return (loss, alpha_dict)"
+        loss, alpha_dict = result
+        assert isinstance(alpha_dict, dict), "second element should be α diagnostic dict"
+        assert "mean" in alpha_dict and "frac_lt_0.95" in alpha_dict
 
     def test_loss_is_finite(self):
         s, t, ids = self._make_ebe_inputs()
-        loss, aw = ebe_loss(s, t, ids)
+        loss, _ = ebe_loss(s, t, ids)
         assert math.isfinite(loss.item()), f"EBE loss is not finite: {loss.item()}"
 
     def test_alpha_mean_in_unit_interval(self):
         s, t, ids = self._make_ebe_inputs()
-        _, aw = ebe_loss(s, t, ids)
-        assert 0.0 <= aw <= 1.0, f"alpha mean must be in [0,1], got {aw}"
+        _, aw_dict = ebe_loss(s, t, ids)
+        mean = aw_dict["mean"]
+        assert 0.0 <= mean <= 1.0, f"alpha mean must be in [0,1], got {mean}"
+        assert 0.0 <= aw_dict["frac_lt_0.95"] <= 1.0
+        assert 0.0 <= aw_dict["frac_lt_0.80"] <= 1.0
 
     def test_gradient_flows(self):
         s, t, ids = self._make_ebe_inputs()

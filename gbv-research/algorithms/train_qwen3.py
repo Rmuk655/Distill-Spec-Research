@@ -549,7 +549,23 @@ def ebe_loss(student_logits, teacher_logits, token_ids, kl_weight=0.1,
     kl = F.kl_div(log_s, log_t.exp(), reduction="batchmean")
 
     loss = ebe + kl_weight * kl
-    return loss, alpha.mean().item()
+
+    # Diagnostic: return a richer dict so the training loop can log the full
+    # α distribution, not just the mean.  Callers that only want a scalar use [0].
+    with torch.no_grad():
+        a = alpha.detach()
+        frac_below_95  = (a < 0.95).float().mean().item()   # tokens with real EBE gradient
+        frac_below_80  = (a < 0.80).float().mean().item()   # strongly rejected tokens
+        alpha_min      = a.min().item()
+        alpha_std      = a.std().item()
+
+    return loss, {
+        "mean":         a.mean().item(),
+        "std":          alpha_std,
+        "min":          alpha_min,
+        "frac_lt_0.95": frac_below_95,   # nonzero → EBE gradient is flowing
+        "frac_lt_0.80": frac_below_80,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -744,8 +760,9 @@ def _compute_val_loss(draft_model, target_model, val_prompts, tok_cache,
                 v_loss = l1_loss(s_log, t_log)
                 v_aw = None
             elif args.loss == "ebe":
-                v_loss, v_aw = ebe_loss(s_log, t_log, gen_ids,
-                                        kl_weight=getattr(args, "ebe_kl_weight", 0.1))
+                v_loss, v_aw_dict = ebe_loss(s_log, t_log, gen_ids,
+                                             kl_weight=getattr(args, "ebe_kl_weight", 0.1))
+                v_aw = v_aw_dict["mean"] if isinstance(v_aw_dict, dict) else v_aw_dict
                 if v_aw is not None:
                     val_aws.append(v_aw)
             else:
@@ -1240,9 +1257,29 @@ def main():
                 loss = l1_loss(s_log, t_log)
                 aw = None
             elif args.loss == "ebe":
-                loss, aw = ebe_loss(s_log, t_log, gen_ids,
-                                    kl_weight=args.ebe_kl_weight)
+                loss, aw_dict = ebe_loss(s_log, t_log, gen_ids,
+                                         kl_weight=args.ebe_kl_weight)
+                # aw_dict contains full α distribution; store mean for history
+                aw = aw_dict["mean"] if isinstance(aw_dict, dict) else aw_dict
                 accept_weights.append(aw)
+                # Log α distribution every log_every steps so we can see how
+                # much real EBE gradient is flowing (frac_lt_0.95 > 0 means it is).
+                if (step + 1) % args.log_every == 0 and isinstance(aw_dict, dict):
+                    print(
+                        f"  [EBE-α]  mean={aw_dict['mean']:.4f}  "
+                        f"std={aw_dict['std']:.4f}  "
+                        f"min={aw_dict['min']:.4f}  "
+                        f"frac<0.95={aw_dict['frac_lt_0.95']:.3f}  "
+                        f"frac<0.80={aw_dict['frac_lt_0.80']:.3f}"
+                    )
+                    if _wandb:
+                        _wandb.log({
+                            "ebe/alpha_mean":      aw_dict["mean"],
+                            "ebe/alpha_std":       aw_dict["std"],
+                            "ebe/alpha_min":       aw_dict["min"],
+                            "ebe/frac_lt_0.95":    aw_dict["frac_lt_0.95"],
+                            "ebe/frac_lt_0.80":    aw_dict["frac_lt_0.80"],
+                        }, step=step + 1)
         except Exception as _loss_exc:
             # Catch runtime errors inside loss functions (e.g. EBE cumprod error,
             # KL divergence shape mismatch) — save what we have and stop gracefully.
