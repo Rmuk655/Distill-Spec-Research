@@ -21,12 +21,14 @@ original, unmodified OSD codebase.
 
 All files currently in this directory are unmodified from the original repository.
 
-## Future migration
+## Git submodule
 
-This directory will be converted to a **git submodule** pointing to the original repo
-after the current pipeline run completes:
+`OSD/` is tracked as a **git submodule** pointing to the original upstream repository:
 ```
 git submodule add https://github.com/LiuXiaoxuanPKU/OSD OSD
 ```
-This makes attribution machine-readable: `.gitmodules` will link directly to the
-upstream repository and commit hash.
+The `.gitmodules` file links directly to the upstream repository and pinned commit hash,
+making attribution machine-readable. To initialise after cloning this repo:
+```
+git submodule update --init OSD
+```
