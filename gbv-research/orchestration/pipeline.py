@@ -389,11 +389,6 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _max_tok       = 30    if smoke else 50
     _Ks            = "3"   if smoke else "3,5"
     _temps         = "0.6" if smoke else "0.6,1.0"
-    # Online adapt: max_new_tokens controls KV-cache size during speculative decode.
-    # Smoke keeps this small (30).  Full run reads from YAML (laptop=80, server=128,
-    # colab=64).  The KL computation is now memory-efficient (rejects-only selection
-    # in _kl_at_positions) so the main remaining constraint is the KV cache.
-    _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
     # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
     _modes = "alpha,bv,gbv,traversal,specinfer,naive"
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
@@ -405,6 +400,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Passed to every train_qwen3.py invocation so the YAML / CLI fully controls
     # all hyperparameters without editing this file.
     _h = train_hparams or {}
+    # Online adapt: max_new_tokens controls KV-cache size during speculative decode.
+    # Smoke keeps this small (30).  Full run reads from YAML (laptop=80, server=128,
+    # colab=64).  The KL computation is now memory-efficient (rejects-only selection
+    # in _kl_at_positions) so the main remaining constraint is the KV cache.
+    _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
     _train_hargs = [
         "--lr",           str(_h.get("lr", 3e-5)),
         "--lora_r",       str(_h.get("lora_r", 8)),
