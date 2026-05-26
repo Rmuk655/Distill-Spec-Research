@@ -1,0 +1,56 @@
+# Colab configuration — Google Colab free T4 (15 GB VRAM)
+# Qwen3-0.6B draft  →  Qwen3-8B target (8B in 4-bit NF4 to fit T4)
+#
+# Free T4 has 15 GB VRAM.  Qwen3-8B in bfloat16 ≈ 16 GB → OOM.
+# Loading the frozen teacher in 4-bit NF4 (bitsandbytes QLoRA) reduces it
+# to ~5 GB; total with draft + activations ≈ 8–9 GB → comfortable T4 fit.
+# The draft is trained in bfloat16 — only the frozen teacher is quantised.
+#
+# Use with: python orchestration/pipeline.py --config colab --ckpt_root /content/drive/MyDrive/specdist/checkpoints
+
+hardware:
+  device: cuda
+  load_in_4bit: true            # required — 8B teacher won't fit T4 in bfloat16
+  compile: false                # torch.compile not reliable in Colab environment
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B
+
+training:
+  steps: 500                    # ~2 hrs on T4; use 1000 with Pro
+  lr: 3.0e-5
+  lora_r: 8                     # keep small to stay within T4 VRAM
+  lora_alpha: 16
+  max_new_tokens: 64            # shorter than server (VRAM constraint)
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: capsules/datasets/raw/gsm8k_train.jsonl
+  val:   capsules/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 50                # frequent saves — Colab sessions die without warning
+  milestone_every: 200
+  max_checkpoints: 5
+  output_root: /content/drive/MyDrive/specdist/checkpoints  # GDrive (persistent)
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-t4
+
+health:
+  val_every: 50
+  ppl_check_every: 100
+  ppl_threshold: 1.25
+  nan_action: skip              # skip instead of stop (T4 sessions are precious)
+  early_stop_patience: 5
+
+evaluation:
+  modes: [alpha, specinfer, traversal, gbv]
+  K_values: [3, 5]
+  L: 8
+  n_prompts: 20                 # fewer than server — T4 eval is slow

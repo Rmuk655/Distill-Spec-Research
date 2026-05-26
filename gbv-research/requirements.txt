@@ -28,6 +28,8 @@ flask-cors>=4.0.0
 tqdm>=4.66.0
 requests>=2.31.0
 huggingface-hub>=0.22.0
+pyyaml>=6.0                   # YAML config loading (orchestration/configs/*.yaml)
+wandb>=0.16.0                  # Experiment tracking + hyperparameter sweeps
 
 # Original OSD deps (kept for compatibility)
 fschat==0.2.23

@@ -449,3 +449,144 @@ python OSD/train_qwen3.py \
   files persist, so re-running `pipeline.py --yes` auto-skips completed steps.
 - W&B logs sync to the cloud in real time — they are always preserved even if
   the session dies mid-run.
+
+---
+
+## 9. MLOps — hyperparameter overrides, loss filtering, and W&B sweeps
+
+### 9a. No-code experiment variation
+
+All training hyperparameters are exposed as CLI flags so researchers can run
+experiments without editing any source file.
+
+**Run only specific losses** (skip the rest):
+```bash
+# Train and eval only KL and EBE — skip rev_kl, jsd, l1, online
+python orchestration/pipeline.py --config laptop --smoke --losses kl,ebe
+```
+
+**Override steps per loss** (e.g., quick 200-step ablation):
+```bash
+python orchestration/pipeline.py --config laptop --train_steps 200 --losses kl,ebe
+```
+
+**Override learning rate** (single run or sweep baseline):
+```bash
+python orchestration/pipeline.py --config laptop --lr 1e-4 --losses kl
+```
+
+**Override LoRA rank** (compare r=8 vs r=16 on laptop):
+```bash
+python orchestration/pipeline.py --config laptop --lora_r 16 --losses kl,ebe
+```
+
+**Standalone `train_qwen3.py` with all sweep-friendly args**:
+```bash
+python OSD/train_qwen3.py \
+    --loss ebe \
+    --steps 500 \
+    --lr 5e-5 \
+    --lora_r 16 \
+    --lora_alpha 32 \
+    --lora_dropout 0.0 \
+    --teacher_temp 1.0 \
+    --ebe_kl_weight 0.05 \
+    --grad_clip 0.5 \
+    --draft Qwen/Qwen3-0.6B \
+    --target Qwen/Qwen3-8B \
+    --dataset OSD/data/gsm8k_train.jsonl \
+    --output db/checkpoints/ebe-ablation-v1
+```
+
+### 9b. YAML config files — per-environment defaults
+
+Each compute environment has a YAML in `orchestration/configs/`:
+
+| File | Environment | Key settings |
+|------|-------------|-------------|
+| `laptop.yaml` | RTX 500, 6 GB | lr=3e-5, lora_r=8, steps=1000 |
+| `server.yaml` | A100 40/80 GB | lr=3e-5, lora_r=16, steps=5000 |
+| `colab.yaml`  | T4 15 GB | lr=3e-5, lora_r=8, steps=500, 4-bit teacher |
+
+CLI args (`--lr`, `--lora_r`, `--teacher_temp`) override YAML values, which
+override the hardcoded defaults. Priority: `CLI > YAML > code default`.
+
+To add a new environment (e.g., Kaggle P100):
+1. Copy `orchestration/configs/laptop.yaml` → `orchestration/configs/kaggle.yaml`
+2. Adjust `hardware`, `training`, and `checkpointing` sections
+3. Add `"kaggle": {"draft": ..., "target": ...}` to `CONFIGS` dict in `pipeline.py`
+4. Run: `python orchestration/pipeline.py --config kaggle --ckpt_root /kaggle/working/ckpts`
+
+### 9c. W&B hyperparameter sweeps
+
+A W&B sweep runs many trials automatically, each with different hyperparameters.
+The Bayesian optimizer finds the best combination faster than a manual grid.
+
+**Step 1 — Register the sweep and run 20 trials locally**:
+```bash
+python orchestration/run_sweep.py --count 20
+```
+
+This outputs a sweep ID and a dashboard URL:
+```
+  [sweep] Sweep ID: abc123xyz
+  [sweep] Dashboard: https://wandb.ai/<entity>/distillspec/sweeps/abc123xyz
+  [sweep] Starting 20 local agent trial(s)...
+```
+
+**Step 2 — Add more parallel agents** (each runs on a separate GPU / machine):
+```bash
+# On another machine, pick up where the first agent left off:
+wandb agent <entity>/distillspec/<sweep_id>
+```
+
+**Focused sweep — single loss, vary LR + lora_r only**:
+```bash
+python orchestration/run_sweep.py --loss ebe --count 12
+```
+
+**Dry-run — inspect the search space without registering**:
+```bash
+python orchestration/run_sweep.py --dry_run
+```
+
+**Custom sweep config** (fork `sweep.yaml` and pass it):
+```bash
+python orchestration/run_sweep.py \
+    --sweep_config orchestration/configs/my_sweep.yaml \
+    --count 30
+```
+
+**Default search space** (defined in `orchestration/configs/sweep.yaml`):
+
+| Parameter | Distribution | Range |
+|-----------|-------------|-------|
+| `lr` | log-uniform | 1e-5 – 1e-4 |
+| `loss` | categorical | forward_kl, ebe, reverse_kl, jsd, l1 |
+| `lora_r` | categorical | 4, 8, 16 |
+| `ebe_kl_weight` | log-uniform | 0.01 – 0.5 |
+| `jsd_alpha` | uniform | 0.1 – 0.9 |
+| `teacher_temp` | categorical | 0.6, 0.8, 1.0 |
+| `grad_clip` | categorical | 0.5, 1.0, 2.0 |
+| `lora_dropout` | categorical | 0.0, 0.05, 0.1 |
+
+All sweep runs appear in W&B under group `hparam_sweep_v1` — use the
+**Parallel Coordinates** chart to identify which hyperparameters drive val/loss.
+
+### 9d. Reading sweep results
+
+After a sweep, pull the best config:
+```python
+import wandb
+api = wandb.Api()
+sweep = api.sweep("<entity>/distillspec/<sweep_id>")
+best_run = sweep.best_run()
+print(best_run.config)   # → the winning hyperparameter set
+```
+
+Then lock those values in the appropriate YAML and re-run the full pipeline:
+```bash
+python orchestration/pipeline.py --config server \
+    --lr 4.2e-5 --lora_r 16 \
+    --experiment_tag "best_sweep_v1"
+```

@@ -228,6 +228,43 @@ CONFIGS = {
 }
 
 # ---------------------------------------------------------------------------
+# YAML config loader — reads orchestration/configs/<name>.yaml for training
+# hyperparameters that the hardcoded CONFIGS dict doesn't carry.
+# Returns a flat dict; missing keys fall back to safe defaults.
+# ---------------------------------------------------------------------------
+
+def _load_config_yaml(config_name: str) -> dict:
+    """Load orchestration/configs/{config_name}.yaml and return a flat hyperparams dict.
+
+    YAML structure (nested) is flattened to a single-level dict so callers can
+    do: h.get("lr", 3e-5) without knowing the nesting.
+
+    Missing YAML file or missing keys → return defaults silently (never crash).
+    """
+    yaml_path = os.path.join(HERE, "configs", f"{config_name}.yaml")
+    if not os.path.exists(yaml_path):
+        return {}
+    try:
+        import yaml
+        with open(yaml_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        training  = data.get("training", {})
+        health    = data.get("health", {})
+        return {
+            "lr":                   training.get("lr", 3e-5),
+            "lora_r":               training.get("lora_r", 8),
+            "lora_alpha":           training.get("lora_alpha", 16),
+            "teacher_temp":         training.get("teacher_temperature", 0.8),
+            "max_new_tokens":       training.get("max_new_tokens", 80),
+            "seed":                 training.get("seed", 42),
+            "nan_action":           health.get("nan_action", "stop"),
+            "early_stop_patience":  health.get("early_stop_patience", 0),
+        }
+    except Exception as exc:
+        print(f"  [config] Warning: could not load {yaml_path}: {exc}")
+        return {}
+
+# ---------------------------------------------------------------------------
 # Step definitions
 # Each step has:
 #   id          : unique key for state tracking
@@ -300,8 +337,21 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
     return cmd
 
 
+# Loss name → step-ID prefixes.  Used to filter steps when --losses is given.
+_LOSS_STEP_PREFIXES: dict = {
+    "kl":     ("train_kl_",      "merge_kl_",      "eval_kl_"),
+    "ebe":    ("train_ebe_",     "merge_ebe_",     "eval_ebe_"),
+    "rev_kl": ("train_rev_kl_",  "merge_rev_kl_",  "eval_rev_kl_"),
+    "jsd":    ("train_jsd_",     "merge_jsd_",     "eval_jsd_"),
+    "l1":     ("train_l1_",      "merge_l1_",      "eval_l1_"),
+    "online": ("online_adapt_",  "merge_online_",  "eval_online_"),
+}
+ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
+
+
 def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
-                load_in_4bit=False, ckpt_root=None):
+                load_in_4bit=False, ckpt_root=None,
+                train_hparams=None, losses_to_run=None):
     """Build the STEPS list for a given draft/target model pair.
 
     Pipeline structure (same for both smoke and full — only numbers differ):
@@ -345,6 +395,23 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
     _4bit = ["--load_in_4bit"] if load_in_4bit else []
 
+    # ── Training hyperparameter args ───────────────────────────────────────────
+    # Resolved from train_hparams dict (built in main() from YAML + CLI overrides).
+    # Passed to every train_qwen3.py invocation so the YAML / CLI fully controls
+    # all hyperparameters without editing this file.
+    _h = train_hparams or {}
+    _train_hargs = [
+        "--lr",           str(_h.get("lr", 3e-5)),
+        "--lora_r",       str(_h.get("lora_r", 8)),
+        "--lora_alpha",   str(_h.get("lora_alpha", 16)),
+        "--teacher_temp", str(_h.get("teacher_temp", 0.8)),
+    ]
+
+    # Override step count if train_steps was specified via CLI
+    if _h.get("train_steps") is not None:
+        _steps = _h["train_steps"]
+        _online_steps = _h["train_steps"]
+
     # ── Checkpoint directory resolver ─────────────────────────────────────────
     # --ckpt_root overrides the default gbv-research/db/checkpoints/ location.
     # Use this for ephemeral compute (Colab, Modal, Kaggle) where local disk
@@ -377,7 +444,26 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         task_score=task_score, experiment_tag=experiment_tag)
         return cmd + _4bit  # append --load_in_4bit for colab config
 
-    return [
+    # ── Loss filter helper ─────────────────────────────────────────────────────
+    def _is_loss_step(sid: str) -> bool:
+        """True if this step ID belongs to a specific loss (train/merge/eval)."""
+        return any(
+            sid.startswith(pfx)
+            for prefixes in _LOSS_STEP_PREFIXES.values()
+            for pfx in prefixes
+        )
+
+    def _loss_selected(sid: str) -> bool:
+        """True if this loss-specific step is for one of the selected losses."""
+        selected = set(losses_to_run) if losses_to_run else set(ALL_LOSSES)
+        return any(
+            sid.startswith(pfx)
+            for name in selected
+            for pfx in _LOSS_STEP_PREFIXES.get(name, ())
+        )
+
+    # ── Build full step list then apply loss filter ────────────────────────
+    _steps_list = [
         # -------------------------------------------------------------------
         # Phase 1 — Baseline
         # Run first every time so the untrained draft model's block efficiency
@@ -410,10 +496,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "forward_kl",
-                "--steps", str(_steps), "--lr", "3e-5",
+                "--steps", str(_steps),
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("kl-gsm8k"),
+                *_train_hargs,
             ] + _4bit,
             "done_check": os.path.join(_ckpt("kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -433,12 +520,13 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "ebe",
-                "--steps", str(_steps), "--lr", "3e-5",
+                "--steps", str(_steps),
                 "--nan_action", "skip",
                 "--early_stop_patience", "3",
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("ebe-gsm8k"),
+                *_train_hargs,
             ] + _4bit,
             "done_check": os.path.join(_ckpt("ebe-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -458,11 +546,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "reverse_kl",
-                "--steps", str(_steps), "--lr", "3e-5",
+                "--steps", str(_steps),
                 "--nan_action", "skip", "--early_stop_patience", "3",
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("rev_kl-gsm8k"),
+                *_train_hargs,
             ] + _4bit,
             "done_check": os.path.join(_ckpt("rev_kl-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -482,11 +571,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "jsd",
-                "--steps", str(_steps), "--lr", "3e-5",
+                "--steps", str(_steps),
                 "--nan_action", "skip", "--early_stop_patience", "3",
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("jsd-gsm8k"),
+                *_train_hargs,
             ] + _4bit,
             "done_check": os.path.join(_ckpt("jsd-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -506,11 +596,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": [
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "l1",
-                "--steps", str(_steps), "--lr", "3e-5",
+                "--steps", str(_steps),
                 "--nan_action", "skip", "--early_stop_patience", "3",
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("l1-gsm8k"),
+                *_train_hargs,
             ] + _4bit,
             "done_check": os.path.join(_ckpt("l1-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -730,7 +821,15 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "done_check": None,  # writes to results.db; no single output file
             },
         ] if eagle else []),
-    ]
+    ]  # end _steps_list
+    # Apply --losses filter: drop steps for unselected losses, keep all others.
+    if losses_to_run is not None:
+        _selected = set(losses_to_run)
+        _steps_list = [
+            s for s in _steps_list
+            if not _is_loss_step(s["id"]) or _loss_selected(s["id"])
+        ]
+    return _steps_list
 
 # ---------------------------------------------------------------------------
 # State management
@@ -1226,11 +1325,54 @@ def main():
                         "Colab + Google Drive: /content/drive/MyDrive/specdist/checkpoints  "
                         "Modal: /vol/checkpoints (set automatically by modal_train.py)  "
                         "Kaggle: /kaggle/working/specdist/checkpoints")
+    # ── MLOps / sweep overrides ───────────────────────────────────────────────
+    p.add_argument("--losses", default=None,
+                   help="Comma-separated subset of losses to train/eval. "
+                        "Default: run all 6 (kl,ebe,rev_kl,jsd,l1,online). "
+                        "Example: --losses kl,ebe  runs only KL and EBE. "
+                        "Useful for debugging a single loss or for parallel experiments.")
+    p.add_argument("--train_steps", type=int, default=None,
+                   help="Override per-loss training step count. "
+                        "Overrides the smoke (50) / full (1000) default. "
+                        "Example: --train_steps 200 for a quick ablation run.")
+    p.add_argument("--lr", type=float, default=None,
+                   help="Learning rate for all training runs (overrides YAML config). "
+                        "Default from YAML: laptop=3e-5, server=3e-5. "
+                        "W&B sweep: set via sweep agent, not this flag directly.")
+    p.add_argument("--lora_r", type=int, default=None,
+                   help="LoRA rank for all training runs (overrides YAML config). "
+                        "Default from YAML: laptop=8, server=16.")
+    p.add_argument("--teacher_temp", type=float, default=None,
+                   help="Teacher sampling temperature for all training runs "
+                        "(overrides YAML config, default 0.8).")
     args = p.parse_args()
 
     cfg = CONFIGS[args.config]
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
+
+    # Load per-config YAML for training hyperparams (lr, lora_r, etc.)
+    # CLI overrides (--lr, --lora_r, --teacher_temp) take priority over YAML values.
+    _yaml_cfg = _load_config_yaml(args.config)
+    train_hparams = {
+        "lr":           args.lr           or _yaml_cfg.get("lr", 3e-5),
+        "lora_r":       args.lora_r       or _yaml_cfg.get("lora_r", 8),
+        "lora_alpha":                         _yaml_cfg.get("lora_alpha", 16),
+        "teacher_temp": args.teacher_temp or _yaml_cfg.get("teacher_temp", 0.8),
+        "train_steps":  args.train_steps,   # None = use smoke/full default
+    }
+
+    # Parse --losses filter into a list; None = run all losses.
+    _losses_to_run = (
+        [l.strip() for l in args.losses.split(",") if l.strip()]
+        if args.losses else None
+    )
+    if _losses_to_run:
+        _invalid = [l for l in _losses_to_run if l not in ALL_LOSSES]
+        if _invalid:
+            p.error(f"--losses: unknown loss name(s): {_invalid}. "
+                    f"Valid: {ALL_LOSSES}")
+        print(f"  [pipeline] Loss filter: {_losses_to_run} (others skipped)")
 
     # State file is config-scoped so laptop and server runs don't mix.
     # Smoke gets its OWN state file so smoke's "done" marks never prevent the
@@ -1246,7 +1388,9 @@ def main():
         STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                             smoke=args.smoke, eagle=args.eagle,
                             load_in_4bit=_load_4bit,
-                            ckpt_root=args.ckpt_root)
+                            ckpt_root=args.ckpt_root,
+                            train_hparams=train_hparams,
+                            losses_to_run=_losses_to_run)
         _print_header(cfg, draft, target, args)
         state = load_state()
         for step in STEPS:                          # sync done_check files
@@ -1273,7 +1417,9 @@ def main():
     STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                         smoke=args.smoke, eagle=args.eagle,
                         load_in_4bit=_load_4bit,
-                        ckpt_root=args.ckpt_root)
+                        ckpt_root=args.ckpt_root,
+                        train_hparams=train_hparams,
+                        losses_to_run=_losses_to_run)
 
     _print_header(cfg, draft, target, args)
 

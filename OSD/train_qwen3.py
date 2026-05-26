@@ -372,6 +372,29 @@ def parse_args():
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable W&B logging for this run (even if wandb is installed). "
                         "Useful for quick debugging runs or air-gapped servers.")
+    # ── Sweep-friendly hyperparameters ───────────────────────────────────────
+    # These replace the previously hardcoded values so W&B sweep agents can
+    # vary them without editing source code.
+    p.add_argument("--teacher_temp", type=float, default=0.8,
+                   help="Teacher sampling temperature (default: 0.8). "
+                        "Controls both the generate() call and logit rescaling: "
+                        "output_scores = raw_logits/T, so we multiply by T to recover "
+                        "raw_logits before computing the distillation loss. "
+                        "Higher T = softer distribution = easier distillation target.")
+    p.add_argument("--ebe_kl_weight", type=float, default=0.1,
+                   help="KL regularizer weight in EBE loss (default: 0.1). "
+                        "L_total = L_EBE + ebe_kl_weight * L_KL. "
+                        "0.0 = pure EBE (unstable). 1.0 = mostly KL. Sweep: 0.01–0.5.")
+    p.add_argument("--jsd_alpha", type=float, default=0.5,
+                   help="Interpolation weight for JSD loss (default: 0.5 = symmetric). "
+                        "JSD = alpha*KL(p_s||M) + (1-alpha)*KL(p_t||M), M=alpha*p_s+(1-alpha)*p_t. "
+                        "0 = reverse KL only, 1 = forward KL only. Sweep: 0.1–0.9.")
+    p.add_argument("--grad_clip", type=float, default=1.0,
+                   help="Gradient norm clipping threshold (default: 1.0). "
+                        "0 = disabled. Helps stabilise EBE and reverse-KL losses.")
+    p.add_argument("--lora_dropout", type=float, default=0.05,
+                   help="LoRA adapter dropout probability (default: 0.05). "
+                        "Sweep: 0.0–0.2. 0 = no dropout (good for small datasets).")
     return p.parse_args()
 
 
@@ -623,7 +646,7 @@ def _compute_val_loss(draft_model, target_model, val_prompts, tok_cache,
     train_loss is still falling, the model is overfitting.  The dashboard
     highlights this automatically.
     """
-    _TEACHER_TEMP = 0.8
+    _TEACHER_TEMP = getattr(args, "teacher_temp", 0.8)
     sample = val_prompts[:max_prompts]
     val_losses, val_aws = [], []
 
@@ -670,13 +693,15 @@ def _compute_val_loss(draft_model, target_model, val_prompts, tok_cache,
                 v_loss = reverse_kl_loss(s_log, t_log)
                 v_aw = None
             elif args.loss == "jsd":
-                v_loss = jsd_loss(s_log, t_log)
+                v_loss = jsd_loss(s_log, t_log,
+                                  alpha=getattr(args, "jsd_alpha", 0.5))
                 v_aw = None
             elif args.loss == "l1":
                 v_loss = l1_loss(s_log, t_log)
                 v_aw = None
             elif args.loss == "ebe":
-                v_loss, v_aw = ebe_loss(s_log, t_log, gen_ids)
+                v_loss, v_aw = ebe_loss(s_log, t_log, gen_ids,
+                                        kl_weight=getattr(args, "ebe_kl_weight", 0.1))
                 if v_aw is not None:
                     val_aws.append(v_aw)
             else:
@@ -879,7 +904,7 @@ def main():
             task_type=TaskType.CAUSAL_LM,
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
-            lora_dropout=0.05,
+            lora_dropout=args.lora_dropout,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
             bias="none",
         )
@@ -1121,7 +1146,7 @@ def main():
         # NOTE on temperature: output_scores are temperature-scaled logits.
         # We divide by _TEACHER_TEMP to recover the raw unscaled distribution
         # that the loss functions expect (they apply softmax internally).
-        _TEACHER_TEMP = 0.8
+        _TEACHER_TEMP = args.teacher_temp
         with torch.no_grad():
             gen_out = target_model.generate(
                 prompt_ids,
@@ -1164,13 +1189,14 @@ def main():
                 loss = reverse_kl_loss(s_log, t_log)
                 aw = None
             elif args.loss == "jsd":
-                loss = jsd_loss(s_log, t_log)
+                loss = jsd_loss(s_log, t_log, alpha=args.jsd_alpha)
                 aw = None
             elif args.loss == "l1":
                 loss = l1_loss(s_log, t_log)
                 aw = None
             elif args.loss == "ebe":
-                loss, aw = ebe_loss(s_log, t_log, gen_ids)
+                loss, aw = ebe_loss(s_log, t_log, gen_ids,
+                                    kl_weight=args.ebe_kl_weight)
                 accept_weights.append(aw)
         except Exception as _loss_exc:
             # Catch runtime errors inside loss functions (e.g. EBE cumprod error,
@@ -1219,8 +1245,10 @@ def main():
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            [p for p in draft_model.parameters() if p.requires_grad], 1.0)
+        if args.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in draft_model.parameters() if p.requires_grad],
+                args.grad_clip)
         optimizer.step()
 
         losses.append(loss.item())
