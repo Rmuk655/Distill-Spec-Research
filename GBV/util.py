@@ -3,7 +3,22 @@ import torch
 import json
 import torch.nn.functional as F
 from typing import List, Tuple
+import transformers
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
+
+
+def _dtype_kwargs(dtype) -> dict:
+    """Return the correct dtype kwarg for AutoModelForCausalLM.from_pretrained().
+
+    transformers >=5.0 renamed torch_dtype= -> dtype= (and deprecated the old name).
+    transformers <5.0  uses    torch_dtype= (dtype= is unknown).
+    This helper returns the right dict so both versions work without warnings.
+    """
+    try:
+        _major = int(transformers.__version__.split(".")[0])
+        return {"dtype": dtype} if _major >= 5 else {"torch_dtype": dtype}
+    except Exception:
+        return {"torch_dtype": dtype}  # safe fallback
 
 """
 Load prompts from a JSONL file, given a path to the directory.
@@ -107,7 +122,7 @@ def load_models(
         p_model = AutoModelForCausalLM.from_pretrained(
             p_name,
             trust_remote_code=True,
-            torch_dtype=torch_dtype,
+            **_dtype_kwargs(torch_dtype),
             low_cpu_mem_usage=True,
             device_map=None,
             use_safetensors=True
@@ -117,7 +132,7 @@ def load_models(
     q_model = AutoModelForCausalLM.from_pretrained(
         q_name,
         trust_remote_code=True,
-        torch_dtype=torch_dtype,
+        **_dtype_kwargs(torch_dtype),
         low_cpu_mem_usage=True,
         device_map=None,
         use_safetensors=True
