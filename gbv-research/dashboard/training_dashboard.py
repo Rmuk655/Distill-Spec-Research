@@ -102,66 +102,94 @@ def api_pipeline_status():
         return jsonify({"found": False, "error": str(e)})
 
     steps = state.get("steps", {})
-    # Ordered step IDs (matches pipeline.py build_steps ordering)
+    # ── Step order and phase labels ────────────────────────────────────────────
+    # MUST stay in sync with pipeline.py build_steps() step IDs and groups.
+    # If you add a step there, add a matching entry here.
     STEP_ORDER = [
-        "merge_ebe_lr1e-5", "merge_ebe_lr3e-5", "merge_ebe_lr1e-4",
-        "eval_baseline_gsm8k", "eval_kl200_gsm8k", "eval_ebe200_gsm8k",
-        "eval_ebe_lr1e5_gsm8k", "eval_ebe_lr3e5_gsm8k", "eval_ebe_lr1e4_gsm8k",
-        "train_kl_gsm8k", "merge_kl_gsm8k", "train_ebe_gsm8k", "merge_ebe_gsm8k",
-        "train_rev_kl_gsm8k", "merge_rev_kl_gsm8k",
-        "train_jsd_gsm8k", "merge_jsd_gsm8k",
-        "online_adapt_gsm8k", "merge_online_gsm8k",
-        "eval_kl1000_gsm8k", "eval_ebe1000_gsm8k",
-        "eval_rev_kl1000_gsm8k", "eval_jsd1000_gsm8k", "eval_online1000_gsm8k",
-        "eval_baseline_all", "eval_kl1000_all", "eval_ebe1000_all",
-        "eval_rev_kl1000_all", "eval_jsd1000_all", "eval_online_all",
+        # Phase 1 — Baseline
+        "eval_baseline_gsm8k",
+        # Phase 2 — Training (offline losses)
+        "train_kl_gsm8k",          "merge_kl_gsm8k",
+        "train_ebe_gsm8k",         "merge_ebe_gsm8k",
+        "train_rev_kl_gsm8k",      "merge_rev_kl_gsm8k",
+        "train_jsd_gsm8k",         "merge_jsd_gsm8k",
+        "train_l1_gsm8k",          "merge_l1_gsm8k",
+        # Phase 2 — Online training
+        "online_adapt_gsm8k",      "merge_online_gsm8k",
+        "online_ebe_adapt_gsm8k",  "merge_online_ebe_gsm8k",
+        # Phase 3 — GSM8K Eval
+        "eval_kl_gsm8k",
+        "eval_ebe_gsm8k",
+        "eval_rev_kl_gsm8k",
+        "eval_jsd_gsm8k",
+        "eval_l1_gsm8k",
+        "eval_online_gsm8k",
+        "eval_online_ebe_gsm8k",
+        # Phase 4 — Multi-Dataset
+        "eval_baseline_all",
+        "eval_kl_all",
+        "eval_ebe_all",
+        "eval_rev_kl_all",
+        "eval_jsd_all",
+        "eval_l1_all",
+        "eval_online_all",
+        "eval_online_ebe_all",
+        # Phase 5 — EAGLE benchmark
+        "eagle_gen", "eagle_train", "eagle_eval",
     ]
     PHASE_LABELS = {
-        "merge_ebe_lr1e-5": "Phase 0 — Merge",
-        "merge_ebe_lr3e-5": "Phase 0 — Merge",
-        "merge_ebe_lr1e-4": "Phase 0 — Merge",
-        "eval_baseline_gsm8k": "Phase 1 — Quick Eval",
-        "eval_kl200_gsm8k":    "Phase 1 — Quick Eval",
-        "eval_ebe200_gsm8k":   "Phase 1 — Quick Eval",
-        "eval_ebe_lr1e5_gsm8k":"Phase 1 — Quick Eval",
-        "eval_ebe_lr3e5_gsm8k":"Phase 1 — Quick Eval",
-        "eval_ebe_lr1e4_gsm8k":"Phase 1 — Quick Eval",
-        "train_kl_gsm8k":  "Phase 2 — Training",
-        "merge_kl_gsm8k":  "Phase 2 — Training",
-        "train_ebe_gsm8k": "Phase 2 — Training",
-        "merge_ebe_gsm8k": "Phase 2 — Training",
-        "train_rev_kl_gsm8k":    "Phase 2b — KL Variants",
-        "merge_rev_kl_gsm8k":    "Phase 2b — KL Variants",
-        "train_jsd_gsm8k":       "Phase 2b — KL Variants",
-        "merge_jsd_gsm8k":       "Phase 2b — KL Variants",
-        "online_adapt_gsm8k":    "Phase 2c — Online Adapt",
-        "merge_online_gsm8k":    "Phase 2c — Online Adapt",
-        "eval_kl1000_gsm8k":  "Phase 3 — Full Eval",
-        "eval_ebe1000_gsm8k": "Phase 3 — Full Eval",
-        "eval_rev_kl1000_gsm8k": "Phase 3 — Full Eval",
-        "eval_jsd1000_gsm8k":    "Phase 3 — Full Eval",
-        "eval_online1000_gsm8k": "Phase 3 — Full Eval",
-        "eval_baseline_all":  "Phase 4 — Multi-Dataset",
-        "eval_kl1000_all":    "Phase 4 — Multi-Dataset",
-        "eval_ebe1000_all":   "Phase 4 — Multi-Dataset",
-        "eval_rev_kl1000_all":   "Phase 4 — Multi-Dataset",
-        "eval_jsd1000_all":      "Phase 4 — Multi-Dataset",
-        "eval_online_all":       "Phase 4 — Multi-Dataset",
+        "eval_baseline_gsm8k":    "Ph 1 — Baseline",
+        "train_kl_gsm8k":         "Ph 2 — Training",
+        "merge_kl_gsm8k":         "Ph 2 — Training",
+        "train_ebe_gsm8k":        "Ph 2 — Training",
+        "merge_ebe_gsm8k":        "Ph 2 — Training",
+        "train_rev_kl_gsm8k":     "Ph 2 — Training",
+        "merge_rev_kl_gsm8k":     "Ph 2 — Training",
+        "train_jsd_gsm8k":        "Ph 2 — Training",
+        "merge_jsd_gsm8k":        "Ph 2 — Training",
+        "train_l1_gsm8k":         "Ph 2 — Training",
+        "merge_l1_gsm8k":         "Ph 2 — Training",
+        "online_adapt_gsm8k":     "Ph 2 — Training",
+        "merge_online_gsm8k":     "Ph 2 — Training",
+        "online_ebe_adapt_gsm8k": "Ph 2 — Training",
+        "merge_online_ebe_gsm8k": "Ph 2 — Training",
+        "eval_kl_gsm8k":          "Ph 3 — GSM8K Eval",
+        "eval_ebe_gsm8k":         "Ph 3 — GSM8K Eval",
+        "eval_rev_kl_gsm8k":      "Ph 3 — GSM8K Eval",
+        "eval_jsd_gsm8k":         "Ph 3 — GSM8K Eval",
+        "eval_l1_gsm8k":          "Ph 3 — GSM8K Eval",
+        "eval_online_gsm8k":      "Ph 3 — GSM8K Eval",
+        "eval_online_ebe_gsm8k":  "Ph 3 — GSM8K Eval",
+        "eval_baseline_all":      "Ph 4 — Multi-DS",
+        "eval_kl_all":            "Ph 4 — Multi-DS",
+        "eval_ebe_all":           "Ph 4 — Multi-DS",
+        "eval_rev_kl_all":        "Ph 4 — Multi-DS",
+        "eval_jsd_all":           "Ph 4 — Multi-DS",
+        "eval_l1_all":            "Ph 4 — Multi-DS",
+        "eval_online_all":        "Ph 4 — Multi-DS",
+        "eval_online_ebe_all":    "Ph 4 — Multi-DS",
+        "eagle_gen":              "Ph 5 — EAGLE",
+        "eagle_train":            "Ph 5 — EAGLE",
+        "eagle_eval":             "Ph 5 — EAGLE",
     }
 
-    # Training steps that stopped early (NaN, exception) but produced a partial
-    # checkpoint are not real failures — the pipeline can still merge + eval them.
-    # Remap their status from "failed" → "stopped" so the badge shows orange
-    # ("STOPPED") rather than red ("FAILED").
-    TRAIN_STEP_IDS = {"train_kl_gsm8k", "train_ebe_gsm8k",
-                      "train_rev_kl_gsm8k", "train_jsd_gsm8k", "online_adapt_gsm8k"}
+    # Training steps that stopped early (NaN / early-stop) but produced a partial
+    # checkpoint are not real failures — pipeline can still merge + eval them.
+    # Remap status from "failed" → "stopped" so badge shows orange not red.
+    TRAIN_STEP_IDS = {
+        "train_kl_gsm8k", "train_ebe_gsm8k", "train_rev_kl_gsm8k",
+        "train_jsd_gsm8k", "train_l1_gsm8k",
+        "online_adapt_gsm8k", "online_ebe_adapt_gsm8k",
+    }
     CKPT_DIR = os.path.join(HERE, "checkpoints")
     _CKPT_SUFFIXES = {
-        "train_kl_gsm8k":     "kl1000-gsm8k",
-        "train_ebe_gsm8k":    "ebe1000-gsm8k",
-        "train_rev_kl_gsm8k": "rev_kl1000-gsm8k",
-        "train_jsd_gsm8k":    "jsd1000-gsm8k",
-        "online_adapt_gsm8k": "online-gsm8k",
+        "train_kl_gsm8k":         "kl-gsm8k",
+        "train_ebe_gsm8k":        "ebe-gsm8k",
+        "train_rev_kl_gsm8k":     "rev_kl-gsm8k",
+        "train_jsd_gsm8k":        "jsd-gsm8k",
+        "train_l1_gsm8k":         "l1-gsm8k",
+        "online_adapt_gsm8k":     "online-gsm8k",
+        "online_ebe_adapt_gsm8k": "online-ebe-gsm8k",
     }
 
     def _has_partial_output(sid):
@@ -833,36 +861,74 @@ let _logPanelOpen  = false;
 let HW_TIER_FILTER = new Set(['laptop', 'colab', 'a100']);
 
 // ---- Step descriptions (shown as tooltips and in panel) ----
+// MUST stay in sync with pipeline.py build_steps() step IDs.
 const STEP_DESC = {
-  'merge_ebe_lr1e-5':    'Phase 0 — Merge: Fuse LoRA adapter (EBE loss, lr=1e-5) into the base draft model',
-  'merge_ebe_lr3e-5':    'Phase 0 — Merge: Fuse LoRA adapter (EBE loss, lr=3e-5) into the base draft model',
-  'merge_ebe_lr1e-4':    'Phase 0 — Merge: Fuse LoRA adapter (EBE loss, lr=1e-4) into the base draft model',
-  'eval_baseline_gsm8k': 'Phase 1 — Quick Eval: Run alpha/BE/PPL on the UNTRAINED baseline draft model — this is the reference point all trained models are compared against',
-  'eval_kl200_gsm8k':    'Phase 1 — Quick Eval: Eval KL-distilled draft (200 steps on diverse data) vs baseline on GSM8K',
-  'eval_ebe200_gsm8k':   'Phase 1 — Quick Eval: Eval EBE-distilled draft (200 steps on diverse data) — EBE is the novel loss; compare vs KL here',
-  'eval_ebe_lr1e5_gsm8k':'Phase 1 — Quick Eval: LR sensitivity check — EBE draft trained with lr=1e-5',
-  'eval_ebe_lr3e5_gsm8k':'Phase 1 — Quick Eval: LR sensitivity check — EBE draft trained with lr=3e-5',
-  'eval_ebe_lr1e4_gsm8k':'Phase 1 — Quick Eval: LR sensitivity check — EBE draft trained with lr=1e-4',
-  'train_kl_gsm8k':      'Phase 2 — Training: Train KL-distillation for 1000 steps on real GSM8K data (overnight, ~5h on laptop)',
-  'merge_kl_gsm8k':      'Phase 2 — Training: Merge the KL-1000 LoRA into base model',
-  'train_ebe_gsm8k':     'Phase 2 — Training: Train EBE-distillation for 1000 steps on real GSM8K data (overnight, ~5h on laptop)',
-  'merge_ebe_gsm8k':     'Phase 2 — Training: Merge the EBE-1000 LoRA into base model',
-  'eval_kl1000_gsm8k':   'Phase 3 — Full Eval: Full eval of KL-1000 draft on GSM8K — key result for the paper',
-  'eval_ebe1000_gsm8k':  'Phase 3 — Full Eval: Full eval of EBE-1000 draft on GSM8K — KEY result: does EBE beat KL?',
-  'eval_baseline_all':   'Phase 4 — Multi-Dataset: Baseline eval on HumanEval, MATH-500, MTBench, Alpaca (robustness check)',
-  'eval_kl1000_all':     'Phase 4 — Multi-Dataset: KL-1000 eval across all 4 datasets',
-  'eval_ebe1000_all':    'Phase 4 — Multi-Dataset: EBE-1000 eval across all 4 datasets — proves cross-domain generalization',
+  // Phase 1
+  'eval_baseline_gsm8k':    'Ph 1 — Baseline: Untrained draft model — reference point all trained models are compared against',
+  // Phase 2 — offline losses
+  'train_kl_gsm8k':         'Ph 2 — Training: Train forward-KL distillation (DistillSpec baseline)',
+  'merge_kl_gsm8k':         'Ph 2 — Training: Merge KL LoRA into base model',
+  'train_ebe_gsm8k':        'Ph 2 — Training: Train offline EBE (ablation — no live SD; weak signal early)',
+  'merge_ebe_gsm8k':        'Ph 2 — Training: Merge EBE LoRA into base model',
+  'train_rev_kl_gsm8k':     'Ph 2 — Training: Train reverse-KL (mode-seeking ablation)',
+  'merge_rev_kl_gsm8k':     'Ph 2 — Training: Merge rev-KL LoRA',
+  'train_jsd_gsm8k':        'Ph 2 — Training: Train JSD (symmetric ablation)',
+  'merge_jsd_gsm8k':        'Ph 2 — Training: Merge JSD LoRA',
+  'train_l1_gsm8k':         'Ph 2 — Training: Train L1 (total-variation ablation)',
+  'merge_l1_gsm8k':         'Ph 2 — Training: Merge L1 LoRA',
+  // Phase 2 — online
+  'online_adapt_gsm8k':     'Ph 2 — Training: Online forward-KL (OSD baseline — KL at rejected positions from live SD)',
+  'merge_online_gsm8k':     'Ph 2 — Training: Merge online-KL LoRA',
+  'online_ebe_adapt_gsm8k': 'Ph 2 — Training: Online EBE (NOVEL — block-level EBE at live rejected positions)',
+  'merge_online_ebe_gsm8k': 'Ph 2 — Training: Merge online-EBE LoRA',
+  // Phase 3
+  'eval_kl_gsm8k':          'Ph 3 — GSM8K Eval: Eval KL draft — DistillSpec baseline result',
+  'eval_ebe_gsm8k':         'Ph 3 — GSM8K Eval: Eval offline-EBE draft — ablation vs online-EBE',
+  'eval_rev_kl_gsm8k':      'Ph 3 — GSM8K Eval: Eval rev-KL draft',
+  'eval_jsd_gsm8k':         'Ph 3 — GSM8K Eval: Eval JSD draft',
+  'eval_l1_gsm8k':          'Ph 3 — GSM8K Eval: Eval L1 draft',
+  'eval_online_gsm8k':      'Ph 3 — GSM8K Eval: Eval online-KL draft (OSD baseline)',
+  'eval_online_ebe_gsm8k':  'Ph 3 — GSM8K Eval: Eval online-EBE draft — KEY result: does online EBE beat online KL?',
+  // Phase 4
+  'eval_baseline_all':      'Ph 4 — Multi-DS: Baseline on HumanEval, MATH-500, MTBench, Alpaca',
+  'eval_kl_all':            'Ph 4 — Multi-DS: KL draft cross-domain',
+  'eval_ebe_all':           'Ph 4 — Multi-DS: Offline-EBE draft cross-domain',
+  'eval_rev_kl_all':        'Ph 4 — Multi-DS: Rev-KL draft cross-domain',
+  'eval_jsd_all':           'Ph 4 — Multi-DS: JSD draft cross-domain',
+  'eval_l1_all':            'Ph 4 — Multi-DS: L1 draft cross-domain',
+  'eval_online_all':        'Ph 4 — Multi-DS: Online-KL draft cross-domain',
+  'eval_online_ebe_all':    'Ph 4 — Multi-DS: Online-EBE draft cross-domain — proves generalization',
+  // Phase 5
+  'eagle_gen':   'Ph 5 — EAGLE: Generate EAGLE training data from target model hidden states',
+  'eagle_train': 'Ph 5 — EAGLE: Train 1-layer EAGLE head on hidden states',
+  'eagle_eval':  'Ph 5 — EAGLE: Eval EAGLE draft — external baseline for block-efficiency comparison',
 };
 
-// Phases grouped for the panel
+// Phases grouped for the step panel
+// MUST stay in sync with pipeline.py build_steps() step IDs.
 const PHASE_GROUPS = [
-  { label: 'Ph 0 — Merge',        steps: ['merge_ebe_lr1e-5','merge_ebe_lr3e-5','merge_ebe_lr1e-4'] },
-  { label: 'Ph 1 — Quick Eval',   steps: ['eval_baseline_gsm8k','eval_kl200_gsm8k','eval_ebe200_gsm8k','eval_ebe_lr1e5_gsm8k','eval_ebe_lr3e5_gsm8k','eval_ebe_lr1e4_gsm8k'] },
-  { label: 'Ph 2 — Training',     steps: ['train_kl_gsm8k','merge_kl_gsm8k','train_ebe_gsm8k','merge_ebe_gsm8k'] },
-  { label: 'Ph 2b — KL Variants', steps: ['train_rev_kl_gsm8k','merge_rev_kl_gsm8k','train_jsd_gsm8k','merge_jsd_gsm8k'] },
-  { label: 'Ph 2c — Online',      steps: ['online_adapt_gsm8k','merge_online_gsm8k'] },
-  { label: 'Ph 3 — Full Eval',    steps: ['eval_kl1000_gsm8k','eval_ebe1000_gsm8k','eval_rev_kl1000_gsm8k','eval_jsd1000_gsm8k','eval_online1000_gsm8k'] },
-  { label: 'Ph 4 — Multi-DS',     steps: ['eval_baseline_all','eval_kl1000_all','eval_ebe1000_all','eval_rev_kl1000_all','eval_jsd1000_all','eval_online_all'] },
+  { label: 'Ph 1 — Baseline',  steps: ['eval_baseline_gsm8k'] },
+  { label: 'Ph 2 — Training',  steps: [
+      'train_kl_gsm8k','merge_kl_gsm8k',
+      'train_ebe_gsm8k','merge_ebe_gsm8k',
+      'train_rev_kl_gsm8k','merge_rev_kl_gsm8k',
+      'train_jsd_gsm8k','merge_jsd_gsm8k',
+      'train_l1_gsm8k','merge_l1_gsm8k',
+      'online_adapt_gsm8k','merge_online_gsm8k',
+      'online_ebe_adapt_gsm8k','merge_online_ebe_gsm8k',
+  ]},
+  { label: 'Ph 3 — GSM8K Eval', steps: [
+      'eval_kl_gsm8k','eval_ebe_gsm8k','eval_rev_kl_gsm8k',
+      'eval_jsd_gsm8k','eval_l1_gsm8k',
+      'eval_online_gsm8k','eval_online_ebe_gsm8k',
+  ]},
+  { label: 'Ph 4 — Multi-DS',   steps: [
+      'eval_baseline_all',
+      'eval_kl_all','eval_ebe_all','eval_rev_kl_all',
+      'eval_jsd_all','eval_l1_all',
+      'eval_online_all','eval_online_ebe_all',
+  ]},
+  { label: 'Ph 5 — EAGLE',     steps: ['eagle_gen','eagle_train','eagle_eval'] },
 ];
 
 // Show a "no data yet" placeholder inside a chart div
