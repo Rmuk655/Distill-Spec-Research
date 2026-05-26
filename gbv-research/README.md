@@ -105,7 +105,7 @@ python orchestration/pipeline.py --config laptop --yes
 ### 5. Dashboard
 
 ```bash
-python OSD/viz_server.py    # http://127.0.0.1:5000
+python dashboard/training_dashboard.py    # http://127.0.0.1:5000
 ```
 
 ## Pipeline structure

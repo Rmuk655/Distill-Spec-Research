@@ -10,6 +10,8 @@ db/pipeline_state*.json
 orchestration/.pipeline_lock
 orchestration/pipeline_state_*.json   # runtime state — gitignored (git rm --cached applied)
 orchestration/wandb/                  # stale WandB runs from before db/wandb/ migration
+orchestration/*_crashed.log           # crash-session copies of logs (archived by pipeline)
+orchestration/pipeline_step_*_error.log  # per-step error logs captured by pipeline
 # Note: pipeline_output.log and be_progress.log now live in db/logs/ (above)
 
 # ── Large model weight files (anywhere in the tree) ───────────────────────────

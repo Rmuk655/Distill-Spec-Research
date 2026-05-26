@@ -44,49 +44,61 @@ Rahul Thomas must NOT own: primary implementation, debugging, experiment trackin
 
 ## Codebase Architecture
 
-Three components integrated via subprocess:
+Three components integrated via subprocess. The sibling directories `OSD/` and `GBV/`
+are transitional: all our research code has been migrated to `gbv-research/`.
+Phase 2 cleanup (after current pipeline run) will make them reference-only.
 
 ```
-OSD/                          ← training + eval runner
-  train_qwen3.py              ← training loop; all 6 losses; crash-safe resume via ckpt_latest/
-  run_all.py                  ← eval subprocess called by pipeline.py; writes to results.db
-  results_db.py               ← SQLite schema; DB lives at gbv-research/db/results.db
-  viz_server.py               ← web dashboard; reads db/results.db + orchestration/pipeline_state_*.json
-  merge_lora.py               ← merge LoRA adapter into base weights
-  online_osd.py               ← online speculative distillation (Phase 2 ablation)
-
-GBV/                          ← verification algorithms (novel contribution)
-  verifier.py                 ← TreeVerifier; dispatches to all 6 modes
-  node.py                     ← OTLP solvers: specinfer, gbv, traversal, bv, alpha, naive
-  main.py                     ← eval entrypoint; called as subprocess by run_all.py
-
-orchestration/                ← pipeline coordination
-  pipeline.py                 ← crash-safe multi-step orchestrator; Phases 1-4 + optional EAGLE
-  run_all.py                  ← eval subprocess wrapper
-  clean_restart.py            ← wipe db/ + reset state files + optional relaunch
-  wandb_config.json.example   ← template; copy to wandb_config.json (gitignored)
-  pipeline_state_laptop.json  ← step states for full run (separate from smoke)
-  pipeline_state_laptop_smoke.json ← step states for smoke run
-
-core/datasets/raw/            ← data
-  gsm8k_train.jsonl           ← 7,473 training prompts (gitignored)
-  gsm8k_30.jsonl, gsm8k_5.jsonl ← fixed eval sets (tracked)
-
-db/                           ← all generated outputs (gitignored)
-  checkpoints/                ← LoRA adapters + merged models
-  results.db                  ← SQLite eval results
-  logs/                       ← pipeline_output.log, be_progress.log
-  wandb/                      ← W&B local sync
+2026 summer/                  ← git repo root
+│
+├── OSD/                      ← training scripts (active during pipeline runs)
+│   ├── train_qwen3.py        ← training loop; all 6 losses (Phase 2: → algorithms/)
+│   ├── online_serve.py       ← online SD (Phase 2: → algorithms/)
+│   └── merge_lora.py         ← LoRA merge; called by pipeline.py
+│
+├── GBV/                      ← verifier CLI (active during eval)
+│   ├── main.py               ← eval entrypoint; called by run_all.py (Phase 2: → verifiers/)
+│   ├── verifier.py           ← TreeVerifier: all 6 verifier modes
+│   ├── node.py               ← OTLP solvers
+│   └── util.py               ← model loading helpers
+│
+└── gbv-research/             ← research project (canonical codebase)
+    ├── algorithms/distillspec_gbv/
+    │   ├── losses/           ← forward_kl, reverse_kl, jsd, l1, ebe (class-based, tested)
+    │   ├── verifiers/        ← evolved GBV (runner.py, tree.py, otlp_registry.py — Phase 2 target)
+    │   └── trainer.py        ← evolved train_qwen3.py (Phase 2: replaces _TRAIN_SCRIPT)
+    ├── orchestration/
+    │   ├── pipeline.py       ← crash-safe orchestrator; Phases 1-4
+    │   ├── run_all.py        ← eval subprocess; calls GBV/main.py; writes results.db
+    │   └── clean_restart.py  ← wipe db/ + reset state
+    ├── core/
+    │   ├── datasets/raw/     ← JSONL eval + training sets
+    │   └── model_families/   ← Qwen/Gemma tokenizer helpers
+    ├── dashboard/
+    │   └── training_dashboard.py  ← web UI; reads db/results.db
+    └── db/                   ← all generated outputs (gitignored)
+        ├── checkpoints/      ← LoRA adapters + merged models
+        ├── results.db        ← SQLite eval results
+        └── logs/             ← pipeline_output.log, be_progress.log
 ```
 
-**Integration pattern**: `pipeline.py` launches `train_qwen3.py` (training) and `run_all.py` (eval) as subprocesses. `run_all.py` calls `GBV/verifier.py` for block-efficiency measurement and writes results to `db/results.db`. No deeper integration needed.
+**Integration pattern**: `pipeline.py` launches `OSD/train_qwen3.py` (training)
+and `orchestration/run_all.py` (eval) as subprocesses. `run_all.py` calls
+`GBV/main.py` as a subprocess for block-efficiency measurement and writes
+results to `db/results.db`.
+
+**Phase 2 migration targets** (once current pipeline run completes):
+- `OSD/train_qwen3.py` → `gbv-research/algorithms/train_qwen3.py`
+- `OSD/online_serve.py` → `gbv-research/algorithms/online_serve.py`
+- `GBV/main.py` subprocess → `algorithms/distillspec_gbv/verifiers/runner.py`
+- Update `_TRAIN_SCRIPT`, `_ONLINE_SCRIPT` in pipeline.py; update run_all.py GBV path
 
 **Data format**: all components read JSONL files with a `"prompt"` field.
 
-**Reference codebases** (read-only — for understanding, never imported):
-- OSD: https://github.com/LiuXiaoxuanPKU/OSD
-- GBV: https://anonymous.4open.science/r/GBV-BED8/README.md
-- AdaSpec: https://github.com/yuezhouhu/adaspec (optional ablation reference)
+**Reference codebases** (read-only snapshots — in `references/`, never imported):
+- `references/osd-original/` — https://github.com/LiuXiaoxuanPKU/OSD
+- `references/gbv-original/` — https://anonymous.4open.science/r/GBV-BED8/
+- `references/adaspec/` — https://github.com/yuezhouhu/adaspec (optional ablation reference)
 
 ---
 

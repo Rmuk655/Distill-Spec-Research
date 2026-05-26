@@ -5,9 +5,9 @@ Live web UI for monitoring SpecDist experiments.
 ## Launch
 
 ```bash
-# From anywhere — uses absolute paths internally
-python OSD/viz_server.py              # http://127.0.0.1:5000
-python OSD/viz_server.py --port 8080  # custom port
+# Run from gbv-research/
+python dashboard/training_dashboard.py              # http://127.0.0.1:5000
+python dashboard/training_dashboard.py --port 8080  # custom port
 ```
 
 The dashboard can be started before, during, or after a pipeline run.
@@ -34,7 +34,7 @@ It reads files, never writes them.
 | `orchestration/pipeline_state_*.json` | Step statuses (done/running/pending/failed) |
 
 All paths are resolved relative to `gbv-research/` regardless of where
-`viz_server.py` is launched from.
+`training_dashboard.py` is launched from.
 
 ## API endpoints
 

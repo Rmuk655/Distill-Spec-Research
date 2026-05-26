@@ -26,7 +26,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
 from .utils import *
 from .draft_generator import *
 from .tree import *
-from .algorithms.registry import *
+from .otlp_registry import *
 
 
 """

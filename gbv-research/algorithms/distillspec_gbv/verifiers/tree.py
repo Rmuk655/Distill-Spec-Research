@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict, Callable
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
 from .utils import *
-from .algorithms.khisti import *
+from .khisti import *
 
 
 """
