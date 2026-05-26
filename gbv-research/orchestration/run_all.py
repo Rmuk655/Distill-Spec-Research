@@ -63,20 +63,38 @@ except AttributeError:
     pass  # Python < 3.7 or non-text stream (e.g. redirected to a file)
 
 # Offline mode — prevents HF Hub network calls on cached / air-gapped setups.
-# Default is ON (safe for most runs where models are already downloaded).
-# First-time run on Kaggle / Colab where models haven't been cached yet?
-#   Shell:    export TRANSFORMERS_OFFLINE=0
-#   Notebook: os.environ["TRANSFORMERS_OFFLINE"] = "0"   ← run BEFORE this cell
-_hf_offline_was_set = "TRANSFORMERS_OFFLINE" in os.environ
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-if not _hf_offline_was_set and os.environ.get("TRANSFORMERS_OFFLINE") == "1":
-    print(
-        "[OSD] HF offline mode ON (default). "
-        "Models must already be cached locally. "
-        "Set TRANSFORMERS_OFFLINE=0 before running to allow first-time downloads "
-        "(needed on a fresh Kaggle/Colab session)."
+# Default: ON on local machines (models already downloaded),
+#          OFF automatically in cloud envs (Colab/Modal/Spaces) where the HF
+#          cache is empty on every fresh session.
+# Manual override: set TRANSFORMERS_OFFLINE=0 or =1 before running.
+
+def _is_cloud_env() -> bool:
+    """Return True when running inside Colab / Modal / HF Spaces / Kaggle."""
+    _cloud_keys = (
+        "COLAB_BACKEND_VERSION",   # Google Colab
+        "COLAB_RELEASE_TAG",       # Google Colab (alt key)
+        "MODAL_TASK_ID",           # Modal
+        "SPACE_ID",                # HuggingFace Spaces
+        "KAGGLE_KERNEL_RUN_TYPE",  # Kaggle
     )
+    return any(k in os.environ for k in _cloud_keys)
+
+if "TRANSFORMERS_OFFLINE" not in os.environ:
+    if _is_cloud_env():
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        print(
+            "[OSD] Cloud env detected — HF online mode ON. "
+            "Models will be downloaded from HuggingFace Hub on first run."
+        )
+    else:
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        print(
+            "[OSD] HF offline mode ON (default). "
+            "Models must already be cached locally. "
+            "Set TRANSFORMERS_OFFLINE=0 before running to allow first-time downloads."
+        )
 
 # Reduce CUDA allocator fragmentation on small GPUs (T4, P100).
 # Set automatically; override with PYTORCH_CUDA_ALLOC_CONF=<custom> in environment.
@@ -134,6 +152,22 @@ def _patch_config_json_serialization():
         pass   # transformers not installed yet — patch will be applied lazily
 
 _patch_config_json_serialization()
+
+
+def _dtype_kwargs(dtype) -> dict:
+    """Return the correct dtype kwarg for AutoModelForCausalLM.from_pretrained().
+
+    transformers ≥5.0  renamed  torch_dtype=  →  dtype=  (old name deprecated).
+    transformers <5.0  uses     torch_dtype=  (dtype= is unknown).
+    This helper returns the right dict so both versions work without warnings.
+    """
+    try:
+        import transformers as _tf
+        _major = int(_tf.__version__.split(".")[0])
+        return {"dtype": dtype} if _major >= 5 else {"torch_dtype": dtype}
+    except Exception:
+        return {"torch_dtype": dtype}  # safe fallback
+
 
 import results_db
 import fetch_datasets as _fd
@@ -367,7 +401,7 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     for attempt in range(2):
         try:
             model = AutoModelForCausalLM.from_pretrained(
-                student_path, torch_dtype=dtype, low_cpu_mem_usage=True,
+                student_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
                 attn_implementation=_ATTN_IMPL,
             ).to(device).eval()
             break
@@ -441,7 +475,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         for attempt in range(2):
             try:
                 student_model = AutoModelForCausalLM.from_pretrained(
-                    student_path, torch_dtype=dtype, low_cpu_mem_usage=True,
+                    student_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
                     attn_implementation=_ATTN_IMPL,
                 ).to(device).eval()
                 same = (student_path == teacher_path)
@@ -464,7 +498,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                     print(f"  [alpha] Teacher loaded in 4-bit NF4")
                 else:
                     teacher_model = AutoModelForCausalLM.from_pretrained(
-                        teacher_path, torch_dtype=dtype, low_cpu_mem_usage=True,
+                        teacher_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
                         attn_implementation=_ATTN_IMPL,
                     ).to(device).eval()
                 break
@@ -712,7 +746,7 @@ def measure_perplexity(model_path: str, prompts: list, max_tokens: int = 200) ->
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=dtype, low_cpu_mem_usage=True,
+        model_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
         attn_implementation=_ATTN_IMPL,
     ).to(device).eval()
 
@@ -1230,12 +1264,12 @@ def main():
         for _attempt in range(2):
             try:
                 _s_model = _AMLM.from_pretrained(
-                    args.student, torch_dtype=_dtype, low_cpu_mem_usage=True,
+                    args.student, **_dtype_kwargs(_dtype), low_cpu_mem_usage=True,
                     attn_implementation=_ATTN_IMPL,
                 ).to(_device).eval()
                 _t_model = (_s_model if _same_models else
                             _AMLM.from_pretrained(
-                                args.teacher, torch_dtype=_dtype, low_cpu_mem_usage=True,
+                                args.teacher, **_dtype_kwargs(_dtype), low_cpu_mem_usage=True,
                                 attn_implementation=_ATTN_IMPL,
                             ).to(_device).eval())
                 break

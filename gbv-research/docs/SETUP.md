@@ -217,47 +217,63 @@ This section shows the exact commands for each platform.
 
 ---
 
-### 8a. Free Colab T4 — persistent checkpoints via Google Drive
+### 8a. Free Colab T4 — one-click notebook
 
-**Why Drive?**  Drive is the only storage that survives a Colab session restart.
-We pass `--ckpt_root` to pipeline.py so every checkpoint lands on Drive instead
-of the ephemeral local disk.
+**➡  Open [`notebooks/colab_quickstart.ipynb`](../notebooks/colab_quickstart.ipynb) and
+run the cells top-to-bottom.  That's it.**
+
+The notebook handles everything in 4 cells:
+1. Mount Drive · clone repo to `/content/` · install deps
+2. Authenticate W&B + HuggingFace via Colab Secrets
+3. Run pipeline (`--config colab`)
+4. Resume after session death (idempotent — re-run any time)
+
+**One-time Colab Secrets setup (left sidebar → 🔑 icon):**
+| Secret name | Where to get it |
+|---|---|
+| `WANDB_API_KEY` | https://wandb.ai/authorize |
+| `HF_TOKEN` | https://huggingface.co/settings/tokens |
+
+**Important path notes:**
+- The repo clones to **`/content/Distill-Spec-Research/`** (ephemeral local disk, fast).
+  Working directory is `/content/Distill-Spec-Research/gbv-research`.
+  **Do not** `%cd` to a Drive path — the code lives on local disk.
+- **Checkpoints land on Drive** (`/content/drive/MyDrive/specdist/checkpoints`).
+  This is the only part that persists across session restarts.
+- On restart: re-run the whole notebook (Cells 1–4 are idempotent).
+  Cell 4 ("Resume") re-clones, re-installs, and re-runs the pipeline
+  automatically from the last Drive checkpoint.
+
+**Manual CLI equivalent** (if you prefer cells over the notebook):
 
 ```python
-# ── Cell 1: mount Drive (do this FIRST, before anything else) ──────────────
+# ── Cell 1 ───────────────────────────────────────────────────────────────────
 from google.colab import drive
 drive.mount('/content/drive')
+import os, subprocess, sys
 
-# Create your persistent checkpoint directory once:
-import os
 DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
 os.makedirs(DRIVE_CKPT, exist_ok=True)
-print(f"Checkpoints will survive session restarts at: {DRIVE_CKPT}")
 
-# ── Cell 2: clone repo + install deps ──────────────────────────────────────
-!git clone https://github.com/Rmuk655/Distill-Spec-Research.git
-%cd Distill-Spec-Research/gbv-research
-!pip install -r requirements.txt
-!pip install bitsandbytes    # required for 4-bit teacher on T4
+subprocess.run(["git", "clone", "--depth", "1",
+                "https://github.com/Rmuk655/Distill-Spec-Research.git",
+                "/content/Distill-Spec-Research"], check=True)
 
-# ── Cell 3: W&B auth (use Colab Secrets tab or paste key) ──────────────────
-import os
-os.environ["WANDB_API_KEY"] = "wandb_v1_..."   # your key
-os.environ["WANDB_ENTITY"]  = "your-username"
-os.environ["WANDB_PROJECT"] = "specdist-gbv"
+os.chdir("/content/Distill-Spec-Research/gbv-research")   # ← always run from here
 
-# ── Cell 4: fetch training data (eval sets already in repo) ────────────────
-!python OSD/fetch_datasets.py --datasets gsm8k
+subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                "-r", "requirements.txt", "bitsandbytes", "accelerate"], check=True)
 
-# ── Cell 5: run pipeline with Drive checkpoints ─────────────────────────────
-# --ckpt_root → all checkpoints go to Drive, not the ephemeral /content disk
-# --config colab → loads 8B teacher in 4-bit NF4 (fits on T4's 15 GB)
-# --yes → skip interactive prompts (required in notebooks)
-DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
-!python orchestration/pipeline.py \
-    --config colab \
-    --ckpt_root {DRIVE_CKPT} \
-    --yes
+# ── Cell 2 ───────────────────────────────────────────────────────────────────
+from google.colab import userdata
+os.environ["WANDB_API_KEY"] = userdata.get("WANDB_API_KEY")
+import wandb; wandb.login()
+
+# ── Cell 3 ───────────────────────────────────────────────────────────────────
+# --config colab → 8B teacher loaded in 4-bit NF4 (fits T4's 15 GB)
+# --smoke        → quick sanity check (~45 min) before overnight run
+subprocess.run([sys.executable, "orchestration/pipeline.py",
+                "--config", "colab", "--ckpt_root", DRIVE_CKPT, "--yes"])
 ```
 
 **VRAM breakdown on T4 (15 GB):**
@@ -266,33 +282,14 @@ DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
 - LoRA + optimizer + activations: ~2.5 GB
 - **Total: ~8–9 GB** → 6 GB headroom on T4
 
-**Resuming after session death:**
-
-Colab sessions die after ~90 min idle (or sooner with free tier).  When you
-restart:
-
-```python
-# Cell 1: remount Drive (always first)
-from google.colab import drive
-drive.mount('/content/drive')
-
-# Cell 2: re-run pipeline — it auto-skips steps whose done_check files exist on Drive
-DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
-!python orchestration/pipeline.py \
-    --config colab \
-    --ckpt_root {DRIVE_CKPT} \
-    --yes
-```
-
-The pipeline reads `adapter_model.safetensors` and `config.json` from Drive to
-detect completed steps — no manual bookkeeping needed.
-
 **Tips:**
-- Run `--smoke` first (~45 min) to verify no crashes before the overnight run.
+- Run with `--smoke` first (~45 min) to verify no crashes before the overnight run.
 - Colab disconnects after ~90 min idle — keep the browser tab active or use
   Colab Pro (persistent sessions up to 12 hours).
 - Drive writes are slow (~50 MB/s).  Milestone checkpoints (`--milestone_every`)
   are what matter for resume — `ckpt_latest/` is overwritten each time.
+- Offline mode is **auto-disabled** in Colab (code detects `COLAB_BACKEND_VERSION`).
+  First-time model downloads happen automatically — no manual env-var override needed.
 
 ---
 

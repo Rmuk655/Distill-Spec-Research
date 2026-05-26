@@ -54,20 +54,38 @@ except ImportError:
     _results_db = None                        # DB optional — training still works without it
 
 # Offline mode — prevents HF Hub network calls on cached / air-gapped setups.
-# Default is ON (safe for most runs where models are already downloaded).
-# First-time run on Kaggle / Colab where models haven't been cached yet?
-#   Shell:    export TRANSFORMERS_OFFLINE=0
-#   Notebook: os.environ["TRANSFORMERS_OFFLINE"] = "0"   ← run BEFORE this cell
-_hf_offline_was_set = "TRANSFORMERS_OFFLINE" in os.environ
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-if not _hf_offline_was_set and os.environ.get("TRANSFORMERS_OFFLINE") == "1":
-    print(
-        "[OSD] HF offline mode ON (default). "
-        "Models must already be cached locally. "
-        "Set TRANSFORMERS_OFFLINE=0 before running to allow first-time downloads "
-        "(needed on a fresh Kaggle/Colab session)."
+# Default: ON on local machines (models already downloaded),
+#          OFF automatically in cloud envs (Colab/Modal/Spaces) where the HF
+#          cache is empty on every fresh session.
+# Manual override: set TRANSFORMERS_OFFLINE=0 or =1 before running.
+
+def _is_cloud_env() -> bool:
+    """Return True when running inside Colab / Modal / HF Spaces / Kaggle."""
+    _cloud_keys = (
+        "COLAB_BACKEND_VERSION",   # Google Colab
+        "COLAB_RELEASE_TAG",       # Google Colab (alt key)
+        "MODAL_TASK_ID",           # Modal
+        "SPACE_ID",                # HuggingFace Spaces
+        "KAGGLE_KERNEL_RUN_TYPE",  # Kaggle
     )
+    return any(k in os.environ for k in _cloud_keys)
+
+if "TRANSFORMERS_OFFLINE" not in os.environ:
+    if _is_cloud_env():
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        print(
+            "[OSD] Cloud env detected — HF online mode ON. "
+            "Models will be downloaded from HuggingFace Hub on first run."
+        )
+    else:
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        print(
+            "[OSD] HF offline mode ON (default). "
+            "Models must already be cached locally. "
+            "Set TRANSFORMERS_OFFLINE=0 before running to allow first-time downloads."
+        )
 
 # Reduce CUDA allocator fragmentation on small GPUs (T4, P100).
 # Set automatically; override with PYTORCH_CUDA_ALLOC_CONF=<custom> in environment.
@@ -78,6 +96,20 @@ import torch.nn.functional as F
 import transformers
 from torch.optim import AdamW
 from peft import get_peft_model, LoraConfig, TaskType, PeftModel
+
+
+def _dtype_kwargs(dtype) -> dict:
+    """Return the correct dtype kwarg for AutoModelForCausalLM.from_pretrained().
+
+    transformers ≥5.0  renamed  torch_dtype=  →  dtype=  (and deprecated the old name).
+    transformers <5.0  uses     torch_dtype=  (dtype= is unknown).
+    This helper returns the right dict so both versions work without warnings.
+    """
+    try:
+        _major = int(transformers.__version__.split(".")[0])
+        return {"dtype": dtype} if _major >= 5 else {"torch_dtype": dtype}
+    except Exception:
+        return {"torch_dtype": dtype}  # safe fallback
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +572,7 @@ def load_prompts(dataset_path=None):
 def merge_and_save(args):
     print(f"Loading base: {args.draft}")
     base = transformers.AutoModelForCausalLM.from_pretrained(
-        args.draft, torch_dtype=torch.bfloat16)
+        args.draft, **_dtype_kwargs(torch.bfloat16))
     print(f"Loading LoRA: {args.adapter}")
     model  = PeftModel.from_pretrained(base, args.adapter)
     merged = model.merge_and_unload()
@@ -883,7 +915,7 @@ def main():
         print(f"  Loaded in 4-bit NF4 (QLoRA mode, attn={_ATTN_IMPL})")
     else:
         target_model = transformers.AutoModelForCausalLM.from_pretrained(
-            args.target, torch_dtype=torch.bfloat16,
+            args.target, **_dtype_kwargs(torch.bfloat16),
             attn_implementation=_ATTN_IMPL).to(device)
     target_model.eval()
     for p in target_model.parameters():
@@ -892,7 +924,7 @@ def main():
 
     print("Loading draft...")
     draft_base = transformers.AutoModelForCausalLM.from_pretrained(
-        args.draft, torch_dtype=torch.bfloat16,
+        args.draft, **_dtype_kwargs(torch.bfloat16),
         attn_implementation=_ATTN_IMPL).to(device)
     if args.no_lora:
         draft_model = draft_base
