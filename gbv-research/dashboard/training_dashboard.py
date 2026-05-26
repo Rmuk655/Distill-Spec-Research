@@ -1671,6 +1671,9 @@ async function loadTrainingCurves() {
   let colorIdx = 0;
   let redFlagLabels = [];
 
+  const nowMs = Date.now();
+  const ACTIVE_WINDOW_MS = 600_000; // 10 minutes — only flag overfitting for currently-running label
+
   Object.entries(byLabel).forEach(([label, rows]) => {
     const trainColor = TRAIN_COLORS[colorIdx % TRAIN_COLORS.length];
     const valColor   = VAL_COLORS  [colorIdx % VAL_COLORS.length];
@@ -1708,7 +1711,11 @@ async function loadTrainingCurves() {
       });
 
       // Red-flag detection: val loss rising after its minimum
-      if (valRows.length >= 2) {
+      // Only flag if this label is currently active (data written in the last 10 min).
+      // Completed runs stay in the chart but never trigger the banner again.
+      const labelMaxTs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
+      const isActive = (nowMs - labelMaxTs) < ACTIVE_WINDOW_MS;
+      if (valRows.length >= 2 && isActive) {
         const valLosses = valRows.map(r => r.loss);
         const minVal = Math.min(...valLosses);
         const lastVal = valLosses[valLosses.length - 1];
