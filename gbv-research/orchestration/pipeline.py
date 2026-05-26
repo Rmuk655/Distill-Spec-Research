@@ -278,9 +278,10 @@ _GBV_RESEARCH = os.path.dirname(HERE)   # gbv-research/
 _OSD_DIR = os.path.join(os.path.dirname(_GBV_RESEARCH), "OSD")   # OSD/ (sibling)
 _GBV_SRC = os.path.join(os.path.dirname(_GBV_RESEARCH), "GBV")   # GBV/ (sibling)
 
-# Training scripts — live in gbv-research/algorithms/ (moved from OSD/ in Phase 2)
+# Training / benchmark scripts — live in gbv-research/algorithms/ (moved from OSD/ in Phase 2)
 _TRAIN_SCRIPT  = os.path.join(_GBV_RESEARCH, "algorithms", "train_qwen3.py")
 _ONLINE_SCRIPT = os.path.join(_GBV_RESEARCH, "algorithms", "online_serve.py")
+_EAGLE_SCRIPT  = os.path.join(_GBV_RESEARCH, "algorithms", "eagle_bench.py")
 
 
 def _ckpt(name):
@@ -844,7 +845,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "group": "Phase 5 — EAGLE Benchmark",
                 "desc": "EAGLE phase 1: generate hidden-state training data (500 prompts)",
                 "cmd": [
-                    sys.executable, os.path.join(HERE, "eagle_bench.py"), "gen",
+                    sys.executable, _EAGLE_SCRIPT, "gen",
                     "--base", target,
                     "--data", _data("gsm8k_train.jsonl"),
                     "--out",  _data("eagle_tmp"),
@@ -858,7 +859,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "group": "Phase 5 — EAGLE Benchmark",
                 "desc": "EAGLE phase 2: train 1-layer head on target hidden states (2000 steps)",
                 "cmd": [
-                    sys.executable, os.path.join(HERE, "eagle_bench.py"), "train",
+                    sys.executable, _EAGLE_SCRIPT, "train",
                     "--base",  target,
                     "--tmp",   _data("eagle_tmp"),
                     "--ckpt",  _ckpt("eagle-head"),
@@ -871,7 +872,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "group": "Phase 5 — EAGLE Benchmark",
                 "desc": "EAGLE phase 3: evaluate block efficiency vs SpecDist baseline",
                 "cmd": [
-                    sys.executable, os.path.join(HERE, "eagle_bench.py"), "eval",
+                    sys.executable, _EAGLE_SCRIPT, "eval",
                     "--base", target,
                     "--ckpt", _ckpt("eagle-head"),
                     "--data", _data("gsm8k_30.jsonl"),
