@@ -250,6 +250,7 @@ def _load_config_yaml(config_name: str) -> dict:
             data = yaml.safe_load(f) or {}
         training  = data.get("training", {})
         health    = data.get("health", {})
+        checkpointing = data.get("checkpointing", {})
         out = {
             "lr":                   training.get("lr", 3e-5),
             "lora_r":               training.get("lora_r", 8),
@@ -260,11 +261,14 @@ def _load_config_yaml(config_name: str) -> dict:
             "nan_action":           health.get("nan_action", "stop"),
             "early_stop_patience":  health.get("early_stop_patience", 0),
         }
-        # training.steps → train_steps so the pipeline uses the right step count
-        # (server=5000, colab=2000, laptop=1000). Must be explicit; no default here
-        # so smoke-mode overrides are not clobbered.
+        # training.steps → train_steps (server=5000, colab=500, laptop=1000).
+        # No default — None lets build_steps() apply the smoke/full default.
         if "steps" in training:
             out["train_steps"] = training["steps"]
+        # checkpointing.storage_root → storage_root so Colab/Modal configs can
+        # set persistent storage without a CLI flag every run.
+        if checkpointing.get("storage_root"):
+            out["storage_root"] = checkpointing["storage_root"]
         return out
     except Exception as exc:
         print(f"  [config] Warning: could not load {yaml_path}: {exc}")
@@ -1465,7 +1469,10 @@ def main():
     #   SPECDIST_LOGS_ROOT     full path to logs/ directory
     global STATE_FILE, _DB_LOGS, _PIPELINE_LOG
 
-    _storage_root = args.storage_root or os.environ.get("SPECDIST_STORAGE_ROOT")
+    # Priority: CLI --storage_root > env var > YAML checkpointing.storage_root
+    _storage_root = (args.storage_root
+                     or os.environ.get("SPECDIST_STORAGE_ROOT")
+                     or _yaml_cfg.get("storage_root"))
 
     if _storage_root:
         os.makedirs(_storage_root, exist_ok=True)
@@ -1501,7 +1508,8 @@ def main():
         "lora_r":       args.lora_r       or _yaml_cfg.get("lora_r", 8),
         "lora_alpha":                         _yaml_cfg.get("lora_alpha", 16),
         "teacher_temp": args.teacher_temp or _yaml_cfg.get("teacher_temp", 0.8),
-        "train_steps":  args.train_steps,   # None = use smoke/full default
+        # CLI --train_steps > YAML training.steps > None (smoke/full default)
+        "train_steps":  args.train_steps or _yaml_cfg.get("train_steps"),
         "max_new_tokens": _yaml_cfg.get("max_new_tokens", 80),
     }
 

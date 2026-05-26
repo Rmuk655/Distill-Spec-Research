@@ -36,7 +36,10 @@ checkpointing:
   save_every: 50                # frequent saves — Colab sessions die without warning
   milestone_every: 200
   max_checkpoints: 5
-  output_root: /content/drive/MyDrive/specdist/checkpoints  # GDrive (persistent)
+  # storage_root moves ALL persistent artifacts (checkpoints, results.db, logs,
+  # pipeline state) to Google Drive so nothing is lost on session crash.
+  # Override with --storage_root on the CLI if you mount Drive at a different path.
+  storage_root: /content/drive/MyDrive/specdist
 
 logging:
   log_every: 10
