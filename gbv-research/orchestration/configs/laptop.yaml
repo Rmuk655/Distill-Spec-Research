@@ -22,8 +22,9 @@ training:
   seed: 42
 
 dataset:
-  train: capsules/datasets/raw/gsm8k_train.jsonl
-  val:   capsules/datasets/raw/gsm8k_30.jsonl    # fixed 30-prompt eval set
+  # These paths are for reference only — pipeline hardcodes core/datasets/raw/ via _data().
+  train: core/datasets/raw/gsm8k_train.jsonl   # 7,473 prompts; 6,726 train / 747 val (10% split)
+  eval:  core/datasets/raw/gsm8k_30.jsonl       # 30-prompt fixed eval set (block-efficiency only)
 
 checkpointing:
   save_every: 100

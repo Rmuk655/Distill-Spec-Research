@@ -250,7 +250,7 @@ def _load_config_yaml(config_name: str) -> dict:
             data = yaml.safe_load(f) or {}
         training  = data.get("training", {})
         health    = data.get("health", {})
-        return {
+        out = {
             "lr":                   training.get("lr", 3e-5),
             "lora_r":               training.get("lora_r", 8),
             "lora_alpha":           training.get("lora_alpha", 16),
@@ -260,6 +260,12 @@ def _load_config_yaml(config_name: str) -> dict:
             "nan_action":           health.get("nan_action", "stop"),
             "early_stop_patience":  health.get("early_stop_patience", 0),
         }
+        # training.steps → train_steps so the pipeline uses the right step count
+        # (server=5000, colab=2000, laptop=1000). Must be explicit; no default here
+        # so smoke-mode overrides are not clobbered.
+        if "steps" in training:
+            out["train_steps"] = training["steps"]
+        return out
     except Exception as exc:
         print(f"  [config] Warning: could not load {yaml_path}: {exc}")
         return {}
