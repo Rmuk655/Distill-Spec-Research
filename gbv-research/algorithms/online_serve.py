@@ -198,6 +198,102 @@ def _kl_at_positions(
 
 
 # ---------------------------------------------------------------------------
+# EBE loss for online speculative decoding
+# ---------------------------------------------------------------------------
+
+def _ebe_online(
+    student_logits: torch.Tensor,   # (B, T, V) — grad required
+    teacher_logits: torch.Tensor,   # (B, T, V) — detached (no grad)
+    token_ids: torch.Tensor,        # (B, T)    — actual generated tokens
+    wrong_mask: torch.Tensor,       # (B, T)    — True at rejected positions (KL reg only)
+    block_len: int = 8,
+    kl_weight: float = 0.1,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Block-level Expected Block Efficiency loss for online speculative decoding.
+
+    Unlike _kl_at_positions, this function does NOT pre-select rejected positions:
+    EBE is computed over full sequences and the gradient is naturally zero at
+    accepted positions — ∂α/∂θ = 0 when α = min(1, q/p) = 1 (i.e. p ≤ q, draft
+    already under-estimates or matches the target).  No wrong_mask surgery needed.
+
+    The KL regulariser is applied only at rejected positions (wrong_mask=True),
+    consistent with OSD's principle of not updating the draft at positions it
+    already gets right.
+
+    Why this works where offline EBE doesn't
+    ----------------------------------------
+    Offline EBE trains on teacher-sampled tokens: q(t) is always high (the teacher
+    chose t), so min(1, q/p) ≈ 1 for almost every token → EBE gradient ≈ 0.
+
+    Here tokens come from an actual speculative decoding run.  At rejected positions
+    the draft proposed token t_draft with high p_draft but the target gave it low
+    q_target → α = q/p < 1 → real EBE gradient.  The block-level cumprod then
+    amplifies that gradient for positions deep in an accepted run (high-value fixes).
+
+    Args:
+        student_logits  (B, T, V)  Draft logits; gradient required.
+        teacher_logits  (B, T, V)  Target logits; must be detached before call.
+        token_ids       (B, T)     Token ids of the generated sequence.
+        wrong_mask      (B, T)     True where the draft was rejected (for KL reg).
+        block_len               Speculative block length — match inference --K.
+        kl_weight               Weight of KL regulariser (0 = pure EBE, no reg).
+        temperature             Logit temperature; applied to both models.
+    """
+    B, T, V = student_logits.shape
+
+    # Compute log-softmax once for both EBE (gather) and KL (full-distribution).
+    # log_s keeps grad; log_t is a no-grad view of the already-detached teacher.
+    log_s = F.log_softmax(student_logits.float() / temperature, dim=-1)  # (B, T, V)
+    with torch.no_grad():
+        log_t = F.log_softmax(teacher_logits.float() / temperature, dim=-1)  # (B, T, V)
+
+    # ── EBE term ──────────────────────────────────────────────────────────────
+    # Gather per-token log-probs for the actual tokens → (B, T) tiny scalars.
+    # Gradient flows through log_p (draft); log_q is from the frozen teacher.
+    ids = token_ids.unsqueeze(-1)                                           # (B, T, 1)
+    log_p = log_s.gather(-1, ids).squeeze(-1)                              # (B, T)
+    log_q = log_t.gather(-1, ids).squeeze(-1)                              # (B, T)
+
+    # α = min(1, q/p) = exp(min(0, log_q − log_p))
+    # Clamp ≥ 1e-6: prevents NaN in cumprod backward when a token is completely
+    # off-distribution (q ≈ 0 → log_q → −∞ → alpha → 0 → cumprod backward divides by 0)
+    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # (B, T)
+
+    # Sum block-level (1 + cumprod) over all blocks and sequences.
+    n_blocks = max(1, T // block_len)
+    ebe = alpha.new_zeros(())
+    for b in range(B):
+        for blk in range(n_blocks):
+            start = blk * block_len
+            chunk = alpha[b, start : start + block_len]            # (≤ block_len,)
+            ebe = ebe - (1.0 + torch.cumprod(chunk, dim=0).sum())
+    ebe = ebe / (B * n_blocks)   # normalise to be scale-independent of batch/seq len
+
+    if kl_weight == 0.0:
+        return ebe
+
+    # ── KL regulariser — rejected positions only ──────────────────────────────
+    # Rationale: EBE gradient is 0 for under-estimated tokens (α = 1); KL covers
+    # those positions.  We restrict it to rejected positions (wrong_mask) rather
+    # than all tokens to stay consistent with OSD's philosophy of not penalising
+    # the draft where it already aligns with the target.
+    mask_flat = wrong_mask.reshape(-1)                                      # (B*T,)
+    if mask_flat.sum() == 0:
+        return ebe
+
+    s_rej = log_s.reshape(-1, V)[mask_flat]                                # (N_rej, V)
+    with torch.no_grad():
+        t_rej = log_t.reshape(-1, V)[mask_flat]                            # (N_rej, V)
+        p_t   = t_rej.exp()                                                # (N_rej, V)
+
+    # Forward KL(target ∥ draft) at rejected positions
+    kl = (p_t * (t_rej - s_rej)).sum(dim=-1).mean()                       # scalar
+
+    return ebe + kl_weight * kl
+
+
+# ---------------------------------------------------------------------------
 # Speculative decoding (single sequence, K tokens per step)
 # ---------------------------------------------------------------------------
 
@@ -570,11 +666,19 @@ def update_step(
     kl_method: str,
     temperature: float,
     device: torch.device,
+    ebe_kl_weight: float = 0.1,
+    ebe_block_len: int = 8,
 ) -> float:
     """Run one gradient update using all buffered sequences.
 
     We re-run BOTH models on the buffered sequences to get fresh logits —
     we never cache logits across update steps because draft weights change.
+
+    kl_method controls the training objective:
+        "forward_kl"  — KL(target ∥ draft) at rejected positions (OSD original)
+        "reverse_kl"  — KL(draft ∥ target) at rejected positions
+        "jsd"         — Jensen-Shannon at rejected positions
+        "ebe"         — Block-level EBE over full sequences + KL at rejected positions
 
     Returns:
         Scalar loss value (float).
@@ -587,8 +691,9 @@ def update_step(
     # (wrong_positions were stored as absolute positions in the *full* sequence
     #  which includes the prompt; the shift is consistent because position p
     #  in the full sequence corresponds to logit at index p-1 for next-token.)
-    x = input_ids[:, :-1]          # (B, T-1)
-    shifted_mask = wrong_mask[:, 1:]  # (B, T-1)
+    x            = input_ids[:, :-1]    # (B, T-1) — model input
+    token_ids    = input_ids[:, 1:]     # (B, T-1) — actual generated tokens (for EBE)
+    shifted_mask = wrong_mask[:, 1:]    # (B, T-1) — rejection mask aligned with logits
 
     if shifted_mask.sum() == 0:
         log.debug("No rejected positions in buffer — skipping update")
@@ -606,9 +711,21 @@ def update_step(
     draft_model.train()
     stu_logits = draft_model(x).logits  # (B, T-1, V)
 
-    # _kl_at_positions selects rejected positions FIRST (N_rej ≪ B*T) and
-    # frees the full (B, T-1, V) logit tensors inside before softmax.
-    loss = _kl_at_positions(stu_logits, tgt_logits, shifted_mask, kl_method, temperature)
+    if kl_method == "ebe":
+        # _ebe_online computes block-level EBE over full sequences.
+        # Gradient is naturally zero at accepted positions (∂α/∂θ = 0 when α=1);
+        # KL regulariser is applied only at rejected positions (wrong_mask).
+        loss = _ebe_online(
+            stu_logits, tgt_logits, token_ids, shifted_mask,
+            block_len=ebe_block_len,
+            kl_weight=ebe_kl_weight,
+            temperature=temperature,
+        )
+    else:
+        # _kl_at_positions selects rejected positions FIRST (N_rej ≪ B*T) and
+        # frees the full (B, T-1, V) logit tensors inside before softmax.
+        loss = _kl_at_positions(stu_logits, tgt_logits, shifted_mask, kl_method, temperature)
+
     optimizer.zero_grad()
     loss.backward()
     torch.nn.utils.clip_grad_norm_(draft_model.parameters(), max_norm=1.0)
@@ -647,7 +764,22 @@ def main():
     parser.add_argument(
         "--kl_method",
         default="forward_kl",
-        choices=["forward_kl", "reverse_kl", "jsd"],
+        choices=["forward_kl", "reverse_kl", "jsd", "ebe"],
+        help=(
+            "Training objective. "
+            "'forward_kl'/'reverse_kl'/'jsd': KL variant at rejected positions (OSD original). "
+            "'ebe': block-level EBE over full sequences + KL reg at rejected positions."
+        ),
+    )
+    parser.add_argument(
+        "--ebe_kl_weight", type=float, default=0.1,
+        help="Weight of the KL regulariser when --kl_method ebe is used. "
+             "Set to 0 for pure EBE (no regulariser). Default: 0.1.",
+    )
+    parser.add_argument(
+        "--ebe_block_len", type=int, default=8,
+        help="Speculative block length for EBE cumprod. "
+             "Should match --K (draft tokens per step). Default: 8.",
     )
     parser.add_argument("--log_every", type=int, default=10)
     parser.add_argument("--eval_alpha_every", type=int, default=50)
@@ -781,6 +913,8 @@ def main():
                 kl_method=args.kl_method,
                 temperature=args.temperature,
                 device=device,
+                ebe_kl_weight=args.ebe_kl_weight,
+                ebe_block_len=args.ebe_block_len,
             )
             buffer.clear()
             update_count += 1
