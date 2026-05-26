@@ -1712,7 +1712,7 @@ async function loadTrainingCurves() {
         const valLosses = valRows.map(r => r.loss);
         const minVal = Math.min(...valLosses);
         const lastVal = valLosses[valLosses.length - 1];
-        if (lastVal > minVal * 1.10) {   // > 10% above minimum → overfitting
+        if (lastVal > minVal + 0.10 * Math.abs(minVal)) {   // > 10% above minimum → overfitting (formula handles negative losses)
           redFlagLabels.push(label);
         }
       }

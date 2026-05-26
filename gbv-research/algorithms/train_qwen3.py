@@ -38,35 +38,20 @@ import time
 
 # ---------------------------------------------------------------------------
 # Results DB — wire to gbv-research/db/results.db (the canonical DB read by
-# viz_server.py).  Python auto-adds the script's directory (OSD/) as
-# sys.path[0], and OSD/results_db.py also exists — so without this explicit
-# prepend, `import results_db` would import the WRONG file and write to
-# OSD/results.db instead of gbv-research/db/results.db, making training
-# curves invisible in the dashboard.
+# the dashboard).  Script now lives at gbv-research/algorithms/train_qwen3.py,
+# so db/ is one level up: os.path.join(__file__, "..", "..", "db").
 # ---------------------------------------------------------------------------
 _GBV_DB_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gbv-research", "db"))
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db"))
 if os.path.isdir(_GBV_DB_DIR) and _GBV_DB_DIR not in sys.path:
     sys.path.insert(0, _GBV_DB_DIR)
 try:
     import results_db as _results_db          # gbv-research/db/results_db.py
-    # Sanity-check: if Python somehow loaded OSD/results_db.py first (e.g. stale
-    # sys.modules from a parent process), reload from the canonical path.
-    _rdb_file = os.path.normpath(getattr(_results_db, "__file__", "") or "")
-    _osd_dir  = os.path.normpath(os.path.dirname(os.path.abspath(__file__)))
-    if _osd_dir in _rdb_file:
-        import importlib as _importlib
-        del sys.modules["results_db"]
-        sys.path.insert(0, _GBV_DB_DIR)
-        import results_db as _results_db      # reload from gbv-research/db/
-        print(f"[OSD] results_db reloaded → {_results_db.__file__}")
     _rdb_canonical = os.path.normpath(os.path.join(_GBV_DB_DIR, "results.db"))
     if hasattr(_results_db, "DB_PATH"):
         if os.path.normpath(_results_db.DB_PATH) != _rdb_canonical:
             print(f"[WARN] train_curves will write to {_results_db.DB_PATH}")
             print(f"       Expected: {_rdb_canonical}")
-        else:
-            pass  # correct — gbv-research/db/results.db
 except ImportError:
     _results_db = None                        # DB optional — training still works without it
 
