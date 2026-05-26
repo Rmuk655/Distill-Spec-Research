@@ -12,11 +12,8 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
 ```
 2026 summer/                    <- git repo root
 |
-+-- OSD/                        Training framework (borrowed; heavily modified)
-|   +-- train_qwen3.py          Training loop: all losses (forward_kl, ebe,
-|   |                             reverse_kl, jsd, l1, online). Used by pipeline.py.
-|   +-- online_serve.py         Online speculative distillation (Phase 2 loss)
-|   +-- merge_lora.py           Merge LoRA adapter into base model weights
++-- OSD/                        git submodule → LiuXiaoxuanPKU/OSD (unmodified upstream)
+|   +-- distill/specInfer/      Alpha-eval Generator used by online_serve.py
 |
 +-- GBV/                        Verification algorithms (novel contribution)
 |   +-- main.py                 CLI eval entrypoint (called by orchestration/run_all.py)
@@ -64,9 +61,8 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
     |   +-- ADDING_A_MODEL_FAMILY.md
     |
     +-- references/             External code -- read-only, never imported by pipeline
-    |   +-- osd-original/
-    |   +-- gbv-original/
-    |   +-- adaspec/
+    |   +-- adaspec/            AdaSpec (Hu et al., 2024) — ablation comparison
+    |   +-- legacy-osd-paper/   OSD paper plot data — read-only reference
     |
     +-- tests/
         +-- test_core.py        Unit tests: EBE loss properties, verifier invariants

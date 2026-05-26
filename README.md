@@ -1,60 +1,36 @@
-# DistillSpec Research
+# Online EBE: Optimising Speculative Decoding via Expected Block Efficiency
 
-A focused ML systems research project exploring speculative decoding, knowledge distillation, and efficient LLM inference.
+**Rahul Thomas** (Columbia University) · **Krishnan R** (IIT Hyderabad)
 
-The goal is to develop and experimentally validate a novel modification to the DistillSpec framework, with emphasis on:
-- draft-target alignment
-- block efficiency / acceptance rate
-- latency and throughput improvements
-- reproducible, compute-efficient experimentation
+---
 
-## Team
+## TL;DR
 
-- **Rahul Thomas** (PhD Student, Columbia University) — Research Lead: direction, novelty, EBE math, publication
-- **Krishnan R** (IIT Hyderabad) — Research Engineer: implementation, experiments, benchmarking
-- **Target venue**: ICLR mid-September 2026
+We replace the forward-KL training signal in online speculative decoding with a loss that directly maximises the expected number of tokens accepted per target-model call, improving block efficiency without increasing inference latency.
 
-## Current Status
+## Abstract
 
-Phase 1 (laptop baseline) complete. Phase 3 (GSM8K eval of all 6 distillation losses) in progress.
+Speculative decoding accelerates LLM inference by having a small draft model propose *K* tokens that a large target model verifies in a single forward pass. Acceptance rate — how many draft tokens survive verification — is the key throughput lever, yet existing distillation objectives (forward KL, DistillSpec) optimise a proxy rather than acceptance directly.
 
-## Research Scope
+We propose **online EBE** (Expected Block Efficiency loss), which computes the acceptance product `Π α_i` at positions where the draft was rejected during live speculative decoding, and uses it as the training signal. The loss is computed entirely from tokens already generated during serving, adding zero overhead to the inference path.
 
-This project is intentionally narrow:
-- one primary research direction
-- one primary baseline architecture (Qwen2.5-0.5B draft → Qwen3-0.6B/8B target)
-- one evaluation plan (block efficiency across 6 verifier modes)
-- reproducible experiments
-- publication-oriented iteration
+We train Qwen2.5-0.5B as draft for Qwen3-0.6B and Qwen3-8B targets, comparing online EBE against five baselines (forward KL, reverse KL, JSD, L1, online KL) across six verifier modes (GBV, traversal, SpecInfer, BV, alpha, naive) on GSM8K, Alpaca, and MATH.
 
-## Experimental Stack
+## Results
 
-- HuggingFace Transformers + PEFT (LoRA)
-- Qwen3 draft/target models
-- Weights & Biases for experiment tracking
-- SQLite (`db/results.db`) + Flask dashboard for local results
+*Results pending.*
+
+## Setup and Reproduction
+
+See **[`gbv-research/docs/SETUP.md`](gbv-research/docs/SETUP.md)** for installation, WandB credentials, and first-run verification.
+
+See **[`gbv-research/README.md`](gbv-research/README.md)** for the full pipeline, directory layout, loss descriptions, verifier modes, and results database schema.
 
 ## Repository Structure
 
-- `gbv-research/` — main research codebase (orchestration, docs, dashboard, tests)
-  - `orchestration/` — crash-safe pipeline, configs, state files
-  - `docs/` — PROJECT_CONTEXT.md, SETUP.md, extension guides
-  - `db/` — results.db, checkpoints, W&B logs (gitignored)
-- `OSD/` — training + eval runner (train_qwen3.py, run_all.py, viz_server.py)
-- `GBV/` — novel tree verification algorithms
-- `EAGLE/`, `adaspec-main/` — reference baselines (read-only)
-
-## Reference Areas
-
-- DistillSpec / online speculative decoding
-- tree-based speculative verification (GBV, traversal, specinfer)
-- draft-target alignment objectives (KL, EBE, reverse KL, JSD, L1)
-- inference efficiency metrics (block efficiency, throughput)
-
-## Principles
-
-- correctness first
-- reproducibility first
-- narrow scope
-- rigorous benchmarking
-- no uncontrolled exploration
+| Directory | Contents |
+|---|---|
+| `gbv-research/` | Main research codebase (algorithms, orchestration, tests, dashboard) |
+| `OSD/` | Upstream OSD codebase — git submodule, unmodified (Liu et al., ICML 2024) |
+| `GBV/` | Tree verification algorithms — Rahul Thomas |
+| `OSD_ATTRIBUTION.md` | Modification notes for the one OSD file we adapted |
