@@ -12,7 +12,26 @@ import sqlite3
 import os
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "results.db")
+# ---------------------------------------------------------------------------
+# DB path resolution — portable across machines and cloud environments.
+#
+# Priority order (first non-empty wins):
+#   1. SPECDIST_DB_PATH env var   — set by pipeline.py when --storage_root is
+#                                   given; propagated to all subprocesses so
+#                                   every tool (train, eval, online) writes to
+#                                   the same DB without knowing the cloud layout.
+#   2. Module-relative default    — gbv-research/db/results.db  (local dev).
+#
+# Cloud launchers should set SPECDIST_DB_PATH to a path on persistent storage:
+#   Colab:   /content/drive/MyDrive/specdist/results.db
+#   Modal:   /vol/results.db
+#   Kaggle:  /kaggle/working/specdist/results.db
+#   RunPod:  /workspace/specdist/results.db
+# ---------------------------------------------------------------------------
+DB_PATH = (
+    os.environ.get("SPECDIST_DB_PATH")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "results.db")
+)
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;

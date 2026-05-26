@@ -17,28 +17,52 @@ import glob, os, re, sys, json, argparse
 
 # ── Path layout ────────────────────────────────────────────────────────────────
 # viz_server.py lives in OSD/ (a sibling of gbv-research/).
-# All run artefacts live under gbv-research/db/; state files are in
-# gbv-research/orchestration/.  Insert gbv-research/db/ at the FRONT of sys.path
-# so `import results_db` finds gbv-research/db/results_db.py (not OSD/results_db.py).
+#
+# Path priority for the results DB (first match wins):
+#   1. --db_path CLI arg          explicit path from user
+#   2. SPECDIST_DB_PATH env var   set by pipeline.py --storage_root
+#   3. Default: gbv-research/db/results.db (local dev)
+#
+# Path priority for logs:
+#   1. SPECDIST_LOGS_ROOT env var  set by pipeline.py --storage_root
+#   2. orchestration/ directory    where pipeline.py writes its log
+#   3. db/logs/ fallback           legacy location
 _OSD_DIR      = os.path.dirname(os.path.abspath(__file__))
 _GBV_RESEARCH = os.path.normpath(os.path.join(_OSD_DIR, "..", "gbv-research"))
 _DB_DIR       = os.path.join(_GBV_RESEARCH, "db")
 _ORCH_DIR     = os.path.join(_GBV_RESEARCH, "orchestration")
 _CKPT_DIR_GBV = os.path.join(_DB_DIR, "checkpoints")
 
-sys.path.insert(0, _DB_DIR)          # gbv-research/db/results_db.py wins over OSD/
-sys.path.insert(1, _OSD_DIR)         # OSD/ second (for any other local imports)
+# Insert gbv-research/db/ FIRST so `import results_db` finds the canonical module
+# rather than OSD/results_db.py which writes to the wrong (local) DB.
+sys.path.insert(0, _DB_DIR)
+sys.path.insert(1, _OSD_DIR)
 import results_db
 
-HERE          = _OSD_DIR
-# Logs are written by pipeline.py / run_all.py into orchestration/.
-# Fall back to db/logs/ copies for compatibility with older sessions.
-_BE_LOG       = os.path.join(_ORCH_DIR, "be_progress.log")
-_PIPELINE_LOG = os.path.join(_ORCH_DIR, "pipeline_output.log")
-if not os.path.exists(_BE_LOG):
-    _BE_LOG = os.path.join(_DB_DIR, "logs", "be_progress.log")
-if not os.path.exists(_PIPELINE_LOG):
-    _PIPELINE_LOG = os.path.join(_DB_DIR, "logs", "pipeline_output.log")
+HERE = _OSD_DIR
+
+# ── Log path resolution (checked at startup and updated after --db_path parsed)
+def _resolve_log_paths(logs_root: str = None):
+    """Return (be_log_path, pipeline_log_path) from the best available source."""
+    candidates_be       = []
+    candidates_pipeline = []
+    if logs_root:
+        candidates_be.append(os.path.join(logs_root, "be_progress.log"))
+        candidates_pipeline.append(os.path.join(logs_root, "pipeline_output.log"))
+    _env_logs = os.environ.get("SPECDIST_LOGS_ROOT")
+    if _env_logs:
+        candidates_be.append(os.path.join(_env_logs, "be_progress.log"))
+        candidates_pipeline.append(os.path.join(_env_logs, "pipeline_output.log"))
+    # Fallbacks: orchestration/ then db/logs/ (local dev)
+    candidates_be      += [os.path.join(_ORCH_DIR, "be_progress.log"),
+                           os.path.join(_DB_DIR, "logs", "be_progress.log")]
+    candidates_pipeline += [os.path.join(_ORCH_DIR, "pipeline_output.log"),
+                            os.path.join(_DB_DIR, "logs", "pipeline_output.log")]
+    _be  = next((p for p in candidates_be      if os.path.exists(p)), candidates_be[0])
+    _pl  = next((p for p in candidates_pipeline if os.path.exists(p)), candidates_pipeline[0])
+    return _be, _pl
+
+_BE_LOG, _PIPELINE_LOG = _resolve_log_paths()
 
 try:
     from flask import Flask, jsonify, request, render_template_string
@@ -2096,13 +2120,48 @@ def index():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--port", type=int, default=5000)
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--debug", action="store_true")
+    p = argparse.ArgumentParser(
+        description="SpecDist experiment dashboard",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Path resolution priority (first non-empty wins):
+  DB:   --db_path  →  $SPECDIST_DB_PATH  →  gbv-research/db/results.db
+  Logs: --logs_dir →  $SPECDIST_LOGS_ROOT →  orchestration/  →  db/logs/
+
+Cloud examples:
+  Colab:  python viz_server.py --db_path /content/drive/MyDrive/specdist/results.db
+  Modal:  SPECDIST_DB_PATH=/vol/results.db python viz_server.py
+  Local:  python viz_server.py  (auto-resolves to gbv-research/db/results.db)
+""",
+    )
+    p.add_argument("--port",     type=int, default=5000)
+    p.add_argument("--host",     default="127.0.0.1")
+    p.add_argument("--debug",    action="store_true")
+    p.add_argument("--db_path",  default=None,
+                   help="Path to results.db (overrides SPECDIST_DB_PATH env var)")
+    p.add_argument("--logs_dir", default=None,
+                   help="Directory containing pipeline_output.log / be_progress.log "
+                        "(overrides SPECDIST_LOGS_ROOT env var)")
     args = p.parse_args()
 
-    # Ensure DB exists
+    # ── Resolve DB path (CLI > env > default) ──────────────────────────────
+    _db_path = (
+        args.db_path
+        or os.environ.get("SPECDIST_DB_PATH")
+        or os.path.join(_DB_DIR, "results.db")
+    )
+    _db_path = os.path.abspath(_db_path)
+    os.makedirs(os.path.dirname(_db_path), exist_ok=True)
+    results_db.DB_PATH = _db_path          # redirect module-level path
+    print(f"  DB          : {_db_path}")
+
+    # ── Resolve log paths (CLI > env > auto) ───────────────────────────────
+    global _BE_LOG, _PIPELINE_LOG
+    _BE_LOG, _PIPELINE_LOG = _resolve_log_paths(args.logs_dir)
+    print(f"  BE log      : {_BE_LOG}")
+    print(f"  Pipeline log: {_PIPELINE_LOG}")
+
+    # Ensure DB schema is initialised (creates tables if first run)
     results_db._connect().close()
 
     print(f"\nSpecDist Dashboard -> http://{args.host}:{args.port}/\n")

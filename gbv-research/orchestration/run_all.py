@@ -280,8 +280,29 @@ EAGLE_REFERENCE = {
 
 
 # ---------------------------------------------------------------------------
-# Label inference
+# Label / loss-name inference
 # ---------------------------------------------------------------------------
+
+# Known loss names (from pipeline.py training steps).
+# Used to infer loss_name from student_label when run_all.py is called by the pipeline.
+_KNOWN_LOSSES = frozenset(["kl", "ebe", "rev_kl", "jsd", "l1", "online", "baseline"])
+
+
+def infer_loss_name(student_label: str) -> str:
+    """Return the loss name from a student label like 'kl', 'ebe', 'rev_kl'.
+
+    The pipeline passes --student_label 'kl' / 'ebe' / ... which directly encodes
+    the training loss.  For unknown labels we fall back to the label itself so the
+    DB always has a meaningful value rather than the opaque sentinel 'custom'.
+    """
+    if student_label in _KNOWN_LOSSES:
+        return student_label
+    # Try stripping dataset suffix e.g. 'kl-gsm8k' → 'kl'
+    base = student_label.split("-")[0].split("_")[0]
+    if base in _KNOWN_LOSSES:
+        return base
+    return student_label   # fallback: use label as-is (never 'custom')
+
 
 def infer_label(path: str) -> str:
     """Derive a short human-readable label from a model path or HF id."""
@@ -830,7 +851,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         draft_label=student_label,
         draft_path=student_path,
         target_path=teacher_path,
-        loss_name="custom",
+        loss_name=infer_loss_name(student_label),
         train_steps=0, learning_rate=0.0, lora_rank=0,
         dataset=dataset, n_prompts=len(prompts),
         mode=mode, K=K, L=L, temperature=temperature,
@@ -1217,7 +1238,7 @@ def main():
                 ppl_row = dict(
                     run_tag=make_run_tag(student_label, "perplexity", ds, 0),
                     draft_label=student_label, draft_path=args.student,
-                    target_path=args.teacher, loss_name="custom",
+                    target_path=args.teacher, loss_name=infer_loss_name(student_label),
                     train_steps=0, learning_rate=0.0,
                     lora_rank=args.lora_rank or 0,
                     dataset=ds, n_prompts=len(prompts), mode="perplexity",
@@ -1375,7 +1396,7 @@ def main():
                 draft_label=student_label,
                 draft_path=args.student,
                 target_path=args.teacher,
-                loss_name="custom",
+                loss_name=infer_loss_name(student_label),
                 train_steps=0, learning_rate=0.0, lora_rank=0,
                 dataset=ds, n_prompts=n,
                 mode=mode, K=K, L=args.L, temperature=T,
