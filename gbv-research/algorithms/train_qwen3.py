@@ -845,9 +845,10 @@ def _print_health_report(step: int, total_steps: int,
     # 3. Val loss
     valid_vals = [v for v in val_loss_history if math.isfinite(v)]
     if valid_vals:
-        last_val = valid_vals[-1]
-        val_min  = min(valid_vals)
-        if last_val > val_min * 1.10:
+        last_val  = valid_vals[-1]
+        val_min   = min(valid_vals)
+        threshold = val_min + 0.10 * abs(val_min)   # works for both +ve and -ve losses
+        if last_val > threshold:
             val_str = f"{last_val:.4f}  ⚠ RISING >10%% above min={val_min:.4f}"
         else:
             val_str = f"{last_val:.4f}  ✓ (min={val_min:.4f})"
