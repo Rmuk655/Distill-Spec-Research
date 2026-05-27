@@ -37,23 +37,13 @@ import sys
 import time
 
 # ---------------------------------------------------------------------------
-# Results DB — wire to gbv-research/db/results.db (the canonical DB read by
-# the dashboard).  Script now lives at gbv-research/algorithms/train_qwen3.py,
-# so db/ is one level up: os.path.join(__file__, "..", "..", "db").
+# Shared training utilities — DB wiring, HW setup, LoRA, checkpointing.
+# training_scaffold.py lives in the same directory (gbv-research/algorithms/).
 # ---------------------------------------------------------------------------
-_GBV_DB_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db"))
-if os.path.isdir(_GBV_DB_DIR) and _GBV_DB_DIR not in sys.path:
-    sys.path.insert(0, _GBV_DB_DIR)
-try:
-    import results_db as _results_db          # gbv-research/db/results_db.py
-    _rdb_canonical = os.path.normpath(os.path.join(_GBV_DB_DIR, "results.db"))
-    if hasattr(_results_db, "DB_PATH"):
-        if os.path.normpath(_results_db.DB_PATH) != _rdb_canonical:
-            print(f"[WARN] train_curves will write to {_results_db.DB_PATH}")
-            print(f"       Expected: {_rdb_canonical}")
-except ImportError:
-    _results_db = None                        # DB optional — training still works without it
+from training_scaffold import (
+    write_train_step as _write_train_step,
+    setup_hw_opts    as _setup_hw_opts,
+)
 
 # Offline mode — prevents HF Hub network calls on cached / air-gapped setups.
 # Default: ON on local machines (models already downloaded),
@@ -134,33 +124,7 @@ def _pick_attn_impl() -> str:
 _ATTN_IMPL = _pick_attn_impl()
 
 
-# ---------------------------------------------------------------------------
-# Hardware optimisations — called once at startup before any model load.
-# ---------------------------------------------------------------------------
-
-def _setup_hw_opts(device: torch.device) -> None:
-    """Enable free GPU-level optimisations that PyTorch leaves off by default.
-
-    TF32 (Ampere+ only — A100, RTX 30xx/40xx):
-      PyTorch ≥ 1.12 disabled TF32 by default after community feedback about
-      silent precision loss.  Re-enabling gives ~2× matmul throughput for
-      float32 ops with negligible training impact (19-bit vs 23-bit mantissa —
-      well above the noise floor for distillation).  No-op on older GPUs.
-
-    cuDNN benchmark:
-      Profiles available CUDA kernels for each (shape, op) pair and caches the
-      fastest.  One-time ~30 s overhead; pays off over 1000+ steps.
-    """
-    if device.type != "cuda":
-        return
-    torch.backends.cuda.matmul.allow_tf32 = True   # Ampere+ free speedup
-    torch.backends.cudnn.allow_tf32       = True
-    torch.backends.cudnn.benchmark        = True    # kernel autotuner
-    # Report so it's visible in logs
-    props = torch.cuda.get_device_properties(device)
-    tf32_active = props.major >= 8                  # Ampere = compute capability 8.x
-    print(f"  [hw] TF32={'on (Ampere+)' if tf32_active else 'set (no-op on this GPU)'}  "
-          f"cuDNN benchmark=on  GPU={props.name}")
+# _setup_hw_opts is imported from training_scaffold above.
 
 
 # ---------------------------------------------------------------------------
@@ -1371,23 +1335,18 @@ def main():
                 if avg_aw     is not None: _wlog["train/accept_weight"] = avg_aw
                 if _gpu_util  is not None: _wlog["train/gpu_util_pct"]  = _gpu_util
                 _wandb.log(_wlog, step=step + 1)
-            # Save to results DB (train split) — uses _results_db imported at top of file.
-            # _results_db points to gbv-research/db/results_db.py → writes to
-            # gbv-research/db/results.db, the same DB the dashboard (viz_server.py) reads.
-            if _results_db is not None:
-                try:
-                    _results_db.insert_train_step(
-                        label=os.path.basename(args.output),
-                        loss_name=args.loss,
-                        step=step + 1,
-                        loss=avg_l,
-                        learning_rate=args.lr,
-                        lora_rank=args.lora_r,
-                        accept_weight=avg_aw,
-                        split="train",
-                    )
-                except Exception:
-                    pass  # DB logging is best-effort
+            # Save to results DB (train split) — write_train_step handles path resolution
+            # and is silently no-op if the DB is unavailable.
+            _write_train_step(
+                label=os.path.basename(args.output),
+                loss_name=args.loss,
+                step=step + 1,
+                loss=avg_l,
+                learning_rate=args.lr,
+                lora_rank=args.lora_r,
+                accept_weight=avg_aw,
+                split="train",
+            )
 
         # ── Validation loss ───────────────────────────────────────────────────
         if (args.val_every > 0 and val_prompts
@@ -1404,20 +1363,16 @@ def main():
                 if val_aw is not None:
                     _vlog["val/accept_weight"] = val_aw
                 _wandb.log(_vlog, step=step + 1)
-            if _results_db is not None:
-                try:
-                    _results_db.insert_train_step(
-                        label=os.path.basename(args.output),
-                        loss_name=args.loss,
-                        step=step + 1,
-                        loss=val_loss,
-                        learning_rate=args.lr,
-                        lora_rank=args.lora_r,
-                        accept_weight=val_aw,
-                        split="val",
-                    )
-                except Exception:
-                    pass
+            _write_train_step(
+                label=os.path.basename(args.output),
+                loss_name=args.loss,
+                step=step + 1,
+                loss=val_loss,
+                learning_rate=args.lr,
+                lora_rank=args.lora_r,
+                accept_weight=val_aw,
+                split="val",
+            )
 
             # ── Health tracking: record val loss, update best, check patience ─
             if math.isfinite(val_loss):

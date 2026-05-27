@@ -103,9 +103,9 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)  # gbv-research/
 sys.path.insert(0, _HERE)
-# OSD/ — so `import fetch_datasets` resolves to OSD/fetch_datasets.py
+# OSD/ — kept for specInfer.generator (alpha eval) and legacy checkpoint fallback.
+# fetch_datasets is NO LONGER imported from OSD/; we use core/datasets/downloader.py.
 _OSD_DIR = os.path.join(os.path.dirname(_PARENT), "OSD")
-sys.path.insert(0, _OSD_DIR)
 # OSD/distill/ — so `from specInfer.generator import Generator` resolves correctly.
 # (specInfer package lives at OSD/distill/specInfer/, not at OSD/specInfer/)
 sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))
@@ -166,12 +166,13 @@ def _dtype_kwargs(dtype) -> dict:
 
 
 import results_db
-import fetch_datasets as _fd
-# Override DATA_DIR so fetch_datasets reads from/writes to gbv-research/core/datasets/raw/
-# instead of OSD/data/. The JSONL files already live here from a previous session.
+# Dataset utilities live in gbv-research/core/datasets/downloader.py — same API as
+# the original OSD/fetch_datasets.py but saves to core/datasets/raw/ by default.
+sys.path.insert(0, os.path.join(_PARENT, "core", "datasets"))
+import downloader as _fd
 _fd.DATA_DIR = os.path.join(_PARENT, "core", "datasets", "raw")
 os.makedirs(_fd.DATA_DIR, exist_ok=True)
-from fetch_datasets import fetch_all, get_dataset_path, ALL_DATASETS
+from downloader import fetch_all, get_dataset_path, ALL_DATASETS
 
 # ---------------------------------------------------------------------------
 # Defaults

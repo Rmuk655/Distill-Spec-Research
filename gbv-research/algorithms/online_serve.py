@@ -77,21 +77,16 @@ from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # ---------------------------------------------------------------------------
-# Results DB — same wiring as train_qwen3.py.
-# online_serve.py lives at gbv-research/algorithms/, so db/ is one level up.
-# Writes to gbv-research/db/results.db (the same DB the dashboard reads).
-# train_curves rows from online runs have split="train" (KL loss) and
-# split="val" (1 - eval_alpha = rejection rate, so lower = better like other
-# val curves).
+# Shared training utilities — DB wiring and HW setup from training_scaffold.
+# training_scaffold.py lives in the same directory (gbv-research/algorithms/).
+# write_train_step handles DB path resolution and is silently no-op if the DB
+# is unavailable. train_curves rows: split="train" (KL loss) and
+# split="val" (1 - eval_alpha = rejection rate, lower = better).
 # ---------------------------------------------------------------------------
-_GBV_DB_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db"))
-if os.path.isdir(_GBV_DB_DIR) and _GBV_DB_DIR not in sys.path:
-    sys.path.insert(0, _GBV_DB_DIR)
-try:
-    import results_db as _results_db          # gbv-research/db/results_db.py
-except ImportError:
-    _results_db = None                        # DB optional — script still works without it
+from training_scaffold import (
+    write_train_step as _write_train_step,
+    setup_hw_opts    as _setup_hw_opts_scaffold,
+)
 
 # peft is optional at import time so we give a clear error if missing
 try:
@@ -124,20 +119,7 @@ log = logging.getLogger("osd")
 
 # ---------------------------------------------------------------------------
 # Hardware optimisations (same set as train_qwen3.py)
-# ---------------------------------------------------------------------------
-
-def _setup_hw_opts(device: torch.device) -> None:
-    """TF32 + cuDNN benchmark — free on Ampere/A100, no-op elsewhere."""
-    if device.type != "cuda":
-        return
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32       = True
-    torch.backends.cudnn.benchmark        = True
-    props = torch.cuda.get_device_properties(device)
-    tf32_active = props.major >= 8
-    log.info("HW opts: TF32=%s  cuDNN-bench=on  GPU=%s",
-             "on (Ampere+)" if tf32_active else "set (no-op)", props.name)
-
+# _setup_hw_opts imported from training_scaffold above as _setup_hw_opts_scaffold.
 
 # ---------------------------------------------------------------------------
 # KL loss
@@ -893,7 +875,7 @@ def main():
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("Using device: %s", device)
-    _setup_hw_opts(device)
+    _setup_hw_opts_scaffold(device)
 
     # --- wandb ---
     use_wandb = WANDB_AVAILABLE and args.wandb_project
@@ -1081,19 +1063,15 @@ def main():
 
             # Write KL loss to results.db so the dashboard Training Loss Curves
             # panel shows the online run alongside kl/ebe/rev_kl/jsd/l1 curves.
-            if _results_db is not None:
-                try:
-                    _results_db.insert_train_step(
-                        label=os.path.basename(args.output),
-                        loss_name=args.kl_method,
-                        step=step + 1,
-                        loss=last_loss,
-                        learning_rate=args.lr,
-                        lora_rank=args.lora_r,
-                        split="train",
-                    )
-                except Exception:
-                    pass  # DB write failure never crashes training
+            _write_train_step(
+                label=os.path.basename(args.output),
+                loss_name=args.kl_method,
+                step=step + 1,
+                loss=last_loss,
+                learning_rate=args.lr,
+                lora_rank=args.lora_r,
+                split="train",
+            )
 
         # 6. Periodic held-out eval
         if (step + 1) % args.eval_alpha_every == 0:
@@ -1117,19 +1095,15 @@ def main():
                 }, step=step + 1)
             # Write rejection rate (1 - eval_alpha) as val "loss" so the curve
             # goes DOWN like other val curves (lower rejection = better draft).
-            if _results_db is not None:
-                try:
-                    _results_db.insert_train_step(
-                        label=os.path.basename(args.output),
-                        loss_name=args.kl_method,
-                        step=step + 1,
-                        loss=1.0 - eval_alpha,   # rejection rate: lower = better
-                        learning_rate=args.lr,
-                        lora_rank=args.lora_r,
-                        split="val",
-                    )
-                except Exception:
-                    pass
+            _write_train_step(
+                label=os.path.basename(args.output),
+                loss_name=args.kl_method,
+                step=step + 1,
+                loss=1.0 - eval_alpha,   # rejection rate: lower = better
+                learning_rate=args.lr,
+                lora_rank=args.lora_r,
+                split="val",
+            )
 
     # --- Final evaluation ---
     draft_model.eval()
