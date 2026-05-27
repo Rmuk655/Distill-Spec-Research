@@ -24,13 +24,13 @@ This file defines what differs per provider: hardware config, storage
 path, session limits, and cost.  To add a new provider:
 
     1. Add a ProviderConfig entry to PROVIDERS below.
-    2. Create launchers/my_provider.{ipynb,py,sh} that reads from PROVIDERS.
+    2. Create deploy/my_provider.{ipynb,py,sh} that reads from PROVIDERS.
 
 Usage from any launcher script
 -------------------------------
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from launchers._provider import PROVIDERS, detect_provider, build_pipeline_cmd
+    from deploy._provider import PROVIDERS, detect_provider, build_pipeline_cmd
 
     p = detect_provider()   # auto-detects current environment
     cmd = build_pipeline_cmd(p, smoke=True)

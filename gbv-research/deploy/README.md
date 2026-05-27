@@ -1,4 +1,4 @@
-# SpecDist Launchers
+# SpecDist Deployment
 
 One-command scripts for running the SpecDist pipeline on any compute provider.
 Every launcher calls the same underlying command:
@@ -33,13 +33,13 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 
 ---
 
-## Launcher files
+## Deployment files
 
 | File | Provider | Usage |
 |---|---|---|
-| `../notebooks/colab_quickstart.ipynb` | Google Colab | Open in Colab, run top to bottom |
+| `colab_quickstart.ipynb` | Google Colab | Open in Colab, run top to bottom |
 | `kaggle.ipynb` | Kaggle Kernels | Upload to Kaggle, run top to bottom |
-| `modal_app.py` | Modal.com | `modal run launchers/modal_app.py::run_pipeline` |
+| `modal_app.py` | Modal.com | `modal run deploy/modal_app.py::run_pipeline` |
 | `runpod.sh` | RunPod | `bash runpod.sh` in pod terminal |
 | `_provider.py` | All (shared) | Config registry + helper functions |
 
@@ -51,7 +51,7 @@ The only thing that changes is `--config` and `--ckpt_root`.
 
 ```python
 # _provider.py gives you the right values per environment:
-from launchers._provider import PROVIDERS, detect_provider, build_pipeline_cmd
+from deploy._provider import PROVIDERS, detect_provider, build_pipeline_cmd
 
 p = detect_provider()                   # auto-detects Colab / Kaggle / Modal / etc.
 cmd = build_pipeline_cmd(p, smoke=True) # returns the correct subprocess argv
@@ -99,10 +99,10 @@ python orchestration/experiment.py --config laptop  --smoke --yes
 **To run with the recommended setup:**
 
 ```bash
-# Colab — just open notebooks/colab_quickstart.ipynb and run all cells.
+# Colab — just open deploy/colab_quickstart.ipynb and run all cells.
 # The colab config already uses 8B 4-bit NF4 teacher — no extra flags needed.
 
-# Kaggle — open launchers/kaggle.ipynb and set CONFIG = "colab"
+# Kaggle — open deploy/kaggle.ipynb and set CONFIG = "colab"
 
 # Local smoke test to verify the code path:
 python orchestration/experiment.py --config laptop --smoke --yes
@@ -112,8 +112,8 @@ python orchestration/experiment.py --config laptop --smoke --yes
 
 ## Adding a new provider
 
-1. Add a `ProviderConfig` entry to `launchers/_provider.py`
-2. Create `launchers/my_provider.{ipynb,py,sh}` using `build_pipeline_cmd(p)` for the command
+1. Add a `ProviderConfig` entry to `deploy/_provider.py`
+2. Create `deploy/my_provider.{ipynb,py,sh}` using `build_pipeline_cmd(p)` for the command
 3. That's it — the pipeline, training, and eval code is the same on all providers
 
 Typical new provider file is < 80 lines.

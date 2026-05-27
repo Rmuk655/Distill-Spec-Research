@@ -11,19 +11,19 @@ Prerequisites
     modal token new          # one-time browser auth
 
 One-time model download (run once, ~15 min):
-    modal run launchers/modal_app.py::download_models
+    modal run deploy/modal_app.py::download_models
 
 Full pipeline (all 6 losses, ~4–6 h on A100):
-    modal run launchers/modal_app.py::run_pipeline
+    modal run deploy/modal_app.py::run_pipeline
 
 Smoke test (code-path check, ~45 min):
-    modal run launchers/modal_app.py::run_pipeline --smoke
+    modal run deploy/modal_app.py::run_pipeline --smoke
 
 Single loss:
-    modal run launchers/modal_app.py::run_pipeline --losses kl
+    modal run deploy/modal_app.py::run_pipeline --losses kl
 
 Custom GPU (default A100-40GB; A10G is cheaper):
-    modal run launchers/modal_app.py::run_pipeline --gpu A10G
+    modal run deploy/modal_app.py::run_pipeline --gpu A10G
 
 Download results locally:
     modal volume get specdist-vol /checkpoints ./local_checkpoints
@@ -173,7 +173,7 @@ def download_models(
     Run this ONCE before the first training run so subsequent runs start
     immediately without downloading 16 GB every time.
 
-        modal run launchers/modal_app.py::download_models
+        modal run deploy/modal_app.py::download_models
     """
     import transformers
 
@@ -207,7 +207,7 @@ def upload_dataset(local_path: str = "capsules/datasets/raw/gsm8k_train.jsonl"):
     """Upload a local dataset JSONL into the volume.
 
     Usage:
-        modal run launchers/modal_app.py::upload_dataset \\
+        modal run deploy/modal_app.py::upload_dataset \\
             --local-path capsules/datasets/raw/gsm8k_train.jsonl
     """
     import shutil
@@ -242,16 +242,16 @@ def run_pipeline(
     Examples
     --------
     Full run:
-        modal run launchers/modal_app.py::run_pipeline
+        modal run deploy/modal_app.py::run_pipeline
 
     Smoke test:
-        modal run launchers/modal_app.py::run_pipeline --smoke
+        modal run deploy/modal_app.py::run_pipeline --smoke
 
     Single loss:
-        modal run launchers/modal_app.py::run_pipeline --losses kl
+        modal run deploy/modal_app.py::run_pipeline --losses kl
 
     Cheap A10G GPU:
-        modal run launchers/modal_app.py::run_pipeline --gpu A10G --config colab
+        modal run deploy/modal_app.py::run_pipeline --gpu A10G --config colab
     """
     wandb_key = os.environ.get("WANDB_API_KEY")
     hf_token  = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
@@ -321,7 +321,7 @@ def download_checkpoints(dest: str = "./modal_checkpoints"):
 
 
 # ---------------------------------------------------------------------------
-# Entry point: `python launchers/modal_app.py` prints a help summary
+# Entry point: `python deploy/modal_app.py` prints a help summary
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

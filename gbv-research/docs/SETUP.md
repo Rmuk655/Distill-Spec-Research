@@ -226,7 +226,7 @@ This section shows the exact commands for each platform.
 
 ### 9a. Free Colab T4 — one-click notebook
 
-**➡  Open [`notebooks/colab_quickstart.ipynb`](../notebooks/colab_quickstart.ipynb) and
+**➡  Open [`deploy/colab_quickstart.ipynb`](../deploy/colab_quickstart.ipynb) and
 run the cells top-to-bottom.  That's it.**
 
 The notebook handles everything in 4 cells:
@@ -349,7 +349,7 @@ modal token new          # opens browser for auth (one-time per machine)
 ```bash
 # Downloads Qwen3-0.6B and Qwen3-8B into the persistent volume's HF cache.
 # Run once; all subsequent training runs use the cached weights offline.
-modal run launchers/modal_app.py::download_models
+modal run deploy/modal_app.py::download_models
 ```
 
 #### Upload training data
@@ -357,30 +357,30 @@ modal run launchers/modal_app.py::download_models
 ```bash
 # Copies core/datasets/raw/gsm8k_train.jsonl (and any other .jsonl) to /vol/data/
 # Run after download_models and before any training.
-modal run launchers/modal_app.py::upload_dataset
+modal run deploy/modal_app.py::upload_dataset
 ```
 
 #### Train individual losses
 
 ```bash
-modal run launchers/modal_app.py::train_kl       # forward KL (DistillSpec baseline)
-modal run launchers/modal_app.py::train_ebe      # EBE block-level loss (novel)
-modal run launchers/modal_app.py::train_rev_kl   # reverse KL (ablation)
-modal run launchers/modal_app.py::train_jsd      # Jensen-Shannon (ablation)
-modal run launchers/modal_app.py::train_l1       # L1 total-variation (ablation)
-modal run launchers/modal_app.py::train_online   # Online OSD adaptation
+modal run deploy/modal_app.py::train_kl       # forward KL (DistillSpec baseline)
+modal run deploy/modal_app.py::train_ebe      # EBE block-level loss (novel)
+modal run deploy/modal_app.py::train_rev_kl   # reverse KL (ablation)
+modal run deploy/modal_app.py::train_jsd      # Jensen-Shannon (ablation)
+modal run deploy/modal_app.py::train_l1       # L1 total-variation (ablation)
+modal run deploy/modal_app.py::train_online   # Online OSD adaptation
 
 # Custom args — override steps, lr, dataset:
-modal run launchers/modal_app.py::run --loss ebe --steps 2000 --lr 1e-4
-modal run launchers/modal_app.py::run --loss forward_kl \
+modal run deploy/modal_app.py::run --loss ebe --steps 2000 --lr 1e-4
+modal run deploy/modal_app.py::run --loss forward_kl \
     --dataset /vol/data/gsm8k_train.jsonl --steps 1000
 ```
 
 #### Run the full pipeline (all 6 losses, ~2 hours on A100-40GB)
 
 ```bash
-modal run launchers/modal_app.py::run_pipeline
-modal run launchers/modal_app.py::run_pipeline --steps 500   # shorter sweep
+modal run deploy/modal_app.py::run_pipeline
+modal run deploy/modal_app.py::run_pipeline --steps 500   # shorter sweep
 ```
 
 #### Monitor progress
@@ -394,7 +394,7 @@ modal app logs <app-id>     # tail live logs
 
 ```bash
 # Convenience command (wraps modal volume get):
-modal run launchers/modal_app.py::download_checkpoints
+modal run deploy/modal_app.py::download_checkpoints
 
 # Or manually:
 modal volume get specdist-vol /checkpoints ./local_checkpoints
@@ -409,7 +409,7 @@ Modal volume is committed every 5 minutes.  To resume:
 ```bash
 # Just re-run the same command — trainer.py detects ckpt_latest/ and
 # resumes from the last saved step automatically.
-modal run launchers/modal_app.py::train_kl
+modal run deploy/modal_app.py::train_kl
 ```
 
 #### GPU options
@@ -420,7 +420,7 @@ modal run launchers/modal_app.py::train_kl
 | `A100-40GB` | 40 GB | ~$2.50/hr | Default — 8B teacher in bfloat16 |
 | `A100-80GB` | 80 GB | ~$3.70/hr | Extra headroom, long sequences |
 
-To use a different GPU, edit `@app.function(gpu=...)` in `launchers/modal_app.py` or
+To use a different GPU, edit `@app.function(gpu=...)` in `deploy/modal_app.py` or
 run with `run.with_options(gpu="A10G").local(...)`.
 
 ---

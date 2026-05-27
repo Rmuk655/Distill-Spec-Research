@@ -89,8 +89,9 @@ python orchestration/experiment.py --config laptop --yes
     +-- paper/
     |   +-- analyze_results.py      Generate paper statistics + significance tests from results.db
     |
-    +-- launchers/
+    +-- deploy/
     |   +-- modal_app.py            Modal cloud launcher
+    |   +-- colab_quickstart.ipynb  Colab / Kaggle quickstart notebook
     |   +-- eval_ebe_sweep.sh       EBE sweep eval script
     |
     +-- docs/                       See docs index above

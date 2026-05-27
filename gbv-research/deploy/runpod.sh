@@ -13,7 +13,7 @@
 #   3. Open the pod terminal (Connect → Start Web Terminal) and run:
 #        bash /workspace/runpod.sh
 #      OR paste this URL into the terminal:
-#        curl -fsSL https://raw.githubusercontent.com/Rmuk655/Distill-Spec-Research/main/gbv-research/launchers/runpod.sh | bash
+#        curl -fsSL https://raw.githubusercontent.com/Rmuk655/Distill-Spec-Research/main/gbv-research/deploy/runpod.sh | bash
 #
 # What this script does:
 #   1. Clones / updates the repo into /workspace/Distill-Spec-Research

@@ -677,7 +677,7 @@ The existing `algorithms/distillspec_gbv/trainer.py` runs anywhere with no code 
 
 ### Google Colab (free T4, 15 GB VRAM)
 
-**Preferred method**: open `notebooks/colab_quickstart.ipynb` and run top-to-bottom. That's it.
+**Preferred method**: open `deploy/colab_quickstart.ipynb` and run top-to-bottom. That's it.
 
 For manual cell-by-cell control:
 
