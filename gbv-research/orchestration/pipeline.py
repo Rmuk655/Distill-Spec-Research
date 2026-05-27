@@ -276,6 +276,10 @@ def _load_config_yaml(config_name: str) -> dict:
         # laptop.yaml: not set   (Windows — scripts skip compile automatically).
         if "compile" in hardware:
             out["compile"] = hardware["compile"]
+        # training.online_lr → separate LR for online adapt (typically 10x offline LR).
+        # Kept separate so offline and online LRs can be tuned independently in the YAML.
+        if "online_lr" in training:
+            out["online_lr"] = training["online_lr"]
         return out
     except Exception as exc:
         print(f"  [config] Warning: could not load {yaml_path}: {exc}")
@@ -425,10 +429,17 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # in _kl_at_positions) so the main remaining constraint is the KV cache.
     _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
     _train_hargs = [
-        "--lr",           str(_h.get("lr", 3e-5)),
-        "--lora_r",       str(_h.get("lora_r", 8)),
-        "--lora_alpha",   str(_h.get("lora_alpha", 16)),
-        "--teacher_temp", str(_h.get("teacher_temp", 0.8)),
+        "--lr",             str(_h.get("lr", 3e-5)),
+        "--lora_r",         str(_h.get("lora_r", 8)),
+        "--lora_alpha",     str(_h.get("lora_alpha", 16)),
+        "--teacher_temp",   str(_h.get("teacher_temp", 0.8)),
+        "--max_new_tokens", str(_h.get("max_new_tokens", 80)),
+    ]
+    # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
+    # the offline training runs so all models have the same adapter capacity.
+    _online_hargs = [
+        "--lora_r",     str(_h.get("lora_r", 8)),
+        "--lora_alpha", str(_h.get("lora_alpha", 16)),
     ]
     # --compile: passed to train_qwen3.py and online_serve.py when YAML sets
     # hardware.compile: true (server/A100 Linux).  Both scripts skip compile
@@ -655,9 +666,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--update_every", "4",
                 "--K", "4",
                 "--kl_method", "forward_kl",
-                "--lr", "3e-4",
+                "--lr", str(_h.get("online_lr", 3e-4)),
                 # _online_max_tok: 30 smoke / YAML value full run (laptop=80, server=128, colab=64)
                 "--max_new_tokens", str(_online_max_tok),
+                *_online_hargs,   # --lora_r, --lora_alpha — must match offline training runs
             ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -692,8 +704,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--kl_method", "ebe",
                 "--ebe_block_len", "4",    # match --K
                 "--ebe_kl_weight", "0.1",
-                "--lr", "3e-4",
+                "--lr", str(_h.get("online_lr", 3e-4)),
                 "--max_new_tokens", str(_online_max_tok),
+                *_online_hargs,   # --lora_r, --lora_alpha — must match offline training runs
             ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-gsm8k"), "adapter_model.safetensors"),
             "retryable": True,
@@ -1525,6 +1538,10 @@ def main():
         # hardware.compile → passed to all training subprocesses as --compile.
         # False by default (safe on Windows).  server.yaml sets True for A100.
         "compile":        _yaml_cfg.get("compile", False),
+        # online_lr: separate LR for online adapt steps.  Defaults to 3e-4 (10x
+        # offline LR) — online adaptation requires a larger step to move the draft
+        # meaningfully within the short 500-prompt online budget.
+        "online_lr":      _yaml_cfg.get("online_lr", 3e-4),
     }
 
     # Parse --losses filter into a list; None = run all losses.

@@ -20,6 +20,7 @@ training:
   lora_alpha: 32
   max_new_tokens: 128          # longer sequences for better distillation
   teacher_temperature: 0.8
+  online_lr: 3.0e-4             # LR for online adapt (higher than offline distillation LR)
   seed: 42
 
 dataset:
