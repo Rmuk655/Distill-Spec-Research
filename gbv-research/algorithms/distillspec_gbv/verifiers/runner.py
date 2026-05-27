@@ -118,12 +118,16 @@ def speculative_decoding_loop(
 
     # Profiling finalization of stats
     torch.cuda.synchronize()
-    _run_stats["target_calls"] = target_calls
-    _run_stats["total_time"] = time.perf_counter() - _loop_start
-    _run_stats["gen_tokens"] = max(full_seq.shape[-1] - context_init_len, 0)
+    _run_stats["target_calls"]     = target_calls
+    _run_stats["total_time"]       = time.perf_counter() - _loop_start
+    _run_stats["gen_tokens"]       = max(full_seq.shape[-1] - context_init_len, 0)
+    # Aliases used by algorithm.py GenerationResult unpacking
+    _run_stats["n_target_calls"]   = target_calls
+    _run_stats["n_draft_tokens"]   = target_calls * 0   # tree node count not tracked here
+    _run_stats["n_accepted_tokens"] = _run_stats["gen_tokens"]
     p_model._spec_profile["runs"].append(_run_stats)
-            
-    return full_seq
+
+    return full_seq, _run_stats
 
 
 

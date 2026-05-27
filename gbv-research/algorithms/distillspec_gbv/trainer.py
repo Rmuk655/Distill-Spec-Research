@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
 
     # ── Training ─────────────────────────────────────────────────────────────
     p.add_argument("--loss", default="forward_kl",
-                   choices=["forward_kl", "reverse_kl", "jsd", "l1", "ebe"],
+                   choices=["forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single"],
                    help="Distillation loss objective.")
     p.add_argument("--steps",  type=int, default=1000,
                    help="Total training steps.")
