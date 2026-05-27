@@ -122,6 +122,6 @@ python paper/analyze_results.py --out report.md
 
 ## Team
 
-- **Mukund R** (IIT Hyderabad) — Research Engineer: implementation, experiments, benchmarking
+- **Krishnan R** (IIT Hyderabad) — Research Engineer: implementation, experiments, benchmarking
 - **Rahul Thomas** (PhD Student, Columbia University) — Research Lead: direction, novelty, EBE math, publication
 - **Target**: ICLR mid-September 2026
