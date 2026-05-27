@@ -656,16 +656,10 @@ _HTML = r"""<!DOCTYPE html>
         <!-- populated by loadTrainingCurves() -->
       </div>
 
-      <!-- Alpha acceptance during online training (written by online_serve.py eval checkpoints) -->
-      <div class="chart-card">
-        <h6>Online Training Quality — block efficiency during training
-          <small class="text-muted ms-2">
-            <strong>online_ebe:</strong> EBE loss = −BE directly, so right axis = −loss (dense, every step, on training data).
-            <strong>online (KL):</strong> train loss is KL divergence; BE estimated from eval_α via (1−α⁶)/(1−α).
-            Actual BE on test prompts is measured in Phase 3 final eval.
-          </small>
-        </h6>
-        <div id="chart-online-health" style="height:360px"></div>
+      <!-- Online health cards — one per online label, populated by renderOnlineHealth() -->
+      <div id="chart-online-health-grid"
+           style="display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:16px">
+        <!-- populated by renderOnlineHealth() -->
       </div>
 
     </div>
@@ -2348,156 +2342,175 @@ async function loadTrainingCurves() {
 }
 
 // ---- Online Training Health ----
-// Reads val rows from train_curves for online-* labels.
-// online_serve.py stores the rejection rate (1 - alpha) as val_loss at each
-// eval checkpoint, so alpha = 1 - val_loss.  Rising alpha = training is helping.
+// One card per online label, same style as the distillation training curve cards.
+//
+// online_serve.py writes:
+//   train split: the training loss (EBE or KL depending on the run)
+//   val   split: rejection_rate = 1 - alpha  (stored as val_loss)
+//
+// For online_ebe the train loss IS block efficiency (EBE loss = −BE), so we
+// negate it → both train and eval lines go UP as the model improves.
+// For online (KL) the train loss is KL divergence (down = better); eval alpha
+// goes up = better.  These can't share one y-axis so we use dual axes — but
+// kept on ONE clear chart per label with no derived formulas.
 async function renderOnlineHealth() {
+  const grid = document.getElementById('chart-online-health-grid');
   const curves = await fetch('/api/train_curves').then(r => r.json());
 
-  // Labels that came from the online training steps
   const allLabels = [...new Set(curves.map(r => r.label))];
-  const onlineLabels = allLabels.filter(l => l.includes('online'));
+  const onlineLabels = allLabels.filter(l => l.includes('online')).sort();
 
   if (!onlineLabels.length) {
-    showNoData('chart-online-health',
-      'Online training health appears during online_adapt_gsm8k and online_ebe_adapt_gsm8k steps. ' +
-      'Shows eval_alpha at each checkpoint — rising = draft model getting better at matching target under live SD.');
+    grid.innerHTML = `<div class="chart-card" style="grid-column:1/-1">
+      <p class="text-muted small mb-0">Online training health appears during
+      online_adapt_gsm8k / online_ebe_adapt_gsm8k steps.
+      Shows train loss + eval acceptance rate at each checkpoint.</p></div>`;
     return;
   }
 
-  const traces = [];
-  let colorIdx = 0;
+  grid.innerHTML = '';
 
-  onlineLabels.forEach(label => {
+  onlineLabels.forEach((label, colorIdx) => {
     const labelRows = curves.filter(r => r.label === label);
+    const isEBE = label.includes('ebe');
 
-    // Train loss rows (step → loss)
+    // De-duplicate train rows by step
     const trainMap = {};
     labelRows.filter(r => !r.split || r.split === 'train')
              .forEach(r => { if (!trainMap[r.step] || r.id > trainMap[r.step].id) trainMap[r.step] = r; });
     const trainRows = Object.values(trainMap).sort((a, b) => a.step - b.step);
 
-    // Val rows — online_serve.py writes rejection_rate as val_loss
+    // Val rows: online_serve.py stores rejection_rate as val_loss → alpha = 1 - val_loss
     const valRows = labelRows.filter(r => r.split === 'val').sort((a, b) => a.step - b.step);
+
+    if (!trainRows.length && !valRows.length) return;
 
     const trainColor = TRAIN_COLORS[colorIdx % TRAIN_COLORS.length];
     const valColor   = VAL_COLORS  [colorIdx % VAL_COLORS.length];
-    colorIdx++;
 
-    // Is this an EBE-based online run?  EBE loss = −(expected block efficiency),
-    // so  BE_from_loss = −train_loss  is a direct dense signal every training step.
-    // For KL-based online runs the train loss is KL divergence — not BE at all.
-    const isEBE = label.includes('ebe');
+    const traces = [];
 
     if (trainRows.length) {
       if (isEBE) {
-        // EBE loss ≈ −BE  →  show −loss directly on the BE axis (y3, ~1–6).
-        // This is a dense per-step signal on the *training* distribution.
+        // EBE loss = −BE  →  plot −loss so the train line goes UP as BE improves.
+        // This makes both train and eval lines read "higher = better."
+        const beVals = trainRows.map(r => -r.loss);
+        const lastBE = beVals[beVals.length - 1];
         traces.push({
           type: 'scatter', mode: 'lines',
-          name: `${label} BE (train, from EBE loss)`,
+          name: `train BE (=−EBE loss)`,
           x: trainRows.map(r => r.step),
-          y: trainRows.map(r => -r.loss),          // negate: EBE loss = −BE
-          line: { color: trainColor, width: 1.5, dash: 'solid', opacity: 0.6 },
-          yaxis: 'y3',
-          hovertemplate: 'step %{x}<br>BE (train dist.): %{y:.2f}  [= −EBE loss]<extra>' + label + '</extra>',
+          y: beVals,
+          line: { color: trainColor, width: 1.8, dash: 'solid' },
+          yaxis: 'y',
+          hovertemplate: 'step %{x}<br><b>train BE: %{y:.2f}</b>  [=−EBE loss, train dist.]<extra></extra>',
         });
       } else {
-        // KL-based online: train loss is KL divergence — show it on its own muted axis.
+        // KL loss: lower = better — show on left axis, down = better
         traces.push({
           type: 'scatter', mode: 'lines',
-          name: `${label} KL loss`,
+          name: `train KL loss`,
           x: trainRows.map(r => r.step),
           y: trainRows.map(r => r.loss),
-          line: { color: trainColor, width: 1.2, dash: 'solid' },
-          yaxis: 'y2',
-          hovertemplate: 'step %{x}<br>KL train loss: %{y:.4f}<extra>' + label + '</extra>',
+          line: { color: trainColor, width: 1.8, dash: 'solid' },
+          yaxis: 'y',
+          hovertemplate: 'step %{x}<br>train KL loss: %{y:.4f}<extra></extra>',
         });
       }
     }
 
     if (valRows.length) {
-      // alpha = 1 - rejection_rate = 1 - val_loss   (measured at eval checkpoints)
+      // alpha = 1 − rejection_rate (higher = better at every checkpoint)
       const alphaVals = valRows.map(r => Math.min(1, Math.max(0, 1 - r.loss)));
+      const lastAlpha = alphaVals[alphaVals.length - 1];
 
-      // Alpha trace (left axis, 0–1)
-      traces.push({
-        type: 'scatter', mode: 'lines+markers',
-        name: `${label} eval_α`,
-        x: valRows.map(r => r.step),
-        y: alphaVals,
-        line: { color: valColor, width: 2, dash: 'solid' },
-        marker: { color: valColor, size: 7, symbol: 'circle',
-                  line: { width: 1.5, color: '#fff' } },
-        yaxis: 'y',
-        hovertemplate: 'step %{x}<br><b>eval_α: %{y:.3f}</b><extra>' + label + '</extra>',
-      });
-
-      // For KL-based online (no EBE loss to read from), also show BE estimated
-      // from eval_α via (1−α^(L+1))/(1−α).  For EBE we already have the loss signal.
-      if (!isEBE) {
-        const L = 5;
-        const beVals = alphaVals.map(a =>
-          a >= 0.9999 ? (L + 1) : (1 - Math.pow(a, L + 1)) / (1 - a)
-        );
+      if (isEBE) {
+        // Both train (−EBE ≈ BE) and eval_α go UP when improving.
+        // They're on different absolute scales (BE ~3–5, alpha ~0.6–0.9) so use y2 for alpha.
         traces.push({
           type: 'scatter', mode: 'lines+markers',
-          name: `${label} est. BE (from α)`,
+          name: `eval α (checkpoints)`,
           x: valRows.map(r => r.step),
-          y: beVals,
-          line: { color: valColor, width: 2, dash: 'dot' },
-          marker: { color: valColor, size: 7, symbol: 'diamond',
-                    line: { width: 1.5, color: '#fff' } },
-          yaxis: 'y3',
-          hovertemplate: 'step %{x}<br><b>est. BE: %{y:.2f}</b>  [(1−α⁶)/(1−α)]<extra>' + label + '</extra>',
+          y: alphaVals,
+          line: { color: valColor, width: 2.2, dash: 'dash' },
+          marker: { color: valColor, size: 7, symbol: 'circle', line: { width: 1.5, color: '#fff' } },
+          yaxis: 'y2',
+          hovertemplate: 'step %{x}<br><b>eval α: %{y:.3f}</b><extra></extra>',
+        });
+      } else {
+        // KL run: train loss goes down, alpha goes up — need separate axes.
+        traces.push({
+          type: 'scatter', mode: 'lines+markers',
+          name: `eval α (checkpoints)`,
+          x: valRows.map(r => r.step),
+          y: alphaVals,
+          line: { color: valColor, width: 2.2, dash: 'dash' },
+          marker: { color: valColor, size: 7, symbol: 'circle', line: { width: 1.5, color: '#fff' } },
+          yaxis: 'y2',
+          hovertemplate: 'step %{x}<br><b>eval α: %{y:.3f}</b><extra></extra>',
         });
       }
     }
+
+    if (!traces.length) return;
+
+    // Build header stats
+    const lastTrain    = trainRows.length ? trainRows[trainRows.length - 1] : null;
+    const lastAlpha    = valRows.length
+      ? (1 - Math.min(1, Math.max(0, valRows[valRows.length - 1].loss))).toFixed(3)
+      : null;
+    const lastTrainVal = lastTrain
+      ? (isEBE ? (-lastTrain.loss).toFixed(2) : lastTrain.loss.toFixed(3))
+      : null;
+    const trainLabel   = isEBE ? 'BE' : 'KL loss';
+    const trainDir     = isEBE ? '↑ higher = better' : '↓ lower = better';
+
+    const statsHtml = [
+      lastTrain   ? `step ${lastTrain.step}` : '',
+      lastTrainVal ? `train ${trainLabel} ${lastTrainVal}` : '',
+      lastAlpha   ? `eval α ${lastAlpha}` : '',
+    ].filter(Boolean).join(' · ');
+
+    const yLeftTitle  = isEBE ? 'Train BE = −EBE loss  (↑ better)' : 'Train KL loss  (↓ better)';
+    const yRightTitle = 'eval α  (↑ better)';
+
+    // Left axis range
+    const trainY  = trainRows.map(r => isEBE ? -r.loss : r.loss);
+    const yMin    = Math.min(...trainY);
+    const yMax    = Math.max(...trainY);
+    const pad     = (yMax - yMin) * 0.15 || 0.5;
+
+    const chartId = `chart-oh-${label.replace(/[^a-z0-9]/gi, '_')}`;
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `
+      <h6 style="text-transform:capitalize">${label}
+        <small class="text-muted ms-2" style="font-size:0.75em">${statsHtml}</small>
+        <small class="text-muted ms-1" style="font-size:0.7em;font-style:italic">${trainDir}</small>
+      </h6>
+      <div id="${chartId}" style="height:260px"></div>`;
+    grid.appendChild(card);
+
+    Plotly.newPlot(chartId, traces, {
+      xaxis: { title: 'Step', tickfont: { size: 10 } },
+      yaxis: {
+        title: yLeftTitle,
+        range: [yMin - pad, yMax + pad],
+        tickfont: { size: 10 }, titlefont: { size: 10 },
+        gridcolor: '#e9ecef',
+      },
+      yaxis2: {
+        title: yRightTitle,
+        overlaying: 'y', side: 'right',
+        range: [0, 1],
+        tickfont: { size: 10, color: valColor },
+        titlefont: { size: 10, color: valColor },
+        showgrid: false,
+      },
+      legend: { orientation: 'h', y: -0.3, font: { size: 11 } },
+      margin: { t: 8, b: 65, l: 55, r: 55 },
+    }, { responsive: true });
   });
-
-  if (!traces.length) {
-    showNoData('chart-online-health',
-      'No online training eval checkpoints yet — logged every --eval_alpha_every steps during online_adapt');
-    return;
-  }
-
-  Plotly.newPlot('chart-online-health', traces, {
-    xaxis: { title: 'Training Step' },
-    yaxis: {
-      title: 'eval α — token acceptance rate (0→1)',
-      range: [0, 1], side: 'left',
-      gridcolor: '#e9ecef',
-    },
-    yaxis2: {
-      title: 'Train Loss',
-      overlaying: 'y', side: 'right',
-      showgrid: false,
-      tickfont: { color: '#adb5bd' },
-      titlefont: { color: '#adb5bd' },
-    },
-    yaxis3: {
-      title: 'Est. Block Efficiency (L=5)',
-      overlaying: 'y', side: 'right',
-      anchor: 'free', position: 1.0,
-      range: [1, 6.5],
-      showgrid: false,
-      tickfont: { color: '#495057' },
-      titlefont: { color: '#495057' },
-    },
-    legend: { orientation: 'h', y: -0.28 },
-    margin: { t: 24, b: 88, r: 90 },
-    shapes: [{
-      type: 'line', xref: 'paper', x0: 0, x1: 1,
-      y0: 0.5, y1: 0.5, yref: 'y',
-      line: { color: '#dee2e6', width: 1, dash: 'dot' }
-    }],
-    annotations: [{
-      text: 'online_ebe: BE (right) read directly from −EBE loss (dense, every step) · online (KL): BE estimated from eval_α via (1−α⁶)/(1−α)',
-      xref: 'paper', yref: 'paper',
-      x: 0, y: 1.07, showarrow: false,
-      font: { size: 10, color: '#6c757d' }
-    }],
-  }, { responsive: true });
 }
 
 // ---- Table ----
