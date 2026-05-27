@@ -640,9 +640,9 @@ _HTML = r"""<!DOCTYPE html>
       <!-- Context banner -->
       <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px;border-left:4px solid #6c757d">
         <strong>What to look for:</strong>
-        Train loss (solid) should fall steadily. Val loss (dashed) should track train — if it rises while train falls that's overfitting.
-        Multiple coloured pairs = one per loss function. EBE/online loss values are negative (log-prob space) — lower = better.
-        The <em>relative gap</em> between train and val matters, not absolute values.
+        One card per distillation method. Solid = train, dashed = val.
+        Train loss should fall steadily; val should track it — if val rises while train falls that's overfitting (red badge).
+        EBE/online loss values are negative (log-prob space) — lower is better. Online curves are shown in the Online Health chart below.
       </div>
 
       <!-- Overfitting banner (shown when triggered) -->
@@ -651,12 +651,10 @@ _HTML = r"""<!DOCTYPE html>
                   border-radius:6px;margin-bottom:10px;font-weight:600;font-size:0.9em">
       </div>
 
-      <!-- Training + val loss comparison across all methods -->
-      <div class="chart-card">
-        <h6>Training Loss Curves — all distillation methods compared
-          <small class="text-muted ms-2">solid = train · dashed = val · each colour = one loss type</small>
-        </h6>
-        <div id="chart-training" style="height:460px"></div>
+      <!-- Training + val loss — one card per distillation method -->
+      <div id="chart-training-grid"
+           style="display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:16px">
+        <!-- populated by loadTrainingCurves() -->
       </div>
 
       <!-- Alpha acceptance during online training (written by online_serve.py eval checkpoints) -->
@@ -2223,75 +2221,124 @@ const TRAIN_COLORS = ['#636efa','#ef553b','#00cc96','#ab63fa','#ffa15a','#19d3f3
 const VAL_COLORS   = ['#ff7f0e','#d62728','#2ca02c','#9467bd','#e377c2','#bcbd22'];
 
 async function loadTrainingCurves() {
+  const grid = document.getElementById('chart-training-grid');
   const curves = await fetch('/api/train_curves').then(r=>r.json());
+
   if (!curves.length) {
-    showNoData('chart-training', 'Training loss curves appear during Phase 2 (train_kl_gsm8k and train_ebe_gsm8k steps). Train=solid line. Val=dashed line. If val rises while train falls → overfitting red flag.');
+    grid.innerHTML = `<div class="chart-card" style="grid-column:1/-1">
+      <p class="text-muted small mb-0">Training loss curves appear during Phase 2
+      (train_kl_gsm8k and train_ebe_gsm8k steps).
+      Train=solid line · Val=dashed line.
+      If val rises while train falls → overfitting red flag.</p></div>`;
     return;
   }
 
   const byLabel = groupBy(curves, 'label');
-  const traces = [];
-  const annotations = [];
-  let colorIdx = 0;
-  let redFlagLabels = [];
-
-  // Only flag overfitting for the currently-active label (most recent DB write).
-  // Completed runs stay in the chart but never trigger the banner again.
-  // Uses most-recent-ts comparison so no wall-clock window is needed.
   const globalMaxTsMs = Math.max(...curves.map(r => new Date(r.ts).getTime()));
 
-  Object.entries(byLabel).forEach(([label, rows]) => {
+  // Determine a stable sort order: baseline first, then by first-seen step
+  const labelOrder = Object.keys(byLabel).sort((a, b) => {
+    if (a === 'baseline') return -1;
+    if (b === 'baseline') return 1;
+    return a.localeCompare(b);
+  });
+
+  // Clear and rebuild grid — one card per label
+  grid.innerHTML = '';
+  let redFlagLabels = [];
+
+  labelOrder.forEach((label, colorIdx) => {
+    const rows = byLabel[label];
+    // Skip online-* labels here — they get their own chart in renderOnlineHealth()
+    if (label.includes('online')) return;
+
     const trainColor = TRAIN_COLORS[colorIdx % TRAIN_COLORS.length];
     const valColor   = VAL_COLORS  [colorIdx % VAL_COLORS.length];
-    colorIdx++;
 
-    // De-duplicate train rows by step (keep latest id if duplicates from multi-run)
+    // De-duplicate train rows by step
     const trainMap = {};
     rows.filter(r => !r.split || r.split === 'train')
         .forEach(r => { if (!trainMap[r.step] || r.id > trainMap[r.step].id) trainMap[r.step] = r; });
     const trainRows = Object.values(trainMap).sort((a,b) => a.step - b.step);
+    const valRows   = rows.filter(r => r.split === 'val').sort((a,b) => a.step - b.step);
 
-    const valRows = rows.filter(r => r.split === 'val')
-                        .sort((a,b) => a.step - b.step);
+    if (!trainRows.length) return;
 
+    // Overfitting detection for this label
+    const labelMaxTsMs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
+    const isCurrentRun  = labelMaxTsMs >= globalMaxTsMs - 2000;
+    let overfit = false;
+    if (valRows.length >= 2 && isCurrentRun) {
+      const minVal  = Math.min(...valRows.map(r => r.loss));
+      const lastVal = valRows[valRows.length - 1].loss;
+      if (lastVal > minVal + 0.10 * Math.abs(minVal)) {
+        redFlagLabels.push(label);
+        overfit = true;
+      }
+    }
+
+    // Build traces
+    const traces = [];
     if (trainRows.length) {
       traces.push({
         type: 'scatter', mode: 'lines',
-        name: `${label} (train)`,
+        name: 'train',
         x: trainRows.map(r => r.step),
         y: trainRows.map(r => r.loss),
         line: { color: trainColor, width: 2, dash: 'solid' },
-        hovertemplate: 'step %{x}<br>train loss: %{y:.4f}<extra>' + label + '</extra>',
+        hovertemplate: 'step %{x}<br>train loss: %{y:.4f}<extra>train</extra>',
       });
     }
-
     if (valRows.length) {
       traces.push({
-        type: 'scatter',
-        mode: 'lines',
-        name: `${label} (val)`,
+        type: 'scatter', mode: 'lines',
+        name: 'val',
         x: valRows.map(r => r.step),
         y: valRows.map(r => r.loss),
         line: { color: valColor, width: 2.5, dash: 'dash' },
-        hovertemplate: 'step %{x}<br><b>val loss: %{y:.4f}</b><extra>' + label + ' val</extra>',
+        hovertemplate: 'step %{x}<br><b>val loss: %{y:.4f}</b><extra>val</extra>',
       });
-
-      // Red-flag detection: val loss rising after its minimum.
-      // Only flag if this is the currently-active label (has the most recent write globally).
-      const labelMaxTsMs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
-      const isCurrentRun = labelMaxTsMs >= globalMaxTsMs - 2000; // within 2s of most-recent write
-      if (valRows.length >= 2 && isCurrentRun) {
-        const valLosses = valRows.map(r => r.loss);
-        const minVal = Math.min(...valLosses);
-        const lastVal = valLosses[valLosses.length - 1];
-        if (lastVal > minVal + 0.10 * Math.abs(minVal)) {   // > 10% above minimum → overfitting (formula handles negative losses)
-          redFlagLabels.push(label);
-        }
-      }
     }
+
+    // Final step annotation
+    const lastTrain = trainRows[trainRows.length - 1];
+    const maxSteps  = Math.max(...trainRows.map(r => r.step));
+
+    // Compute last val annotation if val exists
+    let statusNote = '';
+    if (valRows.length) {
+      const lastValLoss = valRows[valRows.length - 1].loss;
+      statusNote = `val ${lastValLoss.toFixed(3)}`;
+    }
+
+    // Create card element
+    const chartId = `chart-tc-${label.replace(/[^a-z0-9]/gi, '_')}`;
+    const overfitBadge = overfit
+      ? `<span class="badge bg-danger ms-2" style="font-size:0.7em">⚠ overfitting</span>`
+      : '';
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `
+      <h6 style="text-transform:capitalize">${label}
+        <small class="text-muted ms-2" style="font-size:0.75em">
+          step ${lastTrain.step}/${maxSteps} · train ${lastTrain.loss.toFixed(3)}
+          ${statusNote ? '· ' + statusNote : ''}
+        </small>
+        ${overfitBadge}
+      </h6>
+      <div id="${chartId}" style="height:260px"></div>`;
+    grid.appendChild(card);
+
+    Plotly.newPlot(chartId, traces, {
+      xaxis: { title: 'Step', tickfont: { size: 10 } },
+      yaxis: { title: 'Loss', tickfont: { size: 10 } },
+      legend: { orientation: 'h', y: -0.3, font: { size: 11 } },
+      margin: { t: 8, b: 60, l: 50, r: 10 },
+      showlegend: true,
+    }, { responsive: true });
   });
 
-  // Red-flag banner
+  // Red-flag banner (global)
   const banner = document.getElementById('val-redflag-banner');
   if (banner) {
     if (redFlagLabels.length) {
@@ -2301,14 +2348,6 @@ async function loadTrainingCurves() {
       banner.style.display = 'none';
     }
   }
-
-  Plotly.newPlot('chart-training', traces, {
-    xaxis: { title: 'Step' },
-    yaxis: { title: 'Loss' },
-    legend: { orientation: 'h', y: -0.25 },
-    annotations,
-    margin: { t: 10, b: 70 },
-  }, { responsive: true });
 }
 
 // ---- Online Training Health ----
