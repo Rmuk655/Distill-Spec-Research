@@ -1669,6 +1669,9 @@ function renderKeyResults() {
   renderInteractionHeatmap();
   renderGainOverBaseline();
   renderRobustness();
+  // Pareto and BE-norm live in the Results tab — render them here too
+  renderPareto();
+  renderBeNorm();
 }
 
 // Chart A: Loss × Verifier Heatmap
@@ -1846,7 +1849,7 @@ function renderTempGain() {
   const dataset = document.getElementById('sel-dataset-tgain')?.value || '';
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
   if (dataset) runs = runs.filter(r => r.dataset === dataset);
-  if (!runs.length) { Plotly.purge('chart-temp-gain'); return; }
+  if (!runs.length) { showNoData('chart-temp-gain', 'Temperature gain needs BE results at multiple temperatures — appears after Phase 3 evals complete'); return; }
 
   const baselineRuns = runs.filter(r => r.draft_label === 'baseline');
   const nonBaseline  = runs.filter(r => r.draft_label !== 'baseline');
@@ -1894,7 +1897,7 @@ function renderSensitivity() {
   const groupCol = document.getElementById('sens-group').value;
 
   const runs = ALL_RUNS.filter(r => r[xCol] != null && r[yCol] != null);
-  if (!runs.length) return;
+  if (!runs.length) { showNoData('chart-sensitivity', `No runs have both ${xCol} and ${yCol} — try different axes`); return; }
 
   const groups = groupBy(runs, groupCol);
   const traces = Object.entries(groups).map(([grp, rows]) => {
@@ -1965,7 +1968,11 @@ async function renderCategory() {
 // ---- Throughput ----
 function renderThroughput() {
   const runs = ALL_RUNS.filter(r => r.throughput != null && r.throughput > 0);
-  if (!runs.length) return;
+  if (!runs.length) {
+    showNoData('chart-throughput', 'Throughput data (tok/s) not yet available — runner.py will populate this when --measure_throughput is enabled');
+    showNoData('chart-scatter', 'α vs throughput needs both alpha and throughput measurements');
+    return;
+  }
 
   const byLabel = groupBy(runs, 'draft_label');
   const tpTraces = Object.entries(byLabel).map(([label, rows]) => ({
@@ -2001,9 +2008,9 @@ function renderThroughput() {
 
 // ---- Efficiency tab ----
 function renderEfficiency() {
+  // chart-eff-decomp lives in the Analysis tab
   renderBeDecomp();
-  renderPareto();
-  renderBeNorm();
+  // chart-pareto and chart-be-norm live in the Results tab; renderKeyResults() handles them
 }
 
 // Card 1: α → BE theoretical curve + measured scatter
