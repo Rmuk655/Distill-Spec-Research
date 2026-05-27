@@ -1490,6 +1490,9 @@ def main():
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
 
+    # Load YAML config first — needed by storage_root block below.
+    _yaml_cfg = _load_config_yaml(args.config)
+
     # ── Storage root — single source of truth for all persistent paths ────────
     # --storage_root moves checkpoints, DB, logs, and state file to one directory
     # on persistent storage.  On ephemeral cloud (Colab/Kaggle/Modal) this MUST
@@ -1539,9 +1542,7 @@ def main():
         _effective_logs_dir  = _DB_LOGS
         _effective_state_dir = HERE
 
-    # Load per-config YAML for training hyperparams (lr, lora_r, etc.)
-    # CLI overrides (--lr, --lora_r, --teacher_temp) take priority over YAML values.
-    _yaml_cfg = _load_config_yaml(args.config)
+    # Build training hyperparams dict — CLI overrides take priority over YAML values.
     train_hparams = {
         "lr":           args.lr           or _yaml_cfg.get("lr", 3e-5),
         "lora_r":       args.lora_r       or _yaml_cfg.get("lora_r", 8),
