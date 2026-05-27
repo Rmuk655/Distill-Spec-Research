@@ -593,30 +593,103 @@ _HTML = r"""<!DOCTYPE html>
   <!-- Summary stats -->
   <div class="row g-2 mb-3" id="stat-row"></div>
 
-  <!-- Tabs -->
+  <!-- ===== 5 Research-Question Tabs ===== -->
   <ul class="nav nav-tabs" id="myTab">
-    <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-key">Key Results</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-be-k">BE vs K</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mode">Mode Comparison</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-temperature">Temperature</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-alpha">Alpha</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-sensitivity">Sensitivity</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-category">Per-Category</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-throughput">Throughput</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-efficiency">Efficiency</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-training">Training Curves</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-table">All Runs</a></li>
-    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-pivot">Pivot</a></li>
+    <li class="nav-item">
+      <a class="nav-link active" data-bs-toggle="tab" href="#tab-training"
+         title="Is training stable? Which loss converges best?">
+        📈 Training
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" data-bs-toggle="tab" href="#tab-results"
+         title="Which model wins? Does distillation improve block efficiency?">
+        🏆 Results
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" data-bs-toggle="tab" href="#tab-robust"
+         title="Is the improvement consistent across verifiers, K, temperatures, and datasets?">
+        🔄 Robustness
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" data-bs-toggle="tab" href="#tab-analysis"
+         title="Understanding the mechanisms — alpha, throughput, hyperparameter sensitivity">
+        🔬 Analysis
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link" data-bs-toggle="tab" href="#tab-data"
+         title="All eval runs table + custom pivot cross-tabulation">
+        📁 Data
+      </a>
+    </li>
   </ul>
 
   <div class="tab-content">
 
-    <!-- Tab 0: Key Results — the three hypothesis-proving charts -->
-    <div class="tab-pane fade show active" id="tab-key">
-      <!-- Chart A: Loss × Mode Interaction Heatmap -->
+    <!-- ══════════════════════════════════════════════════════════════
+         TAB 1: TRAINING
+         Questions: Is training stable? Which loss converges best?
+                    Is there overfitting? Does eval_be improve?
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="tab-pane fade show active" id="tab-training">
+
+      <!-- Context banner -->
+      <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px;border-left:4px solid #6c757d">
+        <strong>What to look for:</strong>
+        Train loss (solid) should fall steadily. Val loss (dashed) should track train — if it rises while train falls that's overfitting.
+        Multiple coloured pairs = one per loss function. EBE/online loss values are negative (log-prob space) — lower = better.
+        The <em>relative gap</em> between train and val matters, not absolute values.
+      </div>
+
+      <!-- Overfitting banner (shown when triggered) -->
+      <div id="val-redflag-banner"
+           style="display:none;background:#dc3545;color:#fff;padding:8px 12px;
+                  border-radius:6px;margin-bottom:10px;font-weight:600;font-size:0.9em">
+      </div>
+
+      <!-- Training + val loss comparison across all methods -->
       <div class="chart-card">
-        <h6>Loss &times; Verifier Interaction — Block Efficiency Heatmap
-          <small class="text-muted ms-2">(rows = verifier, cols = distillation loss; proves joint-optimization claim)</small>
+        <h6>Training Loss Curves — all distillation methods compared
+          <small class="text-muted ms-2">solid = train · dashed = val · each colour = one loss type</small>
+        </h6>
+        <div id="chart-training" style="height:460px"></div>
+      </div>
+
+      <!-- Alpha acceptance during online training (written by online_serve.py eval checkpoints) -->
+      <div class="chart-card">
+        <h6>Online Training Quality — α and eval_be at each checkpoint
+          <small class="text-muted ms-2">
+            Written by online_serve.py every --eval_alpha_every steps.
+            Rising eval_be = model accepting more draft tokens during live SD.
+            Flat or falling = training not helping (consider LR change or early stop).
+          </small>
+        </h6>
+        <div id="chart-online-health" style="height:340px"></div>
+      </div>
+
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         TAB 2: RESULTS
+         Questions: Which model has the best block efficiency?
+                    Does distillation help vs untrained baseline?
+                    Quality vs Speed tradeoff (Pareto)?
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="tab-pane fade" id="tab-results">
+
+      <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px;border-left:4px solid #0d6efd">
+        <strong>Main paper table:</strong>
+        The heatmap below is rows=verifier mode, cols=distillation loss — this is the core contribution table.
+        Gain chart shows % improvement over the untrained baseline. Pareto shows whether speed gain comes at a quality cost.
+      </div>
+
+      <!-- Chart A: Loss × Verifier Heatmap — the paper's main result table -->
+      <div class="chart-card">
+        <h6>Block Efficiency — Loss &times; Verifier Heatmap
+          <small class="text-muted ms-2">Paper Table 1: each cell = mean BE for that (loss, verifier) pair</small>
         </h6>
         <div class="d-flex gap-2 mb-2 flex-wrap">
           <label class="mb-0">K:</label>
@@ -630,13 +703,15 @@ _HTML = r"""<!DOCTYPE html>
             <option value="">All</option>
           </select>
         </div>
-        <div id="chart-interaction-hm" style="height:380px"></div>
+        <div id="chart-interaction-hm" style="height:360px"></div>
       </div>
 
-      <!-- Chart B: BE gain over baseline (%) — per loss × mode -->
+      <!-- Chart B: Gain over baseline (%) -->
       <div class="chart-card">
-        <h6>Block Efficiency Gain over Baseline (%)
-          <small class="text-muted ms-2">(shows whether distillation helps; positive = better than no training)</small>
+        <h6>Block Efficiency Gain over Untrained Baseline (%)
+          <small class="text-muted ms-2">
+            Positive = distillation helps. The main claim: EBE + tree-verifier &gt; KL + tree-verifier.
+          </small>
         </h6>
         <div class="d-flex gap-2 mb-2 flex-wrap">
           <label class="mb-0">K:</label>
@@ -650,223 +725,16 @@ _HTML = r"""<!DOCTYPE html>
             <option value="">All</option>
           </select>
         </div>
-        <div id="chart-gain" style="height:380px"></div>
+        <div id="chart-gain" style="height:360px"></div>
       </div>
 
-      <!-- Chart C: Dataset robustness — BE across datasets per model -->
-      <div class="chart-card">
-        <h6>Dataset Robustness — Block Efficiency across Tasks
-          <small class="text-muted ms-2">(proves consistency across data distributions)</small>
-        </h6>
-        <div class="d-flex gap-2 mb-2 flex-wrap">
-          <label class="mb-0">Mode:</label>
-          <select id="sel-mode-rob" class="form-select form-select-sm" style="width:140px">
-            <option>traversal</option><option>gbv</option><option>specinfer</option>
-          </select>
-          <label class="mb-0 ms-2">K:</label>
-          <select id="sel-k-rob" class="form-select form-select-sm" style="width:80px">
-            <option>3</option><option>5</option>
-          </select>
-          <label class="mb-0 ms-2">Temperature:</label>
-          <select id="sel-temp-rob" class="form-select form-select-sm" style="width:90px">
-            <option value="">All</option>
-          </select>
-        </div>
-        <div id="chart-robustness" style="height:380px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 1: Alpha Overview -->
-    <div class="tab-pane fade" id="tab-alpha">
-      <div class="chart-card">
-        <h6>Token Acceptance Rate (Alpha) by Condition</h6>
-        <div id="chart-alpha" style="height:420px"></div>
-      </div>
-      <div class="chart-card">
-        <h6>Alpha Distribution (per-dataset breakdown)</h6>
-        <div id="chart-alpha-dataset" style="height:360px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 2: Block Efficiency vs K -->
-    <div class="tab-pane fade" id="tab-be-k">
-      <div class="chart-card">
-        <h6>Block Efficiency vs K — grouped by draft model</h6>
-        <div id="axis-controls" class="d-flex gap-2 align-items-center mb-2 flex-wrap">
-          <label class="mb-0">Mode:</label>
-          <select id="sel-mode-be" class="form-select form-select-sm" style="width:140px">
-            <option>specinfer</option><option>gbv</option>
-            <option>traversal</option><option>bv</option>
-          </select>
-          <label class="mb-0 ms-2">Dataset:</label>
-          <select id="sel-dataset-be" class="form-select form-select-sm" style="width:140px"></select>
-          <label class="mb-0 ms-2">Temperature:</label>
-          <select id="sel-temp-be" class="form-select form-select-sm" style="width:90px">
-            <option value="">All</option>
-          </select>
-        </div>
-        <div id="chart-be-k" style="height:400px"></div>
-      </div>
-      <div class="chart-card">
-        <h6>Block Efficiency vs K — all modes (subplots)</h6>
-        <div id="chart-be-k-modes" style="height:460px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 3: Mode Comparison -->
-    <div class="tab-pane fade" id="tab-mode">
-      <div class="chart-card">
-        <h6>Block Efficiency by Verifier Mode (grouped bar)</h6>
-        <div class="d-flex gap-2 mb-2 flex-wrap">
-          <label class="mb-0">K:</label>
-          <select id="sel-k-mode" class="form-select form-select-sm" style="width:80px">
-            <option>3</option><option>1</option><option>5</option>
-          </select>
-          <label class="mb-0 ms-2">Dataset:</label>
-          <select id="sel-dataset-mode" class="form-select form-select-sm" style="width:140px"></select>
-          <label class="mb-0 ms-2">Temperature:</label>
-          <select id="sel-temp-mode" class="form-select form-select-sm" style="width:90px">
-            <option value="">All</option>
-          </select>
-        </div>
-        <div id="chart-mode" style="height:420px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 4: Temperature Robustness -->
-    <div class="tab-pane fade" id="tab-temperature">
-      <div class="chart-card">
-        <h6>Temperature Sensitivity — BE vs Temperature, one line per model
-          <small class="text-muted ms-2">(standard in EAGLE/GBV papers; shows consistency across sampling settings)</small>
-        </h6>
-        <div class="d-flex gap-2 mb-2 flex-wrap">
-          <label class="mb-0">Mode:</label>
-          <select id="sel-mode-templine" class="form-select form-select-sm" style="width:140px">
-            <option>traversal</option><option>gbv</option><option>specinfer</option>
-          </select>
-          <label class="mb-0 ms-2">K:</label>
-          <select id="sel-k-templine" class="form-select form-select-sm" style="width:80px">
-            <option>3</option><option>5</option><option>1</option>
-          </select>
-          <label class="mb-0 ms-2">Dataset:</label>
-          <select id="sel-dataset-templine" class="form-select form-select-sm" style="width:140px"></select>
-        </div>
-        <div id="chart-temp-line" style="height:420px"></div>
-      </div>
-      <div class="chart-card">
-        <h6>Temperature Gain vs Baseline — (BE_model − BE_baseline) at each temperature
-          <small class="text-muted ms-2">(shows distillation gain is consistent across sampling temperatures)</small>
-        </h6>
-        <div class="d-flex gap-2 mb-2 flex-wrap">
-          <label class="mb-0">Mode:</label>
-          <select id="sel-mode-tgain" class="form-select form-select-sm" style="width:140px">
-            <option>traversal</option><option>gbv</option><option>specinfer</option>
-          </select>
-          <label class="mb-0 ms-2">K:</label>
-          <select id="sel-k-tgain" class="form-select form-select-sm" style="width:80px">
-            <option>3</option><option>5</option>
-          </select>
-          <label class="mb-0 ms-2">Dataset:</label>
-          <select id="sel-dataset-tgain" class="form-select form-select-sm" style="width:140px"></select>
-        </div>
-        <div id="chart-temp-gain" style="height:380px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 5: Sensitivity -->
-    <div class="tab-pane fade" id="tab-sensitivity">
-      <div class="chart-card">
-        <h6>Sensitivity Analysis</h6>
-        <div class="d-flex gap-3 mb-2 align-items-center">
-          <div>
-            <label class="form-label mb-0">X axis</label>
-            <select id="sens-x" class="form-select form-select-sm">
-              <option value="K">K (tree width)</option>
-              <option value="temperature">Temperature</option>
-              <option value="train_steps">Train Steps</option>
-              <option value="learning_rate">Learning Rate</option>
-            </select>
-          </div>
-          <div>
-            <label class="form-label mb-0">Y axis</label>
-            <select id="sens-y" class="form-select form-select-sm">
-              <option value="alpha_mean">Alpha</option>
-              <option value="block_eff">Block Efficiency</option>
-              <option value="throughput">Throughput (tok/s)</option>
-              <option value="ms_per_tok">Latency (ms/tok)</option>
-            </select>
-          </div>
-          <div>
-            <label class="form-label mb-0">Group by</label>
-            <select id="sens-group" class="form-select form-select-sm">
-              <option value="draft_label">Draft Label</option>
-              <option value="loss_name">Loss</option>
-              <option value="mode">Mode</option>
-              <option value="dataset">Dataset</option>
-            </select>
-          </div>
-          <button class="btn btn-sm btn-primary mt-3" onclick="renderSensitivity()">Plot</button>
-        </div>
-        <div id="chart-sensitivity" style="height:420px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 5: Per-Category -->
-    <div class="tab-pane fade" id="tab-category">
-      <div class="chart-card">
-        <h6>Alpha by Category (diverse50 dataset)</h6>
-        <div id="chart-category" style="height:420px"></div>
-      </div>
-    </div>
-
-    <!-- Tab 6: Throughput & Latency -->
-    <div class="tab-pane fade" id="tab-throughput">
-      <div class="chart-card">
-        <h6>Throughput (tok/s) by Condition</h6>
-        <div id="chart-throughput" style="height:380px"></div>
-      </div>
-      <div class="chart-card">
-        <h6>Alpha vs Throughput (scatter)</h6>
-        <div id="chart-scatter" style="height:380px"></div>
-      </div>
-    </div>
-
-    <!-- Tab: Efficiency — novel BE decomposition + quality-vs-speed frontier -->
-    <div class="tab-pane fade" id="tab-efficiency">
-
-      <!-- Card 1: BE theoretical decomposition (α → BE curve) -->
-      <div class="chart-card">
-        <h6>Block Efficiency vs Alpha — Theoretical Curve + Measured Points
-          <small class="text-muted ms-2">
-            For sequential SD: BE = (1 − α<sup>K+1</sup>) / (1 − α).
-            Points above the curve = tree bonus beyond sequential prediction.
-          </small>
-        </h6>
-        <div class="d-flex gap-2 mb-2 flex-wrap">
-          <label class="mb-0">K:</label>
-          <select id="eff-k" class="form-select form-select-sm" style="width:80px">
-            <option>3</option><option>4</option><option>5</option><option>1</option>
-          </select>
-          <label class="mb-0 ms-2">Mode:</label>
-          <select id="eff-mode" class="form-select form-select-sm" style="width:140px">
-            <option>traversal</option><option>gbv</option><option>specinfer</option><option>bv</option>
-          </select>
-        </div>
-        <div id="chart-eff-decomp" style="height:400px"></div>
-        <p class="text-muted mt-1" style="font-size:11px">
-          Grey curve = theoretical BE for sequential speculative decoding with the selected K.
-          Coloured points = actual measured BE vs alpha for each draft model.
-          Points above the curve mean the verifier (tree/GBV) outperforms sequential SD at the same alpha.
-        </p>
-      </div>
-
-      <!-- Card 2: Quality-vs-Speed Pareto frontier -->
+      <!-- Pareto frontier: quality vs speed -->
       <div class="chart-card">
         <h6>Quality vs Speed — Pareto Frontier
           <small class="text-muted ms-2">
-            X = task score (quality preservation).
-            Y = block efficiency (SD speedup proxy).
-            Top-right = best. Dashed line connects Pareto-optimal points.
+            X = task score (quality preservation) · Y = block efficiency (SD speedup).
+            Top-right corner = best. Each point = one draft model.
+            Goal: points above and to the right of the baseline diamond.
           </small>
         </h6>
         <div class="d-flex gap-2 mb-2 flex-wrap">
@@ -880,15 +748,11 @@ _HTML = r"""<!DOCTYPE html>
           </select>
         </div>
         <div id="chart-pareto" style="height:380px"></div>
-        <p class="text-muted mt-1" style="font-size:11px">
-          Each point is one draft model (loss type). Baseline (untrained draft) is the reference corner.
-          Distillation should move points up (more blocks accepted) without moving them left (quality drop).
-        </p>
       </div>
 
-      <!-- Card 3: BE normalised to baseline — improvement bars -->
+      <!-- Normalised % improvement (per verifier mode) -->
       <div class="chart-card">
-        <h6>Relative Block Efficiency Improvement over Baseline
+        <h6>Relative BE Improvement over Baseline — per verifier mode
           <small class="text-muted ms-2">
             BE<sub>model</sub> / BE<sub>baseline</sub> − 1 (%).
             Green = better than no training. Red = regression.
@@ -904,45 +768,267 @@ _HTML = r"""<!DOCTYPE html>
             <option value="">All</option>
           </select>
         </div>
-        <div id="chart-be-norm" style="height:380px"></div>
+        <div id="chart-be-norm" style="height:360px"></div>
       </div>
 
     </div>
 
-    <!-- Tab 7: Training Curves -->
-    <div class="tab-pane fade" id="tab-training">
+    <!-- ══════════════════════════════════════════════════════════════
+         TAB 3: ROBUSTNESS
+         Questions: Does the improvement hold across all verifiers?
+                    Does it hold at different K (tree widths)?
+                    Does it hold at different temperatures?
+                    Does it generalise to other datasets? (Phase 4)
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="tab-pane fade" id="tab-robust">
+
+      <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px;border-left:4px solid #198754">
+        <strong>Robustness checks:</strong>
+        A result is only publishable if it holds across multiple settings.
+        Check: same ranking across all 4 verifiers? Consistent across K=1,3,5?
+        Stable at T=0.6 and T=1.0? Generalises beyond GSM8K (Phase 4)?
+      </div>
+
+      <!-- Mode comparison -->
       <div class="chart-card">
-        <h6>Training Loss Curves</h6>
-        <div id="val-redflag-banner"
-             style="display:none;background:#dc3545;color:#fff;padding:8px 12px;
-                    border-radius:6px;margin-bottom:10px;font-weight:600;font-size:0.9em">
+        <h6>Block Efficiency by Verifier Mode — all loss types compared
+          <small class="text-muted ms-2">If ranking is consistent across modes, the result is robust to verifier choice</small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">K:</label>
+          <select id="sel-k-mode" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>1</option><option>5</option>
+          </select>
+          <label class="mb-0 ms-2">Dataset:</label>
+          <select id="sel-dataset-mode" class="form-select form-select-sm" style="width:140px"></select>
+          <label class="mb-0 ms-2">Temperature:</label>
+          <select id="sel-temp-mode" class="form-select form-select-sm" style="width:90px">
+            <option value="">All</option>
+          </select>
         </div>
-        <p class="text-muted small mb-1">Solid lines = training loss &nbsp;|&nbsp; Dashed lines = validation loss (sparse — val runs less often than train) &nbsp;|&nbsp; Val rising while train falls → overfitting</p>
-        <div id="chart-training" style="height:420px"></div>
+        <div id="chart-mode" style="height:400px"></div>
       </div>
+
+      <!-- BE vs K -->
+      <div class="chart-card">
+        <h6>Block Efficiency vs K (tree width) — does it scale as expected?
+          <small class="text-muted ms-2">BE should rise with K — steeper rise = better draft model</small>
+        </h6>
+        <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+          <label class="mb-0">Mode:</label>
+          <select id="sel-mode-be" class="form-select form-select-sm" style="width:140px">
+            <option>specinfer</option><option>gbv</option>
+            <option>traversal</option><option>bv</option>
+          </select>
+          <label class="mb-0 ms-2">Dataset:</label>
+          <select id="sel-dataset-be" class="form-select form-select-sm" style="width:140px"></select>
+          <label class="mb-0 ms-2">Temperature:</label>
+          <select id="sel-temp-be" class="form-select form-select-sm" style="width:90px">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div id="chart-be-k" style="height:380px"></div>
+      </div>
+      <div class="chart-card">
+        <h6>BE vs K — all modes (subplots)</h6>
+        <div id="chart-be-k-modes" style="height:440px"></div>
+      </div>
+
+      <!-- Temperature robustness -->
+      <div class="chart-card">
+        <h6>Temperature Robustness — BE at T=0.6 vs T=1.0
+          <small class="text-muted ms-2">Lines should stay parallel — if they cross, the ranking depends on temperature</small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">Mode:</label>
+          <select id="sel-mode-templine" class="form-select form-select-sm" style="width:140px">
+            <option>traversal</option><option>gbv</option><option>specinfer</option>
+          </select>
+          <label class="mb-0 ms-2">K:</label>
+          <select id="sel-k-templine" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>5</option><option>1</option>
+          </select>
+          <label class="mb-0 ms-2">Dataset:</label>
+          <select id="sel-dataset-templine" class="form-select form-select-sm" style="width:140px"></select>
+        </div>
+        <div id="chart-temp-line" style="height:380px"></div>
+      </div>
+      <div class="chart-card">
+        <h6>Temperature Gain vs Baseline — distillation gain at each temperature
+          <small class="text-muted ms-2">Positive at both temperatures = robust to sampling temperature</small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">Mode:</label>
+          <select id="sel-mode-tgain" class="form-select form-select-sm" style="width:140px">
+            <option>traversal</option><option>gbv</option><option>specinfer</option>
+          </select>
+          <label class="mb-0 ms-2">K:</label>
+          <select id="sel-k-tgain" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>5</option>
+          </select>
+          <label class="mb-0 ms-2">Dataset:</label>
+          <select id="sel-dataset-tgain" class="form-select form-select-sm" style="width:140px"></select>
+        </div>
+        <div id="chart-temp-gain" style="height:360px"></div>
+      </div>
+
+      <!-- Dataset robustness (Phase 4) -->
+      <div class="chart-card">
+        <h6>Dataset Robustness — BE across all tasks (Phase 4: humaneval · math500 · mtbench · alpaca)
+          <small class="text-muted ms-2">Populated after Phase 4 multi-dataset evals complete</small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">Mode:</label>
+          <select id="sel-mode-rob" class="form-select form-select-sm" style="width:140px">
+            <option>traversal</option><option>gbv</option><option>specinfer</option>
+          </select>
+          <label class="mb-0 ms-2">K:</label>
+          <select id="sel-k-rob" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>5</option>
+          </select>
+          <label class="mb-0 ms-2">Temperature:</label>
+          <select id="sel-temp-rob" class="form-select form-select-sm" style="width:90px">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div id="chart-robustness" style="height:360px"></div>
+      </div>
+
     </div>
 
-    <!-- Tab 8: All Runs Table -->
-    <div class="tab-pane fade" id="tab-table">
+    <!-- ══════════════════════════════════════════════════════════════
+         TAB 4: ANALYSIS
+         Questions: Why does it work? What is the mechanism?
+                    How much of BE gain comes from α vs tree bonus?
+                    What are the latency/throughput numbers?
+                    Which hyperparameters matter?
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="tab-pane fade" id="tab-analysis">
+
+      <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px;border-left:4px solid #fd7e14">
+        <strong>Mechanism analysis:</strong>
+        BE = f(α, K, verifier). The theory curve shows the sequential-SD ceiling for a given α.
+        Points above the curve = additional gain from the tree structure.
+        Alpha chart shows the raw acceptance rate shift from training.
+        Throughput numbers translate BE into wall-clock speedup.
+      </div>
+
+      <!-- BE vs Alpha + theory curve -->
+      <div class="chart-card">
+        <h6>Block Efficiency vs α — measured points overlaid on sequential-SD theory
+          <small class="text-muted ms-2">
+            BE<sub>theory</sub>(α, K) = (1 − α<sup>K+1</sup>) / (1 − α).
+            Points above the grey curve = tree bonus on top of α improvement.
+          </small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">K:</label>
+          <select id="eff-k" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>4</option><option>5</option><option>1</option>
+          </select>
+          <label class="mb-0 ms-2">Mode:</label>
+          <select id="eff-mode" class="form-select form-select-sm" style="width:140px">
+            <option>traversal</option><option>gbv</option><option>specinfer</option><option>bv</option>
+          </select>
+        </div>
+        <div id="chart-eff-decomp" style="height:400px"></div>
+      </div>
+
+      <!-- Alpha breakdown -->
+      <div class="chart-card">
+        <h6>Token Acceptance Rate (α) — how much does training shift the draft distribution?
+          <small class="text-muted ms-2">Higher α = draft tokens accepted more often = higher BE ceiling</small>
+        </h6>
+        <div id="chart-alpha" style="height:380px"></div>
+      </div>
+      <div class="chart-card">
+        <h6>α by Dataset — is the acceptance rate consistent across tasks?</h6>
+        <div id="chart-alpha-dataset" style="height:320px"></div>
+      </div>
+
+      <!-- Per-category alpha -->
+      <div class="chart-card">
+        <h6>α by Category (diverse50) — which task types benefit most from distillation?</h6>
+        <div id="chart-category" style="height:380px"></div>
+      </div>
+
+      <!-- Throughput & latency -->
+      <div class="chart-card">
+        <h6>Throughput (tok/s) — wall-clock speedup from speculative decoding + distillation</h6>
+        <div id="chart-throughput" style="height:340px"></div>
+      </div>
+      <div class="chart-card">
+        <h6>α vs Throughput — does higher acceptance directly translate to faster generation?</h6>
+        <div id="chart-scatter" style="height:320px"></div>
+      </div>
+
+      <!-- Hyperparameter sensitivity -->
+      <div class="chart-card">
+        <h6>Hyperparameter Sensitivity — which parameters most affect the outcome?
+          <small class="text-muted ms-2">Useful for ablation design: vary X, measure Y, group by Z</small>
+        </h6>
+        <div class="d-flex gap-3 mb-2 align-items-center flex-wrap">
+          <div>
+            <label class="form-label mb-0" style="font-size:12px">X axis</label>
+            <select id="sens-x" class="form-select form-select-sm">
+              <option value="K">K (tree width)</option>
+              <option value="temperature">Temperature</option>
+              <option value="train_steps">Train Steps</option>
+              <option value="learning_rate">Learning Rate</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label mb-0" style="font-size:12px">Y axis</label>
+            <select id="sens-y" class="form-select form-select-sm">
+              <option value="block_eff">Block Efficiency</option>
+              <option value="alpha_mean">Alpha</option>
+              <option value="throughput">Throughput (tok/s)</option>
+              <option value="ms_per_tok">Latency (ms/tok)</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label mb-0" style="font-size:12px">Group by</label>
+            <select id="sens-group" class="form-select form-select-sm">
+              <option value="loss_name">Loss Function</option>
+              <option value="draft_label">Draft Label</option>
+              <option value="mode">Verifier Mode</option>
+              <option value="dataset">Dataset</option>
+            </select>
+          </div>
+          <button class="btn btn-sm btn-primary mt-3" onclick="renderSensitivity()">Plot</button>
+        </div>
+        <div id="chart-sensitivity" style="height:380px"></div>
+      </div>
+
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         TAB 5: DATA
+         All eval run rows + custom pivot cross-tabulations
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="tab-pane fade" id="tab-data">
+
+      <!-- All runs table -->
       <div class="chart-card">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <h6 class="mb-0">All Runs</h6>
+          <h6 class="mb-0">All Eval Runs</h6>
           <button class="btn btn-sm btn-outline-secondary" onclick="exportCSV()">Export CSV</button>
         </div>
-        <div class="table-responsive" style="max-height:600px;overflow-y:auto">
+        <div class="table-responsive" style="max-height:480px;overflow-y:auto">
           <table class="table table-sm table-hover table-bordered" id="runs-table">
             <thead class="table-light sticky-top"></thead>
             <tbody></tbody>
           </table>
         </div>
       </div>
-    </div>
 
-    <!-- Tab: Pivot — custom cross-tab report builder -->
-    <div class="tab-pane fade" id="tab-pivot">
+      <!-- Pivot builder -->
       <div class="chart-card">
         <h6 class="mb-3">Custom Pivot Report
-          <small class="text-muted ms-2">build any cross-tabulation from the current filtered runs</small>
+          <small class="text-muted ms-2">
+            Build any cross-tabulation from the current filtered runs.
+            Default config reproduces the paper's main result table.
+          </small>
         </h6>
         <div class="row g-2 align-items-end mb-3">
           <div class="col-auto">
@@ -997,16 +1083,15 @@ _HTML = r"""<!DOCTYPE html>
         <div id="pivot-info" class="text-muted mb-2" style="font-size:12px"></div>
         <div class="table-responsive">
           <table class="table table-sm table-bordered table-hover" id="pivot-table">
-            <thead></thead>
-            <tbody></tbody>
+            <thead></thead><tbody></tbody>
           </table>
         </div>
         <p class="text-muted mt-2" style="font-size:11px">
-          Pivot respects all sidebar filters. Cells with no data show —.
-          Use <strong>Rows=Loss Type, Cols=Verifier Mode, Value=Block Efficiency</strong>
-          to reproduce the paper's main result table.
+          Default (Loss Type × Verifier Mode, Block Efficiency, Mean) reproduces the paper's main result table.
+          Use Count to verify data coverage before reporting numbers.
         </p>
       </div>
+
     </div>
 
   </div><!-- tab-content -->
@@ -1170,15 +1255,11 @@ async function init() {
   document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
     tab.addEventListener('shown.bs.tab', e => {
       const target = e.target.getAttribute('href');
-      if (target === '#tab-key') renderKeyResults();
-      if (target === '#tab-be-k') renderBeVsK();
-      if (target === '#tab-mode') renderModeComparison();
-      if (target === '#tab-temperature') renderTemperature();
-      if (target === '#tab-sensitivity') renderSensitivity();
-      if (target === '#tab-category') renderCategory();
-      if (target === '#tab-throughput') renderThroughput();
-      if (target === '#tab-efficiency') renderEfficiency();
-      if (target === '#tab-pivot') renderPivot();
+      if (target === '#tab-training') { loadTrainingCurves(); renderOnlineHealth(); }
+      if (target === '#tab-results')  { renderKeyResults(); }
+      if (target === '#tab-robust')   { renderModeComparison(); renderBeVsK(); renderTemperature(); renderRobustness(); }
+      if (target === '#tab-analysis') { renderEfficiency(); renderAlpha(); renderCategory(); renderThroughput(); renderSensitivity(); }
+      if (target === '#tab-data')     { renderTable(); renderPivot(); }
     });
   });
 
@@ -1314,7 +1395,7 @@ function populateSelects() {
 
   // Populate dataset dropdowns for new charts
   const dsSelects = ['sel-dataset-hm','sel-dataset-gain','sel-dataset-templine',
-                     'sel-dataset-tgain'];
+                     'sel-dataset-tgain','sel-dataset-rob'];
   dsSelects.forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
@@ -1358,10 +1439,11 @@ async function loadData() {
   renderThroughput();
   renderTable();
   loadTrainingCurves();
+  renderOnlineHealth();
   renderCategory();
   // Only re-render heavy tabs when they're actually visible
-  if (document.getElementById('tab-efficiency')?.classList.contains('active')) renderEfficiency();
-  if (document.getElementById('tab-pivot')?.classList.contains('active')) renderPivot();
+  if (document.getElementById('tab-analysis')?.classList.contains('active')) renderEfficiency();
+  if (document.getElementById('tab-data')?.classList.contains('active')) renderPivot();
 }
 
 // ---- Helpers ----
@@ -2228,6 +2310,104 @@ async function loadTrainingCurves() {
   }, { responsive: true });
 }
 
+// ---- Online Training Health ----
+// Reads val rows from train_curves for online-* labels.
+// online_serve.py stores the rejection rate (1 - alpha) as val_loss at each
+// eval checkpoint, so alpha = 1 - val_loss.  Rising alpha = training is helping.
+async function renderOnlineHealth() {
+  const curves = await fetch('/api/train_curves').then(r => r.json());
+
+  // Labels that came from the online training steps
+  const allLabels = [...new Set(curves.map(r => r.label))];
+  const onlineLabels = allLabels.filter(l => l.includes('online'));
+
+  if (!onlineLabels.length) {
+    showNoData('chart-online-health',
+      'Online training health appears during online_adapt_gsm8k and online_ebe_adapt_gsm8k steps. ' +
+      'Shows eval_alpha at each checkpoint — rising = draft model getting better at matching target under live SD.');
+    return;
+  }
+
+  const traces = [];
+  let colorIdx = 0;
+
+  onlineLabels.forEach(label => {
+    const labelRows = curves.filter(r => r.label === label);
+
+    // Train loss rows (step → loss)
+    const trainMap = {};
+    labelRows.filter(r => !r.split || r.split === 'train')
+             .forEach(r => { if (!trainMap[r.step] || r.id > trainMap[r.step].id) trainMap[r.step] = r; });
+    const trainRows = Object.values(trainMap).sort((a, b) => a.step - b.step);
+
+    // Val rows — online_serve.py writes rejection_rate as val_loss
+    const valRows = labelRows.filter(r => r.split === 'val').sort((a, b) => a.step - b.step);
+
+    const trainColor = TRAIN_COLORS[colorIdx % TRAIN_COLORS.length];
+    const valColor   = VAL_COLORS  [colorIdx % VAL_COLORS.length];
+    colorIdx++;
+
+    if (trainRows.length) {
+      traces.push({
+        type: 'scatter', mode: 'lines',
+        name: `${label} (train loss)`,
+        x: trainRows.map(r => r.step),
+        y: trainRows.map(r => r.loss),
+        line: { color: trainColor, width: 1.5, dash: 'solid' },
+        yaxis: 'y2',
+        hovertemplate: 'step %{x}<br>train loss: %{y:.4f}<extra>' + label + ' train</extra>',
+      });
+    }
+
+    if (valRows.length) {
+      // alpha = 1 - rejection_rate = 1 - val_loss
+      traces.push({
+        type: 'scatter', mode: 'lines+markers',
+        name: `${label} eval_α`,
+        x: valRows.map(r => r.step),
+        y: valRows.map(r => Math.min(1, Math.max(0, 1 - r.loss))),
+        line: { color: valColor, width: 2.5, dash: 'solid' },
+        marker: { color: valColor, size: 8, symbol: 'circle',
+                  line: { width: 1.5, color: '#fff' } },
+        yaxis: 'y',
+        hovertemplate: 'step %{x}<br><b>eval_α: %{y:.4f}</b><extra>' + label + '</extra>',
+      });
+    }
+  });
+
+  if (!traces.length) {
+    showNoData('chart-online-health',
+      'No online training eval checkpoints yet — logged every --eval_alpha_every steps during online_adapt');
+    return;
+  }
+
+  Plotly.newPlot('chart-online-health', traces, {
+    xaxis: { title: 'Training Step' },
+    yaxis: {
+      title: 'Eval α (token acceptance rate) — higher = better',
+      range: [0, 1], side: 'left',
+      gridcolor: '#e9ecef',
+    },
+    yaxis2: {
+      title: 'Train Loss', overlaying: 'y', side: 'right',
+      showgrid: false,
+    },
+    legend: { orientation: 'h', y: -0.25 },
+    margin: { t: 20, b: 80, r: 60 },
+    shapes: [{
+      type: 'line', xref: 'paper', x0: 0, x1: 1,
+      y0: 0.5, y1: 0.5, yref: 'y',
+      line: { color: '#dee2e6', width: 1, dash: 'dot' }
+    }],
+    annotations: [{
+      text: 'Goal: eval_α rising over steps · flat/falling = consider LR change or early stop',
+      xref: 'paper', yref: 'paper',
+      x: 0, y: 1.06, showarrow: false,
+      font: { size: 10, color: '#6c757d' }
+    }],
+  }, { responsive: true });
+}
+
 // ---- Table ----
 const TABLE_COLS = ['id','ts','experiment_tag','draft_label','loss_name','train_steps','learning_rate',
                     'dataset','mode','K','temperature','n_prompts',
@@ -2375,17 +2555,13 @@ function exportPivotCSV() {
 }
 
 // ---- Bootstrap tab change handlers ----
+// Primary handlers are registered inside init() (after DIMS loads and filter chips exist).
+// This second registration is intentionally a no-op — kept as a hook for future per-tab
+// work that must fire even before init() completes (currently nothing).
 document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
   tab.addEventListener('shown.bs.tab', e => {
     const target = e.target.getAttribute('href');
-    if (target === '#tab-key') renderKeyResults();
-    if (target === '#tab-be-k') renderBeVsK();
-    if (target === '#tab-mode') renderModeComparison();
-    if (target === '#tab-temperature') renderTemperature();
-    if (target === '#tab-sensitivity') renderSensitivity();
-    if (target === '#tab-category') renderCategory();
-    if (target === '#tab-throughput') renderThroughput();
-    if (target === '#tab-pivot') renderPivot();
+    // Additional per-tab side-effects can go here; chart rendering handled by init() block.
   });
 });
 
