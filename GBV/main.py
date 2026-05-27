@@ -6,15 +6,11 @@ import argparse
 
 # Force UTF-8 stdout/stderr so Unicode characters in print() never crash on
 # Windows cp1252 terminals (or any other non-UTF-8 default encoding).
-# Wrapped in a function so importing this module in tests does not break
-# pytest's stdout capture (which uses live file handles that get invalidated
-# when sys.stdout is replaced at module level).
-def _reconfigure_stdout_for_windows():
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except AttributeError:
-        pass  # Python < 3.7 or non-text stream
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass  # Python < 3.7 or non-text stream
 
 # Reduce CUDA allocator fragmentation — important on small GPUs (T4, etc.).
 # Set automatically; override with PYTORCH_CUDA_ALLOC_CONF=<custom> in environment.
@@ -243,18 +239,11 @@ def parse_args():
                          "draft model to cut Python→CUDA dispatch overhead.  Draft-only: "
                          "target uses a custom tree-attention mask incompatible with compile. "
                          "First 1-2 prompts are slower (warm-up); subsequent ones are faster.")
-    ap.add_argument("--load_in_4bit", action="store_true",
-                    help="Load the TARGET (p_model) in 4-bit NF4 via bitsandbytes. "
-                         "Use on Colab free T4 (15 GB VRAM) with Qwen3-8B: "
-                         "bfloat16 is ~16 GB (OOM), 4-bit NF4 is ~5 GB (fits). "
-                         "Requires: pip install bitsandbytes. "
-                         "The draft (q_model) is always loaded in the requested --dtype.")
     args = ap.parse_args()
     return args
 
 
 if __name__ == "__main__":
-    _reconfigure_stdout_for_windows()
     args = parse_args()
     set_seed(args.seed)
 
@@ -269,7 +258,6 @@ if __name__ == "__main__":
     tok, p_model, q_model = load_models(
         args.p_model, args.q_model, device=args.device, dtype=args.dtype,
         compile_draft=args.compile,
-        load_in_4bit=getattr(args, "load_in_4bit", False),
     )
 
     # Load prompts.

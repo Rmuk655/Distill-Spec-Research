@@ -184,18 +184,10 @@ DEFAULT_K        = [1, 3, 5]
 DEFAULT_TEMPS    = [0.6, 1.0]   # robustness sweep: two temperatures per run
 DEFAULT_N        = 50
 
-# Phase 2 migration: use the restructured verifier inside gbv-research/
-# instead of shelling out to the sibling GBV/ repo.
-# runner.py has identical CLI and output format (same tagged "Block efficiency" lines),
-# supports --load_in_4bit, and works as a standalone script via the fallback absolute
-# imports in its header.
-# GBV_DIR kept as a fallback constant — remove when GBV/ is fully retired.
-GBV_DIR = os.path.join(os.path.dirname(_PARENT), "GBV")
-_RUNNER_SCRIPT = os.path.join(
+# Verifier script: runner.py inside gbv-research/ (Phase 3 confirmed correct).
+_VERIFIER_SCRIPT = os.path.join(
     _PARENT, "algorithms", "distillspec_gbv", "verifiers", "runner.py"
 )
-# Use runner.py if it exists; fall back to GBV/main.py for safety during transition.
-_VERIFIER_SCRIPT = _RUNNER_SCRIPT if os.path.exists(_RUNNER_SCRIPT) else os.path.join(GBV_DIR, "main.py")
 
 
 # ---------------------------------------------------------------------------

@@ -1075,7 +1075,7 @@ def _yn(prompt):
 # Smoke preflight
 # ---------------------------------------------------------------------------
 
-_GBV_DIR = _GBV_SRC  # defined above: sibling GBV/ repo
+# GBV/ is now reference-only — all eval logic uses algorithms/distillspec_gbv/verifiers/
 
 
 def _cleanup_tmp(path):
@@ -1128,9 +1128,10 @@ def run_smoke_preflight(draft, target):
     with open(tmp_path, "w", encoding="utf-8") as fh:
         fh.writelines(two_prompts)
 
+    _RUNNER = os.path.join(_GBV_RESEARCH, "algorithms", "distillspec_gbv", "verifiers", "runner.py")
     smoke_cmd = [
         sys.executable, "-u",
-        os.path.join(_GBV_DIR, "main.py"),
+        _RUNNER,
         "--p_model",        target,
         "--q_model",        draft,
         "--data",           tmp_path,
@@ -1144,7 +1145,7 @@ def run_smoke_preflight(draft, target):
     print(f"\n{'='*65}")
     print(f"  PREFLIGHT SMOKE CHECK  (laptop auto-check before main pipeline)")
     print(f"  n=2 prompts · mode=gbv · K=3 · T=0.6 · max_tokens=30")
-    print(f"  Runs GBV/main.py directly — zero DB writes, no skip_existing risk.")
+    print(f"  Runs runner.py directly — zero DB writes, no skip_existing risk.")
     print(f"  Expected:  5-20 min on first run (CUDA kernel warm-up),")
     print(f"             1-3 min on subsequent runs (kernels already compiled).")
     print(f"  To skip:   python experiment.py --no_smoke_first")
