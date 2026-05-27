@@ -1505,10 +1505,35 @@ function renderSummaryStats() {
   html += statBox('Alpha Evals', alphaRuns.length, '');
   html += statBox('BE Evals', beRuns.length, '');
 
-  // Best alpha
-  if (alphaRuns.length) {
+  // Best acceptance rate — prefer derived alpha_eff=(BE-1)/K from BE runs (covers all
+  // trained models) over the raw alpha_mean rows (which are baseline-only right now).
+  // alpha_eff = mean accepted draft tokens / K per round; exact derivation:
+  //   gen_tokens = accepted_drafts + target_calls  →  accepted_drafts/call = BE−1  →  rate = (BE−1)/K
+  if (beRuns.length) {
+    // Group by draft_label, average alpha_eff across all conditions
+    const byLabel = {};
+    beRuns.forEach(r => {
+      const ae = (r.block_eff - 1) / r.K;
+      if (!byLabel[r.draft_label]) byLabel[r.draft_label] = [];
+      byLabel[r.draft_label].push(ae);
+    });
+    let bestLabel = null, bestAe = -Infinity;
+    Object.entries(byLabel).forEach(([lbl, vals]) => {
+      const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
+      if (avg > bestAe) { bestAe = avg; bestLabel = lbl; }
+    });
+    const baselineAe = byLabel['baseline']
+      ? byLabel['baseline'].reduce((a,b)=>a+b,0) / byLabel['baseline'].length : null;
+    const gainStr = baselineAe != null && bestLabel !== 'baseline'
+      ? `+${((bestAe - baselineAe) / baselineAe * 100).toFixed(0)}% vs baseline` : '';
+    html += statBox('Best accept rate', bestAe.toFixed(3),
+      `${bestLabel} · ${gainStr || '(BE-1)/K avg all modes+K'}`);
+  } else if (alphaRuns.length) {
+    // Fallback: only show raw alpha if no BE data at all, with a warning
     const best = alphaRuns.reduce((a,b) => (a.alpha_mean > b.alpha_mean ? a : b));
-    html += statBox('Best Alpha', best.alpha_mean.toFixed(4), best.draft_label);
+    const onlyLabels = [...new Set(alphaRuns.map(r => r.draft_label))].join(', ');
+    html += statBox('Best α (measured)', best.alpha_mean.toFixed(4),
+      `${best.draft_label} · only ${onlyLabels} measured`);
   }
   // Best BE — normalised by (K+1) so K=3 and K=5 are on the same scale.
   // Max possible BE at any K is K+1 (all K drafts accepted + 1 bonus target token).
