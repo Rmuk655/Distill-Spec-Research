@@ -35,7 +35,7 @@ Two design choices the paper identifies as critical:
 
 **Paper**: frozen target generates continuations; both models score the same sequence.
 
-**Our code** (`train_qwen3.py:435–447`):
+**Our code** (`algorithms/train_qwen3.py`):
 ```python
 with torch.no_grad():
     full_ids = target_model.generate(
@@ -64,37 +64,48 @@ L_KL = KL(p_target || p_draft) = -Σ_v p_target(v) · log p_draft(v)
 ```
 Mode-covering: draft learns to have mass wherever the target has mass. Recommended by DistillSpec as the default because it directly minimises the gap between target and draft distributions at every position.
 
-**Code** (`train_qwen3.py:233`):
+**Code** (`algorithms/distillspec_gbv/losses/forward_kl.py`):
 ```python
-def forward_kl_loss(student_logits, teacher_logits):
+def forward_kl(student_logits, teacher_logits, token_ids=None, **kw):
     log_s = F.log_softmax(student_logits, dim=-1)
-    p_t   = F.softmax(teacher_logits, dim=-1)
-    return -(p_t * log_s).sum(dim=-1).mean()
+    p_t   = F.softmax(teacher_logits,    dim=-1)
+    return LossOutput(loss=-(p_t * log_s).sum(dim=-1).mean())
 ```
 
 #### EBE — novel contribution
-The token-level acceptance probability under SpecInfer rejection sampling is `min(1, q(t)/p(t))`. The EBE loss maximises the expected number of accepted tokens:
+The loss directly optimises expected block efficiency over non-overlapping windows of `L=8` draft tokens:
 
 ```
-L_EBE = -Σ_t  min(1, q(t)/p(t)).detach()  ×  log p_draft(t)
+L_EBE = -E[τ+1] = -avg_blocks( 1 + Σ_{k=1}^{L} Π_{i=1}^{k} α_i ) + λ·KL
 ```
 
-Intuition: tokens where the draft is already calibrated (q ≥ p → weight=1) get full gradient signal. Tokens where draft overestimates (p > q → weight < 1) get down-weighted — the draft is penalised less for those, encouraging it to spend capacity on tokens it can actually improve.
+where `α_i = min(1, q(t_i)/p(t_i))` and `λ≈0.1` is the KL regulariser weight.
+The KL term provides gradient for already-accepted tokens (where the EBE gradient vanishes) and keeps language quality stable.
 
-**Code** (`train_qwen3.py:268`):
+**Code** (`algorithms/distillspec_gbv/losses/ebe.py`):
 ```python
-def ebe_loss(student_logits, teacher_logits, token_ids):
-    log_accept = torch.clamp(log_q - log_p.detach(), max=0.0)
-    accept_weight = log_accept.exp()                      # in [0,1], no grad
-    loss = -(accept_weight * log_p).mean()
-    return loss, accept_weight.mean().item()
+def ebe(student_logits, teacher_logits, token_ids, kl_weight=0.1, block_len=8, **kw):
+    log_s = F.log_softmax(student_logits, dim=-1)
+    log_t = F.log_softmax(teacher_logits, dim=-1).detach()
+    log_p = log_s.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
+    log_q = log_t.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
+    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # α ∈ (0,1]
+
+    n_blocks, ebe_val = max(1, alpha.shape[0] // block_len), torch.zeros(1)
+    for b in range(n_blocks):
+        blk     = alpha[b * block_len : (b + 1) * block_len]
+        ebe_val = ebe_val - (1.0 + torch.cumprod(blk, dim=0).sum())
+    ebe_val = ebe_val / n_blocks   # scale-independent of sequence length
+
+    loss = ebe_val + kl_weight * F.kl_div(log_s, log_t.exp(), reduction="batchmean")
+    return LossOutput(loss=loss, accept_weight=alpha.mean().item())
 ```
 
-**Note on approximation**: this is the token-level surrogate. The theoretically exact gradient would be a block-level REINFORCE estimator (`BE(block) × ∇log p_draft(block)` averaged over sampled blocks). That requires running GBV inside every training step — expensive. The token-level surrogate is what DistillSpec's appendix proposes and what we implement.
+**Why block-level**: partitioning the sequence into non-overlapping blocks of 8 tokens matches the inference-time draft window, avoids the "giant cumprod" gradient problem for long sequences, and makes the training scale directly comparable to the block efficiency evaluation metric.
 
 ### 2.5 Training loop
 
-Per-step (`train_qwen3.py:424`):
+Per-step (`algorithms/train_qwen3.py`):
 1. Sample a prompt (shuffle per epoch over the dataset)
 2. Frozen target generates continuation (teacher-sampled)
 3. Both models score the full sequence in one forward pass
@@ -112,7 +123,7 @@ For each `(student, dataset, mode, K, temperature)` cell:
 - `mode=alpha`: runs SpecInfer rejection sampling inline, measures α (token acceptance rate)
 - `mode=specinfer/gbv/traversal/bv`: shells out to `GBV/main.py`, parses `"Block efficiency: X.XXX"`
 
-Results go into `results.db` (SQLite). `viz_server.py` reads from the DB and renders charts.
+Results go into `results.db` (SQLite). `dashboard/training_dashboard.py` reads from the DB and renders charts.
 
 ---
 
@@ -255,21 +266,9 @@ This is the `Loss × Mode` interaction the viz dashboard's Key Results tab plots
 
 ---
 
-## 6. Experiment Matrix for the Paper
+## 6. Experiment Matrix
 
-The minimum required matrix:
-
-| Draft training | specinfer | gbv | traversal |
-|---|---|---|---|
-| Untrained (baseline) | BE_00 | BE_01 | BE_02 |
-| KL-1000-gsm8k | BE_10 | BE_11 | BE_12 |
-| EBE-1000-gsm8k | BE_20 | BE_21 | BE_22 |
-
-**The paper story**: `BE_22 > BE_21 > BE_20 > BE_00` (EBE + tree verifier is best). `BE_10 ≈ BE_20` for specinfer (KL and EBE converge on the simple chain verifier). The EBE advantage appears most on GBV/traversal.
-
-Datasets: GSM8K (primary), HumanEval, MATH500, MT-Bench, Alpaca (robustness).
-Temperatures: 0.6 and 1.0 (showing consistency across sampling regimes).
-K values: 3 and 5 (standard in the literature).
+→ See **GUIDE.md § 3** for the full training × verifier experiment matrix and evaluation conditions (datasets, temperatures, K values).
 
 ---
 
@@ -291,62 +290,6 @@ Eval steps are skipped if the result is already in `results.db` (`--skip_existin
 
 ---
 
-## 8. File Map
+## 8. File Layout
 
-```
-gbv-research/              ← all active research code lives here
-  orchestration/
-    experiment.py          ← Crash-safe master runner (phases 1–4, --config laptop|colab|server)
-    evaluate.py            ← Evaluation orchestrator (alpha + BE via GBV subprocess)
-    clean_restart.py       ← Wipe db/ + reset state + optional relaunch
-    run_sweep.py           ← W&B hyperparameter sweep launcher
-    configs/               ← YAML per-environment configs (laptop.yaml, server.yaml, colab.yaml)
-    pipeline_state_laptop.json        ← full-run step state
-    pipeline_state_laptop_smoke.json  ← smoke-run step state (separate)
-
-  algorithms/
-    train_qwen3.py         ← Offline DistillSpec trainer (LoRA, all 5 offline losses)
-    online_serve.py        ← Online SD adaptation trainer (online + online_ebe)
-    training_scaffold.py   ← Shared utilities imported by both trainers
-    distillspec_gbv/
-      losses/              ← forward_kl.py, reverse_kl.py, jsd.py, l1.py, ebe.py
-      verifiers/           ← runner.py, tree.py, otlp_registry.py (Phase 3 eval target)
-      trainer.py           ← Model-family-agnostic trainer
-
-  core/
-    datasets/
-      raw/                 ← gsm8k_train.jsonl, gsm8k_30.jsonl, gsm8k_5.jsonl
-      downloader.py        ← Dataset fetcher (gsm8k, humaneval, math500, mtbench, alpaca)
-    model_families/        ← Qwen, Gemma tokenizer + logit helpers
-
-  dashboard/
-    training_dashboard.py  ← Flask dashboard → http://127.0.0.1:5000
-
-  db/                      ← Generated outputs (gitignored)
-    results.db             ← SQLite schema + all eval results
-    checkpoints/           ← LoRA adapters + merged models
-    logs/                  ← pipeline_output.log, be_progress.log
-
-  docs/
-    SETUP.md               ← Full setup guide (laptop, server, Colab) with troubleshooting
-    DESIGN.md              ← This file — design decisions and implementation notes
-    PROJECT_CONTEXT.md     ← Research context, team, baselines, decisions log
-    GUIDE.md               ← Research hypotheses, experiment matrix, how to interpret results
-    ADDING_A_LOSS.md       ← How to add a new loss objective
-    ADDING_AN_ALGORITHM.md ← How to add a new verifier algorithm
-    ADDING_A_MODEL_FAMILY.md ← How to add Gemma/LLaMA/Mistral support
-
-GBV/                       ← Multi-path verifier codebase (called as subprocess by evaluate.py)
-  main.py                  ← Entry point (--mode specinfer|bv|gbv|traversal|naive|nss|bv)
-  verifier.py              ← TreeVerifier: all 7 verification algorithms
-  node.py                  ← Node class + OTLP solvers
-  util.py                  ← Cache slicing, model loading, data loading
-
-OSD/distill/               ← Original OSD codebase fragment (reference-only)
-  specInfer/generator.py   ← Borrowed for alpha eval in evaluate.py (legitimate borrow)
-```
-
-The active pipeline calls `algorithms/train_qwen3.py` for offline training,
-`algorithms/online_serve.py` for online training, and `GBV/main.py` as a
-subprocess for block-efficiency evaluation. `OSD/` is reference-only except for
-the `specInfer/generator.py` alpha evaluator.
+→ For the current file map, see **PROJECT_CONTEXT.md § Codebase Architecture**.

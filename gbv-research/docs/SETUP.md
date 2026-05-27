@@ -420,7 +420,7 @@ modal run launchers/modal_app.py::train_kl
 | `A100-40GB` | 40 GB | ~$2.50/hr | Default — 8B teacher in bfloat16 |
 | `A100-80GB` | 80 GB | ~$3.70/hr | Extra headroom, long sequences |
 
-To use a different GPU, edit `@app.function(gpu=...)` in `modal_train.py` or
+To use a different GPU, edit `@app.function(gpu=...)` in `launchers/modal_app.py` or
 run with `run.with_options(gpu="A10G").local(...)`.
 
 ---

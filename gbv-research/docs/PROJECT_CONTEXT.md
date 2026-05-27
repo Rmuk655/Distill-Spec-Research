@@ -1,9 +1,10 @@
 # DistillSpec Research Project — Context Reference
 
-> This file is the project-specific companion to the generic skill files.
-> Check it in alongside the code. Update it as decisions are made and results come in.
-> Generic principles (research rigor, logging format, testing philosophy, scope management)
-> live in the skill files. Project-specific facts live here.
+> Project-specific reference — check it in alongside the code.
+> Update it as decisions are made and results come in.
+> Architecture and file layout: **Codebase Architecture** section below.
+> Research hypotheses, experiment matrix, pipeline phases: **GUIDE.md**.
+> Design decisions and implementation notes: **DESIGN.md**.
 
 ---
 
@@ -132,51 +133,7 @@ Architecture mismatch (0.5B Qwen2.5 vs 0.6B Qwen3) is fine — SD only requires 
 
 ## Training Setup
 
-### Loss Functions
-
-| Loss | Description | Role |
-|---|---|---|
-| `forward_kl` | KL(target ∥ student). DistillSpec canonical (Section 3.1). Mode-covering. | Baseline |
-| `ebe` | Expected Block Efficiency — direct gradient through ∏αᵢ cumprod. Novel. | Novel contribution |
-| `reverse_kl` | KL(student ∥ target). Mode-seeking. | Ablation |
-| `jsd` | Jensen-Shannon divergence. Symmetric. | Ablation |
-| `l1` | L1 on probability distributions. Total-variation. | Ablation |
-| `online` | Online OSD — forward_kl on live SD outputs at rejected positions. | Ablation |
-| `online_ebe` | Online OSD with EBE loss at rejected positions. | Novel ablation |
-
-**KL direction**: forward KL — KL(target ∥ student). NOT reverse KL (mode-seeking, collapses to peaked draft).
-
-**`wrong_token_ids`** (OSD feature): NOT used. OSD-specific hard-example signal that introduces distributional shift. DistillSpec paper does not use it.
-
-**Training mode**: teacher-sample (offline). Target generates continuations; both models score them. Trains toward target's actual inference distribution, not a static corpus.
-
-### Training Data
-
-| Flag | Source | Size | Use |
-|---|---|---|---|
-| `--dataset diverse` | 200 built-in diverse prompts | ~16k tokens/epoch | Smoke test / proof of concept |
-| `--dataset gsm8k` | `data/gsm8k_train.jsonl` | 7,473 prompts | Full training runs |
-
-Eval always uses `data/gsm8k_30.jsonl` (30 fixed prompts).
-
----
-
-## Verification Algorithms (GBV modes)
-
-All 6 modes are run in every eval step (both smoke and full pipeline).
-
-| Mode | Role | What it rewards in the draft |
-|---|---|---|
-| `alpha` | Token-level acceptance rate (chain SD floor) | Per-token α |
-| `naive` | Naive chain SD (explicit implementation of alpha) | Per-token acceptance |
-| `bv` | Block Verification — accept/reject entire blocks | Block-level acceptance |
-| `gbv` | **Generalised BV** — optimal transport over block prefixes, strictly > BV | Probability mass on accepted prefixes |
-| `traversal` | **Empirically best** — longest surviving path | Joint prob of best surviving path |
-| `specinfer` | Published multi-path baseline | Multi-path coverage, joint path probability |
-
-**Primary comparison verifiers**: `specinfer` (published baseline) + `traversal` (empirically best) + `gbv` (novel contribution).
-
-**Deprecated / not in pipeline**: `nss`, `spectr` — removed from eval sweep; present in `GBV/node.py` for reference.
+→ See **GUIDE.md § 6** for training loss details, data sources, and training-mode decisions.
 
 ---
 
@@ -199,38 +156,7 @@ Any trained model must beat `specinfer K=3 = 2.520` to show improvement. Regress
 
 ## Experiment Structure
 
-Pipeline runs 4 phases. Phase 4 (multi-dataset) is skipped in smoke mode.
-
-| Phase | Step IDs | What runs |
-|---|---|---|
-| **Phase 1 — Baseline** | `eval_baseline_gsm8k` | Untrained draft, all 6 verifiers, gsm8k |
-| **Phase 2 — Training** | `train_kl_gsm8k` + `merge_kl_gsm8k` ... × 7 losses | 1000 steps each (50 in smoke) |
-| **Phase 3 — GSM8K Eval** | `eval_kl_gsm8k`, `eval_ebe_gsm8k` ... × 6 losses | All 6 verifiers, K=3+5, temps=0.6+1.0 |
-| **Phase 4 — Multi-Dataset** | `eval_*_all` × 7 models | humaneval, math500, mtbench, alpaca |
-
-**Trained models** (Phase 2 outputs, checkpoint name → label):
-- `kl-gsm8k` → `kl` (forward_kl offline, DistillSpec baseline)
-- `ebe-gsm8k` → `ebe` (block-level EBE offline; α≈0.99 → KL-equivalent, control condition)
-- `rev_kl-gsm8k` → `rev_kl` (reverse KL ablation)
-- `jsd-gsm8k` → `jsd` (Jensen-Shannon ablation)
-- `l1-gsm8k` → `l1` (L1 / total variation ablation)
-- `online-gsm8k` → `online` (online OSD — forward_kl at rejected positions, **benchmark**)
-- `online-ebe-gsm8k` → `online_ebe` (online EBE — block-level cumprod at rejected positions, **novel**)
-
-**Paper comparison table**:
-
-| Model | Training | Gradient signal | Paper role |
-|---|---|---|---|
-| baseline | none | — | Floor |
-| kl | offline teacher-sample | KL all tokens | DistillSpec replication |
-| ebe | offline teacher-sample | KL (EBE≈0, α≈1) | Control: shows offline EBE = KL |
-| online | online live SD | KL at rejected only | OSD replication |
-| **online_ebe** | online live SD | **Block EBE at rejected** | **Novel contribution** |
-| rev_kl, jsd, l1 | offline | ablation | Ablation rows |
-
-**State files** (in `orchestration/`):
-- `pipeline_state_laptop.json` — full 1000-step run state
-- `pipeline_state_laptop_smoke.json` — smoke 50-step run state (separate; smoke "done" never blocks full run)
+→ See **GUIDE.md §§ 3 and 5** for the experiment matrix, pipeline phases, trained model labels, and paper comparison table.
 
 ---
 
@@ -317,16 +243,3 @@ The project SHALL NOT include (any of these appearing = flag to Rahul Thomas):
 | Medusa | https://arxiv.org/abs/2401.10774 | Background |
 | Sequoia | https://arxiv.org/abs/2402.12374 | Background |
 
----
-
-## Generic Skill Files (companion to this doc)
-
-These live in the `skills/` directory and apply to any ML project:
-
-| Skill | When to use |
-|---|---|
-| `ml-experiment-log` | Logging any run; filling the results table; comparing conditions |
-| `ml-research-principles` | Hypothesis formulation; interpreting results; deciding to pivot; publication readiness |
-| `ml-research-swe` | Environment setup; config management; training loop hygiene; multi-environment runs |
-| `ml-research-qa` | Writing tests; validating loss correctness; regression testing; debugging wrong results |
-| `ml-scope-management` | PM dashboard; scope enforcement; decision log; meeting structure; phase gates |
