@@ -95,4 +95,15 @@ def ebe(
     kl_reg = F.kl_div(log_s, log_t.exp(), reduction="batchmean")
 
     loss = ebe_val + kl_weight * kl_reg
-    return LossOutput(loss=loss, accept_weight=alpha.mean().item())
+
+    # Rich α diagnostics — logged by the training loop every log_every steps.
+    with torch.no_grad():
+        _a = alpha.detach()
+        _diag = {
+            "mean":         _a.mean().item(),
+            "std":          _a.std().item(),
+            "min":          _a.min().item(),
+            "frac_lt_0.95": (_a < 0.95).float().mean().item(),
+            "frac_lt_0.80": (_a < 0.80).float().mean().item(),
+        }
+    return LossOutput(loss=loss, accept_weight=_diag["mean"], diagnostics=_diag)

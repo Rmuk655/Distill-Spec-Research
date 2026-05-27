@@ -25,8 +25,17 @@ Usage:
   result = algo.generate(prompt_ids, K=4, L=8, verifier="traversal")
 """
 
-from .algorithm import GBVAlgorithm
+# GBVAlgorithm is available lazily — algorithm.py imports algorithms.base which
+# requires the repo root in sys.path.  train_qwen3.py imports only
+# distillspec_gbv.losses (not this package directly) so we avoid the eager
+# import to keep startup fast and path-agnostic.
+__all__ = ["GBVAlgorithm", "ALGORITHM"]
 
-ALGORITHM = GBVAlgorithm()
 
-__all__ = ["ALGORITHM", "GBVAlgorithm"]
+def __getattr__(name: str):
+    if name in ("GBVAlgorithm", "ALGORITHM"):
+        from .algorithm import GBVAlgorithm as _GBVAlgorithm
+        globals()["GBVAlgorithm"] = _GBVAlgorithm
+        globals()["ALGORITHM"]    = _GBVAlgorithm()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

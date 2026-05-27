@@ -2,7 +2,7 @@
 Distillation loss registry.
 
 Usage:
-    from capsules.distillation.losses import LOSS_REGISTRY, get_loss
+    from distillspec_gbv.losses import LOSS_REGISTRY, get_loss
 
     output = get_loss("forward_kl", student_logits, teacher_logits)
     output = get_loss("ebe", student_logits, teacher_logits,
@@ -12,10 +12,10 @@ Every loss function has the uniform signature:
     fn(student_logits, teacher_logits, token_ids=None, **kwargs) -> LossOutput
 
 To add a new loss:
-    1. Create capsules/distillation/losses/<name>.py
+    1. Create algorithms/distillspec_gbv/losses/<name>.py
     2. Implement a function with the above signature
     3. Register it in LOSS_REGISTRY below
-    4. Pass --loss <name> to trainer.py
+    4. Pass --loss <name> to train_qwen3.py
 """
 
 from .base import LossOutput, compute_loss
@@ -24,6 +24,7 @@ from .reverse_kl import reverse_kl
 from .jsd import jsd
 from .l1 import l1
 from .ebe import ebe
+from .ebe_single import ebe_single
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 LOSS_REGISTRY: dict[str, callable] = {
@@ -32,6 +33,7 @@ LOSS_REGISTRY: dict[str, callable] = {
     "jsd":         jsd,
     "l1":          l1,
     "ebe":         ebe,
+    "ebe_single":  ebe_single,
 }
 
 
@@ -57,5 +59,5 @@ def get_loss(name: str, *args, **kwargs) -> LossOutput:
 
 __all__ = [
     "LossOutput", "LOSS_REGISTRY", "compute_loss", "get_loss",
-    "forward_kl", "reverse_kl", "jsd", "l1", "ebe",
+    "forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single",
 ]

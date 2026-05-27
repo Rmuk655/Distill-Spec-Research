@@ -31,9 +31,14 @@ class LossOutput:
         accept_weight:  Optional float — mean per-token acceptance probability
                         α = min(1, p_target/p_student).  Only EBE computes
                         this; other losses return None.
+        diagnostics:    Optional dict with richer α statistics for logging.
+                        Keys (when present): "mean", "std", "min",
+                        "frac_lt_0.95", "frac_lt_0.80".
+                        Only EBE-family losses populate this; others leave None.
     """
     loss: torch.Tensor
     accept_weight: Optional[float] = None
+    diagnostics: Optional[dict] = None
 
 
 def compute_loss(

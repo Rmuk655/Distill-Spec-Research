@@ -18,6 +18,9 @@ Loss choices (--loss):
   ebe         : Expected Block Efficiency surrogate, multi-token cumprod — novel
   ebe_single  : Single-token EBE = -mean(alpha) — ablation vs multi-token EBE
 
+Loss implementations live in distillspec_gbv/losses/ — one file per objective.
+This script imports them via get_loss() and adds no inline loss code of its own.
+
 Laptop usage (train on GSM8K train split, eval on test split):
     python train_qwen3.py --loss forward_kl --steps 200 --dataset data/gsm8k_train.jsonl
     python train_qwen3.py --loss ebe        --steps 200 --dataset data/gsm8k_train.jsonl
@@ -45,6 +48,15 @@ from training_scaffold import (
     write_train_step as _write_train_step,
     setup_hw_opts    as _setup_hw_opts,
 )
+
+# ---------------------------------------------------------------------------
+# Loss registry — canonical implementations live in distillspec_gbv/losses/.
+# train_qwen3.py is run via `python /abs/path/train_qwen3.py`, which adds
+# algorithms/ to sys.path[0], making distillspec_gbv importable as a package.
+# distillspec_gbv/__init__.py uses lazy __getattr__ so algorithm.py (which
+# needs algorithms.base) is NOT imported here — only the losses subpackage.
+# ---------------------------------------------------------------------------
+from distillspec_gbv.losses import get_loss, LossOutput  # noqa: E402
 
 # Offline mode — prevents HF Hub network calls on cached / air-gapped setups.
 # Default: ON on local machines (models already downloaded),
@@ -85,7 +97,6 @@ if "TRANSFORMERS_OFFLINE" not in os.environ:
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
 import torch
-import torch.nn.functional as F
 import transformers
 from torch.optim import AdamW
 from peft import get_peft_model, LoraConfig, TaskType, PeftModel
@@ -423,177 +434,6 @@ def parse_args():
 
 
 # ---------------------------------------------------------------------------
-# Loss functions
-# ---------------------------------------------------------------------------
-
-def forward_kl_loss(student_logits, teacher_logits):
-    """KL(target ∥ student) — DistillSpec Section 3.1."""
-    log_s = F.log_softmax(student_logits, dim=-1)
-    p_t   = F.softmax(teacher_logits, dim=-1)
-    return -(p_t * log_s).sum(dim=-1).mean()
-
-
-def reverse_kl_loss(student_logits, teacher_logits):
-    """KL(draft ∥ target) — mode-seeking, numerically stable.
-
-    Bug: Qwen3 applies a −inf logit bias to forbidden tokens (pad_token, etc.).
-      After log_softmax those tokens have log_t = −inf.
-      Then  log_s − log_t = finite − (−inf) = +inf.
-      Forward: p_s * inf = NaN (when p_s==0 due to float32 underflow) or inf.
-      Backward (torch.where approach): dL/dp_s = 0 * inf = NaN — corrupts
-        LoRA weights on first update, making ALL subsequent steps NaN too.
-
-    Fix: clamp log_t BEFORE the subtraction so neither the forward value
-    nor its gradient ever involves inf.  Tokens the teacher forbids get
-    log_t = -100 (prob ≈ exp(-100) ≈ 0), so their log-ratio contribution
-    is bounded and the gradient flows cleanly.
-    """
-    log_t = F.log_softmax(teacher_logits, dim=-1).clamp(min=-100.0)
-    log_s = F.log_softmax(student_logits, dim=-1)
-    p_s   = F.softmax(student_logits, dim=-1)
-    return (p_s * (log_s - log_t)).sum(dim=-1).mean()
-
-
-def jsd_loss(student_logits, teacher_logits, alpha=0.5):
-    p_s = F.softmax(student_logits, dim=-1)
-    p_t = F.softmax(teacher_logits, dim=-1)
-    m   = alpha * p_s + (1 - alpha) * p_t
-    log_m = m.log().clamp(min=-1e9)
-    kl_s = (p_s * (p_s.log().clamp(min=-1e9) - log_m)).sum(-1).mean()
-    kl_t = (p_t * (p_t.log().clamp(min=-1e9) - log_m)).sum(-1).mean()
-    return alpha * kl_s + (1 - alpha) * kl_t
-
-
-def l1_loss(student_logits, teacher_logits):
-    """L1 / total-variation distance between student and teacher distributions.
-    TV(p, q) = 0.5 * sum_v |p(v) - q(v)|, averaged over positions.
-    Simple to implement; weaker distillation signal than KL/JSD in practice.
-    Use as ablation, not primary objective.
-    """
-    p_s = F.softmax(student_logits, dim=-1)
-    p_t = F.softmax(teacher_logits, dim=-1)
-    return (p_s - p_t).abs().sum(dim=-1).mean() * 0.5
-
-
-_EBE_BLOCK_LEN = 8   # must match GBV/main.py --L default (inference block length)
-
-
-def ebe_loss(student_logits, teacher_logits, token_ids, kl_weight=0.1,
-             block_len: int = _EBE_BLOCK_LEN):
-    """
-    Block-level Expected Block Efficiency surrogate + KL regulariser.
-
-    Training objective mirrors the inference metric exactly:
-        L_EBE = -Σ_{b=1}^{T/L} (1 + Σ_{k=1}^{L} Π_{i=1}^{k} α_{bL+i})  / n_blocks
-
-    Each block of L=8 tokens gets its own cumprod — matching the L=8 speculative
-    window used at inference.  This avoids the "giant single block" distortion where
-    early tokens in a long sequence accumulate an unrealistically large gradient
-    multiplier (Π of 128 alphas instead of Π of 8 alphas).
-
-    Why L=8 specifically:
-    - Inference calls the draft model with block_len=L=8 (evaluate.py default --L 8)
-    - The accepted token count per target call is τ+1 ∈ [1, L+1]
-    - Training with the same L ensures the gradient scale matches the inference scale
-
-    Numerical safety:
-    - alpha is clamped to ≥ 1e-6 before cumprod to prevent NaN gradients.
-      torch.cumprod backward divides by alpha[j] internally; if alpha[j]=0 exactly
-      (i.e. q_target≈0 for that token) this produces NaN.  The clamp fixes it.
-
-    KL regulariser (λ ≈ 0.1): EBE gradient vanishes for under-estimated tokens
-    (α = 1 already).  KL supplies gradient there and prevents PPL collapse.
-    """
-    log_s = F.log_softmax(student_logits, dim=-1)          # [T, V]
-    log_t = F.log_softmax(teacher_logits, dim=-1).detach() # [T, V]  teacher fixed
-
-    # Per-token log probs of the actual generated tokens
-    log_p = log_s.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
-    log_q = log_t.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
-
-    # Acceptance probability — gradient flows through log_p (NOT detached)
-    # Clamp ≥ 1e-6: prevents NaN in cumprod backward when alpha≈0
-    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # [T]
-
-    # Per-block EBE: split sequence into blocks of block_len, sum within each block
-    # This matches inference where each target call sees exactly block_len draft tokens.
-    T = alpha.shape[0]
-    n_blocks = max(1, T // block_len)
-    ebe = torch.zeros((), device=alpha.device, dtype=alpha.dtype)  # 0-dim scalar
-    for b in range(n_blocks):
-        blk = alpha[b * block_len : (b + 1) * block_len]   # [≤ block_len]
-        ebe = ebe - (1.0 + torch.cumprod(blk, dim=0).sum())
-    ebe = ebe / n_blocks   # average over blocks → stable scale regardless of seq len
-
-    # KL regulariser: forward KL keeps language quality stable
-    kl = F.kl_div(log_s, log_t.exp(), reduction="batchmean")
-
-    loss = ebe + kl_weight * kl
-
-    # Diagnostic: return a richer dict so the training loop can log the full
-    # α distribution, not just the mean.  Callers that only want a scalar use [0].
-    with torch.no_grad():
-        a = alpha.detach()
-        frac_below_95  = (a < 0.95).float().mean().item()   # tokens with real EBE gradient
-        frac_below_80  = (a < 0.80).float().mean().item()   # strongly rejected tokens
-        alpha_min      = a.min().item()
-        alpha_std      = a.std().item()
-
-    return loss, {
-        "mean":         a.mean().item(),
-        "std":          alpha_std,
-        "min":          alpha_min,
-        "frac_lt_0.95": frac_below_95,   # nonzero → EBE gradient is flowing
-        "frac_lt_0.80": frac_below_80,
-    }
-
-
-def ebe_single_loss(student_logits, teacher_logits, token_ids):
-    """Single-token EBE surrogate — Loss = −mean(α) per token.
-
-    Simplified ablation of ebe_loss: no block_len, no cumprod, no KL regulariser.
-
-        L = −mean_{t=1}^{T}( α_t )      where  α_t = min(1, q_t / p_t)
-
-    Direct interpretation: maximise the average per-token acceptance rate.
-
-    Why this matters as an ablation:
-    - Multi-token EBE (ebe_loss) chains 8 α's with cumprod.  If that chain
-      is the source of gradient instability or vanishing, single-token EBE
-      will train stably and the comparison tells us exactly which component
-      was responsible.
-    - No λ means a single, clean objective — no two losses fighting each other.
-    - Dense gradient: every token contributes equally (no block-boundary bias).
-
-    Returns (loss, alpha_stats_dict) — same shape as ebe_loss so callers can
-    use the same logging code.
-    """
-    log_s = F.log_softmax(student_logits, dim=-1)          # [T, V]
-    log_t = F.log_softmax(teacher_logits, dim=-1).detach() # [T, V]  teacher fixed
-
-    log_p = log_s.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
-    log_q = log_t.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
-
-    # α = min(1, q/p) = exp(min(0, log_q − log_p)).  Clamp ≥ 1e-6 for grad safety.
-    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # [T]
-
-    loss = -alpha.mean()
-
-    with torch.no_grad():
-        a = alpha.detach()
-        frac_below_95 = (a < 0.95).float().mean().item()
-        frac_below_80 = (a < 0.80).float().mean().item()
-
-    return loss, {
-        "mean":          a.mean().item(),
-        "std":           a.std().item(),
-        "min":           a.min().item(),
-        "frac_lt_0.95":  frac_below_95,
-        "frac_lt_0.80":  frac_below_80,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Dataset loading
 # ---------------------------------------------------------------------------
 
@@ -771,33 +611,14 @@ def _compute_val_loss(draft_model, target_model, val_prompts, tok_cache,
             s_log   = student_logits[:, plen-1:, :].squeeze(0)
             gen_ids = full_ids[0, plen:]
 
-            if args.loss == "forward_kl":
-                v_loss = forward_kl_loss(s_log, t_log)
-                v_aw = None
-            elif args.loss == "reverse_kl":
-                v_loss = reverse_kl_loss(s_log, t_log)
-                v_aw = None
-            elif args.loss == "jsd":
-                v_loss = jsd_loss(s_log, t_log,
-                                  alpha=getattr(args, "jsd_alpha", 0.5))
-                v_aw = None
-            elif args.loss == "l1":
-                v_loss = l1_loss(s_log, t_log)
-                v_aw = None
-            elif args.loss == "ebe":
-                v_loss, v_aw_dict = ebe_loss(s_log, t_log, gen_ids,
-                                             kl_weight=getattr(args, "ebe_kl_weight", 0.1))
-                v_aw = v_aw_dict["mean"] if isinstance(v_aw_dict, dict) else v_aw_dict
-                if v_aw is not None:
-                    val_aws.append(v_aw)
-            elif args.loss == "ebe_single":
-                v_loss, v_aw_dict = ebe_single_loss(s_log, t_log, gen_ids)
-                v_aw = v_aw_dict["mean"] if isinstance(v_aw_dict, dict) else v_aw_dict
-                if v_aw is not None:
-                    val_aws.append(v_aw)
-            else:
-                v_loss = forward_kl_loss(s_log, t_log)
-                v_aw = None
+            _v = get_loss(args.loss, s_log, t_log,
+                          token_ids=gen_ids,
+                          kl_weight=getattr(args, "ebe_kl_weight", 0.1),
+                          alpha=getattr(args, "jsd_alpha", 0.5))
+            v_loss = _v.loss
+            v_aw   = _v.accept_weight
+            if v_aw is not None:
+                val_aws.append(v_aw)
 
             val_losses.append(v_loss.item())
 
@@ -1275,62 +1096,36 @@ def main():
         gen_ids = full_ids[0, plen:]                          # [gen_len]
 
         try:
-            if args.loss == "forward_kl":
-                loss = forward_kl_loss(s_log, t_log)
-                aw = None
-            elif args.loss == "reverse_kl":
-                loss = reverse_kl_loss(s_log, t_log)
-                aw = None
-            elif args.loss == "jsd":
-                loss = jsd_loss(s_log, t_log, alpha=args.jsd_alpha)
-                aw = None
-            elif args.loss == "l1":
-                loss = l1_loss(s_log, t_log)
-                aw = None
-            elif args.loss == "ebe":
-                loss, aw_dict = ebe_loss(s_log, t_log, gen_ids,
-                                         kl_weight=args.ebe_kl_weight)
-                # aw_dict contains full α distribution; store mean for history
-                aw = aw_dict["mean"] if isinstance(aw_dict, dict) else aw_dict
+            _result = get_loss(args.loss, s_log, t_log,
+                               token_ids=gen_ids,
+                               kl_weight=args.ebe_kl_weight,
+                               alpha=args.jsd_alpha)
+            loss = _result.loss
+            aw   = _result.accept_weight
+            if aw is not None:
                 accept_weights.append(aw)
-                # Log α distribution every log_every steps so we can see how
-                # much real EBE gradient is flowing (frac_lt_0.95 > 0 means it is).
-                if (step + 1) % args.log_every == 0 and isinstance(aw_dict, dict):
-                    print(
-                        f"  [EBE-α]  mean={aw_dict['mean']:.4f}  "
-                        f"std={aw_dict['std']:.4f}  "
-                        f"min={aw_dict['min']:.4f}  "
-                        f"frac<0.95={aw_dict['frac_lt_0.95']:.3f}  "
-                        f"frac<0.80={aw_dict['frac_lt_0.80']:.3f}"
-                    )
-                    if _wandb:
-                        _wandb.log({
-                            "ebe/alpha_mean":      aw_dict["mean"],
-                            "ebe/alpha_std":       aw_dict["std"],
-                            "ebe/alpha_min":       aw_dict["min"],
-                            "ebe/frac_lt_0.95":    aw_dict["frac_lt_0.95"],
-                            "ebe/frac_lt_0.80":    aw_dict["frac_lt_0.80"],
-                        }, step=step + 1)
-            elif args.loss == "ebe_single":
-                loss, aw_dict = ebe_single_loss(s_log, t_log, gen_ids)
-                aw = aw_dict["mean"] if isinstance(aw_dict, dict) else aw_dict
-                accept_weights.append(aw)
-                if (step + 1) % args.log_every == 0 and isinstance(aw_dict, dict):
-                    print(
-                        f"  [EBEs-α] mean={aw_dict['mean']:.4f}  "
-                        f"std={aw_dict['std']:.4f}  "
-                        f"min={aw_dict['min']:.4f}  "
-                        f"frac<0.95={aw_dict['frac_lt_0.95']:.3f}  "
-                        f"frac<0.80={aw_dict['frac_lt_0.80']:.3f}"
-                    )
-                    if _wandb:
-                        _wandb.log({
-                            "ebe_single/alpha_mean":   aw_dict["mean"],
-                            "ebe_single/alpha_std":    aw_dict["std"],
-                            "ebe_single/alpha_min":    aw_dict["min"],
-                            "ebe_single/frac_lt_0.95": aw_dict["frac_lt_0.95"],
-                            "ebe_single/frac_lt_0.80": aw_dict["frac_lt_0.80"],
-                        }, step=step + 1)
+            # Diagnostic α-distribution logging for EBE-family losses.
+            # distillspec_gbv/losses/ebe*.py populates LossOutput.diagnostics with
+            # {"mean", "std", "min", "frac_lt_0.95", "frac_lt_0.80"}.
+            if (step + 1) % args.log_every == 0 and _result.diagnostics:
+                _diag = _result.diagnostics
+                _pfx  = "[EBEs-α]" if args.loss == "ebe_single" else "[EBE-α] "
+                print(
+                    f"  {_pfx} mean={_diag['mean']:.4f}  "
+                    f"std={_diag['std']:.4f}  "
+                    f"min={_diag['min']:.4f}  "
+                    f"frac<0.95={_diag['frac_lt_0.95']:.3f}  "
+                    f"frac<0.80={_diag['frac_lt_0.80']:.3f}"
+                )
+                if _wandb:
+                    _ns = "ebe_single" if args.loss == "ebe_single" else "ebe"
+                    _wandb.log({
+                        f"{_ns}/alpha_mean":   _diag["mean"],
+                        f"{_ns}/alpha_std":    _diag["std"],
+                        f"{_ns}/alpha_min":    _diag["min"],
+                        f"{_ns}/frac_lt_0.95": _diag["frac_lt_0.95"],
+                        f"{_ns}/frac_lt_0.80": _diag["frac_lt_0.80"],
+                    }, step=step + 1)
         except Exception as _loss_exc:
             # Catch runtime errors inside loss functions (e.g. EBE cumprod error,
             # KL divergence shape mismatch) — save what we have and stop gracefully.
