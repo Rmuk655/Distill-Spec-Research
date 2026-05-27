@@ -666,10 +666,20 @@ def load_models(args: argparse.Namespace, device: torch.device):
         torch_dtype=dtype,
     ).to(device)
 
-    if args.adapter and args.adapter.lower() != "none":
-        log.info("Loading existing LoRA adapter from: %s", args.adapter)
+    # Auto-resume: if a ckpt_latest/ exists in the output dir use it as the
+    # starting adapter (written by the periodic save_every checkpoint logic).
+    # Explicit --adapter still takes priority so manual overrides work.
+    _ckpt_latest_dir = Path(args.output) / "ckpt_latest"
+    _auto_adapter = (str(_ckpt_latest_dir)
+                     if (_ckpt_latest_dir / "adapter_model.safetensors").exists()
+                     else None)
+    _adapter_src = (args.adapter if (args.adapter and args.adapter.lower() != "none")
+                    else _auto_adapter)
+
+    if _adapter_src:
+        log.info("Loading existing LoRA adapter from: %s", _adapter_src)
         draft_model = PeftModel.from_pretrained(
-            draft_base, args.adapter, is_trainable=True
+            draft_base, _adapter_src, is_trainable=True
         )
     else:
         log.info("Wrapping draft with fresh LoRA (r=%d)", args.lora_r)
@@ -831,6 +841,10 @@ def main():
     parser.add_argument("--log_every", type=int, default=10)
     parser.add_argument("--eval_alpha_every", type=int, default=50)
     parser.add_argument("--n_eval_prompts", type=int, default=20)
+    parser.add_argument("--save_every", type=int, default=50,
+                        help="Save a LoRA checkpoint to <output>/ckpt_latest/ every N steps. "
+                             "On restart the pipeline loads from there and resumes without "
+                             "re-running already-processed prompts or re-measuring baseline alpha.")
     parser.add_argument("--wandb_project", default="distillspec")
     parser.add_argument(
         "--dtype",
@@ -903,21 +917,50 @@ def main():
         lr=args.lr,
     )
 
+    # --- Resume state: load step offset + cached baseline_alpha from ckpt_latest ---
+    # Written by the periodic checkpoint saves below; avoids re-measuring baseline
+    # alpha (~5 min) and re-processing already-seen prompts on restart.
+    _resume_file = _ckpt_latest_dir / "resume_state.json"
+    start_step = 0
+    if _resume_file.exists():
+        try:
+            with open(_resume_file, encoding="utf-8") as _rf:
+                _rs = json.load(_rf)
+            start_step = int(_rs.get("step", 0))
+            log.info("[RESUME] Resuming from step %d / %d", start_step, args.steps)
+        except Exception as _re:
+            log.warning("[RESUME] Could not read resume_state.json (%s) — starting fresh", _re)
+            start_step = 0
+
     # --- Baseline alpha (before any updates) ---
-    log.info("Measuring baseline acceptance rate...")
-    draft_model.eval()
-    baseline_alpha = evaluate_alpha(
-        draft_model,
-        target_model,
-        eval_prompts,
-        tokenizer,
-        K=args.K,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        device=device,
-        n_eval=args.n_eval_prompts,
-    )
-    log.info("Baseline alpha: %.4f", baseline_alpha)
+    # Skip re-measurement when resuming — use the value cached in resume_state.json.
+    if start_step > 0 and _resume_file.exists():
+        try:
+            with open(_resume_file, encoding="utf-8") as _rf:
+                baseline_alpha = float(json.load(_rf).get("baseline_alpha", -1))
+            if baseline_alpha < 0:
+                raise ValueError("baseline_alpha missing")
+            log.info("[RESUME] Restored baseline_alpha=%.4f from checkpoint", baseline_alpha)
+        except Exception:
+            baseline_alpha = None  # will measure below
+    else:
+        baseline_alpha = None
+
+    if baseline_alpha is None:
+        log.info("Measuring baseline acceptance rate...")
+        draft_model.eval()
+        baseline_alpha = evaluate_alpha(
+            draft_model,
+            target_model,
+            eval_prompts,
+            tokenizer,
+            K=args.K,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            device=device,
+            n_eval=args.n_eval_prompts,
+        )
+        log.info("Baseline alpha: %.4f", baseline_alpha)
     if use_wandb:
         _wandb.summary["baseline_alpha"] = baseline_alpha
 
@@ -927,11 +970,14 @@ def main():
     update_count = 0
     last_loss = 0.0
 
-    for step, prompt in enumerate(
-        (train_prompts * math.ceil(args.steps / max(len(train_prompts), 1)))[
-            : args.steps
-        ]
-    ):
+    # Build the full prompt sequence then slice off already-processed steps so
+    # we resume exactly where we left off without reprocessing any prompts.
+    _all_steps_prompts = (
+        train_prompts * math.ceil(args.steps / max(len(train_prompts), 1))
+    )[:args.steps]
+
+    for _loop_idx, prompt in enumerate(_all_steps_prompts[start_step:]):
+        step = start_step + _loop_idx
         # 1. Tokenize prompt
         input_ids = tokenizer(
             prompt, return_tensors="pt", truncation=True, max_length=512
@@ -989,6 +1035,19 @@ def main():
                     },
                     step=step + 1,
                 )
+            # Periodic checkpoint — crash-safe resume without re-running prompts.
+            # Saves to <output>/ckpt_latest/ every save_every steps.
+            if (step + 1) % args.save_every == 0:
+                try:
+                    _ckpt_latest_dir.mkdir(parents=True, exist_ok=True)
+                    draft_model.save_pretrained(str(_ckpt_latest_dir))
+                    tokenizer.save_pretrained(str(_ckpt_latest_dir))
+                    with open(_ckpt_latest_dir / "resume_state.json", "w", encoding="utf-8") as _rsf:
+                        json.dump({"step": step + 1, "baseline_alpha": baseline_alpha}, _rsf)
+                    log.info("[ckpt] Saved checkpoint at step %d → %s", step + 1, _ckpt_latest_dir)
+                except Exception as _ce:
+                    log.warning("[ckpt] Checkpoint save failed at step %d: %s", step + 1, _ce)
+
             # Write KL loss to results.db so the dashboard Training Loss Curves
             # panel shows the online run alongside kl/ebe/rev_kl/jsd/l1 curves.
             if _results_db is not None:

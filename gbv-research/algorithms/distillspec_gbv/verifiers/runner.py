@@ -23,10 +23,22 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict, Mapping, Callable, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
 
-from .utils import *
-from .draft_generator import *
-from .tree import *
-from .otlp_registry import *
+# Support both package import (from .xxx) and direct script execution (python runner.py).
+# Relative imports work when imported as part of the distillspec_gbv package;
+# absolute imports are the fallback when run as __main__ from the CLI.
+try:
+    from .utils import *
+    from .draft_generator import *
+    from .tree import *
+    from .otlp_registry import *
+except ImportError:
+    _here = os.path.dirname(os.path.abspath(__file__))
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    from utils import *            # type: ignore[no-redef]
+    from draft_generator import *  # type: ignore[no-redef]
+    from tree import *             # type: ignore[no-redef]
+    from otlp_registry import *    # type: ignore[no-redef]
 
 
 """
@@ -239,6 +251,10 @@ def parse_args():
                          "draft model to cut Python→CUDA dispatch overhead.  Draft-only: "
                          "target uses a custom tree-attention mask incompatible with compile. "
                          "First 1-2 prompts are slower (warm-up); subsequent ones are faster.")
+    ap.add_argument("--load_in_4bit", action="store_true",
+                    help="Load the TARGET (p_model) in 4-bit NF4 via bitsandbytes. "
+                         "Use on Colab free T4 (15 GB VRAM) with Qwen3-8B. "
+                         "Requires: pip install bitsandbytes.")
     args = ap.parse_args()
     return args
 
@@ -258,6 +274,7 @@ if __name__ == "__main__":
     tok, p_model, q_model = load_models(
         args.p_model, args.q_model, device=args.device, dtype=args.dtype,
         compile_draft=args.compile,
+        load_in_4bit=getattr(args, "load_in_4bit", False),
     )
 
     # Load prompts.

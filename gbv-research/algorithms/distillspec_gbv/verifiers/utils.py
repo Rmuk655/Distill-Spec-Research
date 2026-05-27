@@ -44,20 +44,35 @@ breaks or wrong results.  The draft model uses standard causal attention and is 
 compile.  Benefit: reduces Python-side kernel-launch overhead (~100-200 ms/iter on CPU) that
 accounts for ~90% of wall time on small GPUs with fast forward passes.
 """
+def _dtype_kwargs(torch_dtype) -> dict:
+    """Return correct dtype kwarg for from_pretrained().
+    transformers >= 4.51 (required for Qwen3) deprecates torch_dtype= in favour of dtype=.
+    Always use dtype= — no version check needed.
+    """
+    return {"dtype": torch_dtype}
+
+
 def load_models(
     p_name: str,
     q_name: str,
     device: str = "cuda",
     dtype: str = "bf16",
     compile_draft: bool = False,
+    load_in_4bit: bool = False,
 ):
+    """Load target (p_model) and draft (q_model) for speculative decoding.
+
+    load_in_4bit=True loads the TARGET in 4-bit NF4 via bitsandbytes.
+    Required on free Colab T4 (15 GB) for Qwen3-8B (bfloat16 = ~16 GB → OOM).
+    The draft is always loaded in the requested dtype.
+    """
     dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
     tok = AutoTokenizer.from_pretrained(p_name, use_fast=False)
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
 
     if dtype == "auto":
-        torch_dtype = "auto"       # let HF read torch_dtype from model config (usually bf16)
+        torch_dtype = "auto"
     elif dtype == "fp16":
         torch_dtype = torch.float16
     elif dtype == "bf16":
@@ -65,26 +80,48 @@ def load_models(
     elif dtype == "fp32":
         torch_dtype = torch.float32
     else:
-        # Fallback: use bf16 on CUDA, fp32 on CPU — avoids silent float32 OOM on small GPUs
         torch_dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
-    p_model = AutoModelForCausalLM.from_pretrained(
-        p_name,
-        trust_remote_code=True,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-        device_map=None,
-        use_safetensors=True
-    ).to(dev)
+    if load_in_4bit:
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError:
+            raise SystemExit(
+                "bitsandbytes is required for --load_in_4bit.\n"
+                "Install with:  pip install bitsandbytes"
+            )
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        p_model = AutoModelForCausalLM.from_pretrained(
+            p_name,
+            trust_remote_code=True,
+            quantization_config=bnb_cfg,
+            device_map="auto",
+            use_safetensors=True,
+        )
+        print("[INFO] Target model loaded in 4-bit NF4 (QLoRA mode).")
+    else:
+        p_model = AutoModelForCausalLM.from_pretrained(
+            p_name,
+            trust_remote_code=True,
+            **_dtype_kwargs(torch_dtype),
+            low_cpu_mem_usage=True,
+            device_map=None,
+            use_safetensors=True,
+        ).to(dev)
     p_model.eval()
 
     q_model = AutoModelForCausalLM.from_pretrained(
         q_name,
         trust_remote_code=True,
-        torch_dtype=torch_dtype,
+        **_dtype_kwargs(torch_dtype),
         low_cpu_mem_usage=True,
         device_map=None,
-        use_safetensors=True
+        use_safetensors=True,
     ).to(dev)
     q_model.eval()
 

@@ -183,8 +183,18 @@ DEFAULT_K        = [1, 3, 5]
 DEFAULT_TEMPS    = [0.6, 1.0]   # robustness sweep: two temperatures per run
 DEFAULT_N        = 50
 
-# GBV verifier lives in the sibling GBV/ repo — not inside gbv-research/
+# Phase 2 migration: use the restructured verifier inside gbv-research/
+# instead of shelling out to the sibling GBV/ repo.
+# runner.py has identical CLI and output format (same tagged "Block efficiency" lines),
+# supports --load_in_4bit, and works as a standalone script via the fallback absolute
+# imports in its header.
+# GBV_DIR kept as a fallback constant — remove when GBV/ is fully retired.
 GBV_DIR = os.path.join(os.path.dirname(_PARENT), "GBV")
+_RUNNER_SCRIPT = os.path.join(
+    _PARENT, "algorithms", "distillspec_gbv", "verifiers", "runner.py"
+)
+# Use runner.py if it exists; fall back to GBV/main.py for safety during transition.
+_VERIFIER_SCRIPT = _RUNNER_SCRIPT if os.path.exists(_RUNNER_SCRIPT) else os.path.join(GBV_DIR, "main.py")
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +620,7 @@ def run_be(student_path: str, teacher_path: str,
     import torch
     cmd = [
         sys.executable,
-        os.path.join(GBV_DIR, "main.py"),
+        _VERIFIER_SCRIPT,
         "--p_model", teacher_path,
         "--q_model", student_path,
         "--mode", mode,
@@ -658,8 +668,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
 
     Instead of spawning one subprocess per (mode, K, T) cell (the old behaviour
     that reloaded both models 72 times), this passes comma-separated --modes,
-    --Ks, --p_temps to GBV/main.py which iterates over all combos in one
-    process and prints a tagged result line per combo:
+    --Ks, --p_temps to the verifier script (_VERIFIER_SCRIPT, Phase 2: runner.py)
+    which iterates over all combos in one process and prints a tagged result line:
         Block efficiency (mode=gbv, K=3, T=1.0): 2.345678
 
     Output is streamed to be_progress.log in real time (readable via the
@@ -675,7 +685,7 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
     cmd = [
         sys.executable,
         "-u",                              # -u = unbuffered stdout/stderr in subprocess
-        os.path.join(GBV_DIR, "main.py"),
+        _VERIFIER_SCRIPT,
         "--p_model",  teacher_path,
         "--q_model",  student_path,
         "--modes",    ",".join(modes),
