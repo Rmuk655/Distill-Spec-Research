@@ -2275,6 +2275,22 @@ async function loadTrainingCurves() {
       }
     }
 
+    // Divergence / convergence trend over training
+    // All losses should go DOWN (lower = better for KL/JSD/L1/rev_kl;
+    // more negative = better for EBE). If final > initial: diverging.
+    let trendBadge = '';
+    if (trainRows.length >= 5) {
+      const firstLoss = trainRows[0].loss;
+      const lastLoss  = trainRows[trainRows.length - 1].loss;
+      const pctChange = (lastLoss - firstLoss) / Math.abs(firstLoss) * 100;
+      if (pctChange > 5) {
+        trendBadge = `<span class="badge bg-danger ms-2" style="font-size:0.7em">▲ diverging +${pctChange.toFixed(1)}%</span>`;
+        redFlagLabels.push(label + ' (diverging)');
+      } else if (pctChange < -10) {
+        trendBadge = `<span class="badge bg-success ms-2" style="font-size:0.7em">▼ −${Math.abs(pctChange).toFixed(1)}%</span>`;
+      }
+    }
+
     // Build traces
     const traces = [];
     if (trainRows.length) {
@@ -2322,16 +2338,16 @@ async function loadTrainingCurves() {
           step ${lastTrain.step}/${maxSteps} · train ${lastTrain.loss.toFixed(3)}
           ${statusNote ? '· ' + statusNote : ''}
         </small>
-        ${overfitBadge}
+        ${trendBadge}${overfitBadge}
       </h6>
       <div id="${chartId}" style="height:260px"></div>`;
     grid.appendChild(card);
 
     Plotly.newPlot(chartId, traces, {
       xaxis: { title: 'Step', tickfont: { size: 10 } },
-      yaxis: { title: 'Loss', tickfont: { size: 10 } },
+      yaxis: { title: 'Loss  (↓ better)', tickfont: { size: 10 } },
       legend: { orientation: 'h', y: -0.3, font: { size: 11 } },
-      margin: { t: 8, b: 60, l: 50, r: 10 },
+      margin: { t: 8, b: 60, l: 55, r: 10 },
       showlegend: true,
     }, { responsive: true });
   });
@@ -2518,6 +2534,26 @@ async function renderOnlineHealth() {
       margin: { t: 8, b: 65, l: 55, r: 55 },
     }, { responsive: true });
   });
+
+  // Note about missing online-KL data: the KL online run (online_adapt_gsm8k)
+  // completed before results_db logging was added to online_serve.py.
+  // Only the EBE online run was captured.
+  const hasEBE = onlineLabels.some(l => l.includes('ebe'));
+  const hasKL  = onlineLabels.some(l => !l.includes('ebe'));
+  if (hasEBE && !hasKL) {
+    const note = document.createElement('div');
+    note.className = 'chart-card';
+    note.style.cssText = 'grid-column:1/-1;background:#fffbf0;border-left:3px solid #fd7e14';
+    note.innerHTML = `
+      <p class="mb-0 small text-muted">
+        <strong>Online-KL-Gsm8k training curves not available.</strong>
+        The <code>online_adapt_gsm8k</code> run completed before training-curve DB
+        logging was added to online_serve.py. Block efficiency results will still
+        appear once <code>eval_online_gsm8k</code> finishes. To capture curves,
+        re-run only that step: mark it pending in pipeline_state_laptop.json.
+      </p>`;
+    grid.appendChild(note);
+  }
 }
 
 // ---- Table ----
