@@ -101,6 +101,7 @@ def load_models(
             trust_remote_code=True,
             quantization_config=bnb_cfg,
             device_map="auto",
+            low_cpu_mem_usage=True,   # load shard-by-shard; prevents ~16 GB RAM spike on Colab
             use_safetensors=True,
         )
         print("[INFO] Target model loaded in 4-bit NF4 (QLoRA mode).")
