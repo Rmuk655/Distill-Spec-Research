@@ -22,27 +22,41 @@ from .base import LossOutput
 def my_loss(
     student_logits: torch.Tensor,   # float32  [T, V]  — raw (pre-softmax) logits
     teacher_logits: torch.Tensor,   # float32  [T, V]
-    token_ids: Optional[torch.Tensor] = None,  # int64 [T] — teacher-sampled IDs
-    **kwargs,                       # absorbs extra CLI args (lr, weight, etc.)
+    token_ids: Optional[torch.Tensor] = None,  # int64 [T] — generated token IDs
+    **kwargs,                       # absorbs extra CLI args (kl_weight, alpha, etc.)
 ) -> LossOutput:
     """
     Returns:
-        LossOutput.loss     — scalar tensor with gradient attached
-        LossOutput.aux      — float for logging (e.g. mean accept weight, 0.0 if unused)
+        LossOutput.loss          — scalar tensor with gradient attached
+        LossOutput.accept_weight — mean per-token α = min(1, q/p); set this if
+                                   the loss computes acceptance weights, else leave None
+        LossOutput.diagnostics   — optional dict with α statistics (EBE-family only);
+                                   leave None for losses that don't compute α
     """
     p_s = F.softmax(student_logits.float(), dim=-1).clamp(min=1e-9)
     p_t = F.softmax(teacher_logits.float(), dim=-1).clamp(min=1e-9)
     loss = ...
-    return LossOutput(loss=loss, aux=0.0)
+    return LossOutput(loss=loss)
 ```
 
 `LossOutput` is a dataclass from `losses/base.py`:
+
 ```python
 @dataclass
 class LossOutput:
-    loss: torch.Tensor    # scalar, grad attached
-    aux:  float = 0.0     # logged as "aux_metric" in W&B
+    loss:          torch.Tensor           # scalar, grad attached
+    accept_weight: Optional[float] = None # mean α = min(1, q/p); EBE-family sets this
+    diagnostics:   Optional[dict]  = None # α stats: {"mean","std","min",
+                                          #           "frac_lt_0.95","frac_lt_0.80"}
+                                          # EBE-family only; other losses leave None
 ```
+
+- **`loss`**: always required — the scalar you back-prop through.
+- **`accept_weight`**: set to `alpha.mean().item()` if your loss computes per-token
+  acceptance weights; leave `None` otherwise. The training loop uses this for logging
+  and the dashboard displays it as the "mean α" curve.
+- **`diagnostics`**: optional richer α breakdown. Only EBE-family losses populate this;
+  leave `None` for KL / JSD / L1 style losses.
 
 **Example — alpha divergence (generalises forward/reverse KL):**
 
@@ -52,7 +66,7 @@ def alpha_divergence_loss(student_logits, teacher_logits, token_ids=None, alpha=
     p_t = F.softmax(teacher_logits.float(), dim=-1).clamp(min=1e-9)
     inner = (p_t ** alpha) * (p_s ** (1.0 - alpha))
     loss  = (1.0 - inner.sum(dim=-1)).mean() / (alpha * (1.0 - alpha))
-    return LossOutput(loss=loss, aux=0.0)
+    return LossOutput(loss=loss)   # no accept_weight — this loss doesn't compute α
 ```
 
 ---
@@ -70,12 +84,21 @@ LOSS_REGISTRY = {
     "jsd":         jsd,
     "l1":          l1,
     "ebe":         ebe,
+    "ebe_single":  ebe_single,
     "my_loss":     my_loss,   # ← register
 }
 ```
 
 The `get_loss(name)` helper in `__init__.py` reads `LOSS_REGISTRY` and raises a
 clear error for unknown names — no other registration needed.
+
+Also add `"my_loss"` to the `choices=` list in `algorithms/distillspec_gbv/trainer.py`
+so the CLI accepts it:
+
+```python
+parser.add_argument("--loss", default="forward_kl",
+    choices=["forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single", "my_loss"])
+```
 
 ---
 
@@ -144,27 +167,30 @@ clean restarts reset them correctly.
 - [ ] `loss.backward()` succeeds; all gradients are finite
 - [ ] `loss.shape == torch.Size([])` — scalar, not shape `[1]`
 - [ ] Works at `T = 1` (single-token edge case)
-- [ ] `aux` is in `[0, 1]` if it represents a probability, else `0.0`
+- [ ] If `accept_weight` is populated, it is in `[0, 1]`; otherwise it is `None`
 
 Quick check (no GPU needed, run from `gbv-research/`):
 
 ```bash
 python -c "
-import torch, torch.nn.functional as F, sys
+import torch, sys
 sys.path.insert(0, '.')
 from algorithms.distillspec_gbv.losses.my_loss import my_loss
+from algorithms.distillspec_gbv.losses import LossOutput
 V, T = 32, 10
 s = torch.randn(T, V, requires_grad=True)
 t = torch.randn(T, V)
 ids = torch.randint(0, V, (T,))
 out = my_loss(s, t, ids)
+assert isinstance(out, LossOutput), f'Expected LossOutput, got {type(out)}'
 assert out.loss.shape == torch.Size([]), f'Expected scalar, got {out.loss.shape}'
 assert torch.isfinite(out.loss), f'NaN/Inf loss: {out.loss}'
 out.loss.backward()
 assert torch.isfinite(s.grad).all(), 'NaN gradient'
-print(f'PASS  loss={out.loss.item():.4f}  aux={out.aux:.4f}')
+aw_str = f'{out.accept_weight:.4f}' if out.accept_weight is not None else 'None'
+print(f'PASS  loss={out.loss.item():.4f}  accept_weight={aw_str}')
 "
 ```
 
 Also add a test in `tests/unit/test_losses.py` following the pattern of the
-existing loss tests (see `test_forward_kl_basic`, `test_ebe_shape`, etc.).
+existing loss tests (see `TestForwardKL`, `TestEBE`, `TestEBESingle`, etc.).
