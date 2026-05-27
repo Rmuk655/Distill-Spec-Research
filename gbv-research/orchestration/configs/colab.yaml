@@ -1,10 +1,23 @@
-# Colab configuration — Google Colab free T4 (15 GB VRAM)
-# Qwen3-0.6B draft  →  Qwen3-8B target (8B in 4-bit NF4 to fit T4)
+# Colab configuration -- Google Colab free T4 (15 GB VRAM)
+# Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-8B (4-bit NF4, ~5 GB)
 #
-# Free T4 has 15 GB VRAM.  Qwen3-8B in bfloat16 ≈ 16 GB → OOM.
+# Free T4 has 15 GB VRAM.  Qwen3-8B in bfloat16 ~= 16 GB -> OOM.
 # Loading the frozen teacher in 4-bit NF4 (bitsandbytes QLoRA) reduces it
-# to ~5 GB; total with draft + activations ≈ 8–9 GB → comfortable T4 fit.
-# The draft is trained in bfloat16 — only the frozen teacher is quantised.
+# to ~5 GB; total with draft + activations ~= 8-9 GB -> comfortable T4 fit.
+# The draft is trained in bfloat16 -- only the frozen teacher is quantised.
+#
+# CRASH RESUME: training auto-resumes from ckpt_latest on session restart.
+# save_every controls how much work is lost (25 steps ~= 1-2 min on T4).
+# milestone_every keeps permanent snapshots so you can roll back if needed.
+#
+# LARGER DRAFT MODELS (e.g. Qwen3-1.7B ~3 GB bf16 on T4):
+#   models:
+#     draft: Qwen/Qwen3-1.7B
+#   training:
+#     max_new_tokens: 32   # reduce to fit both models in 15 GB
+#   checkpointing:
+#     save_every: 25       # each step ~3-5 s -> 25 steps ~= 75-125 s lost max
+# Qwen3-4B draft on T4 is marginal (8+4 = 12 GB for weights alone); avoid.
 #
 # Use with: python orchestration/experiment.py --config colab --storage_root /content/drive/MyDrive/specdist
 
@@ -33,9 +46,9 @@ dataset:
   eval:  core/datasets/raw/gsm8k_30.jsonl       # 30-prompt fixed eval set (block-efficiency only)
 
 checkpointing:
-  save_every: 50                # frequent saves — Colab sessions die without warning
-  milestone_every: 200
-  max_checkpoints: 5
+  save_every: 25                # save every 25 steps (~1-2 min on T4) -- Colab sessions die without warning
+  milestone_every: 100          # permanent snapshots every 100 steps; roll back if loss diverges
+  max_checkpoints: 5            # keep last 5 rolling + all milestones
   # storage_root moves ALL persistent artifacts (checkpoints, results.db, logs,
   # pipeline state) to Google Drive so nothing is lost on session crash.
   # Override with --storage_root on the CLI if you mount Drive at a different path.

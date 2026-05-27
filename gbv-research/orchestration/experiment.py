@@ -261,6 +261,12 @@ def _load_config_yaml(config_name: str) -> dict:
             "seed":                 training.get("seed", 42),
             "nan_action":           health.get("nan_action", "stop"),
             "early_stop_patience":  health.get("early_stop_patience", 0),
+            # Checkpoint cadence — controls how much work is lost on crash/timeout.
+            # These were previously read but never forwarded to trainer.py; the
+            # trainer silently fell back to its own defaults (100/200/5).
+            "save_every":           checkpointing.get("save_every", 100),
+            "milestone_every":      checkpointing.get("milestone_every", 200),
+            "max_checkpoints":      checkpointing.get("max_checkpoints", 5),
         }
         # training.steps → train_steps (server=5000, colab=500, laptop=1000).
         # No default — None lets build_steps() apply the smoke/full default.
@@ -440,11 +446,16 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # in _kl_at_positions) so the main remaining constraint is the KV cache.
     _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
     _train_hargs = [
-        "--lr",             str(_h.get("lr", 3e-5)),
-        "--lora_r",         str(_h.get("lora_r", 8)),
-        "--lora_alpha",     str(_h.get("lora_alpha", 16)),
-        "--teacher_temp",   str(_h.get("teacher_temp", 0.8)),
-        "--max_new_tokens", str(_h.get("max_new_tokens", 80)),
+        "--lr",              str(_h.get("lr", 3e-5)),
+        "--lora_r",          str(_h.get("lora_r", 8)),
+        "--lora_alpha",      str(_h.get("lora_alpha", 16)),
+        "--teacher_temp",    str(_h.get("teacher_temp", 0.8)),
+        "--max_new_tokens",  str(_h.get("max_new_tokens", 80)),
+        # Checkpoint cadence — forwarded from YAML checkpointing: section.
+        # Determines how much training is lost on Colab timeout / crash.
+        "--save_every",      str(_h.get("save_every", 100)),
+        "--milestone_every", str(_h.get("milestone_every", 200)),
+        "--max_checkpoints", str(_h.get("max_checkpoints", 5)),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.
