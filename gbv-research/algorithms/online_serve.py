@@ -655,7 +655,7 @@ def load_models(args: argparse.Namespace, device: torch.device):
     else:
         target_model = AutoModelForCausalLM.from_pretrained(
             args.target,
-            torch_dtype=dtype,
+            dtype=dtype,          # transformers ≥ 4.51 (torch_dtype= deprecated)
             device_map=device,
         )
     target_model.eval()
@@ -665,7 +665,7 @@ def load_models(args: argparse.Namespace, device: torch.device):
     log.info("Loading draft base model: %s", args.draft)
     draft_base = AutoModelForCausalLM.from_pretrained(
         args.draft,
-        torch_dtype=dtype,
+        dtype=dtype,              # transformers ≥ 4.51 (torch_dtype= deprecated)
     ).to(device)
 
     # Auto-resume: if a ckpt_latest/ exists in the output dir use it as the
