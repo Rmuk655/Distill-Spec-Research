@@ -512,11 +512,11 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                                 bnb_4bit_compute_dtype=torch.bfloat16,
                                 bnb_4bit_use_double_quant=True)
                     teacher_model = AutoModelForCausalLM.from_pretrained(
-                        teacher_path, quantization_config=_bnb, device_map="auto",
-                        low_cpu_mem_usage=True,
+                        teacher_path, quantization_config=_bnb,
+                        device_map={"": "cuda:0"}, low_cpu_mem_usage=True,
                         attn_implementation=_ATTN_IMPL,
                     ).eval()
-                    print(f"  [alpha] Teacher loaded in 4-bit NF4")
+                    print(f"  [alpha] Teacher loaded in 4-bit NF4 on cuda:0")
                 else:
                     teacher_model = AutoModelForCausalLM.from_pretrained(
                         teacher_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
@@ -1314,6 +1314,7 @@ def main():
         # (see _patch_config_json_serialization() at top of this file)
         _patch_config_json_serialization()   # no-op if already applied
         _device, _dtype = _pick_device()
+        _load_4bit_pre = getattr(args, "load_in_4bit", False)
         print(f"\n-- Pre-loading models for alpha eval (1 load shared across all datasets) --")
         _tok = _ATok.from_pretrained(args.teacher, use_fast=False)
         if _tok.pad_token_id is None:
@@ -1326,11 +1327,28 @@ def main():
                     args.student, **_dtype_kwargs(_dtype), low_cpu_mem_usage=True,
                     attn_implementation=_ATTN_IMPL,
                 ).to(_device).eval()
-                _t_model = (_s_model if _same_models else
-                            _AMLM.from_pretrained(
-                                args.teacher, **_dtype_kwargs(_dtype), low_cpu_mem_usage=True,
-                                attn_implementation=_ATTN_IMPL,
-                            ).to(_device).eval())
+                if _same_models:
+                    _t_model = _s_model
+                elif _load_4bit_pre and _device == "cuda":
+                    # load_in_4bit=True: teacher in 4-bit NF4 so it fits T4 (15 GB).
+                    # device_map={"": "cuda:0"} avoids accelerate's two-pass device-map
+                    # computation, putting all shards directly on the GPU — prevents
+                    # the ~16 GB CPU-RAM spike that caused OOM at 56% tensor load.
+                    from transformers import BitsAndBytesConfig as _BnBPre
+                    _bnb_pre = _BnBPre(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                       bnb_4bit_compute_dtype=_torch.bfloat16,
+                                       bnb_4bit_use_double_quant=True)
+                    _t_model = _AMLM.from_pretrained(
+                        args.teacher, quantization_config=_bnb_pre,
+                        device_map={"": "cuda:0"}, low_cpu_mem_usage=True,
+                        attn_implementation=_ATTN_IMPL,
+                    ).eval()
+                    print(f"  [alpha preload] Teacher loaded in 4-bit NF4 on cuda:0")
+                else:
+                    _t_model = _AMLM.from_pretrained(
+                        args.teacher, **_dtype_kwargs(_dtype), low_cpu_mem_usage=True,
+                        attn_implementation=_ATTN_IMPL,
+                    ).to(_device).eval()
                 break
             except _torch.cuda.OutOfMemoryError:
                 if _device == "cpu":
