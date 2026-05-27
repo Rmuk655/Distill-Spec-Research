@@ -390,7 +390,7 @@ def speculative_step(
     max_new_tokens: int,
     temperature: float,
     eos_token_id: int,
-) -> Tuple[torch.Tensor, List[int], float]:
+) -> Tuple[torch.Tensor, List[int], float, int]:
     """Run linear speculative decoding until EOS or max_new_tokens.
 
     Uses the standard rejection-sampling algorithm (Leviathan et al. 2023).
@@ -408,13 +408,17 @@ def speculative_step(
         full_ids:        (1, L + n_generated) complete sequence including prompt.
         wrong_positions: list of absolute token positions (0-indexed within the
                          *full_ids* tensor) where a draft token was rejected.
-        alpha:           acceptance rate for this call (in [0, 1]).
+        alpha:           per-token acceptance rate for this call (in [0, 1]).
+        target_calls:    number of target model forward passes (= speculative
+                         loop iterations).  block_efficiency = n_generated /
+                         target_calls — the primary metric for this project.
     """
     device = input_ids.device
     seq = input_ids.clone()  # (1, current_len)
     wrong_positions: List[int] = []
     n_accepted_total = 0
     n_proposed_total = 0
+    target_calls = 0
 
     while seq.shape[1] - input_ids.shape[1] < max_new_tokens:
         prompt_len = seq.shape[1]
@@ -433,6 +437,7 @@ def speculative_step(
         )  # (1, prompt_len + k)
 
         target_logits = target_model(candidate).logits  # (1, prompt_len+k, V)
+        target_calls += 1
         # Target's prediction for position j (0-indexed from seq start) is at
         # logit index j-1.  Draft token at absolute position `prompt_len + j`
         # (j in 0..k-1) is predicted by target logit at `prompt_len - 1 + j`.
@@ -513,7 +518,7 @@ def speculative_step(
             break
 
     alpha = n_accepted_total / max(n_proposed_total, 1)
-    return seq, wrong_positions, alpha
+    return seq, wrong_positions, alpha, target_calls
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +570,7 @@ class ReplayBuffer:
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def evaluate_alpha(
+def evaluate_metrics(
     draft_model,
     target_model,
     prompts: List[str],
@@ -575,14 +580,25 @@ def evaluate_alpha(
     temperature: float,
     device: torch.device,
     n_eval: int = 20,
-) -> float:
-    """Measure acceptance rate on a random subset of prompts."""
+) -> Tuple[float, float]:
+    """Measure acceptance rate AND block efficiency on a random subset of prompts.
+
+    Returns:
+        alpha: mean per-token acceptance rate across eval prompts.
+        be:    block efficiency = total_generated_tokens / total_target_calls.
+               Computed as a ratio of totals (not mean of per-prompt values) so
+               short sequences don't dilute the estimate.  This is the primary
+               throughput metric: for K=4 and untrained draft, ~3.1 tokens/call;
+               a well-trained draft should push this toward 4+.
+    """
     sample = random.sample(prompts, min(n_eval, len(prompts)))
-    alphas = []
+    alphas: List[float] = []
+    total_generated = 0
+    total_target_calls = 0
     draft_model.eval()
     for text in sample:
         ids = tokenizer(text, return_tensors="pt").input_ids.to(device)
-        _, _, alpha = speculative_step(
+        seq, _, alpha, tc = speculative_step(
             draft_model,
             target_model,
             ids,
@@ -592,7 +608,11 @@ def evaluate_alpha(
             eos_token_id=tokenizer.eos_token_id,
         )
         alphas.append(alpha)
-    return float(sum(alphas) / len(alphas)) if alphas else 0.0
+        total_generated += seq.shape[1] - ids.shape[1]
+        total_target_calls += tc
+    mean_alpha = float(sum(alphas) / len(alphas)) if alphas else 0.0
+    be = total_generated / max(total_target_calls, 1)
+    return mean_alpha, be
 
 
 # ---------------------------------------------------------------------------
@@ -920,6 +940,9 @@ def main():
     # --- Resume state: load step offset + cached baseline_alpha from ckpt_latest ---
     # Written by the periodic checkpoint saves below; avoids re-measuring baseline
     # alpha (~5 min) and re-processing already-seen prompts on restart.
+    # _ckpt_latest_dir is also used inside load_models() for auto-adapter detection;
+    # we define it here so main() owns it in its own scope (avoids NameError).
+    _ckpt_latest_dir = Path(args.output) / "ckpt_latest"
     _resume_file = _ckpt_latest_dir / "resume_state.json"
     start_step = 0
     if _resume_file.exists():
@@ -932,24 +955,29 @@ def main():
             log.warning("[RESUME] Could not read resume_state.json (%s) — starting fresh", _re)
             start_step = 0
 
-    # --- Baseline alpha (before any updates) ---
-    # Skip re-measurement when resuming — use the value cached in resume_state.json.
+    # --- Baseline alpha + BE (before any updates) ---
+    # Skip re-measurement when resuming — use the values cached in resume_state.json.
     if start_step > 0 and _resume_file.exists():
         try:
             with open(_resume_file, encoding="utf-8") as _rf:
-                baseline_alpha = float(json.load(_rf).get("baseline_alpha", -1))
+                _rs2 = json.load(_rf)
+                baseline_alpha = float(_rs2.get("baseline_alpha", -1))
+                baseline_be    = float(_rs2.get("baseline_be",    0.0))
             if baseline_alpha < 0:
                 raise ValueError("baseline_alpha missing")
-            log.info("[RESUME] Restored baseline_alpha=%.4f from checkpoint", baseline_alpha)
+            log.info("[RESUME] Restored baseline_alpha=%.4f  baseline_be=%.3f",
+                     baseline_alpha, baseline_be)
         except Exception:
             baseline_alpha = None  # will measure below
+            baseline_be    = 0.0
     else:
         baseline_alpha = None
+        baseline_be    = 0.0
 
     if baseline_alpha is None:
-        log.info("Measuring baseline acceptance rate...")
+        log.info("Measuring baseline acceptance rate and block efficiency...")
         draft_model.eval()
-        baseline_alpha = evaluate_alpha(
+        baseline_alpha, baseline_be = evaluate_metrics(
             draft_model,
             target_model,
             eval_prompts,
@@ -960,9 +988,10 @@ def main():
             device=device,
             n_eval=args.n_eval_prompts,
         )
-        log.info("Baseline alpha: %.4f", baseline_alpha)
+        log.info("Baseline  alpha=%.4f  be=%.3f", baseline_alpha, baseline_be)
     if use_wandb:
         _wandb.summary["baseline_alpha"] = baseline_alpha
+        _wandb.summary["baseline_be"]    = baseline_be
 
     # --- Main online loop ---
     buffer = ReplayBuffer()
@@ -986,7 +1015,7 @@ def main():
         # 2. Speculative decoding (draft eval mode, no grad needed)
         draft_model.eval()
         with torch.no_grad():
-            full_ids, wrong_positions, alpha = speculative_step(
+            full_ids, wrong_positions, alpha, _ = speculative_step(
                 draft_model,
                 target_model,
                 input_ids,
@@ -1043,7 +1072,9 @@ def main():
                     draft_model.save_pretrained(str(_ckpt_latest_dir))
                     tokenizer.save_pretrained(str(_ckpt_latest_dir))
                     with open(_ckpt_latest_dir / "resume_state.json", "w", encoding="utf-8") as _rsf:
-                        json.dump({"step": step + 1, "baseline_alpha": baseline_alpha}, _rsf)
+                        json.dump({"step": step + 1,
+                                   "baseline_alpha": baseline_alpha,
+                                   "baseline_be": baseline_be}, _rsf)
                     log.info("[ckpt] Saved checkpoint at step %d → %s", step + 1, _ckpt_latest_dir)
                 except Exception as _ce:
                     log.warning("[ckpt] Checkpoint save failed at step %d: %s", step + 1, _ce)
@@ -1067,7 +1098,7 @@ def main():
         # 6. Periodic held-out eval
         if (step + 1) % args.eval_alpha_every == 0:
             draft_model.eval()
-            eval_alpha = evaluate_alpha(
+            eval_alpha, eval_be = evaluate_metrics(
                 draft_model,
                 target_model,
                 eval_prompts,
@@ -1078,9 +1109,12 @@ def main():
                 device=device,
                 n_eval=args.n_eval_prompts,
             )
-            log.info("step=%d  eval_alpha=%.4f", step + 1, eval_alpha)
+            log.info("step=%d  eval_alpha=%.4f  eval_be=%.3f", step + 1, eval_alpha, eval_be)
             if use_wandb:
-                _wandb.log({"online/eval_alpha": eval_alpha}, step=step + 1)
+                _wandb.log({
+                    "online/eval_alpha": eval_alpha,
+                    "online/eval_be":    eval_be,
+                }, step=step + 1)
             # Write rejection rate (1 - eval_alpha) as val "loss" so the curve
             # goes DOWN like other val curves (lower rejection = better draft).
             if _results_db is not None:
@@ -1099,7 +1133,7 @@ def main():
 
     # --- Final evaluation ---
     draft_model.eval()
-    final_alpha = evaluate_alpha(
+    final_alpha, final_be = evaluate_metrics(
         draft_model,
         target_model,
         eval_prompts,
@@ -1110,21 +1144,27 @@ def main():
         device=device,
         n_eval=args.n_eval_prompts,
     )
-    delta = final_alpha - baseline_alpha
+    delta_alpha = final_alpha - baseline_alpha
+    delta_be    = final_be    - baseline_be
     log.info(
-        "DONE  baseline_alpha=%.4f  final_alpha=%.4f  delta=%+.4f",
-        baseline_alpha,
-        final_alpha,
-        delta,
+        "DONE  baseline_alpha=%.4f  final_alpha=%.4f  Δalpha=%+.4f  "
+        "baseline_be=%.3f  final_be=%.3f  Δbe=%+.3f",
+        baseline_alpha, final_alpha, delta_alpha,
+        baseline_be,    final_be,    delta_be,
     )
     print(
         f"\nbaseline_alpha={baseline_alpha:.4f}  "
         f"final_alpha={final_alpha:.4f}  "
-        f"alpha_improvement={delta:+.4f}"
+        f"alpha_improvement={delta_alpha:+.4f}\n"
+        f"baseline_be={baseline_be:.3f}  "
+        f"final_be={final_be:.3f}  "
+        f"be_improvement={delta_be:+.3f}"
     )
     if use_wandb:
-        _wandb.summary["final_alpha"] = final_alpha
-        _wandb.summary["alpha_improvement"] = delta
+        _wandb.summary["final_alpha"]      = final_alpha
+        _wandb.summary["alpha_improvement"] = delta_alpha
+        _wandb.summary["final_be"]         = final_be
+        _wandb.summary["be_improvement"]   = delta_be
         _wandb.finish()
 
     # --- Save adapter ---
