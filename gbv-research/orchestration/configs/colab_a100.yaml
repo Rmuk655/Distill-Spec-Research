@@ -1,0 +1,68 @@
+# Colab Pro / Pro+ configuration -- A100 GPU (40 GB VRAM)
+# Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-8B (bf16, ~16 GB)
+#
+# Why this config exists separately from colab.yaml (T4):
+#   T4 has 15 GB VRAM -- Qwen3-8B in bf16 (~16 GB) doesn't fit.
+#   A100 40 GB has plenty of headroom.  No 4-bit quantization needed.
+#   Larger teacher = stronger distillation signal = better draft quality.
+#
+# VRAM budget:   draft 1.2 GB + teacher 16 GB + KV/activations 2-3 GB = ~19-20 GB
+# System RAM:    ~51 GB on Colab Pro+ -- no constraints
+# Alpha eval:    both models in VRAM simultaneously -- works fine
+#
+# A100 vs T4 training speed (Qwen3-0.6B draft, seq 128):
+#   T4:   ~1-2 s/step  (500 steps  ~= 15-30 min training only)
+#   A100: ~0.3-0.5 s/step (2000 steps ~= 10-17 min training only)
+#
+# Requires Colab Pro or Pro+ with A100 runtime:
+#   Runtime -> Change runtime type -> A100 GPU
+#
+# Use with: python orchestration/experiment.py --config colab_a100 --storage_root /content/drive/MyDrive/specdist
+
+hardware:
+  device: cuda
+  load_in_4bit: false           # A100 40 GB fits Qwen3-8B in bfloat16 easily
+  compile: true                 # torch.compile is reliable on A100 (Linux); ~10-30% speedup
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B         # 16 GB bf16; fits A100 with ~20 GB to spare
+
+training:
+  steps: 2000                   # A100 is ~4x faster than T4; 2000 steps ~= 15-20 min training
+  lr: 3.0e-5
+  lora_r: 16                    # larger rank for bigger teacher-student gap (8B -> 0.6B)
+  lora_alpha: 32
+  max_new_tokens: 128           # longer sequences; A100 handles the KV cache easily
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  # These paths are for reference only -- pipeline hardcodes core/datasets/raw/ via _data().
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 100               # save every 100 steps (~30-50 s on A100) -- less crash risk than T4
+  milestone_every: 500          # permanent snapshots every 500 steps
+  max_checkpoints: 8
+  storage_root: /content/drive/MyDrive/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-a100
+
+health:
+  val_every: 100
+  ppl_check_every: 500
+  ppl_threshold: 1.25
+  nan_action: stop              # A100 sessions are stable; stop on NaN rather than skipping
+  early_stop_patience: 5
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [1, 3, 5, 8]       # more K values than T4 -- A100 handles the eval load
+  L: 8
+  n_prompts: 50                 # more prompts for reliable numbers (A100 eval is fast)
