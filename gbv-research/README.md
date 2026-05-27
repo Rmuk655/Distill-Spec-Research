@@ -4,199 +4,124 @@ Train a small draft model to better match a large target model's token distribut
 improving acceptance rates in speculative decoding.
 Novel contribution: **EBE loss** — directly optimises block efficiency instead of KL divergence.
 
-## Directory layout
+---
 
-**Repository root** (`2026 summer/`) contains three top-level directories that
-`orchestration/experiment.py` stitches together at runtime:
+## Docs index
+
+| Document | Contents |
+|----------|----------|
+| **[docs/SETUP.md](docs/SETUP.md)** | First-time setup, WandB config, smoke test, environments (Colab/Modal/server) |
+| **[docs/GUIDE.md](docs/GUIDE.md)** | Full experiment guide: pipeline phases, loss descriptions, verifier modes, W&B sweeps, health checks |
+| **[docs/DESIGN.md](docs/DESIGN.md)** | Architecture decisions: loss math, training loop, verifier design, future directions |
+| **[docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md)** | Codebase map, research decisions log, baselines, what's borrowed vs. novel |
+| **[docs/ADDING_A_LOSS.md](docs/ADDING_A_LOSS.md)** | How to add a new distillation loss |
+| **[docs/ADDING_AN_ALGORITHM.md](docs/ADDING_AN_ALGORITHM.md)** | How to add a new verifier algorithm |
+| **[docs/ADDING_A_MODEL_FAMILY.md](docs/ADDING_A_MODEL_FAMILY.md)** | How to add Gemma/LLaMA/Mistral support |
+| **[docs/DELIVERABLES.md](docs/DELIVERABLES.md)** | Research progress record |
+
+---
+
+## Quick start
+
+**Full walkthrough → [docs/SETUP.md](docs/SETUP.md)**
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Download datasets
+python core/datasets/downloader.py --datasets gsm8k
+
+# 3. WandB credentials (one-time)
+cp orchestration/wandb_config.json.example orchestration/wandb_config.json
+# Edit with your api_key, entity, project
+
+# 4. Smoke test (verifies the full pipeline end-to-end, ~35 min, GPU required)
+python orchestration/experiment.py --config laptop --smoke --yes
+
+# 5. Full experiment (~6–8 hrs on laptop)
+python orchestration/experiment.py --config laptop --yes
+```
+
+---
+
+## Repository layout
 
 ```
 2026 summer/                    <- git repo root
 |
-+-- OSD/                        git submodule → LiuXiaoxuanPKU/OSD (unmodified upstream)
++-- OSD/                        Original OSD codebase (LiuXiaoxuanPKU/OSD, unmodified)
 |   +-- distill/specInfer/      Alpha-eval Generator used by online_serve.py
 |
 +-- GBV/                        Reference copy of Rahul Thomas's GBV codebase
-|                               (anonymous.4open.science/r/GBV-BED8 — original, unmodified)
-|                               Production verifier is now distillspec_gbv/verifiers/runner.py;
-|                               GBV/ will be restored to exact reference once Phase 3 confirms.
+|                               (anonymous.4open.science/r/GBV-BED8, unmodified)
 |
 +-- gbv-research/               Research project (this directory)
     |
-    +-- algorithms/             Training scripts and algorithm implementations
-    |   +-- training_scaffold.py    Shared training utilities (HW setup, model load, LoRA,
-    |   |                           checkpoint, WandB, results_db) — import instead of copy
-    |   +-- online_serve.py         Online speculative distillation training (OSD)
-    |   +-- distillspec_gbv/        Novel EBE training code + production verifiers
-    |       +-- losses/             forward_kl, ebe, reverse_kl, jsd, l1 (class-based)
-    |       +-- trainer.py          Offline distillation training script (all 5 losses)
-    |       +-- verifiers/          Production verifiers — runner.py is the Phase 2 eval entry point
+    +-- algorithms/
+    |   +-- training_scaffold.py    Shared HW setup, model load, LoRA, checkpoint, WandB utilities
+    |   +-- online_serve.py         Online speculative distillation trainer
+    |   +-- eagle_bench.py          EAGLE baseline runner
+    |   +-- distillspec_gbv/
+    |       +-- losses/             forward_kl, ebe, reverse_kl, jsd, l1 (registry-based)
+    |       +-- trainer.py          Offline distillation trainer (all 5 offline losses)
+    |       +-- verifiers/          Production verifiers (runner.py = eval entry point)
     |
     +-- core/
-    |   +-- datasets/raw/       JSONL eval + training sets
-    |   |   +-- gsm8k_train.jsonl   7,473 training prompts (gitignored -- large)
-    |   |   +-- gsm8k_30.jsonl      30-prompt fixed eval set (tracked)
-    |   |   +-- gsm8k_5.jsonl       5-prompt smoke eval set (tracked)
-    |   +-- model_families/     Qwen/Gemma model-specific tokenizer helpers
+    |   +-- datasets/raw/           JSONL eval + training sets
+    |   +-- model_families/         Qwen/Gemma tokenizer helpers
     |
-    +-- orchestration/          Experiment coordination scripts
-    |   +-- experiment.py       Full experiment runner: trains all losses, runs all evals
-    |   |                       (Phases 1–4: baseline → train → GSM8K eval → multi-dataset)
-    |   +-- evaluate.py         Stand-alone evaluation: runs a single model through all
-    |   |                       verifier modes (alpha, specinfer, gbv, traversal, bv, naive)
-    |   |                       Called by experiment.py; also usable directly
-    |   +-- clean_restart.py    Wipe outputs + reset state + relaunch
-    |   +-- run_sweep.py        W&B hyperparameter sweep launcher
-    |   +-- pipeline_state_laptop.json        Full-run state (tracked in git)
-    |   +-- pipeline_state_laptop_smoke.json  Smoke state (separate, never blocks full run)
-    |   +-- wandb_config.json.example         Copy -> wandb_config.json (gitignored)
+    +-- orchestration/
+    |   +-- experiment.py           Crash-safe orchestrator: Phases 1–4
+    |   +-- evaluate.py             Stand-alone eval: single model × all verifier modes
+    |   +-- run_sweep.py            W&B hyperparameter sweep launcher
+    |   +-- configs/sweep.yaml      Sweep parameter grid
+    |   +-- clean_restart.py        Wipe outputs + reset state
     |
-    +-- db/                     All generated outputs (entirely gitignored)
-    |   +-- checkpoints/        LoRA adapters + merged models
-    |   +-- results.db          SQLite experiment database
-    |   +-- wandb/              W&B local run logs
-    |   +-- logs/               pipeline_output.log, be_progress.log
+    +-- db/                         All generated outputs (gitignored)
+    |   +-- checkpoints/            LoRA adapters + merged models
+    |   +-- results.db              SQLite experiment database
+    |   +-- logs/                   pipeline_output.log, be_progress.log
     |
     +-- dashboard/
     |   +-- training_dashboard.py   Live training dashboard (Flask, port 5000)
     |
-    +-- docs/
-    |   +-- SETUP.md                First-time setup guide (WandB, smoke test, dashboard)
-    |   +-- PROJECT_CONTEXT.md      Research context, decisions log, baselines
-    |   +-- ADDING_A_LOSS.md        How to add a new loss objective
-    |   +-- ADDING_AN_ALGORITHM.md  How to add a new verifier algorithm
-    |   +-- ADDING_A_MODEL_FAMILY.md  How to add Gemma/LLaMA/Mistral support
+    +-- paper/
+    |   +-- analyze_results.py      Generate paper statistics + significance tests from results.db
     |
-    +-- references/             External code -- read-only, never imported by pipeline
-    |   +-- adaspec/            AdaSpec (Hu et al., 2024) — ablation comparison
-    |   +-- legacy-osd-paper/   OSD paper plot data — read-only reference
+    +-- launchers/
+    |   +-- modal_app.py            Modal cloud launcher
+    |   +-- eval_ebe_sweep.sh       EBE sweep eval script
     |
+    +-- docs/                       See docs index above
     +-- tests/
-        +-- unit/               Unit tests (CPU-only, ~60 s) — run before every commit
-        +-- smoke.py            Pre-commit smoke test: unit tests + pipeline smoke in one command
+    |   +-- unit/                   CPU-only unit tests (~60 s)
+    |   +-- smoke.py                Pre-commit: unit tests + pipeline smoke
+    +-- references/                 External baselines (read-only, never imported)
+        +-- adaspec/
+        +-- legacy-osd-paper/
 ```
 
-## Quick start
-
-See **[docs/SETUP.md](docs/SETUP.md)** for the full walkthrough including WandB setup.
-
-### 1. Install + download data
-
-```bash
-pip install -r requirements.txt
-python core/datasets/downloader.py --datasets gsm8k
-```
-
-### 2. Set up WandB credentials (one-time per machine)
-
-```bash
-cp orchestration/wandb_config.json.example orchestration/wandb_config.json
-# Edit orchestration/wandb_config.json with your api_key, entity, project
-```
-
-### 3. Unit tests + smoke test (before every commit, ~35 min total)
-
-```bash
-# All-in-one pre-commit check (unit tests + pipeline smoke):
-python tests/smoke.py
-
-# Or separately:
-python -m pytest tests/unit/ -q                                 # ~60 s, no GPU
-python orchestration/experiment.py --config laptop --smoke --yes  # ~35 min, GPU
-```
-
-### 4. Full experiment (~6-8 hrs on laptop)
-
-```bash
-python orchestration/experiment.py --config laptop --yes
-```
-
-### 5. Evaluate a specific model
-
-```bash
-python orchestration/evaluate.py \
-    --student db/checkpoints/kl-gsm8k_merged \
-    --teacher Qwen/Qwen3-0.6B \
-    --datasets gsm8k --modes specinfer,gbv,traversal --K 3,5
-```
-
-### 6. Dashboard
-
-```bash
-python dashboard/training_dashboard.py    # http://127.0.0.1:5000
-```
-
-## Pipeline structure
-
-The pipeline runs 4 phases in sequence:
-
-| Phase | Steps | Smoke | Full |
-|-------|-------|-------|------|
-| **1 — Baseline** | `eval_baseline_gsm8k`: unmodified draft, all 6 verifiers | 5 prompts | 10 prompts |
-| **2 — Training** | train + merge × 7 losses: kl, ebe, rev_kl, jsd, l1, online, online_ebe | 50 steps/loss | 1000 steps/loss |
-| **3 — GSM8K Eval** | eval every trained model, all 6 verifier modes | 5 prompts, K=3, temp=0.6 | 10 prompts, K=3+5, temps=0.6+1.0 |
-| **4 — Multi-Dataset** | eval on humaneval, math500, mtbench, alpaca | skipped | runs |
-
-Smoke uses a **separate state file** (`pipeline_state_laptop_smoke.json`) so smoke
-"done" marks never prevent the real pipeline from re-running Phase 2 training.
-
-### Useful commands while running
-
-```bash
-# Status check (safe — does NOT kill the running pipeline)
-python orchestration/experiment.py --config laptop --smoke --status
-
-# Live log
-Get-Content db/logs/pipeline_output.log -Wait -Tail 40   # PowerShell
-tail -f db/logs/pipeline_output.log                      # bash/WSL
-```
-
-## Loss functions
-
-| Loss | Description | Status |
-|------|-------------|--------|
-| `forward_kl` | KL(target ∥ student). DistillSpec baseline. Mode-covering. | Baseline |
-| `ebe` | Expected Block Efficiency — directly optimises acceptance product. Novel. | Novel |
-| `reverse_kl` | KL(student ∥ target). Mode-seeking ablation. | Ablation |
-| `jsd` | Jensen-Shannon divergence. Symmetric ablation. | Ablation |
-| `l1` | L1 on probability distributions. Total-variation ablation. | Ablation |
-| `online` | Online speculative distillation (forward_kl on live SD outputs). | Ablation |
-| `online_ebe` | Online distillation with EBE loss — combines online adaptation with block-efficiency objective. | Novel ablation |
-
-## Verifier modes
-
-All 6 modes run in both smoke and full pipeline:
-
-| Mode | Description |
-|------|-------------|
-| `alpha` | Token-level acceptance rate (chain SD floor) |
-| `bv` | Block Verification — accept/reject whole blocks |
-| `gbv` | Generalised BV — optimal transport over block prefixes (novel, > BV) |
-| `traversal` | Longest surviving path — empirically best single-path verifier |
-| `specinfer` | SpecInfer published baseline — multi-path joint probability |
-| `naive` | Naive chain SD — same as alpha but explicit implementation |
-
-## Baseline numbers (Qwen2.5-0.5B → Qwen3-0.6B, gsm8k, untrained)
-
-| Verifier | K=3 BE | K=5 BE |
-|----------|--------|--------|
-| specinfer | 2.520 | 2.512 |
-| gbv | 2.797 | 2.786 |
-| traversal | 2.954 | 3.107 |
-
-Any trained model must beat `specinfer K=3 = 2.520`. Regression → investigate immediately.
+---
 
 ## Current results
 
-| Model | Loss | GSM8K BE (specinfer K=3) | Notes |
-|-------|------|--------------------------|-------|
-| Baseline | — | 2.520 | Pre-training reference |
-| forward_kl 1000 steps | forward_kl | TBD | DistillSpec baseline |
-| ebe 1000 steps | ebe | TBD | Novel EBE objective |
+Results are in `db/results.db`. Visualise live at `http://127.0.0.1:5000` after running:
 
-Full results in `db/results.db`; visualise at http://127.0.0.1:5000.
+```bash
+python dashboard/training_dashboard.py
+```
+
+For paper statistics and significance tests:
+
+```bash
+python paper/analyze_results.py --out report.md
+```
+
+---
 
 ## Team
 
-- **Krishnan R** (IIT Hyderabad) — Research Engineer: implementation, experiments, benchmarking
+- **Mukund R** (IIT Hyderabad) — Research Engineer: implementation, experiments, benchmarking
 - **Rahul Thomas** (PhD Student, Columbia University) — Research Lead: direction, novelty, EBE math, publication
 - **Target**: ICLR mid-September 2026
