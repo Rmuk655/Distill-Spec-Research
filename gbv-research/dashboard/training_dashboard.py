@@ -1747,11 +1747,46 @@ function renderGainOverBaseline() {
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.K === K);
   if (dataset) runs = runs.filter(r => r.dataset === dataset);
   if (selTemp) runs = runs.filter(r => String(r.temperature) === selTemp);
-  if (!runs.length) { showNoData('chart-gain', 'Gain chart needs BE results for trained models — appears after Phase 1 evals complete (at least baseline + one trained model)'); return; }
 
-  // Find baseline BE per (mode, temperature, dataset) combination
+  // ── State 1: Phase 1 not yet done — no baseline at all ───────────────────
   const baselineRuns = runs.filter(r => r.draft_label === 'baseline');
-  if (!baselineRuns.length) { showNoData('chart-gain', 'Baseline BE results not yet available — waiting for eval_baseline_gsm8k step to finish'); return; }
+  if (!baselineRuns.length) {
+    showNoData('chart-gain',
+      'Waiting for Phase 1 baseline eval (eval_baseline_gsm8k) to finish…');
+    return;
+  }
+
+  // ── State 2: Baseline in, but no trained-model evals yet (Phase 3 pending) ─
+  // Show the actual baseline BE numbers so the researcher has immediate signal.
+  const nonBaseline = runs.filter(r => r.draft_label !== 'baseline');
+  if (!nonBaseline.length) {
+    const modes = [...new Set(baselineRuns.map(r => r.mode))].sort();
+    const tableRows = modes.map(m => {
+      const vals = baselineRuns.filter(r => r.mode === m).map(r => r.block_eff);
+      const avg  = vals.length ? mean(vals).toFixed(3) : '—';
+      return `<tr><td style="padding:3px 14px;font-weight:600">${m}</td>` +
+             `<td style="padding:3px 10px;color:#4dabf7;font-variant-numeric:tabular-nums">${avg}</td></tr>`;
+    }).join('');
+    const el = document.getElementById('chart-gain');
+    if (!el) return;
+    try { Plotly.purge('chart-gain'); } catch(e) {}
+    el.innerHTML =
+      `<div style="display:flex;align-items:center;justify-content:center;` +
+      `height:100%;flex-direction:column;gap:14px;color:#ccc">` +
+      `<div style="font-size:13px;font-style:italic;color:#aaa">` +
+      `✅ Baseline established — gain bars appear after Phase 3 trained-model evals land` +
+      `</div>` +
+      `<table style="font-size:13px;border-collapse:collapse">` +
+      `<thead><tr>` +
+      `<th style="padding:3px 14px;color:#777;font-weight:400;border-bottom:1px solid #444">Verifier mode</th>` +
+      `<th style="padding:3px 10px;color:#777;font-weight:400;border-bottom:1px solid #444">Baseline BE (K=${K})</th>` +
+      `</tr></thead><tbody>${tableRows}</tbody>` +
+      `</table>` +
+      `</div>`;
+    return;
+  }
+
+  // ── State 3: Baseline + ≥1 trained model — render the gain bars ───────────
 
   function baselineBE(mode, temperature, ds) {
     const vals = baselineRuns.filter(r =>
@@ -1762,7 +1797,6 @@ function renderGainOverBaseline() {
     return vals.length ? mean(vals) : null;
   }
 
-  const nonBaseline = runs.filter(r => r.draft_label !== 'baseline');
   const labels = [...new Set(nonBaseline.map(r => r.draft_label))].sort();
   const modes  = [...new Set(runs.map(r => r.mode))].sort();
 
