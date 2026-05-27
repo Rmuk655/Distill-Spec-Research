@@ -530,13 +530,12 @@ _HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="filter-section">
-    <label>Draft Label</label>
+    <label>Distillation Method</label>
+    <!-- draft_label = loss name used during training; loss_name is always identical, not shown separately -->
     <div id="f-draft_label"></div>
   </div>
-  <div class="filter-section">
-    <label>Loss Type</label>
-    <div id="f-loss_name"></div>
-  </div>
+  <!-- f-loss_name hidden: always same as draft_label in this pipeline -->
+  <div id="f-loss_name" style="display:none"></div>
   <div class="filter-section">
     <label>Dataset</label>
     <div id="f-dataset"></div>
@@ -988,8 +987,7 @@ _HTML = r"""<!DOCTYPE html>
           <div>
             <label class="form-label mb-0" style="font-size:12px">Group by</label>
             <select id="sens-group" class="form-select form-select-sm">
-              <option value="loss_name">Loss Function</option>
-              <option value="draft_label">Draft Label</option>
+              <option value="draft_label">Distillation Method</option>
               <option value="mode">Verifier Mode</option>
               <option value="dataset">Dataset</option>
             </select>
@@ -1033,9 +1031,8 @@ _HTML = r"""<!DOCTYPE html>
           <div class="col-auto">
             <label class="form-label mb-1" style="font-size:12px;font-weight:600">Rows</label>
             <select id="piv-row" class="form-select form-select-sm" style="width:140px">
-              <option value="loss_name">Loss Type</option>
+              <option value="draft_label">Distillation Method</option>
               <option value="dataset">Dataset</option>
-              <option value="draft_label">Draft Label</option>
               <option value="mode">Verifier Mode</option>
               <option value="K">K (tree width)</option>
               <option value="temperature">Temperature</option>
@@ -1048,8 +1045,7 @@ _HTML = r"""<!DOCTYPE html>
               <option value="mode">Verifier Mode</option>
               <option value="dataset">Dataset</option>
               <option value="K">K (tree width)</option>
-              <option value="loss_name">Loss Type</option>
-              <option value="draft_label">Draft Label</option>
+              <option value="draft_label">Distillation Method</option>
               <option value="temperature">Temperature</option>
               <option value="experiment_tag">Experiment Tag</option>
             </select>
@@ -1276,7 +1272,8 @@ const _SCALAR_MODES = new Set(['alpha','perplexity']);
 
 function buildFilterChips() {
   // Standard columns (mode handled specially below)
-  const filterCols = ['draft_label','loss_name','dataset','K','temperature','train_steps','experiment_tag'];
+  // loss_name is always identical to draft_label in this pipeline — omit from chips
+  const filterCols = ['draft_label','dataset','K','temperature','train_steps','experiment_tag'];
   filterCols.forEach(col => {
     const div = document.getElementById('f-' + col);
     if (!div) return;
