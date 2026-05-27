@@ -88,6 +88,11 @@ from training_scaffold import (
     setup_hw_opts    as _setup_hw_opts_scaffold,
 )
 
+# Loss registry — canonical implementations live in distillspec_gbv/losses/.
+# online_serve.py is in algorithms/ which is sys.path[0] at runtime, so the
+# subpackage import resolves without any extra sys.path surgery.
+from distillspec_gbv.losses import get_loss as _get_loss
+
 # peft is optional at import time so we give a clear error if missing
 try:
     from peft import LoraConfig, PeftModel, TaskType, get_peft_model
@@ -177,40 +182,13 @@ def _kl_at_positions(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # ── Compute distributions on the small (N_rejected, V) slices ────────────
-    log_s = F.log_softmax(s_sel, dim=-1)         # (N_rej, V) — needs grad
-
-    if kl_method == "forward_kl":
-        # KL(target ∥ student) — mode-covering, standard distillation
-        # Only need p_t and log_s → skip materialising p_s entirely
-        with torch.no_grad():
-            log_t = F.log_softmax(t_sel, dim=-1)
-            p_t   = log_t.exp()
-        kl = (p_t * (log_t - log_s)).sum(dim=-1)              # (N_rej,)
-
-    elif kl_method == "reverse_kl":
-        # KL(student ∥ target) — mode-seeking
-        with torch.no_grad():
-            log_t = F.log_softmax(t_sel, dim=-1)
-        p_s = log_s.exp()
-        kl = (p_s * (log_s - log_t)).sum(dim=-1)              # (N_rej,)
-
-    elif kl_method == "jsd":
-        # Jensen-Shannon divergence — symmetric, bounded in [0, ln2]
-        with torch.no_grad():
-            log_t = F.log_softmax(t_sel, dim=-1)
-            p_t   = log_t.exp()
-        p_s   = log_s.exp()
-        m     = 0.5 * (p_s + p_t)
-        log_m = (m + 1e-10).log()
-        kl = (
-            0.5 * (p_s * (log_s - log_m)).sum(dim=-1)
-            + 0.5 * (p_t * (log_t - log_m)).sum(dim=-1)
-        )                                                       # (N_rej,)
-    else:
-        raise ValueError(f"Unknown kl_method: {kl_method!r}")
-
-    return kl.mean()
+    # ── Route through canonical loss registry ─────────────────────────────────
+    # s_sel and t_sel are (N_rej, V) temperature-scaled logits (not log-probs);
+    # the package functions (forward_kl / reverse_kl / jsd) apply log_softmax
+    # internally, so we hand them the raw scaled logits directly.
+    # Memory efficiency: only the small rejected-position slice is ever
+    # materialised in the loss computation — same guarantee as before.
+    return _get_loss(kl_method, s_sel, t_sel).loss
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +236,15 @@ def _ebe_online(
     """
     B, T, V = student_logits.shape
 
-    # Compute log-softmax once for both EBE (gather) and KL (full-distribution).
-    # log_s keeps grad; log_t is a no-grad view of the already-detached teacher.
-    log_s = F.log_softmax(student_logits.float() / temperature, dim=-1)  # (B, T, V)
+    # Temperature-scaled logits (kept as named tensors so the KL regulariser can
+    # pass raw logits to the loss registry — package functions apply log_softmax
+    # internally and therefore require logits, not log-probs).
+    s_scaled = student_logits.float() / temperature                           # (B, T, V) grad
     with torch.no_grad():
-        log_t = F.log_softmax(teacher_logits.float() / temperature, dim=-1)  # (B, T, V)
+        t_scaled = teacher_logits.float() / temperature                       # (B, T, V) no grad
+    log_s = F.log_softmax(s_scaled, dim=-1)                                   # (B, T, V)
+    with torch.no_grad():
+        log_t = F.log_softmax(t_scaled, dim=-1)                               # (B, T, V)
 
     # ── EBE term ──────────────────────────────────────────────────────────────
     # Gather per-token log-probs for the actual tokens → (B, T) tiny scalars.
@@ -289,22 +271,20 @@ def _ebe_online(
     if kl_weight == 0.0:
         return ebe
 
-    # ── KL regulariser — rejected positions only ──────────────────────────────
+    # ── KL regulariser — rejected positions only (via loss registry) ──────────
     # Rationale: EBE gradient is 0 for under-estimated tokens (α = 1); KL covers
     # those positions.  We restrict it to rejected positions (wrong_mask) rather
     # than all tokens to stay consistent with OSD's philosophy of not penalising
     # the draft where it already aligns with the target.
-    mask_flat = wrong_mask.reshape(-1)                                      # (B*T,)
+    # We pass s_scaled / t_scaled (raw temperature-scaled logits) to the registry
+    # because package functions apply log_softmax internally.
+    mask_flat = wrong_mask.reshape(-1)                                       # (B*T,)
     if mask_flat.sum() == 0:
         return ebe
 
-    s_rej = log_s.reshape(-1, V)[mask_flat]                                # (N_rej, V)
-    with torch.no_grad():
-        t_rej = log_t.reshape(-1, V)[mask_flat]                            # (N_rej, V)
-        p_t   = t_rej.exp()                                                # (N_rej, V)
-
-    # Forward KL(target ∥ draft) at rejected positions
-    kl = (p_t * (t_rej - s_rej)).sum(dim=-1).mean()                       # scalar
+    s_rej = s_scaled.reshape(-1, V)[mask_flat]                              # (N_rej, V) grad
+    t_rej = t_scaled.reshape(-1, V)[mask_flat].detach()                     # (N_rej, V) no grad
+    kl = _get_loss("forward_kl", s_rej, t_rej).loss                         # scalar
 
     return ebe + kl_weight * kl
 
@@ -337,23 +317,18 @@ def _ebe_single_online(
         return (student_logits * 0).sum()
 
     # Select only rejected positions (N_rej ≪ B*T — memory-efficient)
-    s_sel = student_logits.reshape(-1, V)[mask_flat].float() / temperature   # (N_rej, V) grad
-    t_sel = teacher_logits.reshape(-1, V)[mask_flat].detach().float() / temperature  # no grad
+    s_sel    = student_logits.reshape(-1, V)[mask_flat].float() / temperature  # (N_rej, V) grad
+    t_sel    = teacher_logits.reshape(-1, V)[mask_flat].detach().float() / temperature  # no grad
+    ids_flat = token_ids.reshape(-1)[mask_flat]                                # (N_rej,)
     del student_logits, teacher_logits
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    log_s = F.log_softmax(s_sel, dim=-1)   # (N_rej, V)
-    with torch.no_grad():
-        log_t = F.log_softmax(t_sel, dim=-1)
-
-    # Gather token log-probs at rejected positions
-    ids_flat = token_ids.reshape(-1)[mask_flat]                     # (N_rej,)
-    log_p = log_s.gather(-1, ids_flat.unsqueeze(-1)).squeeze(-1)    # (N_rej,)
-    log_q = log_t.gather(-1, ids_flat.unsqueeze(-1)).squeeze(-1)    # (N_rej,)
-
-    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # (N_rej,)
-    return -alpha.mean()
+    # Route through canonical loss registry — same α = min(1, q/p) math as
+    # offline ebe_single, but applied only at rejected positions.
+    # s_sel / t_sel are temperature-scaled logits; ebe_single applies log_softmax
+    # internally and accepts token_ids for per-position gathering.
+    return _get_loss("ebe_single", s_sel, t_sel, token_ids=ids_flat).loss
 
 
 # ---------------------------------------------------------------------------

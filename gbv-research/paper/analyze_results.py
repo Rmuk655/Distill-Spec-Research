@@ -13,7 +13,7 @@ Usage:
     python analyze_results.py                    # full analysis, prints to stdout
     python analyze_results.py --out report.md    # save Markdown report
     python analyze_results.py --section alpha    # only alpha section
-    python analyze_results.py --baseline baseline --compare kl200,ebe200
+    python analyze_results.py --baseline baseline --compare kl-gsm8k,ebe-gsm8k
 """
 
 import sys, os, json, argparse
@@ -24,7 +24,9 @@ from collections import defaultdict
 from typing import Optional
 import math
 
-sys.path.insert(0, os.path.dirname(__file__))
+# results_db.py lives in gbv-research/db/, not in paper/.
+# Resolve the path relative to this file so the script runs from any cwd.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db"))
 import results_db
 
 # ---------------------------------------------------------------------------
@@ -311,31 +313,44 @@ def analyze_block_efficiency(baseline_label="baseline", compare_labels=None, out
             k_rows.append(row)
         buf.append(md_table(headers_k, k_rows))
 
-    # EBE gain analysis
+    # EBE gain analysis — detect KL and EBE labels dynamically so the table
+    # works with any naming convention (kl200, kl-gsm8k, etc.).
     buf.append("### EBE vs KL vs Baseline Gain Summary\n")
-    gain_rows = []
-    headers_g = ["Mode", "K", "Dataset", "KL vs BASE", "EBE vs BASE", "EBE vs KL", "Winner"]
-    for mode in modes:
-        for K in Ks:
-            datasets = sorted(set(r["dataset"] for r in runs if r["mode"] == mode and r["K"] == K))
-            for ds in datasets:
-                def _be(label):
-                    vals = [r["block_eff"] for r in runs
-                            if r["mode"]==mode and r["K"]==K and r["draft_label"]==label
-                            and r["dataset"]==ds and r["block_eff"] is not None]
-                    return mean(vals) if vals else None
-                base_be = _be(baseline_label)
-                kl_be   = _be("kl200")
-                ebe_be  = _be("ebe200")
-                if not base_be:
-                    continue
-                kl_gain  = f"{pct_change(kl_be, base_be):+.1f}%" if kl_be else "—"
-                ebe_gain = f"{pct_change(ebe_be, base_be):+.1f}%" if ebe_be else "—"
-                ebe_vs_kl = f"{pct_change(ebe_be, kl_be):+.1f}%" if (ebe_be and kl_be) else "—"
-                vals = {k: v for k, v in [("baseline",base_be),("kl200",kl_be),("ebe200",ebe_be)] if v}
-                winner = max(vals, key=vals.get) if vals else "—"
-                gain_rows.append([mode, K, ds, kl_gain, ebe_gain, ebe_vs_kl, winner])
-    buf.append(md_table(headers_g, gain_rows))
+    kl_label  = next((l for l in compare_labels if "kl"  in l.lower()), None)
+    ebe_label = next((l for l in compare_labels if "ebe" in l.lower()), None)
+    if not kl_label or not ebe_label:
+        buf.append(
+            f"_Skipped: need at least one KL label and one EBE label in the compare set. "
+            f"Pass --compare <kl-label>,<ebe-label> explicitly._\n"
+        )
+    else:
+        gain_rows = []
+        headers_g = ["Mode", "K", "Dataset",
+                     f"KL ({kl_label}) vs BASE",
+                     f"EBE ({ebe_label}) vs BASE",
+                     "EBE vs KL", "Winner"]
+        for mode in modes:
+            for K in Ks:
+                datasets = sorted(set(r["dataset"] for r in runs if r["mode"] == mode and r["K"] == K))
+                for ds in datasets:
+                    def _be(label):
+                        vals = [r["block_eff"] for r in runs
+                                if r["mode"]==mode and r["K"]==K and r["draft_label"]==label
+                                and r["dataset"]==ds and r["block_eff"] is not None]
+                        return mean(vals) if vals else None
+                    base_be = _be(baseline_label)
+                    kl_be   = _be(kl_label)
+                    ebe_be  = _be(ebe_label)
+                    if not base_be:
+                        continue
+                    kl_gain   = f"{pct_change(kl_be,  base_be):+.1f}%" if kl_be  else "—"
+                    ebe_gain  = f"{pct_change(ebe_be, base_be):+.1f}%" if ebe_be else "—"
+                    ebe_vs_kl = f"{pct_change(ebe_be, kl_be):+.1f}%"  if (ebe_be and kl_be) else "—"
+                    vals = {k: v for k, v in
+                            [("baseline", base_be), (kl_label, kl_be), (ebe_label, ebe_be)] if v}
+                    winner = max(vals, key=vals.get) if vals else "—"
+                    gain_rows.append([mode, K, ds, kl_gain, ebe_gain, ebe_vs_kl, winner])
+        buf.append(md_table(headers_g, gain_rows))
 
     return "\n".join(buf)
 
@@ -386,7 +401,9 @@ def analyze_convergence():
     buf.append("### Learning Rate Recommendation\n")
     lr_summary = []
     for label, pts in sorted(by_label.items()):
-        if "lr" not in label.lower() and label not in ("ebe200", "kl200"):
+        # Include labels that are LR-ablation runs ("lr" in name) OR
+        # standard KL / EBE training runs (any label containing "kl" or "ebe").
+        if not any(x in label.lower() for x in ("lr", "kl", "ebe")):
             continue
         pts_sorted = sorted(pts, key=lambda x: x["step"])
         if not pts_sorted:
@@ -635,7 +652,7 @@ def _generate_recommendations():
                    f"(mean BE={mean(by_K[best_K]):.4f})\n")
 
     buf.append("\n**Server run parameters:**\n")
-    buf.append("```\npython OSD/run_all.py \\\n"
+    buf.append("```\npython gbv-research/orchestration/evaluate.py \\\n"
                "    --student Qwen/Qwen2.5-0.5B \\\n"
                "    --teacher Qwen/Qwen3-8B \\\n"
                "    --n 50 \\\n"

@@ -1,8 +1,20 @@
 """
-seed_db.py — import all already-collected experimental results into results.db.
+seed_db.py — import historical experimental results into results.db.
 
-Run once after collecting results from bl56mnhxp and subsequent runs.
-Safe to re-run: checks for existing rows before inserting.
+This file seeds the DB with results from the bl56mnhxp proof-of-concept run
+(200-step offline distillation, Qwen2.5-0.5B draft → Qwen3-0.6B target).
+It is a one-time historical record — not an active data pipeline.
+
+Label naming in this file uses the OLD convention (kl200, ebe200) from the
+200-step run.  Current naming convention is <loss>-<dataset> (e.g.
+kl-gsm8k, ebe-gsm8k).  Do NOT change the labels here; the historical rows
+in results.db carry those labels and changing them would break continuity.
+
+Safe to re-run: insert_run() checks for existing rows before inserting.
+
+For adding NEW results interactively, use add_run() from a REPL:
+    from seed_db import add_run
+    add_run("kl-gsm8k", "gbv", K=3, dataset="gsm8k", block_eff=2.81)
 
 Usage:
     python seed_db.py            # seeds everything
@@ -15,15 +27,25 @@ import results_db
 
 TARGET = "Qwen/Qwen3-0.6B"
 BASE_PATH = "Qwen/Qwen2.5-0.5B"
-KL_PATH = "OSD/checkpoints/kl200_merged"
-EBE_PATH = "OSD/checkpoints/ebe200_merged"
 
+# Historical checkpoint paths from the 200-step bl56mnhxp proof-of-concept run.
+# These paths are stored as metadata strings in the DB (they don't need to exist
+# on disk for the DB insert to succeed).  Current runs save checkpoints under
+# gbv-research/orchestration/checkpoints/<label>/ — update paths there for new
+# DRAFT_META entries if you extend this seeder with new experiments.
+_KL_PATH_HISTORICAL  = "OSD/checkpoints/kl200_merged"
+_EBE_PATH_HISTORICAL = "OSD/checkpoints/ebe200_merged"
+
+# Historical label → metadata mapping.
+# Labels use the OLD 200-step naming (kl200, ebe200).  Current convention is
+# <loss>-<dataset> (e.g. kl-gsm8k, ebe-gsm8k).  Keep these as-is so the DB
+# rows remain consistent with what was actually run.
 DRAFT_META = {
-    "baseline": dict(draft_path=BASE_PATH, loss_name="baseline", train_steps=0,
+    "baseline": dict(draft_path=BASE_PATH,             loss_name="baseline", train_steps=0,
                      learning_rate=0.0, lora_rank=0),
-    "kl200":    dict(draft_path=KL_PATH,  loss_name="kl",       train_steps=200,
+    "kl200":    dict(draft_path=_KL_PATH_HISTORICAL,   loss_name="kl",       train_steps=200,
                      learning_rate=3e-5, lora_rank=8),
-    "ebe200":   dict(draft_path=EBE_PATH, loss_name="ebe",      train_steps=200,
+    "ebe200":   dict(draft_path=_EBE_PATH_HISTORICAL,  loss_name="ebe",      train_steps=200,
                      learning_rate=3e-5, lora_rank=8),
 }
 
@@ -199,9 +221,17 @@ def add_run(draft_label: str, mode: str, K: int, dataset: str,
             notes: str = None):
     """
     Helper to add a single result from the REPL after an experiment completes.
+
+    Use current label naming (<loss>-<dataset>), not historical 200-step names.
+
     Example:
         from seed_db import add_run
-        add_run("ebe200", "gbv", K=3, dataset="diverse50", block_eff=2.81)
+        add_run("ebe-gsm8k", "gbv", K=3, dataset="gsm8k", block_eff=2.81)
+        add_run("kl-gsm8k",  "specinfer", K=5, dataset="gsm8k", block_eff=2.64)
+
+    If draft_label is not in DRAFT_META (historical entries), draft_path defaults
+    to the label string itself and train_steps/lr/rank are zeroed — fill in notes
+    with any extra metadata you want to record.
     """
     meta = DRAFT_META.get(draft_label, dict(
         draft_path=draft_label, loss_name="custom",
