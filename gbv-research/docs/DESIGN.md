@@ -294,30 +294,59 @@ Eval steps are skipped if the result is already in `results.db` (`--skip_existin
 ## 8. File Map
 
 ```
-OSD/
-  experiment.py            ← Crash-safe master runner (phases 0–4, --config laptop|server)
-  evaluate.py             ← Evaluation orchestrator (alpha + BE via GBV subprocess)
-  train_qwen3.py         ← DistillSpec trainer (LoRA, forward_kl + ebe loss)
-  viz_server.py          ← Flask dashboard → http://localhost:5000
-  results_db.py          ← SQLite schema + insert/query helpers
-  setup_download.py      ← One-time model + dataset download (laptop/server configs)
-  fetch_datasets.py      ← Dataset fetchers (gsm8k, humaneval, math500, mtbench, alpaca)
-  SETUP.md               ← Full setup guide (laptop, server, Colab) with troubleshooting
-  DESIGN.md              ← This file
+gbv-research/              ← all active research code lives here
+  orchestration/
+    experiment.py          ← Crash-safe master runner (phases 1–4, --config laptop|colab|server)
+    evaluate.py            ← Evaluation orchestrator (alpha + BE via GBV subprocess)
+    clean_restart.py       ← Wipe db/ + reset state + optional relaunch
+    run_sweep.py           ← W&B hyperparameter sweep launcher
+    configs/               ← YAML per-environment configs (laptop.yaml, server.yaml, colab.yaml)
+    pipeline_state_laptop.json        ← full-run step state
+    pipeline_state_laptop_smoke.json  ← smoke-run step state (separate)
 
-  distill/               ← Original OSD codebase (kept for reference, NOT used in pipeline)
-    distill_trainer.py   ← OSD's DistillTrainer (online mode, wrong_token_ids, HF Trainer)
-    specInfer/generator.py ← OSD's SD loop (proposer + verifier, alpha tracking)
+  algorithms/
+    train_qwen3.py         ← Offline DistillSpec trainer (LoRA, all 5 offline losses)
+    online_serve.py        ← Online SD adaptation trainer (online + online_ebe)
+    training_scaffold.py   ← Shared utilities imported by both trainers
+    distillspec_gbv/
+      losses/              ← forward_kl.py, reverse_kl.py, jsd.py, l1.py, ebe.py
+      verifiers/           ← runner.py, tree.py, otlp_registry.py (Phase 3 eval target)
+      trainer.py           ← Model-family-agnostic trainer
 
-GBV/                     ← Multi-path verifier codebase (called as subprocess by evaluate.py)
-  main.py                ← Entry point (--mode specinfer|bv|gbv|traversal|naive|nss|bv)
-  verifier.py            ← TreeVerifier: all 7 verification algorithms
-  inference_util.py      ← iid_draft, target_tree_pass
-  node.py                ← Node class + OTLP solvers
-  util.py                ← Cache slicing, model loading, data loading
-  data/test.jsonl        ← 3-prompt smoke test for GBV standalone
+  core/
+    datasets/
+      raw/                 ← gsm8k_train.jsonl, gsm8k_30.jsonl, gsm8k_5.jsonl
+      downloader.py        ← Dataset fetcher (gsm8k, humaneval, math500, mtbench, alpaca)
+    model_families/        ← Qwen, Gemma tokenizer + logit helpers
+
+  dashboard/
+    training_dashboard.py  ← Flask dashboard → http://127.0.0.1:5000
+
+  db/                      ← Generated outputs (gitignored)
+    results.db             ← SQLite schema + all eval results
+    checkpoints/           ← LoRA adapters + merged models
+    logs/                  ← pipeline_output.log, be_progress.log
+
+  docs/
+    SETUP.md               ← Full setup guide (laptop, server, Colab) with troubleshooting
+    DESIGN.md              ← This file — design decisions and implementation notes
+    PROJECT_CONTEXT.md     ← Research context, team, baselines, decisions log
+    GUIDE.md               ← Research hypotheses, experiment matrix, how to interpret results
+    ADDING_A_LOSS.md       ← How to add a new loss objective
+    ADDING_AN_ALGORITHM.md ← How to add a new verifier algorithm
+    ADDING_A_MODEL_FAMILY.md ← How to add Gemma/LLaMA/Mistral support
+
+GBV/                       ← Multi-path verifier codebase (called as subprocess by evaluate.py)
+  main.py                  ← Entry point (--mode specinfer|bv|gbv|traversal|naive|nss|bv)
+  verifier.py              ← TreeVerifier: all 7 verification algorithms
+  node.py                  ← Node class + OTLP solvers
+  util.py                  ← Cache slicing, model loading, data loading
+
+OSD/distill/               ← Original OSD codebase fragment (reference-only)
+  specInfer/generator.py   ← Borrowed for alpha eval in evaluate.py (legitimate borrow)
 ```
 
-The `distill/` directory is the original OSD code, kept for reference. It is
-not called by `experiment.py` or `evaluate.py`. Our pipeline calls
-`train_qwen3.py` for training and `GBV/main.py` for block-efficiency evaluation.
+The active pipeline calls `algorithms/train_qwen3.py` for offline training,
+`algorithms/online_serve.py` for online training, and `GBV/main.py` as a
+subprocess for block-efficiency evaluation. `OSD/` is reference-only except for
+the `specInfer/generator.py` alpha evaluator.

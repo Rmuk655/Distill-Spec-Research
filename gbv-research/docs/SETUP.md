@@ -98,7 +98,7 @@ python orchestration/experiment.py --config laptop --smoke --yes
 
 What it runs:
 - **Phase 1**: baseline eval (untrained draft, all 6 verifier modes)
-- **Phase 2**: 50-step training for each of 6 losses (kl, ebe, rev_kl, jsd, l1, online)
+- **Phase 2**: 50-step training for each of 7 losses (kl, ebe, rev_kl, jsd, l1, online, online_ebe)
 - **Phase 3**: eval every trained model on gsm8k (all 6 verifiers)
 - **Phase 4**: skipped in smoke (multi-dataset eval — too slow)
 
@@ -107,7 +107,7 @@ Expected time breakdown:
 - Phase 2 per-loss: ~3-5 min each × 6 = ~25 min
 - Phase 3 per-eval: ~3-4 min each × 6 = ~20 min
 
-Pass criteria: no NaN/OOM errors, all 19 steps (Phase 1 + Phase 2 + Phase 3) green.
+Pass criteria: no NaN/OOM errors, all 22 steps (Phase 1 + Phase 2 + Phase 3) green.
 
 ### Watch progress
 
@@ -179,7 +179,7 @@ Expected time: 6-8 hours on laptop (RTX 500 4GB), ~2 hours on A100.
 
 ---
 
-## 6. Dashboard
+## 7. Dashboard
 
 The dashboard reads results directly from `db/results.db` — no W&B dependency.
 
@@ -198,7 +198,7 @@ What it shows:
 
 ---
 
-## 7. Clean restart
+## 8. Clean restart
 
 If the pipeline gets into a bad state (stale checkpoints, corrupted state file):
 
@@ -216,7 +216,7 @@ Both `pipeline_state_laptop.json` and `pipeline_state_laptop_smoke.json` are res
 
 ---
 
-## 8. Ephemeral compute — Colab, Kaggle, Modal
+## 9. Ephemeral compute — Colab, Kaggle, Modal
 
 Colab, Kaggle, and Modal all wipe local `/content` or `/tmp` disk when the
 session ends.  **Without persistent storage you lose every checkpoint.**
@@ -224,7 +224,7 @@ This section shows the exact commands for each platform.
 
 ---
 
-### 8a. Free Colab T4 — one-click notebook
+### 9a. Free Colab T4 — one-click notebook
 
 **➡  Open [`notebooks/colab_quickstart.ipynb`](../notebooks/colab_quickstart.ipynb) and
 run the cells top-to-bottom.  That's it.**
@@ -300,7 +300,7 @@ subprocess.run([sys.executable, "orchestration/experiment.py",
 
 ---
 
-### 8b. Colab Pro / Kaggle / any A100 (24 GB+)
+### 9b. Colab Pro / Kaggle / any A100 (24 GB+)
 
 No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB:
 
@@ -327,7 +327,7 @@ from the Kaggle session output panel when done.
 
 ---
 
-### 8c. Modal (recommended for overnight / paper-quality runs)
+### 9c. Modal (recommended for overnight / paper-quality runs)
 
 Modal gives on-demand A100 GPUs billed per second.  All checkpoints live in
 a **persistent Modal Volume** (`specdist-vol`) that survives container
@@ -425,7 +425,7 @@ run with `run.with_options(gpu="A10G").local(...)`.
 
 ---
 
-### 8d. Manual standalone run (single training step, no pipeline orchestrator)
+### 9d. Manual standalone run (single training step, no pipeline orchestrator)
 
 ```bash
 # Colab free T4 — must pass --load_in_4bit manually:
@@ -456,9 +456,9 @@ python algorithms/train_qwen3.py \
 
 ---
 
-## 9. MLOps — hyperparameter overrides, loss filtering, and W&B sweeps
+## 10. MLOps — hyperparameter overrides, loss filtering, and W&B sweeps
 
-### 9a. No-code experiment variation
+### 10a. No-code experiment variation
 
 All training hyperparameters are exposed as CLI flags so researchers can run
 experiments without editing any source file.
@@ -502,7 +502,7 @@ python algorithms/train_qwen3.py \
     --output db/checkpoints/ebe-ablation-v1
 ```
 
-### 9b. YAML config files — per-environment defaults
+### 10b. YAML config files — per-environment defaults
 
 Each compute environment has a YAML in `orchestration/configs/`:
 
@@ -521,7 +521,7 @@ To add a new environment (e.g., Kaggle P100):
 3. Add `"kaggle": {"draft": ..., "target": ...}` to `CONFIGS` dict in `experiment.py`
 4. Run: `python orchestration/experiment.py --config kaggle --ckpt_root /kaggle/working/ckpts`
 
-### 9c. W&B hyperparameter sweeps
+### 10c. W&B hyperparameter sweeps
 
 A W&B sweep runs many trials automatically, each with different hyperparameters.
 The Bayesian optimizer finds the best combination faster than a manual grid.
@@ -577,7 +577,7 @@ python orchestration/run_sweep.py \
 All sweep runs appear in W&B under group `hparam_sweep_v1` — use the
 **Parallel Coordinates** chart to identify which hyperparameters drive val/loss.
 
-### 9d. Reading sweep results
+### 10d. Reading sweep results
 
 After a sweep, pull the best config:
 ```python

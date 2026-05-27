@@ -44,29 +44,30 @@ Rahul Thomas must NOT own: primary implementation, debugging, experiment trackin
 
 ## Codebase Architecture
 
-Three components integrated via subprocess. The sibling directories `OSD/` and `GBV/`
-are transitional: all our research code has been migrated to `gbv-research/`.
-Phase 2 cleanup (after current pipeline run) will make them reference-only.
+Three components integrated via subprocess. `OSD/` and `GBV/` are reference-only
+codebases. All active research code lives in `gbv-research/`.
 
 ```
 2026 summer/                  ← git repo root
 │
-├── OSD/                      ← training scripts (active during pipeline runs)
-│   ├── train_qwen3.py        ← training loop; all 6 losses (Phase 2: → algorithms/)
-│   ├── online_serve.py       ← online SD (Phase 2: → algorithms/)
-│   └── merge_lora.py         ← LoRA merge; called by experiment.py
+├── OSD/                      ← original OSD codebase (reference-only, not imported by pipeline)
+│   └── distill/specInfer/    ← alpha-eval Generator still borrowed here for evaluate.py
 │
-├── GBV/                      ← verifier CLI (active during eval)
-│   ├── main.py               ← eval entrypoint; called by evaluate.py (Phase 2: → verifiers/)
+├── GBV/                      ← verifier CLI (called as subprocess during eval; pending Phase 3 revert)
+│   ├── main.py               ← eval entrypoint; called by evaluate.py
 │   ├── verifier.py           ← TreeVerifier: all 6 verifier modes
 │   ├── node.py               ← OTLP solvers
 │   └── util.py               ← model loading helpers
 │
 └── gbv-research/             ← research project (canonical codebase)
-    ├── algorithms/distillspec_gbv/
-    │   ├── losses/           ← forward_kl, reverse_kl, jsd, l1, ebe (class-based, tested)
-    │   ├── verifiers/        ← evolved GBV (runner.py, tree.py, otlp_registry.py — Phase 2 target)
-    │   └── trainer.py        ← evolved train_qwen3.py (Phase 2: replaces _TRAIN_SCRIPT)
+    ├── algorithms/
+    │   ├── train_qwen3.py    ← offline distillation trainer (all 5 offline losses)
+    │   ├── online_serve.py   ← online SD adaptation trainer (online + online_ebe)
+    │   ├── training_scaffold.py ← shared utilities (HW setup, model load, LoRA, checkpoints, W&B)
+    │   └── distillspec_gbv/
+    │       ├── losses/       ← forward_kl, reverse_kl, jsd, l1, ebe (class-based, tested)
+    │       ├── verifiers/    ← runner.py, tree.py, otlp_registry.py (Phase 3: replaces GBV/main.py)
+    │       └── trainer.py    ← model-family-agnostic replacement for train_qwen3.py
     ├── orchestration/
     │   ├── experiment.py       ← crash-safe orchestrator; Phases 1-4
     │   ├── evaluate.py        ← eval subprocess; calls GBV/main.py; writes results.db
@@ -82,23 +83,19 @@ Phase 2 cleanup (after current pipeline run) will make them reference-only.
         └── logs/             ← pipeline_output.log, be_progress.log
 ```
 
-**Integration pattern**: `experiment.py` launches `OSD/train_qwen3.py` (training)
-and `orchestration/evaluate.py` (eval) as subprocesses. `evaluate.py` calls
-`GBV/main.py` as a subprocess for block-efficiency measurement and writes
-results to `db/results.db`.
+**Integration pattern**: `experiment.py` launches `algorithms/train_qwen3.py` (offline
+training) and `algorithms/online_serve.py` (online training) as subprocesses, then
+`orchestration/evaluate.py` (eval). `evaluate.py` calls `GBV/main.py` as a subprocess
+for block-efficiency measurement and writes results to `db/results.db`.
 
-**Phase 2 migration targets** (once current pipeline run completes):
-- `OSD/train_qwen3.py` → `gbv-research/algorithms/train_qwen3.py`
-- `OSD/online_serve.py` → `gbv-research/algorithms/online_serve.py`
-- `GBV/main.py` subprocess → `algorithms/distillspec_gbv/verifiers/runner.py`
-- Update `_TRAIN_SCRIPT`, `_ONLINE_SCRIPT` in experiment.py; update evaluate.py GBV path
+**Pending Phase 3 migration**: after Phase 3 eval confirms `algorithms/distillspec_gbv/verifiers/runner.py`
+produces identical results to `GBV/main.py`, switch `evaluate.py` to runner.py and
+revert `GBV/` to the unmodified reference repo.
 
 **Data format**: all components read JSONL files with a `"prompt"` field.
 
 **Reference codebases** (read-only snapshots — in `references/`, never imported):
-- `references/osd-original/` — https://github.com/LiuXiaoxuanPKU/OSD
-- `references/gbv-original/` — https://anonymous.4open.science/r/GBV-BED8/
-- `references/adaspec/` — https://github.com/yuezhouhu/adaspec (optional ablation reference)
+- `references/adaspec/` — https://github.com/yuezhouhu/adaspec (ablation reference)
 
 ---
 
@@ -137,12 +134,15 @@ Architecture mismatch (0.5B Qwen2.5 vs 0.6B Qwen3) is fine — SD only requires 
 
 ### Loss Functions
 
-| Loss | Description | Phase |
+| Loss | Description | Role |
 |---|---|---|
-| `forward_kl` | KL(target ∥ student). DistillSpec canonical (Section 3.1). Mode-covering. | Phase 1 baseline |
-| `ebe_token` | Acceptance-weighted MLE: `L = -Σ min(1,q/p).detach() × log p_draft(t)` | Phase 1 novel |
-| `ebe_block` | Analytic gradient through ∏αᵢ. Confirms with Rahul Thomas before implementing. | Phase 2 |
-| `reinforce` | Policy gradient with BE as reward. High variance. Needs server VRAM. | Phase 2+ |
+| `forward_kl` | KL(target ∥ student). DistillSpec canonical (Section 3.1). Mode-covering. | Baseline |
+| `ebe` | Expected Block Efficiency — direct gradient through ∏αᵢ cumprod. Novel. | Novel contribution |
+| `reverse_kl` | KL(student ∥ target). Mode-seeking. | Ablation |
+| `jsd` | Jensen-Shannon divergence. Symmetric. | Ablation |
+| `l1` | L1 on probability distributions. Total-variation. | Ablation |
+| `online` | Online OSD — forward_kl on live SD outputs at rejected positions. | Ablation |
+| `online_ebe` | Online OSD with EBE loss at rejected positions. | Novel ablation |
 
 **KL direction**: forward KL — KL(target ∥ student). NOT reverse KL (mode-seeking, collapses to peaked draft).
 
@@ -204,7 +204,7 @@ Pipeline runs 4 phases. Phase 4 (multi-dataset) is skipped in smoke mode.
 | Phase | Step IDs | What runs |
 |---|---|---|
 | **Phase 1 — Baseline** | `eval_baseline_gsm8k` | Untrained draft, all 6 verifiers, gsm8k |
-| **Phase 2 — Training** | `train_kl_gsm8k` + `merge_kl_gsm8k` ... × 6 losses | 1000 steps each (50 in smoke) |
+| **Phase 2 — Training** | `train_kl_gsm8k` + `merge_kl_gsm8k` ... × 7 losses | 1000 steps each (50 in smoke) |
 | **Phase 3 — GSM8K Eval** | `eval_kl_gsm8k`, `eval_ebe_gsm8k` ... × 6 losses | All 6 verifiers, K=3+5, temps=0.6+1.0 |
 | **Phase 4 — Multi-Dataset** | `eval_*_all` × 7 models | humaneval, math500, mtbench, alpaca |
 

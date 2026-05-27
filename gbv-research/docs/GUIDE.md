@@ -419,8 +419,9 @@ where  α_i = min(1, q(token_i) / p_draft(token_i))
 ## 7. Dashboard
 
 Start with:
-```
-python viz_server.py       # opens http://localhost:5000
+```bash
+# Run from gbv-research/
+python dashboard/training_dashboard.py    # opens http://127.0.0.1:5000
 ```
 
 The dashboard auto-refreshes every 30 seconds. The status bar at the top shows live pipeline progress.
@@ -618,9 +619,9 @@ python experiment.py --config server --yes
 
 ### View dashboard
 ```bash
-python viz_server.py
+python dashboard/training_dashboard.py
 ```
-Open http://localhost:5000 in a browser. Use the HW TIER filter in the sidebar to select which tier's results to display.
+Open http://127.0.0.1:5000 in a browser. Use the HW TIER filter in the sidebar to select which tier's results to display.
 
 ### Force restart from a specific step
 ```bash
@@ -643,21 +644,23 @@ checkpoints/kl-run/
 To answer "is training actually helping?", evaluate block efficiency at each checkpoint:
 
 ```bash
+# Run from gbv-research/
+
 # 1. Merge the LoRA adapter into a standalone model
-python train_qwen3.py --merge_only \
-    --adapter checkpoints/kl-run/ckpt_step_00200 \
+python algorithms/train_qwen3.py --merge_only \
+    --adapter db/checkpoints/kl-gsm8k/ckpt_step_00200 \
     --draft Qwen/Qwen3-0.6B
 
 # 2. Run speculative decoding eval on the merged model
-python evaluate.py \
-    --student checkpoints/kl-run/ckpt_step_00200_merged \
+python orchestration/evaluate.py \
+    --student db/checkpoints/kl-gsm8k/ckpt_step_00200_merged \
     --teacher Qwen/Qwen3-8B \
     --student_label kl_step200 \
     --datasets gsm8k --modes gbv,specinfer --K 3 --n 10 \
     --hw_tier a100
 
 # 3. Repeat for each checkpoint, then view in dashboard
-python viz_server.py
+python dashboard/training_dashboard.py
 ```
 
 The Mode Comparison tab will show a bar for each checkpoint. If BE increases step-by-step, training is working. If it flatlines or drops after a certain step, that is where to stop training.
@@ -668,11 +671,15 @@ The Mode Comparison tab will show a bar for each checkpoint. If BE increases ste
 
 ## 8b. Running Training on a Server (Colab / Modal)
 
-The existing `train_qwen3.py` runs anywhere — no code changes needed. These are the setup steps for each environment.
+The existing `algorithms/train_qwen3.py` runs anywhere — no code changes needed. These are the setup steps for each environment.
 
 ---
 
 ### Google Colab (free T4, 15 GB VRAM)
+
+**Preferred method**: open `notebooks/colab_quickstart.ipynb` and run top-to-bottom. That's it.
+
+For manual cell-by-cell control:
 
 ```python
 # Cell 1: Mount Drive so checkpoints survive session restart
@@ -682,20 +689,20 @@ drive.mount('/content/drive')
 # Cell 2: Install dependencies
 !pip install -q peft transformers accelerate bitsandbytes
 
-# Cell 3: Clone / upload the OSD directory, then train
+# Cell 3: Clone repo and train
 import os
 os.environ["TRANSFORMERS_OFFLINE"] = "0"   # allow first-time download
 
 # COLAB ONLY: --load_in_4bit loads the 8B target in 4-bit NF4 for T4 15GB
 # DO NOT use --load_in_4bit on A100/server runs (bf16 full precision required)
-!python train_qwen3.py \
+!python algorithms/train_qwen3.py \
     --draft  Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
     --load_in_4bit \
     --loss forward_kl \
     --steps 1000 \
-    --output /content/drive/MyDrive/OSD/checkpoints/kl-run \
-    --dataset data/gsm8k_train.jsonl \
+    --output /content/drive/MyDrive/specdist/checkpoints/kl-run \
+    --dataset core/datasets/raw/gsm8k_train.jsonl \
     --milestone_every 200 \
     --val_every 50
 ```
@@ -782,22 +789,25 @@ python setup_download.py --config server --dry_run
 
 ## 8d. Generating a Results Report (analyze_results.py)
 
-`analyze_results.py` reads from `results.db` and generates a statistical comparison of all evaluation runs.
+`paper/analyze_results.py` reads from `db/results.db` and generates a statistical
+comparison of all evaluation runs.
 
 ### Usage
 
 ```bash
+# Run from gbv-research/
+
 # Print Markdown report to terminal
-python analyze_results.py
+python paper/analyze_results.py
 
 # Save to file (for the paper or a PR)
-python analyze_results.py --out report.md
+python paper/analyze_results.py --out report.md
 
 # Paper runs only (a100 tier)
-python analyze_results.py --draft_labels baseline,kl1000-gsm8k,ebe1000-gsm8k
+python paper/analyze_results.py --draft_labels baseline,kl1000-gsm8k,ebe1000-gsm8k
 
 # Filter by dataset
-python analyze_results.py --dataset gsm8k --out gsm8k_report.md
+python paper/analyze_results.py --dataset gsm8k --out gsm8k_report.md
 ```
 
 ### What it reports
@@ -834,10 +844,10 @@ The EAGLE head trains on the **target** model's hidden states. The paper's targe
 
 ```bash
 # Run full pipeline + EAGLE baseline — use --config server or colab (never laptop)
-python experiment.py --config server --yes --eagle
+python orchestration/experiment.py --config server --yes --eagle
 
 # Run EAGLE phases only (Phases 0–4 already done)
-python experiment.py --config server --yes --eagle --from eagle_gen
+python orchestration/experiment.py --config server --yes --eagle --from eagle_gen
 ```
 
 ---
@@ -927,14 +937,15 @@ Each eval cell logs one point to W&B:
 
 ### 10e. Hyperparameter Sweeps
 
-The sweep config at `OSD/sweep_config.yaml` runs a **Bayesian sweep** over lr, lora_r, and loss type.
+The sweep config at `orchestration/configs/sweep.yaml` runs a **Bayesian sweep** over lr, lora_r, and loss type.
+Use `orchestration/run_sweep.py` rather than calling `wandb sweep` directly (it sets up the correct project and agent).
 
 ```bash
-# Step 1 — create the sweep
-wandb sweep sweep_config.yaml
+# Step 1 — register the sweep and run 20 trials
+python orchestration/run_sweep.py --count 20
 
-# Step 2 — start an agent
-wandb agent <entity>/distillspec/abc123xy
+# Step 2 — add more parallel agents on other machines
+wandb agent <entity>/distillspec/<sweep_id>
 ```
 
 ---
@@ -1017,13 +1028,19 @@ Every update_every prompts:
 ### Running online adaptation
 
 ```bash
+# Run from gbv-research/
+
 # Start from base draft (no prior training)
-python online_serve.py --prompts data/gsm8k_train.jsonl --steps 500 --output checkpoints/online-gsm8k
+python algorithms/online_serve.py \
+    --prompts core/datasets/raw/gsm8k_train.jsonl \
+    --steps 500 --output db/checkpoints/online-gsm8k
 
 # Start from a pre-trained offline checkpoint (recommended — faster convergence)
-python online_serve.py --prompts data/gsm8k_train.jsonl --steps 500 \
-    --adapter checkpoints/ebe1000-gsm8k \
-    --output checkpoints/online-gsm8k
+python algorithms/online_serve.py \
+    --prompts core/datasets/raw/gsm8k_train.jsonl \
+    --steps 500 \
+    --adapter db/checkpoints/ebe-gsm8k \
+    --output db/checkpoints/online-gsm8k
 ```
 
 ### Tests that prove improvement
@@ -1032,34 +1049,39 @@ python online_serve.py --prompts data/gsm8k_train.jsonl --steps 500 \
 
 | Metric | What it means | Expected trend |
 |---|---|---|
-| `online/alpha` | Rolling acceptance rate | Rises from ~0.45 → 0.55+ over 500 steps |
-| `online/eval_alpha` | Acceptance rate on 30 held-out prompts | Rises monotonically; end value > baseline |
+| `online/alpha` | Rolling acceptance rate | Rises from ~0.73 → 0.80+ over 500 steps |
+| `online/eval_alpha` | Acceptance rate on held-out prompts | Rises monotonically; end value > baseline |
 | `online/loss` | Forward KL loss at rejection positions | Decreases (model correcting its errors) |
 
 **Pass threshold (H3):** `eval_alpha` at step 500 > `eval_alpha` at step 0.  
-A successful online run should reach ≥ 0.52 on GSM8K after 500 steps starting from baseline (~0.446).
+A successful online run should reach ≥ 0.76 on GSM8K after 500 steps starting from baseline (~0.73).
 
-#### 2. Ranked comparison test (run after pipeline finishes Phase 2c)
+#### 2. Ranked comparison (run after pipeline finishes Phase 3)
+
+Use `orchestration/evaluate.py` directly to compare all checkpoints:
 
 ```bash
-python test_kl_comparison.py --n 20 --dataset data/gsm8k_train.jsonl
+python orchestration/evaluate.py \
+    --student db/checkpoints/online-gsm8k_merged \
+    --teacher Qwen/Qwen3-0.6B \
+    --datasets gsm8k --modes specinfer,traversal --K 3,5
 ```
 
-This runs GBV evaluation on all merged checkpoints and prints a ranked table.
+This writes results to `db/results.db`; compare models in the dashboard.
 
 #### 3. Dashboard comparison
 
-After Phase 3/4 evals complete, open `http://127.0.0.1:5000/`:
+After Phase 3/4 evals complete, open `http://127.0.0.1:5000`:
 - **Key Results tab** → `online` bar should be taller than `baseline` bar in the alpha chart
-- **Mode Comparison tab** → select `online-gsm8k` vs `ebe1000-gsm8k` to see the gap
+- **Mode Comparison tab** → select `online-gsm8k` vs `ebe-gsm8k` to see the gap
 
 ### KL method for online mode
 
 Online OSD defaults to `--kl_method forward_kl`, matching the paper.
 
 ```bash
-python online_serve.py --kl_method reverse_kl ...  # ablation
-python online_serve.py --kl_method jsd ...          # symmetric blend
+python algorithms/online_serve.py --kl_method reverse_kl ...  # ablation
+python algorithms/online_serve.py --kl_method jsd ...          # symmetric blend
 ```
 
 ### In-pipeline integration

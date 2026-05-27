@@ -14,6 +14,7 @@ will appear in `list_algorithms()` and can be selected anywhere via
 - [ ] 3. Create any helper modules (`heads.py`, `predictor.py`, `tree_optimizer.py`, …)
 - [ ] 4. Uncomment the import in `algorithms/__init__.py`
 - [ ] 5. Smoke-test with `python -c "from algorithms import get_algorithm; get_algorithm('my_algo')"`
+- [ ] 6. *(Optional)* Add eval step(s) to `orchestration/experiment.py`'s `build_steps()` so the pipeline auto-evaluates it (see "Wiring into the pipeline" section below)
 
 ---
 
@@ -186,7 +187,33 @@ before it is fully implemented.
 
 ---
 
-## 6. Testing your implementation
+## 6. Wiring into the pipeline (optional)
+
+If you want `orchestration/experiment.py` to automatically evaluate your algorithm
+as part of Phase 3 or Phase 4, add an eval step to `build_steps()` in
+`orchestration/experiment.py`. Follow the pattern of the existing `eval_*` blocks:
+
+```python
+# In build_steps() — Phase 3 GSM8K Eval block:
+{
+    "id": "eval_my_algo_gsm8k",
+    "group": "Phase 3 — GSM8K Eval",
+    "desc": "Eval my_algo on gsm8k",
+    "cmd": _ec(_merged("ebe-gsm8k"), "my_algo_label",
+               datasets="gsm8k", modes="my_algo", K="3,5", task_score=True),
+    "done_check": None,
+},
+```
+
+Also add `"eval_my_algo_gsm8k"` to `_ALL_STEP_IDS` in `orchestration/clean_restart.py`
+so clean restarts reset it correctly.
+
+This step is only needed if your algorithm is evaluated by the pipeline runner.
+If you are only using it for standalone comparisons, skip this step.
+
+---
+
+## 7. Testing your implementation
 
 ```python
 # Smoke test — no GPU needed, just checks imports and meta
