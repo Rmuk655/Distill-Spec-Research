@@ -684,10 +684,11 @@ def load_models(args: argparse.Namespace, device: torch.device):
             draft_base, _adapter_src, is_trainable=True
         )
     else:
-        log.info("Wrapping draft with fresh LoRA (r=%d)", args.lora_r)
+        _lora_alpha = args.lora_alpha if args.lora_alpha is not None else args.lora_r * 2
+        log.info("Wrapping draft with fresh LoRA (r=%d, alpha=%d)", args.lora_r, _lora_alpha)
         lora_cfg = LoraConfig(
             r=args.lora_r,
-            lora_alpha=args.lora_r * 2,
+            lora_alpha=_lora_alpha,
             target_modules=["q_proj", "v_proj"],
             task_type=TaskType.CAUSAL_LM,
             bias="none",
@@ -820,6 +821,16 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_alpha", type=int, default=None,
+                        help="LoRA alpha. Defaults to 2 * lora_r if not set.")
+    parser.add_argument("--milestone_every", type=int, default=0,
+                        help="Save a permanent milestone checkpoint to ckpt_step_NNNNN/ "
+                             "every N steps in addition to the rolling ckpt_latest/. "
+                             "0 = disabled. Useful for EBE/online runs that can peak early "
+                             "and then collapse — milestone preserves the best model.")
+    parser.add_argument("--early_stop_patience", type=int, default=0,
+                        help="Stop training if eval_be worsens for this many consecutive "
+                             "eval windows. 0 = disabled (run all --steps).")
     parser.add_argument(
         "--kl_method",
         default="forward_kl",
@@ -980,6 +991,9 @@ def main():
     alpha_window: deque = deque(maxlen=50)  # rolling window for online/alpha
     update_count = 0
     last_loss = 0.0
+    # Early-stop tracking: count consecutive eval windows where eval_be worsens.
+    _best_eval_be = baseline_be
+    _early_stop_bad_windows = 0
 
     # Build the full prompt sequence then slice off already-processed steps so
     # we resume exactly where we left off without reprocessing any prompts.
@@ -1060,6 +1074,17 @@ def main():
                     log.info("[ckpt] Saved checkpoint at step %d → %s", step + 1, _ckpt_latest_dir)
                 except Exception as _ce:
                     log.warning("[ckpt] Checkpoint save failed at step %d: %s", step + 1, _ce)
+            # Milestone checkpoint — permanent named snapshot, never overwritten.
+            # Fires at multiples of --milestone_every (independent of save_every).
+            if args.milestone_every and (step + 1) % args.milestone_every == 0:
+                _ms_dir = Path(args.output) / f"ckpt_step_{step+1:05d}"
+                try:
+                    _ms_dir.mkdir(parents=True, exist_ok=True)
+                    draft_model.save_pretrained(str(_ms_dir))
+                    tokenizer.save_pretrained(str(_ms_dir))
+                    log.info("[ckpt] Milestone at step %d → %s", step + 1, _ms_dir)
+                except Exception as _me:
+                    log.warning("[ckpt] Milestone save failed at step %d: %s", step + 1, _me)
 
             # Write KL loss to results.db so the dashboard Training Loss Curves
             # panel shows the online run alongside kl/ebe/rev_kl/jsd/l1 curves.
@@ -1104,6 +1129,19 @@ def main():
                 lora_rank=args.lora_r,
                 split="val",
             )
+            # Early stopping: stop if eval_be worsens for patience consecutive windows.
+            if eval_be > _best_eval_be:
+                _best_eval_be = eval_be
+                _early_stop_bad_windows = 0
+            else:
+                _early_stop_bad_windows += 1
+                if args.early_stop_patience and _early_stop_bad_windows >= args.early_stop_patience:
+                    log.info(
+                        "[early_stop] eval_be did not improve for %d consecutive windows "
+                        "(best=%.3f, current=%.3f) — stopping at step %d",
+                        _early_stop_bad_windows, _best_eval_be, eval_be, step + 1,
+                    )
+                    break
 
     # --- Final evaluation ---
     draft_model.eval()
