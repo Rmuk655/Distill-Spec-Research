@@ -1,42 +1,42 @@
 # Colab configuration -- Google Colab free T4 (15 GB VRAM)
-# Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-8B (4-bit NF4, ~5 GB)
+# Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-4B (bf16, ~8 GB)
 #
-# Free T4 has 15 GB VRAM.  Qwen3-8B in bfloat16 ~= 16 GB -> OOM.
-# Loading the frozen teacher in 4-bit NF4 (bitsandbytes QLoRA) reduces it
-# to ~5 GB; total with draft + activations ~= 8-9 GB -> comfortable T4 fit.
-# The draft is trained in bfloat16 -- only the frozen teacher is quantised.
+# Why Qwen3-4B instead of 8B?
+#   The 8B teacher needed 4-bit NF4 quantization to fit.  Quantization loads
+#   BF16 intermediates into CPU RAM (12 GB on Colab) per-tensor, and the Linux
+#   OOM killer fires with SIGKILL before Python can catch anything (exit -9).
+#   Qwen3-4B loads as plain BF16: 1.2 + 8.0 + ~1.5 (activations) = ~10.7 GB
+#   VRAM -- fits T4 with 4+ GB to spare, no quantization, no CPU RAM spike.
+#
+# VRAM budget:   draft 1.2 GB + teacher 8.0 GB + KV/activations 1.5 GB = 10.7 GB
+# System RAM:    minimal (straight BF16 mmap, no intermediate tensors)
+# Alpha eval:    both models in VRAM simultaneously -- works fine
 #
 # CRASH RESUME: training auto-resumes from ckpt_latest on session restart.
-# save_every controls how much work is lost (25 steps ~= 1-2 min on T4).
-# milestone_every keeps permanent snapshots so you can roll back if needed.
+# save_every=25 steps ~= 1-2 min on T4 -- worst-case loss on crash.
 #
-# LARGER DRAFT MODELS (e.g. Qwen3-1.7B ~3 GB bf16 on T4):
-#   models:
-#     draft: Qwen/Qwen3-1.7B
-#   training:
-#     max_new_tokens: 32   # reduce to fit both models in 15 GB
-#   checkpointing:
-#     save_every: 25       # each step ~3-5 s -> 25 steps ~= 75-125 s lost max
-# Qwen3-4B draft on T4 is marginal (8+4 = 12 GB for weights alone); avoid.
+# To use Qwen3-1.7B teacher instead (even smaller, 6.1 GB total VRAM):
+#   models.target: Qwen/Qwen3-1.7B
+#   training.max_new_tokens: 128  (lots of headroom)
 #
 # Use with: python orchestration/experiment.py --config colab --storage_root /content/drive/MyDrive/specdist
 
 hardware:
   device: cuda
-  load_in_4bit: true            # required — 8B teacher won't fit T4 in bfloat16
+  load_in_4bit: false           # not needed -- 4B teacher fits T4 in bfloat16
   compile: false                # torch.compile not reliable in Colab environment
 
 models:
   family: qwen
   draft:  Qwen/Qwen3-0.6B
-  target: Qwen/Qwen3-8B
+  target: Qwen/Qwen3-4B         # 8 GB bf16; total VRAM with draft ~10.7 GB -- fits T4
 
 training:
   steps: 500                    # ~2 hrs on T4; use 1000 with Pro
   lr: 3.0e-5
   lora_r: 8                     # keep small to stay within T4 VRAM
   lora_alpha: 16
-  max_new_tokens: 64            # shorter than server (VRAM constraint)
+  max_new_tokens: 96            # more headroom with 4B teacher vs 8B
   teacher_temperature: 0.8
   seed: 42
 
@@ -67,11 +67,10 @@ health:
   early_stop_patience: 5
 
 evaluation:
-  # alpha is EXCLUDED on Colab: loading 0.6B student + 8B teacher in the same
-  # process exhausts ~12 GB system RAM and triggers the Linux OOM killer (exit -9)
-  # before Python can catch it.  Block-efficiency metrics run fine (subprocess mode).
-  # To get alpha metrics: re-run with --config server on an A100.
-  modes: [bv, gbv, traversal, specinfer, naive]
+  # All modes work: Qwen3-4B teacher loads as plain BF16 so there is no
+  # CPU-RAM spike from 4-bit quantization intermediates.  Alpha eval (token
+  # acceptance rate) fits comfortably in VRAM with both models resident.
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3, 5]
   L: 8
   n_prompts: 20                 # fewer than server -- T4 eval is slow
