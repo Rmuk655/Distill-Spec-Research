@@ -241,11 +241,18 @@ def api_pipeline_status():
     #   current_combo  — which (mode, K, T) combo + prompt progress is active
     #   n_be_done      — how many combos have printed their result line so far
     #   n_be_total     — total combos expected in this batch (from log header)
+    #
+    # IMPORTANT: Only read be_progress.log when an EVAL step is running.
+    # Training steps (online_serve.py, train_qwen3.py) never write to this
+    # log — they use evaluate_metrics() which calls speculative_step() directly.
+    # Reading a stale log during training steps shows confusing Phase 1 data.
+    _running_step_ids = {s["id"] for s in all_steps if s["status"] == "running"}
+    _an_eval_is_running = bool(_running_step_ids - TRAIN_STEP_IDS - {"eagle_gen", "eagle_train"})
     current_combo = None
     n_be_done     = 0
     n_be_total    = None
     try:
-        if os.path.exists(_BE_LOG):
+        if _an_eval_is_running and os.path.exists(_BE_LOG):
             with open(_BE_LOG, encoding="utf-8", errors="replace") as f:
                 log_lines = f.readlines()
 
@@ -536,7 +543,11 @@ _HTML = r"""<!DOCTYPE html>
   </div>
   <div class="filter-section">
     <label>Verifier Mode</label>
-    <div id="f-mode"></div>
+    <div id="f-mode-tree"></div>
+  </div>
+  <div class="filter-section">
+    <label>Measurement</label>
+    <div id="f-mode-scalar"></div>
   </div>
   <div class="filter-section">
     <label>K (tree width)</label>
@@ -592,6 +603,7 @@ _HTML = r"""<!DOCTYPE html>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-sensitivity">Sensitivity</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-category">Per-Category</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-throughput">Throughput</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-efficiency">Efficiency</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-training">Training Curves</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-table">All Runs</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-pivot">Pivot</a></li>
@@ -817,6 +829,84 @@ _HTML = r"""<!DOCTYPE html>
         <h6>Alpha vs Throughput (scatter)</h6>
         <div id="chart-scatter" style="height:380px"></div>
       </div>
+    </div>
+
+    <!-- Tab: Efficiency — novel BE decomposition + quality-vs-speed frontier -->
+    <div class="tab-pane fade" id="tab-efficiency">
+
+      <!-- Card 1: BE theoretical decomposition (α → BE curve) -->
+      <div class="chart-card">
+        <h6>Block Efficiency vs Alpha — Theoretical Curve + Measured Points
+          <small class="text-muted ms-2">
+            For sequential SD: BE = (1 − α<sup>K+1</sup>) / (1 − α).
+            Points above the curve = tree bonus beyond sequential prediction.
+          </small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">K:</label>
+          <select id="eff-k" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>4</option><option>5</option><option>1</option>
+          </select>
+          <label class="mb-0 ms-2">Mode:</label>
+          <select id="eff-mode" class="form-select form-select-sm" style="width:140px">
+            <option>traversal</option><option>gbv</option><option>specinfer</option><option>bv</option>
+          </select>
+        </div>
+        <div id="chart-eff-decomp" style="height:400px"></div>
+        <p class="text-muted mt-1" style="font-size:11px">
+          Grey curve = theoretical BE for sequential speculative decoding with the selected K.
+          Coloured points = actual measured BE vs alpha for each draft model.
+          Points above the curve mean the verifier (tree/GBV) outperforms sequential SD at the same alpha.
+        </p>
+      </div>
+
+      <!-- Card 2: Quality-vs-Speed Pareto frontier -->
+      <div class="chart-card">
+        <h6>Quality vs Speed — Pareto Frontier
+          <small class="text-muted ms-2">
+            X = task score (quality preservation).
+            Y = block efficiency (SD speedup proxy).
+            Top-right = best. Dashed line connects Pareto-optimal points.
+          </small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">Mode:</label>
+          <select id="eff-pareto-mode" class="form-select form-select-sm" style="width:140px">
+            <option>traversal</option><option>gbv</option><option>specinfer</option>
+          </select>
+          <label class="mb-0 ms-2">K:</label>
+          <select id="eff-pareto-k" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>5</option>
+          </select>
+        </div>
+        <div id="chart-pareto" style="height:380px"></div>
+        <p class="text-muted mt-1" style="font-size:11px">
+          Each point is one draft model (loss type). Baseline (untrained draft) is the reference corner.
+          Distillation should move points up (more blocks accepted) without moving them left (quality drop).
+        </p>
+      </div>
+
+      <!-- Card 3: BE normalised to baseline — improvement bars -->
+      <div class="chart-card">
+        <h6>Relative Block Efficiency Improvement over Baseline
+          <small class="text-muted ms-2">
+            BE<sub>model</sub> / BE<sub>baseline</sub> − 1 (%).
+            Green = better than no training. Red = regression.
+          </small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap">
+          <label class="mb-0">K:</label>
+          <select id="eff-norm-k" class="form-select form-select-sm" style="width:80px">
+            <option>3</option><option>5</option><option>1</option>
+          </select>
+          <label class="mb-0 ms-2">Temperature:</label>
+          <select id="eff-norm-t" class="form-select form-select-sm" style="width:90px">
+            <option value="">All</option>
+          </select>
+        </div>
+        <div id="chart-be-norm" style="height:380px"></div>
+      </div>
+
     </div>
 
     <!-- Tab 7: Training Curves -->
@@ -1087,6 +1177,7 @@ async function init() {
       if (target === '#tab-sensitivity') renderSensitivity();
       if (target === '#tab-category') renderCategory();
       if (target === '#tab-throughput') renderThroughput();
+      if (target === '#tab-efficiency') renderEfficiency();
       if (target === '#tab-pivot') renderPivot();
     });
   });
@@ -1099,8 +1190,13 @@ async function init() {
   startAutoRefresh(30);
 }
 
+// Tree-based verifiers vs scalar measurement modes
+const _TREE_MODES   = new Set(['gbv','traversal','specinfer','bv','naive']);
+const _SCALAR_MODES = new Set(['alpha','perplexity']);
+
 function buildFilterChips() {
-  const filterCols = ['draft_label','loss_name','dataset','mode','K','temperature','train_steps','experiment_tag'];
+  // Standard columns (mode handled specially below)
+  const filterCols = ['draft_label','loss_name','dataset','K','temperature','train_steps','experiment_tag'];
   filterCols.forEach(col => {
     const div = document.getElementById('f-' + col);
     if (!div) return;
@@ -1114,12 +1210,33 @@ function buildFilterChips() {
       chip.onclick = () => toggleChip(chip);
       div.appendChild(chip);
     });
-    // Hide the entire filter section when there are ≤1 distinct values —
-    // a single value gives no filtering power and just clutters the sidebar.
-    // (train_steps is always "0" until ablation runs; experiment_tag may be empty.)
+    // Hide entire section when ≤1 distinct values (e.g. train_steps always "0")
     const section = div.closest('.filter-section');
     if (section && vals.length <= 1) section.style.display = 'none';
   });
+
+  // Split mode into "Verifier Mode" (tree/sequential) and "Measurement" (alpha/perplexity)
+  const modes = DIMS['mode'] || [];
+  const treeModes   = modes.filter(m => _TREE_MODES.has(m));
+  const scalarModes = modes.filter(m => _SCALAR_MODES.has(m));
+
+  function _addModeChips(divId, modeList) {
+    const div = document.getElementById(divId);
+    if (!div) return;
+    modeList.forEach(val => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = val;
+      chip.dataset.col = 'mode';   // still filters on the 'mode' DB column
+      chip.dataset.val = val;
+      chip.onclick = () => toggleChip(chip);
+      div.appendChild(chip);
+    });
+    const section = div.closest('.filter-section');
+    if (section && modeList.length <= 1) section.style.display = 'none';
+  }
+  _addModeChips('f-mode-tree',   treeModes);
+  _addModeChips('f-mode-scalar', scalarModes);
 }
 
 function toggleChip(chip) {
@@ -1162,6 +1279,10 @@ function clearFilters() {
   document.querySelectorAll('.hw-tier-chip').forEach(c => c.classList.add('active'));
   applyFilters();
 }
+
+// ---- Convenience: is a given mode a tree verifier or a scalar measurement? ----
+function isMeasurementMode(mode) { return _SCALAR_MODES.has(mode); }
+function isVerifierMode(mode)    { return _TREE_MODES.has(mode); }
 
 function filterTagChips(q) {
   // Live-filter the experiment_tag chips by substring match
@@ -1238,7 +1359,8 @@ async function loadData() {
   renderTable();
   loadTrainingCurves();
   renderCategory();
-  // Re-render pivot only when its tab is active — avoids hidden table noise
+  // Only re-render heavy tabs when they're actually visible
+  if (document.getElementById('tab-efficiency')?.classList.contains('active')) renderEfficiency();
   if (document.getElementById('tab-pivot')?.classList.contains('active')) renderPivot();
 }
 
@@ -1804,6 +1926,212 @@ function renderThroughput() {
     margin: { t: 10 },
   }, { responsive: true });
 }
+
+// ---- Efficiency tab ----
+function renderEfficiency() {
+  renderBeDecomp();
+  renderPareto();
+  renderBeNorm();
+}
+
+// Card 1: α → BE theoretical curve + measured scatter
+function renderBeDecomp() {
+  const K    = parseInt(document.getElementById('eff-k')?.value || '3');
+  const mode = document.getElementById('eff-mode')?.value || 'traversal';
+
+  // Theoretical sequential-SD curve: BE(α) = (1 - α^(K+1)) / (1 - α)
+  // (Each block: draft proposes K tokens; accepted up to first rejection.
+  //  Expected accepted = sum_{k=0}^{K-1} α^k  = (1 - α^K)/(1-α).
+  //  Plus the forced target token = +1.  So BE = 1 + (1-α^K)/(1-α) = (1-α^(K+1))/(1-α).)
+  const alphaRange = Array.from({length: 100}, (_, i) => i / 100);
+  const theoryCurve = alphaRange.map(a =>
+    a >= 0.9999 ? K + 1 : (1 - Math.pow(a, K + 1)) / (1 - a)
+  );
+
+  const beRuns  = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
+  const alpRuns = ALL_RUNS.filter(r => r.alpha_mean != null && r.mode === 'alpha');
+
+  // Merge alpha + BE by (draft_label, dataset, temperature)
+  const key = r => `${r.draft_label}||${r.dataset}||${r.temperature}`;
+  const alpMap = {};
+  alpRuns.forEach(r => { alpMap[key(r)] = r.alpha_mean; });
+
+  const byLabel = {};
+  beRuns.forEach(r => {
+    const a = alpMap[key(r)];
+    if (a == null) return;
+    if (!byLabel[r.draft_label]) byLabel[r.draft_label] = {xs:[], ys:[], texts:[]};
+    byLabel[r.draft_label].xs.push(a);
+    byLabel[r.draft_label].ys.push(r.block_eff);
+    byLabel[r.draft_label].texts.push(`${r.draft_label}<br>${r.dataset} T=${r.temperature}`);
+  });
+
+  const traces = [
+    {
+      type: 'scatter', mode: 'lines',
+      name: `Sequential SD theory (K=${K})`,
+      x: alphaRange, y: theoryCurve,
+      line: { color: '#adb5bd', width: 2, dash: 'dot' },
+      hovertemplate: 'α=%{x:.2f}<br>theory BE=%{y:.3f}<extra>sequential theory</extra>',
+    },
+    ...Object.entries(byLabel).map(([label, d]) => ({
+      type: 'scatter', mode: 'markers',
+      name: label,
+      x: d.xs, y: d.ys, text: d.texts,
+      marker: { color: draftColor(label), size: 11, symbol: 'circle',
+                line: { width: 1.5, color: '#fff' } },
+      hovertemplate: '%{text}<br>α=%{x:.3f}<br>BE=%{y:.3f}<extra>' + label + '</extra>',
+    })),
+  ];
+
+  if (!Object.keys(byLabel).length) {
+    showNoData('chart-eff-decomp', 'Needs both alpha and BE results — appears after Phase 3 evals complete');
+    return;
+  }
+
+  Plotly.newPlot('chart-eff-decomp', traces, {
+    xaxis: { title: 'Token Acceptance Rate (α)', range: [0, 1] },
+    yaxis: { title: `Block Efficiency (tokens / target call) — ${mode} K=${K}` },
+    legend: { orientation: 'h', y: -0.2 },
+    margin: { t: 10, b: 70 },
+    shapes: [{
+      type: 'line', x0: 0, x1: 1, y0: 1, y1: 1,
+      line: { color: '#dee2e6', width: 1 }
+    }],
+  }, { responsive: true });
+}
+
+// Card 2: Quality (task_score) vs Speed (block_eff) Pareto frontier
+function renderPareto() {
+  const mode = document.getElementById('eff-pareto-mode')?.value || 'traversal';
+  const K    = parseInt(document.getElementById('eff-pareto-k')?.value || '3');
+
+  const beRuns    = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
+  const alpRuns   = ALL_RUNS.filter(r => r.task_score != null && r.mode === 'alpha');
+
+  // Build (task_score, block_eff) per draft_label (average across datasets/temps)
+  const labels = [...new Set(beRuns.map(r => r.draft_label))];
+  const points = labels.map(lbl => {
+    const be = beRuns.filter(r => r.draft_label === lbl).map(r => r.block_eff);
+    const ts = alpRuns.filter(r => r.draft_label === lbl).map(r => r.task_score);
+    return {
+      label: lbl,
+      be: be.length ? mean(be) : null,
+      ts: ts.length ? mean(ts) : null,
+    };
+  }).filter(p => p.be != null && p.ts != null);
+
+  if (!points.length) {
+    showNoData('chart-pareto', 'Pareto frontier needs task_score (from alpha eval with --task_score) and BE — appears after Phase 3 evals complete');
+    return;
+  }
+
+  // Pareto-optimal points (top-right corner dominance)
+  const sorted = [...points].sort((a, b) => a.ts - b.ts);
+  let paretoMaxBE = -Infinity;
+  const paretoFront = sorted.filter(p => {
+    if (p.be > paretoMaxBE) { paretoMaxBE = p.be; return true; }
+    return false;
+  });
+
+  const traces = [
+    // All points
+    {
+      type: 'scatter', mode: 'markers+text',
+      name: 'Draft models',
+      x: points.map(p => p.ts),
+      y: points.map(p => p.be),
+      text: points.map(p => p.label),
+      textposition: 'top center',
+      textfont: { size: 10 },
+      marker: { color: points.map(p => draftColor(p.label)), size: 12,
+                line: { width: 1.5, color: '#fff' } },
+      hovertemplate: '%{text}<br>task_score=%{x:.3f}<br>BE=%{y:.3f}<extra></extra>',
+    },
+    // Pareto frontier line
+    {
+      type: 'scatter', mode: 'lines',
+      name: 'Pareto frontier',
+      x: paretoFront.map(p => p.ts),
+      y: paretoFront.map(p => p.be),
+      line: { color: '#0d6efd', width: 2, dash: 'dash' },
+      hoverinfo: 'skip',
+    },
+  ];
+
+  // Reference: baseline point
+  const bl = points.find(p => p.label === 'baseline');
+  if (bl) {
+    traces.push({
+      type: 'scatter', mode: 'markers',
+      name: 'Baseline (no training)',
+      x: [bl.ts], y: [bl.be],
+      marker: { color: '#6c757d', size: 15, symbol: 'diamond',
+                line: { width: 2, color: '#333' } },
+      hovertemplate: 'Baseline<br>task=%{x:.3f}<br>BE=%{y:.3f}<extra></extra>',
+    });
+  }
+
+  Plotly.newPlot('chart-pareto', traces, {
+    xaxis: { title: 'Task Score (quality preservation — higher = less degradation)' },
+    yaxis: { title: `Block Efficiency — ${mode} K=${K}` },
+    legend: { orientation: 'h', y: -0.2 },
+    margin: { t: 10, b: 70 },
+  }, { responsive: true });
+}
+
+// Card 3: Normalised BE improvement over baseline (%)
+function renderBeNorm() {
+  const K    = parseInt(document.getElementById('eff-norm-k')?.value || '3');
+  const selT = document.getElementById('eff-norm-t')?.value || '';
+
+  let runs = ALL_RUNS.filter(r => r.block_eff != null && r.K === K);
+  if (selT) runs = runs.filter(r => String(r.temperature) === selT);
+  if (!runs.length) { showNoData('chart-be-norm', 'BE normalisation needs Phase 3 eval results'); return; }
+
+  const baselineRuns = runs.filter(r => r.draft_label === 'baseline');
+  if (!baselineRuns.length) { showNoData('chart-be-norm', 'Baseline BE results not yet available'); return; }
+
+  const nonBL  = runs.filter(r => r.draft_label !== 'baseline');
+  const labels = [...new Set(nonBL.map(r => r.draft_label))].sort();
+  const modes  = [...new Set(runs.map(r => r.mode)).values()].filter(m => _TREE_MODES.has(m)).sort();
+
+  const traces = labels.map(lbl => {
+    const color = draftColor(lbl);
+    const ys = modes.map(m => {
+      const trained = nonBL.filter(r => r.draft_label === lbl && r.mode === m).map(r => r.block_eff);
+      const bl      = baselineRuns.filter(r => r.mode === m).map(r => r.block_eff);
+      if (!trained.length || !bl.length || mean(bl) === 0) return null;
+      return ((mean(trained) - mean(bl)) / mean(bl)) * 100;
+    });
+    return {
+      type: 'bar', name: lbl,
+      x: modes, y: ys,
+      marker: {
+        color: ys.map(v => v == null ? '#eee' : v >= 0 ? color : '#dc3545'),
+      },
+      hovertemplate: '%{x}<br>%{y:.1f}%<extra>' + lbl + '</extra>',
+    };
+  });
+
+  Plotly.newPlot('chart-be-norm', traces, {
+    barmode: 'group',
+    yaxis: { title: 'BE improvement over baseline (%)', zeroline: true,
+             zerolinecolor: '#333', zerolinewidth: 2 },
+    xaxis: { title: 'Verifier Mode' },
+    shapes: [{ type: 'line', x0: -0.5, x1: modes.length - 0.5, y0: 0, y1: 0,
+               line: { color: '#333', width: 1.5, dash: 'dot' } }],
+    legend: { orientation: 'h', y: -0.2 },
+    margin: { t: 10, b: 60 },
+  }, { responsive: true });
+}
+
+['eff-k','eff-mode'].forEach(id =>
+  document.getElementById(id)?.addEventListener('change', renderBeDecomp));
+['eff-pareto-mode','eff-pareto-k'].forEach(id =>
+  document.getElementById(id)?.addEventListener('change', renderPareto));
+['eff-norm-k','eff-norm-t'].forEach(id =>
+  document.getElementById(id)?.addEventListener('change', renderBeNorm));
 
 // ---- Training Curves ----
 // Train colors (solid lines) — one per label
