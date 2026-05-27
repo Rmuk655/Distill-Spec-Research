@@ -659,14 +659,14 @@ _HTML = r"""<!DOCTYPE html>
 
       <!-- Alpha acceptance during online training (written by online_serve.py eval checkpoints) -->
       <div class="chart-card">
-        <h6>Online Training Quality — α and eval_be at each checkpoint
+        <h6>Online Training Quality — eval α and estimated block efficiency
           <small class="text-muted ms-2">
-            Written by online_serve.py every --eval_alpha_every steps.
-            Rising eval_be = model accepting more draft tokens during live SD.
-            Flat or falling = training not helping (consider LR change or early stop).
+            online_serve.py measures α (token acceptance rate) at each checkpoint — cheap, no full SD run needed.
+            Block efficiency is <em>estimated</em> from α using BE = (1−α⁶)/(1−α) for L=5.
+            Actual BE is measured in the final eval (Phase 3).
           </small>
         </h6>
-        <div id="chart-online-health" style="height:340px"></div>
+        <div id="chart-online-health" style="height:360px"></div>
       </div>
 
     </div>
@@ -2401,16 +2401,42 @@ async function renderOnlineHealth() {
 
     if (valRows.length) {
       // alpha = 1 - rejection_rate = 1 - val_loss
+      const alphaVals = valRows.map(r => Math.min(1, Math.max(0, 1 - r.loss)));
+
+      // Estimated block efficiency from alpha using closed-form formula for
+      // standard speculative decoding with draft length L=5:
+      //   BE_approx = (1 - α^(L+1)) / (1 - α)
+      // This is the expected number of tokens generated per SD round (range ~1–6).
+      // When α→1: BE→L+1=6 (all drafts accepted). When α=0: BE=1 (0 accepted).
+      const L = 5;
+      const beVals = alphaVals.map(a =>
+        a >= 0.9999 ? (L + 1) : (1 - Math.pow(a, L + 1)) / (1 - a)
+      );
+
+      // Alpha trace (left axis, 0–1)
       traces.push({
         type: 'scatter', mode: 'lines+markers',
         name: `${label} eval_α`,
         x: valRows.map(r => r.step),
-        y: valRows.map(r => Math.min(1, Math.max(0, 1 - r.loss))),
-        line: { color: valColor, width: 2.5, dash: 'solid' },
-        marker: { color: valColor, size: 8, symbol: 'circle',
+        y: alphaVals,
+        line: { color: valColor, width: 2, dash: 'solid' },
+        marker: { color: valColor, size: 7, symbol: 'circle',
                   line: { width: 1.5, color: '#fff' } },
         yaxis: 'y',
-        hovertemplate: 'step %{x}<br><b>eval_α: %{y:.4f}</b><extra>' + label + '</extra>',
+        hovertemplate: 'step %{x}<br><b>eval_α: %{y:.3f}</b><extra>' + label + '</extra>',
+      });
+
+      // Estimated BE trace (right axis, ~1–6)
+      traces.push({
+        type: 'scatter', mode: 'lines+markers',
+        name: `${label} est. BE`,
+        x: valRows.map(r => r.step),
+        y: beVals,
+        line: { color: valColor, width: 2, dash: 'dot' },
+        marker: { color: valColor, size: 7, symbol: 'diamond',
+                  line: { width: 1.5, color: '#fff' } },
+        yaxis: 'y3',
+        hovertemplate: 'step %{x}<br><b>est. BE: %{y:.2f}</b> (L=5 formula)<extra>' + label + '</extra>',
       });
     }
   });
@@ -2424,25 +2450,37 @@ async function renderOnlineHealth() {
   Plotly.newPlot('chart-online-health', traces, {
     xaxis: { title: 'Training Step' },
     yaxis: {
-      title: 'Eval α (token acceptance rate) — higher = better',
+      title: 'eval α — token acceptance rate (0→1)',
       range: [0, 1], side: 'left',
       gridcolor: '#e9ecef',
     },
     yaxis2: {
-      title: 'Train Loss', overlaying: 'y', side: 'right',
+      title: 'Train Loss',
+      overlaying: 'y', side: 'right',
       showgrid: false,
+      tickfont: { color: '#adb5bd' },
+      titlefont: { color: '#adb5bd' },
     },
-    legend: { orientation: 'h', y: -0.25 },
-    margin: { t: 20, b: 80, r: 60 },
+    yaxis3: {
+      title: 'Est. Block Efficiency (L=5)',
+      overlaying: 'y', side: 'right',
+      anchor: 'free', position: 1.0,
+      range: [1, 6.5],
+      showgrid: false,
+      tickfont: { color: '#495057' },
+      titlefont: { color: '#495057' },
+    },
+    legend: { orientation: 'h', y: -0.28 },
+    margin: { t: 24, b: 88, r: 90 },
     shapes: [{
       type: 'line', xref: 'paper', x0: 0, x1: 1,
       y0: 0.5, y1: 0.5, yref: 'y',
       line: { color: '#dee2e6', width: 1, dash: 'dot' }
     }],
     annotations: [{
-      text: 'Goal: eval_α rising over steps · flat/falling = consider LR change or early stop',
+      text: 'Solid = eval_α · Diamond = est. BE (= (1−α⁶)/(1−α)) · BE not measured directly during training',
       xref: 'paper', yref: 'paper',
-      x: 0, y: 1.06, showarrow: false,
+      x: 0, y: 1.07, showarrow: false,
       font: { size: 10, color: '#6c757d' }
     }],
   }, { responsive: true });
