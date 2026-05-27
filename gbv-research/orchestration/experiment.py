@@ -276,10 +276,12 @@ def _load_config_yaml(config_name: str) -> dict:
         # laptop.yaml: not set   (Windows — scripts skip compile automatically).
         if "compile" in hardware:
             out["compile"] = hardware["compile"]
-        # training.online_lr → separate LR for online adapt (typically 10x offline LR).
-        # Kept separate so offline and online LRs can be tuned independently in the YAML.
+        # training.online_lr → LR for forward_kl online adapt (typically 10x offline LR).
         if "online_lr" in training:
             out["online_lr"] = training["online_lr"]
+        # training.online_ebe_lr → LR for EBE online adapt (lower than online_lr).
+        if "online_ebe_lr" in training:
+            out["online_ebe_lr"] = training["online_ebe_lr"]
         return out
     except Exception as exc:
         print(f"  [config] Warning: could not load {yaml_path}: {exc}")
@@ -704,8 +706,21 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--kl_method", "ebe",
                 "--ebe_block_len", "4",    # match --K
                 "--ebe_kl_weight", "0.1",
-                "--lr", str(_h.get("online_lr", 3e-4)),
+                # online_ebe uses a lower LR than forward_kl online (1e-4 vs 3e-4):
+                # EBE's cumprod gradient is more volatile — same step size causes
+                # mode collapse after ~100 steps.  Observed: eval_be peaked at step
+                # 100 (3.302) then collapsed to 2.338 (below baseline 2.835) at step
+                # 150 when run with lr=3e-4.  Use separate online_ebe_lr key so the
+                # two online methods can be tuned independently.
+                "--lr", str(_h.get("online_ebe_lr", 1e-4)),
                 "--max_new_tokens", str(_online_max_tok),
+                # milestone checkpoints every 50 steps: preserve the best model even
+                # if it degrades later.  Forward_kl online is stable so doesn't need
+                # this; EBE online can peak early and then collapse.
+                "--milestone_every", "50",
+                # early stopping: if eval_alpha worsens for 3 consecutive eval windows
+                # (eval_every=50 steps by default), stop and keep ckpt_latest as-is.
+                "--early_stop_patience", "3",
                 *_online_hargs,   # --lora_r, --lora_alpha — must match offline training runs
             ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-gsm8k"), "adapter_model.safetensors"),
@@ -1538,10 +1553,14 @@ def main():
         # hardware.compile → passed to all training subprocesses as --compile.
         # False by default (safe on Windows).  server.yaml sets True for A100.
         "compile":        _yaml_cfg.get("compile", False),
-        # online_lr: separate LR for online adapt steps.  Defaults to 3e-4 (10x
-        # offline LR) — online adaptation requires a larger step to move the draft
+        # online_lr: LR for forward_kl online adapt.  Defaults to 3e-4 (10x
+        # offline LR) — online KL adaptation requires a larger step to move the draft
         # meaningfully within the short 500-prompt online budget.
         "online_lr":      _yaml_cfg.get("online_lr", 3e-4),
+        # online_ebe_lr: separate LR for EBE online adapt.  Must be lower than
+        # online_lr because EBE's cumprod gradient is more volatile.  Defaults to
+        # 1e-4 (3x lower than online_lr).  Set in laptop/server/colab YAML if needed.
+        "online_ebe_lr":  _yaml_cfg.get("online_ebe_lr", 1e-4),
     }
 
     # Parse --losses filter into a list; None = run all losses.
