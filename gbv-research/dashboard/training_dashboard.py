@@ -1365,10 +1365,13 @@ function toggleTierChip(chip) {
 
 function getActiveChips() {
   const filters = {};
-  document.querySelectorAll('.chip.active').forEach(c => {
+  // Use :not(.hw-tier-chip) to exclude hw-tier chips — they have data-tier (not
+  // data-col/data-val) and are handled separately by HW_TIER_FILTER, not here.
+  document.querySelectorAll('.chip.active:not(.hw-tier-chip)').forEach(c => {
     const col = c.dataset.col, val = c.dataset.val;
+    if (!col) return;   // guard: skip chips that lack data-col (shouldn't happen now)
     if (!filters[col]) filters[col] = [];
-    filters[col].push(val);
+    filters[col].push(String(val));
   });
   return filters;
 }
