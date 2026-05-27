@@ -81,7 +81,7 @@ clear error for unknown names — no other registration needed.
 
 ## Step 3. Add to pipeline
 
-Open `orchestration/pipeline.py` and add a **train + merge + eval** triple to
+Open `orchestration/experiment.py` and add a **train + merge + eval** triple to
 `build_steps()`, following the pattern of the existing losses. Copy the
 `train_jsd_gsm8k` block and replace `jsd` / `jsd-gsm8k` with your loss name.
 

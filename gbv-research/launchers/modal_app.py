@@ -125,14 +125,14 @@ def _start_commit_daemon(stop_event: threading.Event) -> threading.Thread:
 # ---------------------------------------------------------------------------
 
 def _setup_env(wandb_key: str | None = None, hf_token: str | None = None):
-    """Set environment variables used by pipeline.py and train_qwen3.py."""
+    """Set environment variables used by experiment.py and train_qwen3.py."""
     os.environ["HF_HOME"]              = HF_CACHE
     os.environ["TRANSFORMERS_OFFLINE"] = "0"   # always online on Modal
     os.environ["HF_HUB_OFFLINE"]       = "0"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 
     # ── Specdist storage env vars ───────────────────────────────────────────
-    # pipeline.py reads these and propagates them to all subprocesses, so every
+    # experiment.py reads these and propagates them to all subprocesses, so every
     # tool (train, eval, online) writes to the same persistent volume paths.
     os.environ["SPECDIST_STORAGE_ROOT"] = STORAGE_ROOT
     os.environ["SPECDIST_DB_PATH"]       = RESULTS_DB
@@ -262,7 +262,7 @@ def run_pipeline(
 
     pipeline_cmd = [
         sys.executable,
-        os.path.join(repo_dir, "orchestration", "pipeline.py"),
+        os.path.join(repo_dir, "orchestration", "experiment.py"),
         "--config",       config,
         "--storage_root", STORAGE_ROOT,   # pins ALL artifacts to the persistent volume
         "--yes",

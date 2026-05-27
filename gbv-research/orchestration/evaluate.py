@@ -1,5 +1,5 @@
 """
-run_all.py — single entry-point for the full SpecDist evaluation pipeline.
+evaluate.py — single entry-point for the full SpecDist evaluation pipeline.
 
 Verification algorithm reference (Thomas et al., 2026 — arXiv:2602.16994v1):
     "Dynamic Delayed Tree Expansion for Improved Multi-Path Speculative Decoding"
@@ -23,24 +23,24 @@ Everything else uses sensible defaults and can be overridden.
 
 Usage:
     # Laptop (0.6B models)
-    python run_all.py \\
+    python evaluate.py \\
         --student Qwen/Qwen2.5-0.5B \\
         --teacher Qwen/Qwen3-0.6B
 
     # Server (8B target)
-    python run_all.py \\
+    python evaluate.py \\
         --student Qwen/Qwen2.5-0.5B \\
         --teacher Qwen/Qwen3-8B \\
         --n 50
 
     # Quick smoke test
-    python run_all.py \\
+    python evaluate.py \\
         --student Qwen/Qwen2.5-0.5B \\
         --teacher Qwen/Qwen3-0.6B \\
         --datasets diverse50 --modes alpha --K 1 --n 10
 
     # Laptop full run (all datasets, all modes, ~4-6 hours)
-    python run_all.py \\
+    python evaluate.py \\
         --student Qwen/Qwen2.5-0.5B \\
         --teacher Qwen/Qwen3-0.6B \\
         --full
@@ -291,7 +291,7 @@ EAGLE_REFERENCE = {
 # ---------------------------------------------------------------------------
 
 # Known loss names (from pipeline.py training steps).
-# Used to infer loss_name from student_label when run_all.py is called by the pipeline.
+# Used to infer loss_name from student_label when evaluate.py is called by the pipeline.
 _KNOWN_LOSSES = frozenset(["kl", "ebe", "rev_kl", "jsd", "l1", "online", "baseline"])
 
 

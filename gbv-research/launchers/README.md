@@ -4,7 +4,7 @@ One-command scripts for running the SpecDist pipeline on any compute provider.
 Every launcher calls the same underlying command:
 
 ```bash
-python orchestration/pipeline.py \
+python orchestration/experiment.py \
     --config  {provider_config} \
     --ckpt_root {persistent_storage} \
     --yes
@@ -62,13 +62,13 @@ Or manually:
 
 ```bash
 # Free Colab / Kaggle T4
-python orchestration/pipeline.py --config colab   --ckpt_root /content/drive/MyDrive/specdist/checkpoints --yes
+python orchestration/experiment.py --config colab   --ckpt_root /content/drive/MyDrive/specdist/checkpoints --yes
 
 # Modal / RunPod A100
-python orchestration/pipeline.py --config server  --ckpt_root /vol/checkpoints --yes
+python orchestration/experiment.py --config server  --ckpt_root /vol/checkpoints --yes
 
 # Local smoke test
-python orchestration/pipeline.py --config laptop  --smoke --yes
+python orchestration/experiment.py --config laptop  --smoke --yes
 ```
 
 ---
@@ -105,7 +105,7 @@ python orchestration/pipeline.py --config laptop  --smoke --yes
 # Kaggle — open launchers/kaggle.ipynb and set CONFIG = "colab"
 
 # Local smoke test to verify the code path:
-python orchestration/pipeline.py --config laptop --smoke --yes
+python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
 ---

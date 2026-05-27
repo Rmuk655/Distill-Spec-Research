@@ -4,7 +4,7 @@ _provider.py — SpecDist provider configuration registry.
 All launchers (Colab, Kaggle, Modal, RunPod, local) share the same
 underlying command:
 
-    python orchestration/pipeline.py \
+    python orchestration/experiment.py \
         --config  {provider.pipeline_config} \
         --storage_root {provider.storage_root} \
         --yes
@@ -178,7 +178,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "local_laptop": ProviderConfig(
         name             = "local_laptop",
         pipeline_config  = "laptop",
-        storage_root     = "",              # empty → pipeline.py defaults (gbv-research/db/)
+        storage_root     = "",              # empty → experiment.py defaults (gbv-research/db/)
         hf_home          = None,
         gpu_vram_gb      = 4.0,
         session_max_h    = 0.0,
@@ -190,7 +190,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     "local_server": ProviderConfig(
         name             = "local_server",
         pipeline_config  = "server",
-        storage_root     = "",              # empty → pipeline.py defaults (gbv-research/db/)
+        storage_root     = "",              # empty → experiment.py defaults (gbv-research/db/)
         hf_home          = None,
         gpu_vram_gb      = 24.0,
         session_max_h    = 0.0,
@@ -234,19 +234,19 @@ def build_pipeline_cmd(
     losses : str | None
         Comma-separated loss names, e.g. ``"kl,ebe"``. None = all.
     extra : list[str] | None
-        Any additional pipeline.py flags.
+        Any additional experiment.py flags.
     """
     repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
     cmd = [
         sys.executable,
-        os.path.join(repo_root, "orchestration", "pipeline.py"),
+        os.path.join(repo_root, "orchestration", "experiment.py"),
         "--config", provider.pipeline_config,
         "--yes",
     ]
     # storage_root pins all artifacts (DB, checkpoints, logs) to persistent storage.
     # On cloud providers this must point to mounted persistent storage so artifacts
     # survive session termination.  For local runs leave storage_root empty and
-    # pipeline.py will use its project-relative defaults.
+    # experiment.py will use its project-relative defaults.
     if provider.storage_root:
         cmd += ["--storage_root", provider.storage_root]
     if smoke:

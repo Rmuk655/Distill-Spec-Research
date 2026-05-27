@@ -490,7 +490,7 @@ def ebe_loss(student_logits, teacher_logits, token_ids, kl_weight=0.1,
     multiplier (Π of 128 alphas instead of Π of 8 alphas).
 
     Why L=8 specifically:
-    - Inference calls the draft model with block_len=L=8 (run_all.py default --L 8)
+    - Inference calls the draft model with block_len=L=8 (evaluate.py default --L 8)
     - The accepted token count per target call is τ+1 ∈ [1, L+1]
     - Training with the same L ensures the gradient scale matches the inference scale
 

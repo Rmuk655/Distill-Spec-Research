@@ -7,7 +7,7 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
 ## Directory layout
 
 **Repository root** (`2026 summer/`) contains three top-level directories that
-`orchestration/pipeline.py` stitches together at runtime:
+`orchestration/experiment.py` stitches together at runtime:
 
 ```
 2026 summer/                    <- git repo root
@@ -39,11 +39,14 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
     |   |   +-- gsm8k_5.jsonl       5-prompt smoke eval set (tracked)
     |   +-- model_families/     Qwen/Gemma model-specific tokenizer helpers
     |
-    +-- orchestration/          Pipeline coordination
-    |   +-- pipeline.py         Crash-safe orchestrator (Phase 1->4 + optional EAGLE)
-    |   +-- run_all.py          Eval subprocess -- calls distillspec_gbv/verifiers/runner.py
-    |   |                       (Phase 2 complete; GBV/main.py kept as fallback until Phase 3)
+    +-- orchestration/          Experiment coordination scripts
+    |   +-- experiment.py       Full experiment runner: trains all losses, runs all evals
+    |   |                       (Phases 1–4: baseline → train → GSM8K eval → multi-dataset)
+    |   +-- evaluate.py         Stand-alone evaluation: runs a single model through all
+    |   |                       verifier modes (alpha, specinfer, gbv, traversal, bv, naive)
+    |   |                       Called by experiment.py; also usable directly
     |   +-- clean_restart.py    Wipe outputs + reset state + relaunch
+    |   +-- run_sweep.py        W&B hyperparameter sweep launcher
     |   +-- pipeline_state_laptop.json        Full-run state (tracked in git)
     |   +-- pipeline_state_laptop_smoke.json  Smoke state (separate, never blocks full run)
     |   +-- wandb_config.json.example         Copy -> wandb_config.json (gitignored)
@@ -62,14 +65,15 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
     |   +-- PROJECT_CONTEXT.md      Research context, decisions log, baselines
     |   +-- ADDING_A_LOSS.md        How to add a new loss objective
     |   +-- ADDING_AN_ALGORITHM.md  How to add a new verifier algorithm
-    |   +-- ADDING_A_MODEL_FAMILY.md
+    |   +-- ADDING_A_MODEL_FAMILY.md  How to add Gemma/LLaMA/Mistral support
     |
     +-- references/             External code -- read-only, never imported by pipeline
     |   +-- adaspec/            AdaSpec (Hu et al., 2024) — ablation comparison
     |   +-- legacy-osd-paper/   OSD paper plot data — read-only reference
     |
     +-- tests/
-        +-- test_core.py        Unit tests: EBE loss properties, verifier invariants
+        +-- unit/               Unit tests (CPU-only, ~60 s) — run before every commit
+        +-- smoke.py            Pre-commit smoke test: unit tests + pipeline smoke in one command
 ```
 
 ## Quick start
@@ -80,7 +84,7 @@ See **[docs/SETUP.md](docs/SETUP.md)** for the full walkthrough including WandB 
 
 ```bash
 pip install -r requirements.txt
-python ../OSD/fetch_datasets.py --datasets gsm8k   # OSD/ is a sibling of gbv-research/
+python core/datasets/downloader.py --datasets gsm8k
 ```
 
 ### 2. Set up WandB credentials (one-time per machine)
@@ -90,19 +94,33 @@ cp orchestration/wandb_config.json.example orchestration/wandb_config.json
 # Edit orchestration/wandb_config.json with your api_key, entity, project
 ```
 
-### 3. Smoke test (~35 min — verify all losses + verifiers before overnight run)
+### 3. Unit tests + smoke test (before every commit, ~35 min total)
 
 ```bash
-python orchestration/pipeline.py --config laptop --smoke --yes
+# All-in-one pre-commit check (unit tests + pipeline smoke):
+python tests/smoke.py
+
+# Or separately:
+python -m pytest tests/unit/ -q                                 # ~60 s, no GPU
+python orchestration/experiment.py --config laptop --smoke --yes  # ~35 min, GPU
 ```
 
-### 4. Full pipeline (~6-8 hrs on laptop)
+### 4. Full experiment (~6-8 hrs on laptop)
 
 ```bash
-python orchestration/pipeline.py --config laptop --yes
+python orchestration/experiment.py --config laptop --yes
 ```
 
-### 5. Dashboard
+### 5. Evaluate a specific model
+
+```bash
+python orchestration/evaluate.py \
+    --student db/checkpoints/kl-gsm8k_merged \
+    --teacher Qwen/Qwen3-0.6B \
+    --datasets gsm8k --modes specinfer,gbv,traversal --K 3,5
+```
+
+### 6. Dashboard
 
 ```bash
 python dashboard/training_dashboard.py    # http://127.0.0.1:5000
@@ -126,7 +144,7 @@ Smoke uses a **separate state file** (`pipeline_state_laptop_smoke.json`) so smo
 
 ```bash
 # Status check (safe — does NOT kill the running pipeline)
-python orchestration/pipeline.py --config laptop --smoke --status
+python orchestration/experiment.py --config laptop --smoke --status
 
 # Live log
 Get-Content db/logs/pipeline_output.log -Wait -Tail 40   # PowerShell

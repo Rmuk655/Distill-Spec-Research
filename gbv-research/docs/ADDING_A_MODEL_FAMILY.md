@@ -25,7 +25,7 @@ Before writing code, run these checks for your new model:
 import torch, transformers
 
 model_id = "google/gemma-2-2b"
-model = transformers.AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).cuda()
+model = transformers.AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.bfloat16).cuda()
 tok   = transformers.AutoTokenizer.from_pretrained(model_id)
 
 prompt_ids = tok("Hello world", return_tensors="pt").input_ids.cuda()
@@ -70,11 +70,11 @@ Typical results:
 
 ### 3. Create the family file
 
-Copy `capsules/distillation/model_families/gemma.py` as a starting point:
+Copy `core/model_families/gemma.py` as a starting point:
 
 ```bash
-cp capsules/distillation/model_families/gemma.py \
-   capsules/distillation/model_families/llama.py
+cp core/model_families/gemma.py \
+   core/model_families/llama.py
 ```
 
 Edit the copy, filling in:
@@ -118,7 +118,7 @@ FAMILY = LlamaFamily()
 
 ### 4. Register in `__init__.py`
 
-Edit `capsules/distillation/model_families/__init__.py`:
+Edit `core/model_families/__init__.py`:
 
 ```python
 from .llama import FAMILY as _llama
@@ -133,12 +133,12 @@ FAMILY_REGISTRY = {
 ### 5. Run a smoke test
 
 ```bash
-python -m capsules.distillation.trainer \
+python algorithms/distillspec_gbv/trainer.py \
     --model_family llama \
     --draft meta-llama/Llama-3.2-1B \
     --target meta-llama/Llama-3.1-8B \
     --loss forward_kl --steps 10 \
-    --dataset capsules/datasets/raw/gsm8k_30.jsonl \
+    --dataset core/datasets/raw/gsm8k_30.jsonl \
     --no_wandb
 ```
 

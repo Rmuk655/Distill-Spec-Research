@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 # DB path resolution — portable across machines and cloud environments.
 #
 # Priority order (first non-empty wins):
-#   1. SPECDIST_DB_PATH env var   — set by pipeline.py when --storage_root is
+#   1. SPECDIST_DB_PATH env var   — set by experiment.py when --storage_root is
 #                                   given; propagated to all subprocesses so
 #                                   every tool (train, eval, online) writes to
 #                                   the same DB without knowing the cloud layout.

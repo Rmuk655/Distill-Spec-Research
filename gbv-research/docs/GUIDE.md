@@ -53,7 +53,7 @@ The experiment runs in three hardware tiers, each with a specific purpose. **Nev
 | Temperature | 0.6, 1.0 |
 
 ```bash
-python pipeline.py --config laptop --yes --smoke
+python experiment.py --config laptop --yes --smoke
 ```
 
 **Decision gate**: if any step crashes or OOMs, fix it before proceeding. If all steps pass, proceed to Stage 1.
@@ -79,7 +79,7 @@ python pipeline.py --config laptop --yes --smoke
 | Temperature | 0.6, 1.0 |
 
 ```bash
-python pipeline.py --config colab --yes
+python experiment.py --config colab --yes
 ```
 
 **NOTE**: `--load_in_4bit` is colab-only. The pipeline adds it automatically for `--config colab` and never adds it for `--config server` or `--config a100`.
@@ -107,10 +107,10 @@ python pipeline.py --config colab --yes
 | Temperature | 0.6, 1.0 |
 
 ```bash
-python pipeline.py --config server --yes
+python experiment.py --config server --yes
 ```
 
-**IMPORTANT**: `run_all.py --hw_tier a100` includes a guard that errors if the target model appears quantized. This prevents accidentally tagging quantized (Colab) results as a100 tier.
+**IMPORTANT**: `evaluate.py --hw_tier a100` includes a guard that errors if the target model appears quantized. This prevents accidentally tagging quantized (Colab) results as a100 tier.
 
 **Decision gate**: after A100 runs, use `analyze_results.py` to generate the paper table.
 
@@ -275,7 +275,7 @@ Measured end-to-end for the speculative decoding loop. Throughput increases with
 ### Laptop smoke tier (--config laptop --smoke)
 
 ```bash
-python pipeline.py --config laptop --yes --smoke
+python experiment.py --config laptop --yes --smoke
 ```
 
 Phase 0: Merge pre-existing LoRA adapters.  
@@ -289,7 +289,7 @@ Phase 5: Laptop smoke — ALL verifiers (traversal, specinfer, gbv, naive, bv) +
 ### Colab tier (--config colab)
 
 ```bash
-python pipeline.py --config colab --yes
+python experiment.py --config colab --yes
 ```
 
 Phase 0–1: same structure as laptop.  
@@ -306,7 +306,7 @@ All results tagged `hw_tier=colab` in results.db. Alpha and BE are directionally
 ### A100 tier (--config server)
 
 ```bash
-python pipeline.py --config server --yes
+python experiment.py --config server --yes
 ```
 
 Same phases as colab, but:
@@ -316,7 +316,7 @@ Same phases as colab, but:
 - Both datasets: gsm8k_30 and math500_30 for eval.
 - ALL 4 verifiers: traversal, specinfer, gbv, bv.
 
-The `run_all.py --hw_tier a100` guard will error if it detects a quantized target, preventing accidental contamination of paper-quality data.
+The `evaluate.py --hw_tier a100` guard will error if it detects a quantized target, preventing accidental contamination of paper-quality data.
 
 ---
 
@@ -588,32 +588,32 @@ Full table of every evaluation row in the database. Supports sorting and can be 
 
 ### Laptop smoke test (verify setup, ~10 min)
 ```bash
-python pipeline.py --config laptop --yes --smoke
+python experiment.py --config laptop --yes --smoke
 ```
 Runs 5 prompts, max 30 tokens, K=3, modes=gbv+specinfer, temp=0.6.  
 Also runs Phase 5 laptop_smoke: ALL verifiers including naive and bv, ALL losses (200 steps) on diverse50 — exercises every code path.
 
 ### Full colab run (trend formation, ~8-12 hr on T4)
 ```bash
-python pipeline.py --config colab --yes
+python experiment.py --config colab --yes
 ```
 `--load_in_4bit` is added automatically. Do NOT add it manually.
 
 ### Full A100 run (paper-quality, ~24-48 hr on A100)
 ```bash
-python pipeline.py --config server --yes
+python experiment.py --config server --yes
 ```
 No quantization. Full bf16. Results tagged `hw_tier=a100`.
 
 ### Check status without running
 ```bash
-python pipeline.py --status
+python experiment.py --status
 ```
 
 ### Resume after a crash
 The pipeline saves state after every step and resumes from the first `pending` step:
 ```bash
-python pipeline.py --config server --yes
+python experiment.py --config server --yes
 ```
 
 ### View dashboard
@@ -624,7 +624,7 @@ Open http://localhost:5000 in a browser. Use the HW TIER filter in the sidebar t
 
 ### Force restart from a specific step
 ```bash
-python pipeline.py --config server --from eval_baseline_gsm8k --yes
+python experiment.py --config server --from eval_baseline_gsm8k --yes
 ```
 
 ---
@@ -649,7 +649,7 @@ python train_qwen3.py --merge_only \
     --draft Qwen/Qwen3-0.6B
 
 # 2. Run speculative decoding eval on the merged model
-python run_all.py \
+python evaluate.py \
     --student checkpoints/kl-run/ckpt_step_00200_merged \
     --teacher Qwen/Qwen3-8B \
     --student_label kl_step200 \
@@ -704,7 +704,7 @@ os.environ["TRANSFORMERS_OFFLINE"] = "0"   # allow first-time download
 - `--load_in_4bit` is safe for colab only — the teacher is frozen during training.
 - Set `--output` to a Google Drive path so checkpoints survive session death.
 - After the first run, set `TRANSFORMERS_OFFLINE=1` to avoid re-downloading.
-- When running `run_all.py` on colab after training, pass `--hw_tier colab` to tag results correctly.
+- When running `evaluate.py` on colab after training, pass `--hw_tier colab` to tag results correctly.
 
 #### Validation frequency and compute cost
 
@@ -834,10 +834,10 @@ The EAGLE head trains on the **target** model's hidden states. The paper's targe
 
 ```bash
 # Run full pipeline + EAGLE baseline — use --config server or colab (never laptop)
-python pipeline.py --config server --yes --eagle
+python experiment.py --config server --yes --eagle
 
 # Run EAGLE phases only (Phases 0–4 already done)
-python pipeline.py --config server --yes --eagle --from eagle_gen
+python experiment.py --config server --yes --eagle --from eagle_gen
 ```
 
 ---
@@ -889,7 +889,7 @@ python train_qwen3.py ... --early_stop_patience 5
 | Phase | What W&B tracks | Script |
 |---|---|---|
 | **Training** | Loss curves (train + val), PPL health, LR, GPU util, gradient histograms | `train_qwen3.py` |
-| **Eval / Inference** | Alpha, block efficiency, task score, throughput per eval cell | `run_all.py` |
+| **Eval / Inference** | Alpha, block efficiency, task score, throughput per eval cell | `evaluate.py` |
 | **Hyperparameter sweep** | LR × LoRA-rank × loss-type sweep | `sweep_config.yaml` |
 
 ### 10b. Setup
@@ -973,7 +973,7 @@ DistillSpec (Zhou et al. 2023) Section 3.1 explicitly uses **forward KL** — KL
 **How to run all variants:**
 The pipeline runs all three KL variants as Phase 2b steps:
 ```bash
-python pipeline.py --config server --yes --from train_rev_kl_gsm8k
+python experiment.py --config server --yes --from train_rev_kl_gsm8k
 ```
 
 Results appear in the dashboard's Training Curves and Key Results tabs, color-coded:

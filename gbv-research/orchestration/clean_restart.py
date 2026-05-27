@@ -232,7 +232,7 @@ def _reset_state(config, dry_run=False):
 # ── Launch pipeline ────────────────────────────────────────────────────────
 
 def _launch(config, dry_run=False):
-    pipeline_script = os.path.join(_HERE, "pipeline.py")
+    pipeline_script = os.path.join(_HERE, "experiment.py")
     log_path = os.path.join(_GBV_RESEARCH, "db", "logs", "pipeline_output.log")
     cmd = [sys.executable, pipeline_script, "--config", config, "--yes"]
     print(f"\n  Launching: {' '.join(os.path.basename(p) for p in cmd)}")
@@ -251,7 +251,7 @@ def _launch(config, dry_run=False):
     print(f"  Pipeline started (PID {proc.pid}) [ok]")
     print(f"\n  Watch progress:  tail -f db/logs/pipeline_output.log")
     print(f"  Dashboard:       http://127.0.0.1:5000")
-    print(f"  Status:          python orchestration/pipeline.py --status")
+    print(f"  Status:          python orchestration/experiment.py --status")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────

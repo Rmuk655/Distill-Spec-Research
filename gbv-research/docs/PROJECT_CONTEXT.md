@@ -54,10 +54,10 @@ Phase 2 cleanup (after current pipeline run) will make them reference-only.
 ├── OSD/                      ← training scripts (active during pipeline runs)
 │   ├── train_qwen3.py        ← training loop; all 6 losses (Phase 2: → algorithms/)
 │   ├── online_serve.py       ← online SD (Phase 2: → algorithms/)
-│   └── merge_lora.py         ← LoRA merge; called by pipeline.py
+│   └── merge_lora.py         ← LoRA merge; called by experiment.py
 │
 ├── GBV/                      ← verifier CLI (active during eval)
-│   ├── main.py               ← eval entrypoint; called by run_all.py (Phase 2: → verifiers/)
+│   ├── main.py               ← eval entrypoint; called by evaluate.py (Phase 2: → verifiers/)
 │   ├── verifier.py           ← TreeVerifier: all 6 verifier modes
 │   ├── node.py               ← OTLP solvers
 │   └── util.py               ← model loading helpers
@@ -68,8 +68,8 @@ Phase 2 cleanup (after current pipeline run) will make them reference-only.
     │   ├── verifiers/        ← evolved GBV (runner.py, tree.py, otlp_registry.py — Phase 2 target)
     │   └── trainer.py        ← evolved train_qwen3.py (Phase 2: replaces _TRAIN_SCRIPT)
     ├── orchestration/
-    │   ├── pipeline.py       ← crash-safe orchestrator; Phases 1-4
-    │   ├── run_all.py        ← eval subprocess; calls GBV/main.py; writes results.db
+    │   ├── experiment.py       ← crash-safe orchestrator; Phases 1-4
+    │   ├── evaluate.py        ← eval subprocess; calls GBV/main.py; writes results.db
     │   └── clean_restart.py  ← wipe db/ + reset state
     ├── core/
     │   ├── datasets/raw/     ← JSONL eval + training sets
@@ -82,8 +82,8 @@ Phase 2 cleanup (after current pipeline run) will make them reference-only.
         └── logs/             ← pipeline_output.log, be_progress.log
 ```
 
-**Integration pattern**: `pipeline.py` launches `OSD/train_qwen3.py` (training)
-and `orchestration/run_all.py` (eval) as subprocesses. `run_all.py` calls
+**Integration pattern**: `experiment.py` launches `OSD/train_qwen3.py` (training)
+and `orchestration/evaluate.py` (eval) as subprocesses. `evaluate.py` calls
 `GBV/main.py` as a subprocess for block-efficiency measurement and writes
 results to `db/results.db`.
 
@@ -91,7 +91,7 @@ results to `db/results.db`.
 - `OSD/train_qwen3.py` → `gbv-research/algorithms/train_qwen3.py`
 - `OSD/online_serve.py` → `gbv-research/algorithms/online_serve.py`
 - `GBV/main.py` subprocess → `algorithms/distillspec_gbv/verifiers/runner.py`
-- Update `_TRAIN_SCRIPT`, `_ONLINE_SCRIPT` in pipeline.py; update run_all.py GBV path
+- Update `_TRAIN_SCRIPT`, `_ONLINE_SCRIPT` in experiment.py; update evaluate.py GBV path
 
 **Data format**: all components read JSONL files with a `"prompt"` field.
 

@@ -15,7 +15,7 @@
 | Loss function | forward KL, reverse KL, JSD | forward KL + EBE | forward KL + EBE (+ reverse KL, JSD, L1 as ablations) |
 | Token masking | Only wrong positions (wrong_token_ids) | All generated positions | All generated positions |
 | Verifier at training time | SD runs inside training loop | None — separate eval | None — separate eval |
-| Eval framework | llamacpp-based | Separate pass | Separate `run_all.py` → GBV subprocess |
+| Eval framework | llamacpp-based | Separate pass | Separate `evaluate.py` → GBV subprocess |
 | Model family | LLaMA/Vicuna | Generic | **Qwen2.5-0.5B → Qwen3-0.6B** (laptop) / **Qwen3-0.6B → Qwen3-8B** (server) |
 | HF Trainer | Yes (DistillTrainer) | N/A | No — plain PyTorch loop |
 
@@ -106,7 +106,7 @@ Per-step (`train_qwen3.py:424`):
 
 ### 2.6 Evaluation — fully separate from training
 
-**`run_all.py`** is the evaluation entry point. It does not touch training code.
+**`evaluate.py`** is the evaluation entry point. It does not touch training code.
 
 For each `(student, dataset, mode, K, temperature)` cell:
 - `mode=alpha`: runs SpecInfer rejection sampling inline, measures α (token acceptance rate)
@@ -232,7 +232,7 @@ The acceptance algorithm is the same as GBV — the only difference is how the t
 
 ### 5.5 How we use GBV in evaluation
 
-`run_all.py:run_be()` calls `GBV/main.py` as a subprocess:
+`evaluate.py:run_be()` calls `GBV/main.py` as a subprocess:
 ```python
 cmd = [sys.executable, "GBV/main.py",
        "--p_model", teacher_path,    # frozen target
@@ -275,7 +275,7 @@ K values: 3 and 5 (standard in the literature).
 
 ## 7. Pipeline Phases
 
-`pipeline.py --config laptop --yes` runs 18 steps across 5 phases:
+`experiment.py --config laptop --yes` runs 18 steps across 5 phases:
 
 | Phase | Steps | What it does |
 |---|---|---|
@@ -285,7 +285,7 @@ K values: 3 and 5 (standard in the literature).
 | **3 — Full Eval** | 2 | Eval the newly trained kl1000 + ebe1000 on gsm8k. Produces the core 3×3 interaction matrix for the paper. |
 | **4 — Multi-Dataset** | 3 | Eval baseline + kl1000 + ebe1000 on humaneval, math500, mtbench, alpaca. Validates generalization beyond the training distribution. |
 
-Resume at any time with `python pipeline.py --config laptop --yes`. Steps with
+Resume at any time with `python experiment.py --config laptop --yes`. Steps with
 a `done_check` file (training steps) are skipped if the output artifact exists.
 Eval steps are skipped if the result is already in `results.db` (`--skip_existing`).
 
@@ -295,8 +295,8 @@ Eval steps are skipped if the result is already in `results.db` (`--skip_existin
 
 ```
 OSD/
-  pipeline.py            ← Crash-safe master runner (phases 0–4, --config laptop|server)
-  run_all.py             ← Evaluation orchestrator (alpha + BE via GBV subprocess)
+  experiment.py            ← Crash-safe master runner (phases 0–4, --config laptop|server)
+  evaluate.py             ← Evaluation orchestrator (alpha + BE via GBV subprocess)
   train_qwen3.py         ← DistillSpec trainer (LoRA, forward_kl + ebe loss)
   viz_server.py          ← Flask dashboard → http://localhost:5000
   results_db.py          ← SQLite schema + insert/query helpers
@@ -309,7 +309,7 @@ OSD/
     distill_trainer.py   ← OSD's DistillTrainer (online mode, wrong_token_ids, HF Trainer)
     specInfer/generator.py ← OSD's SD loop (proposer + verifier, alpha tracking)
 
-GBV/                     ← Multi-path verifier codebase (called as subprocess by run_all.py)
+GBV/                     ← Multi-path verifier codebase (called as subprocess by evaluate.py)
   main.py                ← Entry point (--mode specinfer|bv|gbv|traversal|naive|nss|bv)
   verifier.py            ← TreeVerifier: all 7 verification algorithms
   inference_util.py      ← iid_draft, target_tree_pass
@@ -319,5 +319,5 @@ GBV/                     ← Multi-path verifier codebase (called as subprocess 
 ```
 
 The `distill/` directory is the original OSD code, kept for reference. It is
-not called by `pipeline.py` or `run_all.py`. Our pipeline calls
+not called by `experiment.py` or `evaluate.py`. Our pipeline calls
 `train_qwen3.py` for training and `GBV/main.py` for block-efficiency evaluation.

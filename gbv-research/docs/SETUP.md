@@ -34,8 +34,8 @@ pip install bitsandbytes
 ## 2. Download datasets
 
 ```bash
-# Run from gbv-research/ — OSD/ is a sibling directory
-python ../OSD/fetch_datasets.py --datasets gsm8k
+# Run from gbv-research/
+python core/datasets/downloader.py --datasets gsm8k
 ```
 
 This writes `gsm8k_train.jsonl` (7,473 prompts) and `gsm8k_30.jsonl` (30-prompt
@@ -68,7 +68,7 @@ Edit `orchestration/wandb_config.json` with your own credentials:
 | `entity`  | Your W&B username (or team name for shared workspace)        |
 | `project` | Project name in W&B — use `specdist-gbv` for this research   |
 
-**How it works**: at pipeline startup, `pipeline.py` reads this file and sets
+**How it works**: at pipeline startup, `experiment.py` reads this file and sets
 `WANDB_API_KEY`, `WANDB_ENTITY`, and `WANDB_PROJECT` as environment variables.
 Every subprocess (training runs, eval runs) inherits them automatically.
 If the file is absent the pipeline falls back to whatever `wandb login`
@@ -93,7 +93,7 @@ It exercises every loss function and every verifier at reduced scale
 
 ```bash
 # From gbv-research/
-python orchestration/pipeline.py --config laptop --smoke --yes
+python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
 What it runs:
@@ -117,7 +117,7 @@ Get-Content db/logs/pipeline_output.log -Wait -Tail 40   # PowerShell
 # or: tail -f db/logs/pipeline_output.log                # bash
 
 # Status snapshot (safe to run while pipeline is running — does NOT kill it)
-python orchestration/pipeline.py --config laptop --smoke --status
+python orchestration/experiment.py --config laptop --smoke --status
 
 # Dashboard
 python dashboard/training_dashboard.py   # http://127.0.0.1:5000
@@ -167,7 +167,7 @@ Test coverage:
 ## 6. Full pipeline run (after smoke passes)
 
 ```bash
-python orchestration/pipeline.py --config laptop --yes
+python orchestration/experiment.py --config laptop --yes
 ```
 
 What changes vs smoke:
@@ -279,7 +279,7 @@ import wandb; wandb.login()
 # ── Cell 3 ───────────────────────────────────────────────────────────────────
 # --config colab → 8B teacher loaded in 4-bit NF4 (fits T4's 15 GB)
 # --smoke        → quick sanity check (~45 min) before overnight run
-subprocess.run([sys.executable, "orchestration/pipeline.py",
+subprocess.run([sys.executable, "orchestration/experiment.py",
                 "--config", "colab", "--ckpt_root", DRIVE_CKPT, "--yes"])
 ```
 
@@ -307,7 +307,7 @@ No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB:
 ```python
 # Colab Pro / A100: use server config (bf16 teacher, no quantisation)
 DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
-!python orchestration/pipeline.py \
+!python orchestration/experiment.py \
     --config server \
     --ckpt_root {DRIVE_CKPT} \
     --yes
@@ -315,7 +315,7 @@ DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
 
 ```bash
 # Kaggle: attach this repo as a dataset, point ckpt_root to /kaggle/working
-!python orchestration/pipeline.py \
+!python orchestration/experiment.py \
     --config server \
     --ckpt_root /kaggle/working/specdist/checkpoints \
     --yes
@@ -355,7 +355,7 @@ modal run launchers/modal_app.py::download_models
 #### Upload training data
 
 ```bash
-# Copies OSD/data/gsm8k_train.jsonl (and any other .jsonl) to /vol/data/
+# Copies core/datasets/raw/gsm8k_train.jsonl (and any other .jsonl) to /vol/data/
 # Run after download_models and before any training.
 modal run launchers/modal_app.py::upload_dataset
 ```
@@ -429,7 +429,7 @@ run with `run.with_options(gpu="A10G").local(...)`.
 
 ```bash
 # Colab free T4 — must pass --load_in_4bit manually:
-python OSD/train_qwen3.py \
+python algorithms/train_qwen3.py \
     --draft  Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
     --loss   forward_kl \
@@ -438,7 +438,7 @@ python OSD/train_qwen3.py \
     --output /content/drive/MyDrive/specdist/checkpoints/kl-8b
 
 # Server / A100 — no 4-bit flag needed:
-python OSD/train_qwen3.py \
+python algorithms/train_qwen3.py \
     --draft  Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
     --loss   forward_kl \
@@ -450,7 +450,7 @@ python OSD/train_qwen3.py \
 - Always pass `--yes` on Colab/Kaggle/Modal to skip interactive prompts.
 - The pipeline state file (`pipeline_state_colab.json`) is on local disk and
   lost on session death — but `--ckpt_root` on Drive/volume means `done_check`
-  files persist, so re-running `pipeline.py --yes` auto-skips completed steps.
+  files persist, so re-running `experiment.py --yes` auto-skips completed steps.
 - W&B logs sync to the cloud in real time — they are always preserved even if
   the session dies mid-run.
 
@@ -466,27 +466,27 @@ experiments without editing any source file.
 **Run only specific losses** (skip the rest):
 ```bash
 # Train and eval only KL and EBE — skip rev_kl, jsd, l1, online
-python orchestration/pipeline.py --config laptop --smoke --losses kl,ebe
+python orchestration/experiment.py --config laptop --smoke --losses kl,ebe
 ```
 
 **Override steps per loss** (e.g., quick 200-step ablation):
 ```bash
-python orchestration/pipeline.py --config laptop --train_steps 200 --losses kl,ebe
+python orchestration/experiment.py --config laptop --train_steps 200 --losses kl,ebe
 ```
 
 **Override learning rate** (single run or sweep baseline):
 ```bash
-python orchestration/pipeline.py --config laptop --lr 1e-4 --losses kl
+python orchestration/experiment.py --config laptop --lr 1e-4 --losses kl
 ```
 
 **Override LoRA rank** (compare r=8 vs r=16 on laptop):
 ```bash
-python orchestration/pipeline.py --config laptop --lora_r 16 --losses kl,ebe
+python orchestration/experiment.py --config laptop --lora_r 16 --losses kl,ebe
 ```
 
 **Standalone `train_qwen3.py` with all sweep-friendly args**:
 ```bash
-python OSD/train_qwen3.py \
+python algorithms/train_qwen3.py \
     --loss ebe \
     --steps 500 \
     --lr 5e-5 \
@@ -498,7 +498,7 @@ python OSD/train_qwen3.py \
     --grad_clip 0.5 \
     --draft Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
-    --dataset OSD/data/gsm8k_train.jsonl \
+    --dataset core/datasets/raw/gsm8k_train.jsonl \
     --output db/checkpoints/ebe-ablation-v1
 ```
 
@@ -518,8 +518,8 @@ override the hardcoded defaults. Priority: `CLI > YAML > code default`.
 To add a new environment (e.g., Kaggle P100):
 1. Copy `orchestration/configs/laptop.yaml` → `orchestration/configs/kaggle.yaml`
 2. Adjust `hardware`, `training`, and `checkpointing` sections
-3. Add `"kaggle": {"draft": ..., "target": ...}` to `CONFIGS` dict in `pipeline.py`
-4. Run: `python orchestration/pipeline.py --config kaggle --ckpt_root /kaggle/working/ckpts`
+3. Add `"kaggle": {"draft": ..., "target": ...}` to `CONFIGS` dict in `experiment.py`
+4. Run: `python orchestration/experiment.py --config kaggle --ckpt_root /kaggle/working/ckpts`
 
 ### 9c. W&B hyperparameter sweeps
 
@@ -590,7 +590,7 @@ print(best_run.config)   # → the winning hyperparameter set
 
 Then lock those values in the appropriate YAML and re-run the full pipeline:
 ```bash
-python orchestration/pipeline.py --config server \
+python orchestration/experiment.py --config server \
     --lr 4.2e-5 --lora_r 16 \
     --experiment_tag "best_sweep_v1"
 ```

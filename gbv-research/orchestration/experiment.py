@@ -1,5 +1,5 @@
 """
-pipeline.py — master run script with crash-safe resume.
+experiment.py — master run script with crash-safe resume.
 
 Runs the full SpecDist experiment pipeline in order:
   1. Merge pending LoRA checkpoints
@@ -8,17 +8,17 @@ Runs the full SpecDist experiment pipeline in order:
 
 State is persisted to pipeline_state.json after every step.
 On restart, the script shows what's done and asks before resuming.
-Eval steps always pass --skip_existing to run_all.py, so partial evals
+Eval steps always pass --skip_existing to evaluate.py, so partial evals
 are safe to re-run — they pick up from the last completed cell.
 
 Usage:
-    python pipeline.py                        # laptop config, interactive
-    python pipeline.py --yes                  # auto-resume without prompts
-    python pipeline.py --config server --yes  # Qwen3-0.6B -> Qwen3-8B
-    python pipeline.py --restart              # force-restart from step 1
-    python pipeline.py --from STEP_ID         # resume from a specific step
-    python pipeline.py --dry_run              # print plan without running
-    python pipeline.py --status               # print current status and exit
+    python experiment.py                        # laptop config, interactive
+    python experiment.py --yes                  # auto-resume without prompts
+    python experiment.py --config server --yes  # Qwen3-0.6B -> Qwen3-8B
+    python experiment.py --restart              # force-restart from step 1
+    python experiment.py --from STEP_ID         # resume from a specific step
+    python experiment.py --dry_run              # print plan without running
+    python experiment.py --status               # print current status and exit
 """
 
 import argparse
@@ -33,8 +33,8 @@ import time
 from datetime import datetime
 
 # Windows cp1252 stdout can't encode Unicode arrows/checkmarks used by subprocesses.
-# Reconfigure to UTF-8 with replacement so pipeline.py never dies on a stray character.
-# Guard with __name__ == "__main__" so importing pipeline.py in tests doesn't break
+# Reconfigure to UTF-8 with replacement so experiment.py never dies on a stray character.
+# Guard with __name__ == "__main__" so importing experiment.py in tests doesn't break
 # pytest's stdout capture (which holds open file handles that get invalidated by
 # sys.stdout = io.TextIOWrapper(...) at module level).
 def _reconfigure_stdout_for_windows():
@@ -88,9 +88,9 @@ def _load_wandb_config():
 # Zombie / concurrent-invocation prevention
 #
 # Root cause of the "same step ran 3 times" problem:
-#   The user ran pipeline.py 3 times in the same terminal session.  Each time
-#   the old pipeline.py process had been killed (OOM, Ctrl+C, power cycle) but
-#   its child subprocess (run_all.py) was left running as an ORPHAN — it kept
+#   The user ran experiment.py 3 times in the same terminal session.  Each time
+#   the old experiment.py process had been killed (OOM, Ctrl+C, power cycle) but
+#   its child subprocess (evaluate.py) was left running as an ORPHAN — it kept
 #   holding GPU VRAM and the state file showed the step as "running".  On the
 #   next restart, the old code fell through and re-ran the step concurrently
 #   with any still-alive orphaned child.
@@ -102,7 +102,7 @@ def _load_wandb_config():
 #   2. run_step() uses Popen so we hold the child Popen handle and can
 #      terminate it cleanly on SIGTERM/Ctrl-C.
 #   3. PYTHONIOENCODING=utf-8 is injected into every subprocess environment
-#      so Unicode characters in run_all.py output never crash on Windows cp1252.
+#      so Unicode characters in evaluate.py output never crash on Windows cp1252.
 # ---------------------------------------------------------------------------
 
 _LOCK_FILE    = os.path.join(HERE, ".pipeline_lock")          # runtime artifact — stays in orchestration/
@@ -140,7 +140,7 @@ def _pid_alive(pid: int) -> bool:
 def _kill_tree(pid: int):
     """Kill a process and all its children (cross-platform)."""
     if sys.platform == "win32":
-        # /T = kill entire process tree (children too — catches orphaned run_all.py)
+        # /T = kill entire process tree (children too — catches orphaned evaluate.py)
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(pid)],
             capture_output=True, timeout=15,
@@ -174,7 +174,7 @@ atexit.register(_release_lock)
 def _acquire_lock():
     """
     On startup: if a stale lock file exists, kill every PID listed in it
-    (the previous pipeline.py AND its run_all.py child) before proceeding.
+    (the previous experiment.py AND its evaluate.py child) before proceeding.
     This is what frees the GPU VRAM held by orphaned processes.
     """
     if not os.path.exists(_LOCK_FILE):
@@ -339,7 +339,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
     on Colab/server T4 for paper-quality results.
     """
     cmd = [
-        sys.executable, os.path.join(HERE, "run_all.py"),
+        sys.executable, os.path.join(HERE, "evaluate.py"),
         "--student", student_path,
         "--teacher", teacher,
         "--student_label", label,
@@ -1072,10 +1072,10 @@ def _cleanup_tmp(path):
 
 def run_smoke_preflight(draft, target):
     """
-    Run 2 gsm8k prompts through GBV/main.py directly — NO run_all.py, NO DB writes.
+    Run 2 gsm8k prompts through GBV/main.py directly — NO evaluate.py, NO DB writes.
 
-    Why bypass run_all.py?
-      run_all.py's --skip_existing checks (student_label, dataset, mode, K, T)
+    Why bypass evaluate.py?
+      evaluate.py's --skip_existing checks (student_label, dataset, mode, K, T)
       without experiment_tag.  If the preflight wrote "baseline/gsm8k/gbv/3/0.6"
       rows, the real eval would silently skip those combos.  By calling GBV/main.py
       directly we test model loading + speculative decoding without touching the DB.
@@ -1103,7 +1103,7 @@ def run_smoke_preflight(draft, target):
     if not data_file:
         print(f"\n  [PREFLIGHT] No gsm8k data file found in data/ — skipping preflight.")
         print(f"  The first pipeline step will fetch/create it automatically.")
-        print(f"  To always skip: python pipeline.py --no_smoke_first\n")
+        print(f"  To always skip: python experiment.py --no_smoke_first\n")
         return True   # non-fatal
 
     # ── Write a 2-prompt temp file ─────────────────────────────────────────
@@ -1132,7 +1132,7 @@ def run_smoke_preflight(draft, target):
     print(f"  Runs GBV/main.py directly — zero DB writes, no skip_existing risk.")
     print(f"  Expected:  5-20 min on first run (CUDA kernel warm-up),")
     print(f"             1-3 min on subsequent runs (kernels already compiled).")
-    print(f"  To skip:   python pipeline.py --no_smoke_first")
+    print(f"  To skip:   python experiment.py --no_smoke_first")
     print(f"{'='*65}")
 
     env = {**os.environ,
@@ -1145,7 +1145,7 @@ def run_smoke_preflight(draft, target):
     t0 = time.time()
     PARENT = os.path.dirname(HERE)
     # stdout/stderr explicitly piped so the traceback appears in the pipeline
-    # log even when pipeline.py runs detached (DETACHED_PROCESS on Windows
+    # log even when experiment.py runs detached (DETACHED_PROCESS on Windows
     # does not reliably inherit file handles to grandchildren).
     proc = subprocess.Popen(
         smoke_cmd, cwd=PARENT, env=env,
@@ -1174,7 +1174,7 @@ def run_smoke_preflight(draft, target):
         _cleanup_tmp(tmp_path)
         print(f"\n  {CROSS} PREFLIGHT TIMED OUT (>40 min)")
         print(f"  Possible causes: OOM, frozen CUDA, very slow GPU.")
-        print(f"  Re-run with:  python pipeline.py --no_smoke_first  to skip preflight.")
+        print(f"  Re-run with:  python experiment.py --no_smoke_first  to skip preflight.")
         return False
     except KeyboardInterrupt:
         if proc.poll() is None:
@@ -1242,7 +1242,7 @@ def run_step(step, state, dry_run=False):
     env["HF_HUB_OFFLINE"]       = "1"
     env["HF_DATASETS_OFFLINE"]  = "1"
     # Force UTF-8 I/O in every child Python process — prevents UnicodeEncodeError
-    # when run_all.py prints box-drawing characters on Windows cp1252 terminals.
+    # when evaluate.py prints box-drawing characters on Windows cp1252 terminals.
     # Also needed for correct text handling on Kaggle (UTF-8 by default but explicit
     # is safer) and Colab (same).
     env["PYTHONIOENCODING"]  = "utf-8"
@@ -1305,11 +1305,11 @@ def run_step(step, state, dry_run=False):
             _hints = (
                 "  Hint: check output above for [OOM] / [ERROR] / Traceback.\n"
                 "  Common fixes:\n"
-                "    OOM       -> run_all.py retries on CPU automatically;\n"
+                "    OOM       -> evaluate.py retries on CPU automatically;\n"
                 "                 train_qwen3.py: add --no_lora or reduce --max_new_tokens\n"
                 "    Offline   -> run setup_download.py first, or unset TRANSFORMERS_OFFLINE\n"
-                "    Stale run -> python pipeline.py --status\n"
-                "  Restart   -> python pipeline.py --config laptop --yes\n"
+                "    Stale run -> python experiment.py --status\n"
+                "  Restart   -> python experiment.py --config laptop --yes\n"
                 "               (resets 'failed' training steps to 'pending' automatically)\n"
             )
             sys.stdout.write(_hints); sys.stdout.flush()
@@ -1373,7 +1373,7 @@ def _print_header(cfg, draft, target, args):
                   f"{free/1024**3:.1f} GB free / {total/1024**3:.1f} GB total")
             if free / 1024**3 < 2.0:
                 print("  [WARN] Less than 2 GB VRAM free. "
-                      "run_all.py will fall back to CPU automatically on OOM.")
+                      "evaluate.py will fall back to CPU automatically on OOM.")
         else:
             print("  GPU    : None — all steps will run on CPU (slow but correct)")
     except Exception:
@@ -1680,7 +1680,7 @@ def main():
     # Runs 2 prompts through GBV/main.py directly before any pipeline step.
     # Purpose: catch model-load failures, OOM, assertion errors, and import
     # problems early — before the user waits hours for the real eval to start.
-    # Bypasses run_all.py so zero DB rows are written → no skip_existing risk.
+    # Bypasses evaluate.py so zero DB rows are written → no skip_existing risk.
     # Skipped when: --smoke (user is already in lightweight mode), --no_smoke_first
     # (explicit opt-out), non-laptop config, or all eval steps already done.
     _has_pending_eval = any(
@@ -1753,9 +1753,9 @@ def main():
         n_run += 1
 
         if not success:
-            print(f"\n{CROSS} Step '{sid}' failed. Fix the issue then re-run pipeline.py")
+            print(f"\n{CROSS} Step '{sid}' failed. Fix the issue then re-run experiment.py")
             print(f"   The pipeline will skip completed steps and retry from '{sid}'.")
-            print(f"   Restart: python pipeline.py --config {args.config} --yes")
+            print(f"   Restart: python experiment.py --config {args.config} --yes")
             sys.exit(1)
 
     print(f"\n{'='*65}")

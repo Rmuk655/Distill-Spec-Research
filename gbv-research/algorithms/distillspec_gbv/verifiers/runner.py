@@ -313,7 +313,7 @@ if __name__ == "__main__":
         target_pct     = 100.0 * time_target / total_time if total_time > 0 else float("nan")
         avg_tree_nodes = total_tree_nodes / total_calls    if total_calls > 0 else float("nan")
 
-        # Machine-parseable tagged line (run_all.py uses this exact format).
+        # Machine-parseable tagged line (evaluate.py uses this exact format).
         print(f"Block efficiency (mode={mode}, K={K}, T={p_temp}): {block_eff:.6f}")
         print(f"Throughput (tokens / second): {tokens_per_sec:.6f}")
         print(f"Walltime (ms / token): {ms_per_token:.6f}")

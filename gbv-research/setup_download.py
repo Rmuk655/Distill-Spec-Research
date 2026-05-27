@@ -126,7 +126,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("  Download complete. To run the pipeline:")
-    print(f"    python pipeline.py --config {args.config} --yes")
+    print(f"    python experiment.py --config {args.config} --yes")
     print("=" * 60)
 
 

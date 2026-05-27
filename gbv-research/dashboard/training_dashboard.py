@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(_GBV_RESEARCH, "db"))
 import results_db
 
 HERE          = _SERVER_HERE
-# Logs live in db/logs/ (written by orchestration/pipeline.py and run_all.py)
+# Logs live in db/logs/ (written by orchestration/experiment.py and evaluate.py)
 _DB_LOGS      = os.path.join(_GBV_RESEARCH, "db", "logs")
 _BE_LOG       = os.path.join(_DB_LOGS, "be_progress.log")
 _PIPELINE_LOG = os.path.join(_DB_LOGS, "pipeline_output.log")
@@ -106,7 +106,7 @@ def api_pipeline_status():
 
     steps = state.get("steps", {})
     # ── Step order and phase labels ────────────────────────────────────────────
-    # MUST stay in sync with pipeline.py build_steps() step IDs and groups.
+    # MUST stay in sync with experiment.py build_steps() step IDs and groups.
     # If you add a step there, add a matching entry here.
     STEP_ORDER = [
         # Phase 1 — Baseline
@@ -328,7 +328,7 @@ def api_log_tail():
             "source": source,
             "msg": (
                 f"{os.path.basename(log_path)} not created yet — "
-                f"{'run pipeline.py first' if source != 'eval' else 'starts when the first GBV eval batch runs'}."
+                f"{'run experiment.py first' if source != 'eval' else 'starts when the first GBV eval batch runs'}."
                 + (f"  Try ?source={'eval' if source != 'eval' else 'pipeline'}" if fallback_exists else "")
             ),
         })
@@ -864,7 +864,7 @@ let _logPanelOpen  = false;
 let HW_TIER_FILTER = new Set(['laptop', 'colab', 'a100']);
 
 // ---- Step descriptions (shown as tooltips and in panel) ----
-// MUST stay in sync with pipeline.py build_steps() step IDs.
+// MUST stay in sync with experiment.py build_steps() step IDs.
 const STEP_DESC = {
   // Phase 1
   'eval_baseline_gsm8k':    'Ph 1 — Baseline: Untrained draft model — reference point all trained models are compared against',
@@ -908,7 +908,7 @@ const STEP_DESC = {
 };
 
 // Phases grouped for the step panel
-// MUST stay in sync with pipeline.py build_steps() step IDs.
+// MUST stay in sync with experiment.py build_steps() step IDs.
 const PHASE_GROUPS = [
   { label: 'Ph 1 — Baseline',  steps: ['eval_baseline_gsm8k'] },
   { label: 'Ph 2 — Training',  steps: [

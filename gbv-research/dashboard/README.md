@@ -28,7 +28,7 @@ It reads files, never writes them.
 
 | Source | What it contains |
 |--------|-----------------|
-| `db/results.db` | All eval results — written by `orchestration/run_all.py` |
+| `db/results.db` | All eval results — written by `orchestration/evaluate.py` |
 | `db/logs/pipeline_output.log` | Full pipeline log — training steps, val loss, step boundaries |
 | `db/logs/be_progress.log` | Per-prompt block efficiency progress during eval steps |
 | `orchestration/pipeline_state_*.json` | Step statuses (done/running/pending/failed) |
