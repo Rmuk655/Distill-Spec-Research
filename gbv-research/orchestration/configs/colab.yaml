@@ -67,7 +67,11 @@ health:
   early_stop_patience: 5
 
 evaluation:
-  modes: [alpha, specinfer, traversal, gbv]
+  # alpha is EXCLUDED on Colab: loading 0.6B student + 8B teacher in the same
+  # process exhausts ~12 GB system RAM and triggers the Linux OOM killer (exit -9)
+  # before Python can catch it.  Block-efficiency metrics run fine (subprocess mode).
+  # To get alpha metrics: re-run with --config server on an A100.
+  modes: [bv, gbv, traversal, specinfer, naive]
   K_values: [3, 5]
   L: 8
-  n_prompts: 20                 # fewer than server — T4 eval is slow
+  n_prompts: 20                 # fewer than server -- T4 eval is slow

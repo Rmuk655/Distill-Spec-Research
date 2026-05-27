@@ -431,6 +431,19 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _temps         = "0.6" if smoke else "0.6,1.0"
     # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
     _modes = "alpha,bv,gbv,traversal,specinfer,naive"
+
+    # Alpha evaluation requires both draft (0.6B BF16) and teacher (8B) in the
+    # same evaluate.py process simultaneously.  On Colab (load_in_4bit=True) this
+    # exhausts the ~12 GB system RAM and the Linux OOM killer fires with SIGKILL
+    # before any Python exception handler can catch it.  The symptom is exit -9 at
+    # ~7% of teacher weight loading (layer 2 of 28).
+    #
+    # Fix: exclude alpha on Colab.  Block-efficiency metrics (BE) run through
+    # runner.py subprocesses that start fresh each time (small RAM footprint).
+    # Alpha can be run with --config server (A100, full BF16, no 4-bit).
+    if load_in_4bit:
+        _modes = "bv,gbv,traversal,specinfer,naive"
+
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
     _4bit = ["--load_in_4bit"] if load_in_4bit else []
