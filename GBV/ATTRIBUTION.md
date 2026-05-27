@@ -27,13 +27,20 @@ co-author on this project.
 
 `node.py` is unmodified.
 
-## Evolved production version
+## Production version (Phase 2 — migration complete)
 
-A restructured, production-ready version of this codebase lives at
-`gbv-research/algorithms/distillspec_gbv/verifiers/`. That version adds:
-- Package structure (`__init__.py` with clean exports)
-- Corrected import paths
-- Integration with the `gbv-research` training pipeline
+`orchestration/run_all.py` now calls
+`gbv-research/algorithms/distillspec_gbv/verifiers/runner.py` as the primary
+evaluation entry point. `GBV/main.py` is retained as a fallback only until
+Phase 3 evals confirm runner.py is correct (expected: next pipeline run).
 
-The Phase 2 migration target is for `orchestration/run_all.py` to call
-`verifiers/runner.py` directly instead of shelling out to `GBV/main.py`.
+After Phase 3 confirmation, this directory will be restored to an **exact copy**
+of the anonymous reference repo (anonymous.4open.science/r/GBV-BED8):
+- Revert `main.py`, `util.py`, `verifier.py` to reference versions
+- Remove the `GBV_DIR` fallback from `run_all.py`
+- `ATTRIBUTION.md` and `data/` stay (they were never in the reference)
+
+The files in `distillspec_gbv/verifiers/` incorporate all infrastructure additions
+(Windows compat, load_in_4bit, torch.compile, corrected dtype kwarg) that were
+temporarily patched into the files here. Those patches are no longer needed in
+GBV/ once the production verifier is runner.py.

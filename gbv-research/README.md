@@ -15,19 +15,22 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
 +-- OSD/                        git submodule → LiuXiaoxuanPKU/OSD (unmodified upstream)
 |   +-- distill/specInfer/      Alpha-eval Generator used by online_serve.py
 |
-+-- GBV/                        Verification algorithms (novel contribution)
-|   +-- main.py                 CLI eval entrypoint (called by orchestration/run_all.py)
-|   +-- verifier.py             TreeVerifier -- dispatches all 6 verifier modes
-|   +-- node.py                 Draft tree node + OTLP solvers
-|   +-- util.py                 Model loading helpers
++-- GBV/                        Reference copy of Rahul Thomas's GBV codebase
+|                               (anonymous.4open.science/r/GBV-BED8 — original, unmodified)
+|                               Production verifier is now distillspec_gbv/verifiers/runner.py;
+|                               GBV/ will be restored to exact reference once Phase 3 confirms.
 |
 +-- gbv-research/               Research project (this directory)
     |
-    +-- algorithms/             New algorithm implementations (migration target for OSD)
-    |   +-- distillspec_gbv/    Novel EBE training code + verifier wrappers
-    |       +-- losses/         forward_kl, ebe, reverse_kl, jsd, l1 (class-based)
-    |       +-- trainer.py      Training loop (future replacement for OSD/train_qwen3.py)
-    |       +-- verifiers/      GBV verifier wrappers
+    +-- algorithms/             Training scripts and algorithm implementations
+    |   +-- training_scaffold.py    Shared training utilities (HW setup, model load, LoRA,
+    |   |                           checkpoint, WandB, results_db) — import instead of copy
+    |   +-- train_qwen3.py          Offline distillation training script (all 5 losses)
+    |   +-- online_serve.py         Online speculative distillation training (OSD)
+    |   +-- distillspec_gbv/        Novel EBE training code + production verifiers
+    |       +-- losses/             forward_kl, ebe, reverse_kl, jsd, l1 (class-based)
+    |       +-- trainer.py          Training loop (model-family-agnostic replacement for train_qwen3)
+    |       +-- verifiers/          Production verifiers — runner.py is the Phase 2 eval entry point
     |
     +-- core/
     |   +-- datasets/raw/       JSONL eval + training sets
@@ -38,7 +41,8 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
     |
     +-- orchestration/          Pipeline coordination
     |   +-- pipeline.py         Crash-safe orchestrator (Phase 1->4 + optional EAGLE)
-    |   +-- run_all.py          Eval subprocess -- calls GBV/main.py, writes to results.db
+    |   +-- run_all.py          Eval subprocess -- calls distillspec_gbv/verifiers/runner.py
+    |   |                       (Phase 2 complete; GBV/main.py kept as fallback until Phase 3)
     |   +-- clean_restart.py    Wipe outputs + reset state + relaunch
     |   +-- pipeline_state_laptop.json        Full-run state (tracked in git)
     |   +-- pipeline_state_laptop_smoke.json  Smoke state (separate, never blocks full run)
@@ -111,7 +115,7 @@ The pipeline runs 4 phases in sequence:
 | Phase | Steps | Smoke | Full |
 |-------|-------|-------|------|
 | **1 — Baseline** | `eval_baseline_gsm8k`: unmodified draft, all 6 verifiers | 5 prompts | 10 prompts |
-| **2 — Training** | train + merge × 6 losses: kl, ebe, rev_kl, jsd, l1, online | 50 steps/loss | 1000 steps/loss |
+| **2 — Training** | train + merge × 7 losses: kl, ebe, rev_kl, jsd, l1, online, online_ebe | 50 steps/loss | 1000 steps/loss |
 | **3 — GSM8K Eval** | eval every trained model, all 6 verifier modes | 5 prompts, K=3, temp=0.6 | 10 prompts, K=3+5, temps=0.6+1.0 |
 | **4 — Multi-Dataset** | eval on humaneval, math500, mtbench, alpaca | skipped | runs |
 
@@ -139,6 +143,7 @@ tail -f db/logs/pipeline_output.log                      # bash/WSL
 | `jsd` | Jensen-Shannon divergence. Symmetric ablation. | Ablation |
 | `l1` | L1 on probability distributions. Total-variation ablation. | Ablation |
 | `online` | Online speculative distillation (forward_kl on live SD outputs). | Ablation |
+| `online_ebe` | Online distillation with EBE loss — combines online adaptation with block-efficiency objective. | Novel ablation |
 
 ## Verifier modes
 
