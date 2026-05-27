@@ -25,11 +25,10 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
     +-- algorithms/             Training scripts and algorithm implementations
     |   +-- training_scaffold.py    Shared training utilities (HW setup, model load, LoRA,
     |   |                           checkpoint, WandB, results_db) — import instead of copy
-    |   +-- train_qwen3.py          Offline distillation training script (all 5 losses)
     |   +-- online_serve.py         Online speculative distillation training (OSD)
     |   +-- distillspec_gbv/        Novel EBE training code + production verifiers
     |       +-- losses/             forward_kl, ebe, reverse_kl, jsd, l1 (class-based)
-    |       +-- trainer.py          Training loop (model-family-agnostic replacement for train_qwen3)
+    |       +-- trainer.py          Offline distillation training script (all 5 losses)
     |       +-- verifiers/          Production verifiers — runner.py is the Phase 2 eval entry point
     |
     +-- core/

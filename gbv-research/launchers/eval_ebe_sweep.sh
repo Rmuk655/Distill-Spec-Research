@@ -21,7 +21,7 @@ for LR in "1e-5" "3e-5" "1e-4"; do
     echo ""
     echo "=== Merging ${CKPT} ==="
     if [ ! -f "${MERGED}/config.json" ]; then
-        python train_qwen3.py --merge_only --adapter "${CKPT}"
+        python algorithms/distillspec_gbv/trainer.py --merge_only --adapter "${CKPT}"
         echo "  Merged → ${MERGED}"
     else
         echo "  Already merged, skipping"

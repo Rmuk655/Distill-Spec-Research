@@ -26,7 +26,7 @@ Usage:
 """
 
 # GBVAlgorithm is available lazily — algorithm.py imports algorithms.base which
-# requires the repo root in sys.path.  train_qwen3.py imports only
+# requires the repo root in sys.path.  trainer.py imports only
 # distillspec_gbv.losses (not this package directly) so we avoid the eager
 # import to keep startup fast and path-agnostic.
 __all__ = ["GBVAlgorithm", "ALGORITHM"]

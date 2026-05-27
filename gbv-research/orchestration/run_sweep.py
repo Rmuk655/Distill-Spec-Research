@@ -4,7 +4,7 @@ run_sweep.py — Launch a W&B hyperparameter sweep for SpecDist distillation.
 This script:
   1. Reads orchestration/configs/sweep.yaml (or a custom --sweep_config file)
   2. Registers the sweep with W&B (wandb.sweep) → prints a sweep ID
-  3. Starts a local sweep agent (wandb.agent) that calls train_qwen3.py
+  3. Starts a local sweep agent (wandb.agent) that calls trainer.py
      once per trial with the hyperparameters sampled by the sweep controller
 
 Usage
@@ -26,7 +26,7 @@ Usage
 
 Notes
 -----
-- Each trial runs train_qwen3.py as a subprocess so GPU memory is fully released
+- Each trial runs trainer.py as a subprocess so GPU memory is fully released
   between trials.  wandb.agent() is used in function-call mode (not command mode)
   so we can inject extra fixed args (draft path, dataset path) cleanly.
 - The sweep agent reads W&B API key / entity / project from the same
@@ -44,8 +44,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(HERE)
-_OSD_DIR   = os.path.join(os.path.dirname(_REPO_ROOT), "OSD")
-_TRAIN_SCRIPT = os.path.join(_OSD_DIR, "train_qwen3.py")
+_TRAIN_SCRIPT = os.path.join(_REPO_ROOT, "algorithms", "distillspec_gbv", "trainer.py")
 _DEFAULT_SWEEP_CFG = os.path.join(HERE, "configs", "sweep.yaml")
 _WANDB_CFG = os.path.join(HERE, "wandb_config.json")
 
@@ -110,7 +109,7 @@ def launch_sweep(sweep_cfg_path: str, count: int, loss_filter: str = None,
     sweep_cfg_path : str
         Path to sweep.yaml (or custom YAML).
     count : int
-        Number of trials to run locally.  Each trial calls train_qwen3.py once.
+        Number of trials to run locally.  Each trial calls trainer.py once.
     loss_filter : str or None
         If set, override the 'loss' parameter to a fixed single value.
     dry_run : bool
@@ -156,7 +155,7 @@ def launch_sweep(sweep_cfg_path: str, count: int, loss_filter: str = None,
     print(f"  [sweep] To add more agents:  wandb agent {entity}/{project}/{sweep_id}\n")
 
     def _trial(config=None):
-        """Called by wandb.agent() for each trial.  Runs train_qwen3.py as a subprocess."""
+        """Called by wandb.agent() for each trial.  Runs trainer.py as a subprocess."""
         with wandb.init(config=config) as run:
             cfg = dict(wandb.config)
 
@@ -177,7 +176,7 @@ def launch_sweep(sweep_cfg_path: str, count: int, loss_filter: str = None,
                     else:
                         cmd += [f"--{key}", str(val)]
 
-            # Pass W&B run ID so train_qwen3.py resumes the correct run
+            # Pass W&B run ID so trainer.py resumes the correct run
             env = {**os.environ, "WANDB_RUN_ID": run.id, "WANDB_RESUME": "allow"}
 
             print(f"\n  [trial {run.id}] CMD: {' '.join(cmd)}\n")

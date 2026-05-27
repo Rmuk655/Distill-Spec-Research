@@ -1,7 +1,7 @@
 # W&B hyperparameter sweep configuration for SpecDist distillation experiments.
 #
 # This file defines the search space for a W&B sweep.  The sweep agent calls
-# train_qwen3.py once per trial, varying the parameters below.
+# algorithms/distillspec_gbv/trainer.py once per trial, varying the parameters below.
 #
 # Usage:
 #   # Register the sweep with W&B and get a sweep ID:
@@ -18,7 +18,7 @@
 #
 # Reference: https://docs.wandb.ai/guides/sweeps/configuration
 
-program: OSD/train_qwen3.py
+program: algorithms/distillspec_gbv/trainer.py
 
 method: bayes                   # bayes = Bayesian optimization (best for <50 runs)
                                 # grid  = exhaustive grid search
@@ -79,7 +79,7 @@ parameters:
   target:
     value: Qwen/Qwen3-8B
   dataset:
-    value: OSD/data/gsm8k_train.jsonl
+    value: core/datasets/raw/gsm8k_train.jsonl
   wandb_group:
     value: hparam_sweep_v1      # all sweep runs appear under this group in W&B UI
   no_wandb:

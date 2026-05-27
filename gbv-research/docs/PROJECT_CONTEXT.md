@@ -62,13 +62,12 @@ codebases. All active research code lives in `gbv-research/`.
 │
 └── gbv-research/             ← research project (canonical codebase)
     ├── algorithms/
-    │   ├── train_qwen3.py    ← offline distillation trainer (all 5 offline losses)
     │   ├── online_serve.py   ← online SD adaptation trainer (online + online_ebe)
     │   ├── training_scaffold.py ← shared utilities (HW setup, model load, LoRA, checkpoints, W&B)
     │   └── distillspec_gbv/
     │       ├── losses/       ← forward_kl, reverse_kl, jsd, l1, ebe (class-based, tested)
     │       ├── verifiers/    ← runner.py, tree.py, otlp_registry.py (Phase 3: replaces GBV/main.py)
-    │       └── trainer.py    ← model-family-agnostic replacement for train_qwen3.py
+    │       └── trainer.py    ← offline distillation trainer (all 5 offline losses)
     ├── orchestration/
     │   ├── experiment.py       ← crash-safe orchestrator; Phases 1-4
     │   ├── evaluate.py        ← eval subprocess; calls GBV/main.py; writes results.db
@@ -84,8 +83,8 @@ codebases. All active research code lives in `gbv-research/`.
         └── logs/             ← pipeline_output.log, be_progress.log
 ```
 
-**Integration pattern**: `experiment.py` launches `algorithms/train_qwen3.py` (offline
-training) and `algorithms/online_serve.py` (online training) as subprocesses, then
+**Integration pattern**: `experiment.py` launches `algorithms/distillspec_gbv/trainer.py`
+(offline training) and `algorithms/online_serve.py` (online training) as subprocesses, then
 `orchestration/evaluate.py` (eval). `evaluate.py` calls `GBV/main.py` as a subprocess
 for block-efficiency measurement and writes results to `db/results.db`.
 

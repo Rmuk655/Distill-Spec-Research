@@ -15,7 +15,7 @@ To add a new loss:
     1. Create algorithms/distillspec_gbv/losses/<name>.py
     2. Implement a function with the above signature
     3. Register it in LOSS_REGISTRY below
-    4. Pass --loss <name> to train_qwen3.py
+    4. Pass --loss <name> to trainer.py
 """
 
 from .base import LossOutput, compute_loss

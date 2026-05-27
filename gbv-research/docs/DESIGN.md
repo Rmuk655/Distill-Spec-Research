@@ -35,7 +35,7 @@ Two design choices the paper identifies as critical:
 
 **Paper**: frozen target generates continuations; both models score the same sequence.
 
-**Our code** (`algorithms/train_qwen3.py`):
+**Our code** (`algorithms/distillspec_gbv/trainer.py`):
 ```python
 with torch.no_grad():
     full_ids = target_model.generate(
@@ -105,7 +105,7 @@ def ebe(student_logits, teacher_logits, token_ids, kl_weight=0.1, block_len=8, *
 
 ### 2.5 Training loop
 
-Per-step (`algorithms/train_qwen3.py`):
+Per-step (`algorithms/distillspec_gbv/trainer.py`):
 1. Sample a prompt (shuffle per epoch over the dataset)
 2. Frozen target generates continuation (teacher-sampled)
 3. Both models score the full sequence in one forward pass
@@ -191,7 +191,7 @@ EBE weights by **acceptance probability** (calibration signal). AdaSPEC weights 
 
 ### 4.3 When to add it
 
-Add AdaSPEC as a separate `--loss adaspec` mode in `train_qwen3.py` after the KL/EBE baseline is solid. It requires pre-training a reference model first (one extra training run). Treating it as an ablation in the paper ("selective distillation") is the cleanest framing.
+Add AdaSPEC as a separate `--loss adaspec` mode in `algorithms/distillspec_gbv/trainer.py` after the KL/EBE baseline is solid. It requires pre-training a reference model first (one extra training run). Treating it as an ablation in the paper ("selective distillation") is the cleanest framing.
 
 ---
 

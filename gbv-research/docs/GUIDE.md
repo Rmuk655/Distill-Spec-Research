@@ -647,7 +647,7 @@ To answer "is training actually helping?", evaluate block efficiency at each che
 # Run from gbv-research/
 
 # 1. Merge the LoRA adapter into a standalone model
-python algorithms/train_qwen3.py --merge_only \
+python algorithms/distillspec_gbv/trainer.py --merge_only \
     --adapter db/checkpoints/kl-gsm8k/ckpt_step_00200 \
     --draft Qwen/Qwen3-0.6B
 
@@ -671,7 +671,7 @@ The Mode Comparison tab will show a bar for each checkpoint. If BE increases ste
 
 ## 8b. Running Training on a Server (Colab / Modal)
 
-The existing `algorithms/train_qwen3.py` runs anywhere — no code changes needed. These are the setup steps for each environment.
+The existing `algorithms/distillspec_gbv/trainer.py` runs anywhere with no code changes needed. These are the setup steps for each environment.
 
 ---
 
@@ -695,7 +695,7 @@ os.environ["TRANSFORMERS_OFFLINE"] = "0"   # allow first-time download
 
 # COLAB ONLY: --load_in_4bit loads the 8B target in 4-bit NF4 for T4 15GB
 # DO NOT use --load_in_4bit on A100/server runs (bf16 full precision required)
-!python algorithms/train_qwen3.py \
+!python algorithms/distillspec_gbv/trainer.py \
     --draft  Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
     --load_in_4bit \
@@ -854,7 +854,7 @@ python orchestration/experiment.py --config server --yes --eagle --from eagle_ge
 
 ## 9. Automatic Training Health Checks
 
-`train_qwen3.py` runs five automated health checks as training proceeds.
+`trainer.py` runs five automated health checks as training proceeds.
 
 ### 9a. How Each Check Works
 
@@ -870,22 +870,22 @@ python orchestration/experiment.py --config server --yes --eagle --from eagle_ge
 
 ```bash
 # NaN handling (default: stop and save checkpoint)
-python train_qwen3.py ... --nan_action stop   # abort on NaN (saves checkpoint first)
-python train_qwen3.py ... --nan_action skip   # discard step, continue
-python train_qwen3.py ... --nan_action warn   # log only, continue
+python algorithms/distillspec_gbv/trainer.py ... --nan_action stop   # abort on NaN (saves checkpoint first)
+python algorithms/distillspec_gbv/trainer.py ... --nan_action skip   # discard step, continue
+python algorithms/distillspec_gbv/trainer.py ... --nan_action warn   # log only, continue
 
 # Health report frequency
-python train_qwen3.py ... --health_every 100  # print report every 100 steps
+python algorithms/distillspec_gbv/trainer.py ... --health_every 100  # print report every 100 steps
 
 # Val loss frequency
-python train_qwen3.py ... --val_every 50      # check val loss every 50 train steps
-python train_qwen3.py ... --val_split 0.10    # hold out 10% of prompts for val
+python algorithms/distillspec_gbv/trainer.py ... --val_every 50      # check val loss every 50 train steps
+python algorithms/distillspec_gbv/trainer.py ... --val_split 0.10    # hold out 10% of prompts for val
 
 # PPL vs baseline
-python train_qwen3.py ... --ppl_check_every 200 --ppl_threshold 1.25
+python algorithms/distillspec_gbv/trainer.py ... --ppl_check_every 200 --ppl_threshold 1.25
 
 # Early stopping (recommended for unattended server runs)
-python train_qwen3.py ... --early_stop_patience 5
+python algorithms/distillspec_gbv/trainer.py ... --early_stop_patience 5
 ```
 
 ---
@@ -898,7 +898,7 @@ python train_qwen3.py ... --early_stop_patience 5
 
 | Phase | What W&B tracks | Script |
 |---|---|---|
-| **Training** | Loss curves (train + val), PPL health, LR, GPU util, gradient histograms | `train_qwen3.py` |
+| **Training** | Loss curves (train + val), PPL health, LR, GPU util, gradient histograms | `trainer.py` |
 | **Eval / Inference** | Alpha, block efficiency, task score, throughput per eval cell | `evaluate.py` |
 | **Hyperparameter sweep** | LR × LoRA-rank × loss-type sweep | `sweep_config.yaml` |
 

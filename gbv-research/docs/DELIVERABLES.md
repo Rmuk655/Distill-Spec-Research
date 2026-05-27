@@ -30,7 +30,7 @@ The novel contribution is the EBE loss + tree verification combined.
 
 DistillSpec was implemented by **simplifying the OSD codebase** (https://github.com/LiuXiaoxuanPKU/OSD) per the scope spec instructions. AdaSpec was reviewed as an additional reference.
 
-The implementation is in [`OSD/train_qwen3.py`](train_qwen3.py). It is substantially simpler than OSD:
+The implementation was initially in `train_qwen3.py` and has since been migrated to `algorithms/distillspec_gbv/trainer.py` (model-family-agnostic). It is substantially simpler than OSD:
 
 | OSD component | Our implementation | Kept / Removed |
 |---|---|---|
@@ -44,7 +44,7 @@ The implementation is in [`OSD/train_qwen3.py`](train_qwen3.py). It is substanti
 | wandb logging | Removed (not needed for Phase 1) | Removed |
 
 New addition not in OSD or DistillSpec paper:
-- **Expected Block Efficiency (EBE) loss** — `ebe_loss()` in `train_qwen3.py`
+- **Expected Block Efficiency (EBE) loss** — `ebe()` in `algorithms/distillspec_gbv/losses/ebe.py`
 
 ### 2.2 Code Changes to OSD
 
@@ -85,7 +85,7 @@ One fix to `util.py`:
 
 ### 2.4 EBE Loss Implementation
 
-The novel Expected Block Efficiency loss, implemented in `train_qwen3.py`:
+The novel Expected Block Efficiency loss, implemented in `algorithms/distillspec_gbv/losses/ebe.py`:
 
 ```python
 def ebe_loss(student_logits, teacher_logits, token_ids):
