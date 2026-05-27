@@ -70,6 +70,9 @@ def api_dimensions():
     # T=0.0 rows are perplexity-check placeholders (no real speculative-decoding run).
     # Strip them so they never appear in the Temperature filter or dropdowns.
     dims["temperature"] = [t for t in dims.get("temperature", []) if t != 0.0]
+    # K=0 rows are perplexity-check runs (mode=perplexity, no speculative decoding).
+    # Strip K=0 — users cannot meaningfully filter on it.
+    dims["K"] = [k for k in dims.get("K", []) if k != 0]
     return jsonify(dims)
 
 
@@ -591,6 +594,7 @@ _HTML = r"""<!DOCTYPE html>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-throughput">Throughput</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-training">Training Curves</a></li>
     <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-table">All Runs</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-pivot">Pivot</a></li>
   </ul>
 
   <div class="tab-content">
@@ -844,6 +848,77 @@ _HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Tab: Pivot — custom cross-tab report builder -->
+    <div class="tab-pane fade" id="tab-pivot">
+      <div class="chart-card">
+        <h6 class="mb-3">Custom Pivot Report
+          <small class="text-muted ms-2">build any cross-tabulation from the current filtered runs</small>
+        </h6>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-auto">
+            <label class="form-label mb-1" style="font-size:12px;font-weight:600">Rows</label>
+            <select id="piv-row" class="form-select form-select-sm" style="width:140px">
+              <option value="loss_name">Loss Type</option>
+              <option value="dataset">Dataset</option>
+              <option value="draft_label">Draft Label</option>
+              <option value="mode">Verifier Mode</option>
+              <option value="K">K (tree width)</option>
+              <option value="temperature">Temperature</option>
+              <option value="experiment_tag">Experiment Tag</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label mb-1" style="font-size:12px;font-weight:600">Columns</label>
+            <select id="piv-col" class="form-select form-select-sm" style="width:140px">
+              <option value="mode">Verifier Mode</option>
+              <option value="dataset">Dataset</option>
+              <option value="K">K (tree width)</option>
+              <option value="loss_name">Loss Type</option>
+              <option value="draft_label">Draft Label</option>
+              <option value="temperature">Temperature</option>
+              <option value="experiment_tag">Experiment Tag</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label mb-1" style="font-size:12px;font-weight:600">Value</label>
+            <select id="piv-val" class="form-select form-select-sm" style="width:160px">
+              <option value="block_eff">Block Efficiency</option>
+              <option value="alpha_mean">Alpha (accept rate)</option>
+              <option value="throughput">Throughput (tok/s)</option>
+              <option value="ms_per_tok">Latency (ms/tok)</option>
+              <option value="peak_vram_mb">Peak VRAM (MB)</option>
+              <option value="alpha_ci95">Alpha CI-95</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label mb-1" style="font-size:12px;font-weight:600">Aggregate</label>
+            <select id="piv-agg" class="form-select form-select-sm" style="width:100px">
+              <option value="mean">Mean</option>
+              <option value="max">Max</option>
+              <option value="min">Min</option>
+              <option value="count">Count</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-primary btn-sm" onclick="renderPivot()">Build</button>
+            <button class="btn btn-outline-secondary btn-sm ms-1" onclick="exportPivotCSV()">CSV</button>
+          </div>
+        </div>
+        <div id="pivot-info" class="text-muted mb-2" style="font-size:12px"></div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered table-hover" id="pivot-table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="text-muted mt-2" style="font-size:11px">
+          Pivot respects all sidebar filters. Cells with no data show —.
+          Use <strong>Rows=Loss Type, Cols=Verifier Mode, Value=Block Efficiency</strong>
+          to reproduce the paper's main result table.
+        </p>
+      </div>
+    </div>
+
   </div><!-- tab-content -->
 </div><!-- main -->
 </div><!-- flex wrapper -->
@@ -1012,6 +1087,7 @@ async function init() {
       if (target === '#tab-sensitivity') renderSensitivity();
       if (target === '#tab-category') renderCategory();
       if (target === '#tab-throughput') renderThroughput();
+      if (target === '#tab-pivot') renderPivot();
     });
   });
 
@@ -1028,7 +1104,8 @@ function buildFilterChips() {
   filterCols.forEach(col => {
     const div = document.getElementById('f-' + col);
     if (!div) return;
-    (DIMS[col] || []).forEach(val => {
+    const vals = DIMS[col] || [];
+    vals.forEach(val => {
       const chip = document.createElement('span');
       chip.className = 'chip';
       chip.textContent = val;
@@ -1037,6 +1114,11 @@ function buildFilterChips() {
       chip.onclick = () => toggleChip(chip);
       div.appendChild(chip);
     });
+    // Hide the entire filter section when there are ≤1 distinct values —
+    // a single value gives no filtering power and just clutters the sidebar.
+    // (train_steps is always "0" until ablation runs; experiment_tag may be empty.)
+    const section = div.closest('.filter-section');
+    if (section && vals.length <= 1) section.style.display = 'none';
   });
 }
 
@@ -1156,6 +1238,8 @@ async function loadData() {
   renderTable();
   loadTrainingCurves();
   renderCategory();
+  // Re-render pivot only when its tab is active — avoids hidden table noise
+  if (document.getElementById('tab-pivot')?.classList.contains('active')) renderPivot();
 }
 
 // ---- Helpers ----
@@ -1851,6 +1935,117 @@ function exportCSV() {
   a.click();
 }
 
+// ---- Pivot Table ----
+function renderPivot() {
+  const rowKey = document.getElementById('piv-row')?.value;
+  const colKey = document.getElementById('piv-col')?.value;
+  const valKey = document.getElementById('piv-val')?.value;
+  const aggFn  = document.getElementById('piv-agg')?.value;
+  if (!rowKey || !colKey || !valKey || !aggFn) return;
+
+  const thead = document.querySelector('#pivot-table thead');
+  const tbody = document.querySelector('#pivot-table tbody');
+  const info  = document.getElementById('pivot-info');
+
+  const runs = ALL_RUNS.filter(r => r[valKey] != null);
+  if (!runs.length) {
+    if (info) info.textContent = 'No data matching current filters — run the pipeline to generate results.';
+    if (thead) thead.innerHTML = '';
+    if (tbody) tbody.innerHTML = '<tr><td class="text-muted" style="padding:1rem">No data yet.</td></tr>';
+    return;
+  }
+
+  // Unique sorted row / col values
+  const rowVals = [...new Set(runs.map(r => String(r[rowKey])))].sort();
+  const colVals = [...new Set(runs.map(r => String(r[colKey])))].sort();
+
+  // Bucket runs into pivot[rowVal][colVal] = [metric values]
+  const pivot = {};
+  rowVals.forEach(rv => { pivot[rv] = {}; colVals.forEach(cv => { pivot[rv][cv] = []; }); });
+  runs.forEach(r => {
+    const rv = String(r[rowKey]), cv = String(r[colKey]);
+    if (pivot[rv]?.[cv] !== undefined) pivot[rv][cv].push(Number(r[valKey]));
+  });
+
+  // Aggregate
+  function agg(vals) {
+    if (!vals.length) return null;
+    if (aggFn === 'mean')  return vals.reduce((a,b) => a+b, 0) / vals.length;
+    if (aggFn === 'max')   return Math.max(...vals);
+    if (aggFn === 'min')   return Math.min(...vals);
+    if (aggFn === 'count') return vals.length;
+    return null;
+  }
+
+  // Find max value for conditional heat-shading (skip for 'count')
+  let allVals = [];
+  rowVals.forEach(rv => colVals.forEach(cv => {
+    const v = agg(pivot[rv][cv]);
+    if (v != null) allVals.push(v);
+  }));
+  const maxVal = allVals.length ? Math.max(...allVals) : 1;
+  const minVal = allVals.length ? Math.min(...allVals) : 0;
+
+  function cellBg(v) {
+    if (v == null || aggFn === 'count' || maxVal === minVal) return '';
+    // Light blue → dark blue heat: 0% → max value
+    const t = (v - minVal) / (maxVal - minVal);
+    const r = Math.round(255 - t * 127);
+    const g = Math.round(255 - t * 127);
+    const b = 255;
+    return `background:rgba(${r},${g},${b},${0.2 + t * 0.55})`;
+  }
+
+  // Render
+  thead.innerHTML = `<tr>
+    <th style="background:#f1f3f5;font-weight:700;min-width:100px">${rowKey} / ${colKey}</th>
+    ${colVals.map(cv => `<th style="text-align:center;font-size:12px">${cv}</th>`).join('')}
+  </tr>`;
+
+  tbody.innerHTML = rowVals.map(rv => {
+    const cells = colVals.map(cv => {
+      const v = agg(pivot[rv][cv]);
+      const disp = v == null ? '—'
+                 : aggFn === 'count' ? v
+                 : v.toFixed(3);
+      const bg = cellBg(v);
+      return `<td style="text-align:center;${bg}">${disp}</td>`;
+    }).join('');
+    return `<tr><td style="font-weight:600;background:#f8f9fa;font-size:12px">${rv}</td>${cells}</tr>`;
+  }).join('');
+
+  const valLabel = document.getElementById('piv-val')?.selectedOptions[0]?.text || valKey;
+  if (info) info.textContent =
+    `${aggFn} of ${valLabel} — ${rowVals.length} row(s) × ${colVals.length} col(s) — ${runs.length} run(s) in scope`;
+}
+
+function exportPivotCSV() {
+  // Build pivot first in case it hasn't been rendered yet
+  renderPivot();
+  const thead = document.querySelector('#pivot-table thead');
+  const tbody = document.querySelector('#pivot-table tbody');
+  if (!thead || !tbody) return;
+
+  const escCell = cell => {
+    const t = cell.textContent.trim();
+    return t.includes(',') || t.includes('"') ? `"${t.replace(/"/g,'""')}"` : t;
+  };
+
+  const rows = [];
+  thead.querySelectorAll('tr').forEach(tr => {
+    rows.push([...tr.querySelectorAll('th,td')].map(escCell).join(','));
+  });
+  tbody.querySelectorAll('tr').forEach(tr => {
+    rows.push([...tr.querySelectorAll('th,td')].map(escCell).join(','));
+  });
+
+  const blob = new Blob([rows.join('\n')], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pivot_report.csv';
+  a.click();
+}
+
 // ---- Bootstrap tab change handlers ----
 document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
   tab.addEventListener('shown.bs.tab', e => {
@@ -1862,6 +2057,7 @@ document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
     if (target === '#tab-sensitivity') renderSensitivity();
     if (target === '#tab-category') renderCategory();
     if (target === '#tab-throughput') renderThroughput();
+    if (target === '#tab-pivot') renderPivot();
   });
 });
 
