@@ -1510,10 +1510,25 @@ function renderSummaryStats() {
     const best = alphaRuns.reduce((a,b) => (a.alpha_mean > b.alpha_mean ? a : b));
     html += statBox('Best Alpha', best.alpha_mean.toFixed(4), best.draft_label);
   }
-  // Best BE
+  // Best BE — normalised by (K+1) so K=3 and K=5 are on the same scale.
+  // Max possible BE at any K is K+1 (all K drafts accepted + 1 bonus target token).
   if (beRuns.length) {
-    const best = beRuns.reduce((a,b) => (a.block_eff > b.block_eff ? a : b));
-    html += statBox('Best BE', best.block_eff.toFixed(3), `${best.draft_label} ${best.mode} K=${best.K}`);
+    // Best by normalised efficiency BE/(K+1)
+    const bestNorm = beRuns.reduce((a,b) =>
+      (a.block_eff/(a.K+1) > b.block_eff/(b.K+1) ? a : b));
+    const normPct = (bestNorm.block_eff / (bestNorm.K+1) * 100).toFixed(0);
+    html += statBox('Best BE (norm)', `${bestNorm.block_eff.toFixed(3)} · ${normPct}%`,
+      `${bestNorm.draft_label} ${bestNorm.mode} K=${bestNorm.K} (of max ${bestNorm.K+1})`);
+
+    // Also show best raw BE per K so both are visible
+    [3, 5].forEach(k => {
+      const kRuns = beRuns.filter(r => r.K === k);
+      if (!kRuns.length) return;
+      const bestK = kRuns.reduce((a,b) => (a.block_eff > b.block_eff ? a : b));
+      const kEff  = (bestK.block_eff / (k+1) * 100).toFixed(0);
+      html += statBox(`Best BE K=${k}`, bestK.block_eff.toFixed(3),
+        `${bestK.draft_label} ${bestK.mode} · ${kEff}% of ${k+1}`);
+    });
   }
 
   document.getElementById('stat-row').innerHTML = html;
