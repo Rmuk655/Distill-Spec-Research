@@ -61,7 +61,7 @@ export TRANSFORMERS_OFFLINE=0      # always online on RunPod (we're on fast clou
 export HF_HUB_OFFLINE=0
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
-# Specdist storage env vars — pipeline.py propagates these to all subprocesses
+# Specdist storage env vars — experiment.py propagates these to all subprocesses
 export SPECDIST_STORAGE_ROOT="${STORAGE_ROOT}"
 export SPECDIST_DB_PATH="${STORAGE_ROOT}/results.db"
 export SPECDIST_LOGS_ROOT="${STORAGE_ROOT}/logs"
@@ -92,7 +92,7 @@ mkdir -p "${STORAGE_ROOT}/logs"
 # ── 4. Run pipeline ───────────────────────────────────────────────────────────
 echo ""
 echo "[pipeline] Starting pipeline..."
-CMD="python orchestration/pipeline.py --config ${CONFIG} --storage_root ${STORAGE_ROOT} --yes"
+CMD="python orchestration/experiment.py --config ${CONFIG} --storage_root ${STORAGE_ROOT} --yes"
 [ -n "${SMOKE}" ]  && CMD="${CMD} ${SMOKE}"
 [ -n "${LOSSES}" ] && CMD="${CMD} --losses ${LOSSES}"
 echo "[pipeline] Command: ${CMD}"

@@ -6,7 +6,7 @@
 # to ~5 GB; total with draft + activations ≈ 8–9 GB → comfortable T4 fit.
 # The draft is trained in bfloat16 — only the frozen teacher is quantised.
 #
-# Use with: python orchestration/pipeline.py --config colab --ckpt_root /content/drive/MyDrive/specdist/checkpoints
+# Use with: python orchestration/experiment.py --config colab --storage_root /content/drive/MyDrive/specdist
 
 hardware:
   device: cuda
