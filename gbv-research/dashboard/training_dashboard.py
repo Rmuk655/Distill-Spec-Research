@@ -1529,13 +1529,38 @@ function draftColor(label) {
 // ---- Summary Stats ----
 function renderSummaryStats() {
   const alphaRuns = ALL_RUNS.filter(r => r.mode === 'alpha' && r.alpha_mean != null);
-  const beRuns = ALL_RUNS.filter(r => r.block_eff != null);
-  const labels = [...new Set(ALL_RUNS.map(r => r.draft_label))];
+  const beRuns    = ALL_RUNS.filter(r => r.block_eff != null);
+  const pplRuns   = ALL_RUNS.filter(r => r.mode === 'perplexity' && r.perplexity != null);
+  const labels    = [...new Set(ALL_RUNS.map(r => r.draft_label))];
 
   let html = '';
-  html += statBox('Total Runs', ALL_RUNS.length, '');
-  html += statBox('Alpha Evals', alphaRuns.length, '');
-  html += statBox('BE Evals', beRuns.length, '');
+
+  // ── Total Runs — show the 3-way breakdown so the number is never mysterious ──
+  const runBreakdown = [
+    beRuns.length  ? `${beRuns.length} BE`    : null,
+    pplRuns.length ? `${pplRuns.length} PPL`  : null,
+    alphaRuns.length ? `${alphaRuns.length} α` : null,
+  ].filter(Boolean).join(' + ');
+  html += statBox('Total Runs', ALL_RUNS.length, runBreakdown);
+
+  // ── α checks — honest about what they cover ──────────────────────────────────
+  // (If only baseline was measured, say so — α_eff is now derived from all 160 BE rows)
+  if (alphaRuns.length) {
+    const alphaLabels    = [...new Set(alphaRuns.map(r => r.draft_label))];
+    const isBaselineOnly = alphaLabels.length === 1 && alphaLabels[0] === 'baseline';
+    const alphaSub = isBaselineOnly
+      ? 'baseline calibration only — α_eff derived from all BE rows'
+      : alphaLabels.join(', ');
+    html += statBox('α checks', alphaRuns.length, alphaSub);
+  }
+
+  // ── PPL checks — quality-preservation sanity, separate from BE ───────────────
+  if (pplRuns.length) {
+    const pplModels = [...new Set(pplRuns.map(r => r.draft_label))];
+    html += statBox('PPL checks', pplRuns.length, `${pplModels.length} models — quality sanity`);
+  }
+
+  html += statBox('BE Evals', beRuns.length, 'speedup metric — main result');
 
   // Best acceptance rate — prefer derived alpha_eff=(BE-1)/K from BE runs (covers all
   // trained models) over the raw alpha_mean rows (which are baseline-only right now).

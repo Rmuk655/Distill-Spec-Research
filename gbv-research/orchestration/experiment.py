@@ -334,11 +334,16 @@ def _merged(name): return _ckpt(name + "_merged")
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               modes="alpha,specinfer,gbv,traversal",
               Ks="3,5", temps="0.6,1.0", n=10, max_tokens=50, task_score=False,
-              experiment_tag=None):
+              experiment_tag=None, train_steps=0):
     """Eval command — always passes --skip_existing so restarts are safe.
 
     Defaults (laptop): n=10 prompts, max_tokens=50.  Run with n=30/max_tokens=100
     on Colab/server T4 for paper-quality results.
+
+    train_steps is passed through to evaluate.py --train_steps so the DB row
+    records how many training steps produced this checkpoint.  0 = baseline
+    (no training).  Omit / leave 0 for the baseline eval; pass _steps or
+    _online_steps for trained models.
     """
     cmd = [
         sys.executable, os.path.join(HERE, "evaluate.py"),
@@ -354,6 +359,8 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         "--skip_existing",
         "--skip_fetch",
     ]
+    if train_steps:
+        cmd += ["--train_steps", str(train_steps)]
     if task_score:
         cmd.append("--task_score")
     if experiment_tag:
@@ -479,12 +486,29 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _ckpt   = globals()["_ckpt"]    # noqa: E731 — module-level default
         _merged = globals()["_merged"]  # noqa: E731
 
+    # Labels that use online_steps (smaller budget, online distillation).
+    _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
+
     def _ec(student_path, label, datasets="gsm8k", task_score=False):
-        """Shorthand: eval cmd with smoke-aware parameters."""
+        """Shorthand: eval cmd with smoke-aware parameters.
+
+        Automatically infers train_steps from label:
+          baseline           → 0    (no training)
+          online / *         → _online_steps
+          everything else    → _steps
+        This keeps every DB row honest without touching each call site.
+        """
+        if label == "baseline":
+            ts = 0
+        elif label in _ONLINE_LABELS:
+            ts = _online_steps
+        else:
+            ts = _steps
         cmd = _eval_cmd(student_path, label, target,
                         datasets=datasets, modes=_modes, Ks=_Ks, temps=_temps,
                         n=_n, max_tokens=_max_tok,
-                        task_score=task_score, experiment_tag=experiment_tag)
+                        task_score=task_score, experiment_tag=experiment_tag,
+                        train_steps=ts)
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # ── Loss filter helper ─────────────────────────────────────────────────────

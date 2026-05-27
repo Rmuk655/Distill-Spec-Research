@@ -869,7 +869,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         draft_path=student_path,
         target_path=teacher_path,
         loss_name=infer_loss_name(student_label),
-        train_steps=0, learning_rate=0.0, lora_rank=0,
+        train_steps=args.train_steps, learning_rate=0.0, lora_rank=0,
         dataset=dataset, n_prompts=len(prompts),
         mode=mode, K=K, L=L, temperature=temperature,
         experiment_tag=experiment_tag,
@@ -1092,6 +1092,10 @@ def main():
     p.set_defaults(perplexity=True)
     p.add_argument("--task_score", action="store_true",
                    help="Compute task accuracy: GSM8K exact match, HumanEval pass@1")
+    p.add_argument("--train_steps", type=int, default=0,
+                   help="Number of training steps used to produce this checkpoint "
+                        "(stored in DB; 0 = baseline / not trained). "
+                        "Passed automatically by experiment.py.")
     p.add_argument("--lora_rank", type=int, default=None,
                    help="LoRA rank used for this checkpoint (stored in DB for analysis)")
     p.add_argument("--experiment_tag", default=None,
@@ -1256,7 +1260,7 @@ def main():
                     run_tag=make_run_tag(student_label, "perplexity", ds, 0),
                     draft_label=student_label, draft_path=args.student,
                     target_path=args.teacher, loss_name=infer_loss_name(student_label),
-                    train_steps=0, learning_rate=0.0,
+                    train_steps=args.train_steps, learning_rate=0.0,
                     lora_rank=args.lora_rank or 0,
                     dataset=ds, n_prompts=len(prompts), mode="perplexity",
                     K=0, L=0, temperature=0.0,
@@ -1414,7 +1418,7 @@ def main():
                 draft_path=args.student,
                 target_path=args.teacher,
                 loss_name=infer_loss_name(student_label),
-                train_steps=0, learning_rate=0.0, lora_rank=0,
+                train_steps=args.train_steps, learning_rate=0.0, lora_rank=0,
                 dataset=ds, n_prompts=n,
                 mode=mode, K=K, L=args.L, temperature=T,
                 block_eff=be_val,
