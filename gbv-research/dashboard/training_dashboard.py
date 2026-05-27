@@ -35,12 +35,20 @@ _BE_LOG       = os.path.join(_DB_LOGS, "be_progress.log")
 _PIPELINE_LOG = os.path.join(_DB_LOGS, "pipeline_output.log")
 
 try:
-    from flask import Flask, jsonify, request, render_template_string
+    from flask import Flask, jsonify, request, render_template_string, send_from_directory
 except ImportError:
     print("Flask not installed. Run: pip install flask")
     sys.exit(1)
 
 app = Flask(__name__)
+
+_STATIC_DIR = os.path.join(_SERVER_HERE, "static")
+
+
+@app.route("/static/<path:filename>")
+def dashboard_static(filename):
+    """Serve bundled static assets (Plotly, Bootstrap) from dashboard/static/."""
+    return send_from_directory(_STATIC_DIR, filename)
 
 # ---------------------------------------------------------------------------
 # API
@@ -404,9 +412,8 @@ _HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SpecDist Results Dashboard</title>
-<link rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<link rel="stylesheet" href="/static/bootstrap.min.css">
+<script src="/static/plotly.min.js"></script>
 <style>
   body { background: #f8f9fa; font-size: 14px; }
   /* Pipeline status bar — sticky across the top */
@@ -1103,7 +1110,7 @@ _HTML = r"""<!DOCTYPE html>
 </div><!-- main -->
 </div><!-- flex wrapper -->
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/bootstrap.bundle.min.js"></script>
 <script>
 // ---- State ----
 let ALL_RUNS = [];
