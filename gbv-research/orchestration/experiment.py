@@ -301,8 +301,8 @@ _GBV_RESEARCH = os.path.dirname(HERE)   # gbv-research/
 _OSD_DIR = os.path.join(os.path.dirname(_GBV_RESEARCH), "OSD")   # OSD/ (sibling)
 _GBV_SRC = os.path.join(os.path.dirname(_GBV_RESEARCH), "GBV")   # GBV/ (sibling)
 
-# Training / benchmark scripts — live in gbv-research/algorithms/ (moved from OSD/ in Phase 2)
-_TRAIN_SCRIPT  = os.path.join(_GBV_RESEARCH, "algorithms", "train_qwen3.py")
+# Training / benchmark scripts
+_TRAIN_SCRIPT  = os.path.join(_GBV_RESEARCH, "algorithms", "distillspec_gbv", "trainer.py")
 _ONLINE_SCRIPT = os.path.join(_GBV_RESEARCH, "algorithms", "online_serve.py")
 _EAGLE_SCRIPT  = os.path.join(_GBV_RESEARCH, "algorithms", "eagle_bench.py")
 
@@ -424,7 +424,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
 
     # ── Training hyperparameter args ───────────────────────────────────────────
     # Resolved from train_hparams dict (built in main() from YAML + CLI overrides).
-    # Passed to every train_qwen3.py invocation so the YAML / CLI fully controls
+    # Passed to every trainer.py invocation so the YAML / CLI fully controls
     # all hyperparameters without editing this file.
     _h = train_hparams or {}
     # Online adapt: max_new_tokens controls KV-cache size during speculative decode.

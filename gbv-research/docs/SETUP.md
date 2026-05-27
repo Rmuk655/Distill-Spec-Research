@@ -334,7 +334,7 @@ a **persistent Modal Volume** (`specdist-vol`) that survives container
 restarts — you never lose a checkpoint even if Modal preempts your run.
 
 The training script commits the volume every 5 minutes automatically.
-On restart, `train_qwen3.py` auto-resumes from `ckpt_latest/` — no flags
+On restart, `trainer.py` auto-resumes from `ckpt_latest/` — no flags
 needed.
 
 #### One-time setup
@@ -407,7 +407,7 @@ Modal containers can be preempted or OOM-killed.  The training script saves
 Modal volume is committed every 5 minutes.  To resume:
 
 ```bash
-# Just re-run the same command — train_qwen3.py detects ckpt_latest/ and
+# Just re-run the same command — trainer.py detects ckpt_latest/ and
 # resumes from the last saved step automatically.
 modal run launchers/modal_app.py::train_kl
 ```
@@ -429,7 +429,7 @@ run with `run.with_options(gpu="A10G").local(...)`.
 
 ```bash
 # Colab free T4 — must pass --load_in_4bit manually:
-python algorithms/train_qwen3.py \
+python algorithms/distillspec_gbv/trainer.py \
     --draft  Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
     --loss   forward_kl \
@@ -438,7 +438,7 @@ python algorithms/train_qwen3.py \
     --output /content/drive/MyDrive/specdist/checkpoints/kl-8b
 
 # Server / A100 — no 4-bit flag needed:
-python algorithms/train_qwen3.py \
+python algorithms/distillspec_gbv/trainer.py \
     --draft  Qwen/Qwen3-0.6B \
     --target Qwen/Qwen3-8B \
     --loss   forward_kl \
@@ -484,9 +484,9 @@ python orchestration/experiment.py --config laptop --lr 1e-4 --losses kl
 python orchestration/experiment.py --config laptop --lora_r 16 --losses kl,ebe
 ```
 
-**Standalone `train_qwen3.py` with all sweep-friendly args**:
+**Standalone `trainer.py` with all sweep-friendly args**:
 ```bash
-python algorithms/train_qwen3.py \
+python algorithms/distillspec_gbv/trainer.py \
     --loss ebe \
     --steps 500 \
     --lr 5e-5 \

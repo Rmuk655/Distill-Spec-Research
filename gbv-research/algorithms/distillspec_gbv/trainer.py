@@ -100,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--target", default=None,
                    help="Frozen teacher HuggingFace ID or local path. "
                         "Defaults to family.default_target_model_id.")
-    p.add_argument("--teacher_temperature", type=float, default=0.8,
+    p.add_argument("--teacher_temp", type=float, default=0.8,
                    help="Sampling temperature for the teacher's generate() call. "
                         "The trainer undoes any family-specific temperature pre-scaling "
                         "via ModelFamily.recover_raw_logits().")
@@ -117,11 +117,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no_shuffle", action="store_true",
                    help="Disable dataset shuffling.")
+    p.add_argument("--grad_clip", type=float, default=1.0,
+                   help="Gradient norm clipping threshold (0 = disabled).")
+
+    # ── Sweep-friendly hyperparameters ───────────────────────────────────────
+    p.add_argument("--ebe_kl_weight", type=float, default=0.1,
+                   help="KL regulariser weight in EBE loss.  "
+                        "L_total = L_EBE + ebe_kl_weight * L_KL.  Sweep: 0.01–0.5.")
+    p.add_argument("--jsd_alpha", type=float, default=0.5,
+                   help="JSD interpolation weight (0=reverse KL, 1=forward KL).  Sweep: 0.1–0.9.")
 
     # ── LoRA ─────────────────────────────────────────────────────────────────
-    p.add_argument("--lora_r",     type=int, default=8)
-    p.add_argument("--lora_alpha", type=int, default=16)
-    p.add_argument("--no_lora",    action="store_true",
+    p.add_argument("--lora_r",       type=int,   default=8)
+    p.add_argument("--lora_alpha",   type=int,   default=16)
+    p.add_argument("--lora_dropout", type=float, default=0.05,
+                   help="LoRA adapter dropout probability.  Sweep: 0.0–0.2.")
+    p.add_argument("--no_lora",      action="store_true",
                    help="Full SFT instead of LoRA (needs more VRAM).")
 
     # ── Data ─────────────────────────────────────────────────────────────────
@@ -298,7 +309,7 @@ def _compute_val_loss(
                 prompt_ids,
                 max_new_tokens=args.max_new_tokens,
                 do_sample=True,
-                temperature=args.teacher_temperature,
+                temperature=args.teacher_temp,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 return_dict_in_generate=True,
@@ -311,13 +322,14 @@ def _compute_val_loss(
             # Undo family-specific temperature pre-scaling
             t_log = (torch.stack(gen_out.scores, dim=0)
                      .squeeze(1).float())
-            t_log = family.recover_raw_logits(t_log, args.teacher_temperature)
+            t_log = family.recover_raw_logits(t_log, args.teacher_temp)
 
             student_logits = draft_model(full_ids).logits[:, :-1, :].float()
             s_log   = student_logits[:, plen - 1:, :].squeeze(0)
             gen_ids = full_ids[0, plen:]
 
-            out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids)
+            out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids,
+                          kl_weight=args.ebe_kl_weight, alpha=args.jsd_alpha)
             val_losses.append(out.loss.item())
             if out.accept_weight is not None:
                 val_aws.append(out.accept_weight)
@@ -391,7 +403,7 @@ def main() -> None:
     print(f"Loss          : {args.loss}")
     print(f"Attn backend  : {_ATTN_IMPL}")
     print(f"Steps         : {args.steps}")
-    print(f"Teacher temp  : {args.teacher_temperature}")
+    print(f"Teacher temp  : {args.teacher_temp}")
     if args.dataset:
         print(f"Dataset       : {args.dataset}")
 
@@ -436,7 +448,7 @@ def main() -> None:
             task_type=TaskType.CAUSAL_LM,
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
-            lora_dropout=0.05,
+            lora_dropout=args.lora_dropout,
             target_modules=family.lora_target_modules(),  # ← family-specific
             bias="none",
         )
@@ -580,7 +592,7 @@ def main() -> None:
                 prompt_ids,
                 max_new_tokens=args.max_new_tokens,
                 do_sample=True,
-                temperature=args.teacher_temperature,
+                temperature=args.teacher_temp,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 return_dict_in_generate=True,
@@ -595,7 +607,7 @@ def main() -> None:
 
         # Recover raw logits (undo family-specific temp pre-scaling)
         raw_scores = torch.stack(gen_out.scores, dim=0).squeeze(1).float()
-        t_log = family.recover_raw_logits(raw_scores, args.teacher_temperature)
+        t_log = family.recover_raw_logits(raw_scores, args.teacher_temp)
 
         # Draft: forward pass with gradient
         draft_model.train()
@@ -604,7 +616,8 @@ def main() -> None:
         gen_ids = full_ids[0, plen:]                            # [gen_len]
 
         try:
-            out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids)
+            out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids,
+                          kl_weight=args.ebe_kl_weight, alpha=args.jsd_alpha)
             loss = out.loss
             aw   = out.accept_weight
         except Exception as exc:
@@ -635,8 +648,9 @@ def main() -> None:
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            [p for p in draft_model.parameters() if p.requires_grad], 1.0)
+        if args.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in draft_model.parameters() if p.requires_grad], args.grad_clip)
         optimizer.step()
 
         losses.append(loss_val)

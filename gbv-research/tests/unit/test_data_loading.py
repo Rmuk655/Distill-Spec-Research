@@ -2,15 +2,15 @@
 test_data_loading.py — unit tests for dataset loading utilities.
 
 Functions under test:
-  - GBV/util.py  : load_prompts_jsonl(path)
-  - gbv-research/algorithms/train_qwen3.py : load_prompts(dataset_path)
+  - GBV/util.py                                    : load_prompts_jsonl(path)
+  - algorithms/distillspec_gbv/trainer.py          : load_prompts(path)
 
 Tests verify:
   1. Correct prompts are loaded from {"prompt": ...} records
   2. Empty lines are silently skipped
   3. Records missing the "prompt" key are silently skipped
-  4. JSONL with alternate keys ("question", "instruction") handled by train_qwen3
-  5. Empty dataset raises ValueError (train_qwen3.load_prompts)
+  4. JSONL with alternate keys ("question", "instruction") handled by trainer
+  5. Empty dataset raises ValueError (trainer.load_prompts)
   6. No prompt if the file has only whitespace / comment-like lines
   7. Unicode prompts handled correctly (math / code prompts)
 
@@ -23,9 +23,7 @@ import sys
 import pytest
 
 from util import load_prompts_jsonl
-import train_qwen3 as _t
-
-load_prompts = _t.load_prompts
+from distillspec_gbv.trainer import load_prompts
 
 
 # ===========================================================================
@@ -97,10 +95,10 @@ class TestLoadPromptsJsonl:
 
 
 # ===========================================================================
-# load_prompts  (OSD/train_qwen3.py)
+# load_prompts  (algorithms/distillspec_gbv/trainer.py)
 # ===========================================================================
 
-class TestLoadPromptsTrainQwen3:
+class TestLoadPromptsTrainer:
 
     def test_prompt_key(self, tmp_path):
         p = tmp_path / "data.jsonl"
@@ -110,7 +108,7 @@ class TestLoadPromptsTrainQwen3:
         assert "Euler" in prompts[0]
 
     def test_question_key_fallback(self, tmp_path):
-        """train_qwen3.load_prompts should also accept 'question' key."""
+        """trainer.load_prompts should also accept 'question' key."""
         p = tmp_path / "data.jsonl"
         p.write_text('{"question": "What is entropy?"}\n')
         prompts = load_prompts(str(p))
@@ -118,7 +116,7 @@ class TestLoadPromptsTrainQwen3:
         assert "entropy" in prompts[0]
 
     def test_instruction_key_fallback(self, tmp_path):
-        """train_qwen3.load_prompts should also accept 'instruction' key."""
+        """trainer.load_prompts should also accept 'instruction' key."""
         p = tmp_path / "data.jsonl"
         p.write_text('{"instruction": "Summarise this paragraph."}\n')
         prompts = load_prompts(str(p))
@@ -139,11 +137,10 @@ class TestLoadPromptsTrainQwen3:
         with pytest.raises(ValueError, match="No prompts"):
             load_prompts(str(p))
 
-    def test_none_path_returns_builtin_prompts(self):
-        """load_prompts(None) should return the built-in PROMPTS list."""
-        prompts = load_prompts(None)
-        assert isinstance(prompts, list)
-        assert len(prompts) > 0
+    def test_none_path_raises(self):
+        """load_prompts(None) should raise ValueError (--dataset is required)."""
+        with pytest.raises(ValueError, match="--dataset"):
+            load_prompts(None)
 
     def test_returns_stripped_strings(self, tmp_path):
         """Prompts should be stripped of leading/trailing whitespace."""
