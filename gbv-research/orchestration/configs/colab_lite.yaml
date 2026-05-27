@@ -1,0 +1,72 @@
+# Colab Lite configuration -- Google Colab free T4 (15 GB VRAM)
+# Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-1.7B (bf16, ~3.4 GB)
+#
+# Use this FIRST for quick ablation / hypothesis testing before committing to
+# a full colab.yaml run (Qwen3-4B teacher, 500 steps, ~2 h).
+#
+# Why Qwen3-1.7B?
+#   Total VRAM: 1.2 + 3.4 + ~1.0 (activations) = ~5.6 GB
+#   T4 headroom: ~9 GB -- enormous margin, no OOM risk at all.
+#   Teacher download: ~3.4 GB vs ~8 GB for 4B -- saves ~10 min on first run.
+#   Training speed: faster teacher inference -> ~0.5-0.8 s/step on T4.
+#   300 steps = ~5-10 min training; total wall time ~20-25 min including eval.
+#
+# Recommended workflow:
+#   Level 1: colab_lite  (1.7B teacher, 300 steps) -- verify pipeline works,
+#            check loss curve shape, confirm eval modes run without error.
+#   Level 2: colab       (4B teacher, 500 steps)   -- real training run,
+#            publishable block-efficiency numbers.
+#   Level 3: colab_a100  (8B teacher, 2000 steps)  -- best quality, needs Pro+.
+#
+# Note: 1.7B teacher gives a weaker distillation signal than 4B (smaller gap
+# in teacher capacity means less information transfer). Block-efficiency gains
+# will be smaller. Use Level 2/3 for final results.
+#
+# Use with: python orchestration/experiment.py --config colab_lite --storage_root /content/drive/MyDrive/specdist
+
+hardware:
+  device: cuda
+  load_in_4bit: false           # 1.7B fits T4 in bfloat16 with 9+ GB to spare
+  compile: false                # torch.compile not reliable in Colab environment
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-1.7B      # 3.4 GB bf16; total VRAM ~5.6 GB -- fits T4 with ease
+
+training:
+  steps: 300                    # ~5-10 min on T4; enough to verify convergence
+  lr: 3.0e-5
+  lora_r: 4                     # small rank -- 1.7B teacher gives a shallower signal
+  lora_alpha: 8
+  max_new_tokens: 128           # plenty of headroom with 1.7B teacher
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 25                # save every 25 steps -- same as colab.yaml
+  milestone_every: 100
+  max_checkpoints: 5
+  storage_root: /content/drive/MyDrive/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-lite
+
+health:
+  val_every: 50
+  ppl_check_every: 100
+  ppl_threshold: 1.25
+  nan_action: skip
+  early_stop_patience: 5
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]  # all modes -- plenty of VRAM
+  K_values: [3, 5]
+  L: 8
+  n_prompts: 20
