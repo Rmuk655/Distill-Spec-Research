@@ -1406,7 +1406,11 @@ function populateSelects() {
   datasetSelects.forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
-    sel.innerHTML = datasets.map(d => `<option>${d}</option>`).join('');
+    // Preserve current selection if already set (e.g. user picked something earlier)
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">All</option>'
+      + datasets.map(d => `<option>${d}</option>`).join('');
+    if (prev && datasets.includes(prev)) sel.value = prev;
   });
 
   // Populate temperature dropdowns
@@ -1584,7 +1588,10 @@ function renderBeVsK() {
   if (selDataset) runs = runs.filter(r => r.dataset === selDataset);
   if (selTemp) runs = runs.filter(r => String(r.temperature) === selTemp);
 
-  if (!runs.length) { showNoData('chart-be-k', 'Block Efficiency data pending — GBV batch finishes for the first eval step, then 12 BE results appear at once'); showNoData('chart-be-k-modes','BE vs K by mode pending'); return; }
+  if (!runs.length) {
+    const why = selDataset ? `no BE data for dataset "${selDataset}" — try "All"` : `no BE data yet for mode "${selMode}"`;
+    showNoData('chart-be-k', why); showNoData('chart-be-k-modes', why); return;
+  }
 
   const byLabel = groupBy(runs, 'draft_label');
   const traces = Object.entries(byLabel).map(([label, rows]) => {
@@ -1672,7 +1679,10 @@ function renderModeComparison() {
   let runs = ALL_RUNS.filter(r => r.block_eff != null && r.K === selK);
   if (selDataset) runs = runs.filter(r => r.dataset === selDataset);
   if (selTemp) runs = runs.filter(r => String(r.temperature) === selTemp);
-  if (!runs.length) { showNoData('chart-mode', 'Mode comparison pending — needs BE results from GBV batch (first eval step finishing populates this)'); return; }
+  if (!runs.length) {
+    const why = selDataset ? `no BE data for dataset "${selDataset}" — try "All"` : `no BE data yet for K=${selK}`;
+    showNoData('chart-mode', why); return;
+  }
 
   const labels = [...new Set(runs.map(r=>r.draft_label))];
   const modes  = [...new Set(runs.map(r=>r.mode))];
