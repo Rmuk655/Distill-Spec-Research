@@ -722,36 +722,52 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
 
             _tee_thread = threading.Thread(target=_tee, args=(proc.stdout,), daemon=True)
             _tee_thread.start()
+            _timed_out = False
             try:
                 rc = proc.wait(timeout=7200)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-                _tee_thread.join(timeout=5)
+                _timed_out = True
                 print(f"    [TIMEOUT] GBV batch subprocess timed out after 2 hours. "
                       f"Consider reducing --n or --max_tokens.")
-                return {}
+                # Do NOT return here — fall through to parse whatever completed combos
+                # are already in the log.  Combos that finished before the timeout will
+                # be saved to the DB; on restart --skip_existing will skip them so only
+                # the unfinished combos re-run.
             _tee_thread.join(timeout=10)  # drain any last lines before closing the log
 
-        # Read back the log for parsing (now the process has exited)
+        # Read back the log for parsing (now the process has exited or been killed)
         with open(_be_log, encoding="utf-8", errors="replace") as f:
             out = f.read()
 
-        oom = "out of memory" in out.lower() or "outofmemory" in out.lower()
-        if oom and _device == "cuda":
-            print(f"    [OOM] GBV batch subprocess OOM — retrying on CPU (slower)")
-            torch.cuda.empty_cache()
-            return run_be_batch(student_path, teacher_path, data_path,
-                                modes, Ks, temps, L, max_new_tokens, _device="cpu",
-                                load_in_4bit=load_in_4bit)
+        # OOM retry only applies to clean (non-timeout) exits
+        if not _timed_out:
+            oom = "out of memory" in out.lower() or "outofmemory" in out.lower()
+            if oom and _device == "cuda":
+                print(f"    [OOM] GBV batch subprocess OOM — retrying on CPU (slower)")
+                torch.cuda.empty_cache()
+                return run_be_batch(student_path, teacher_path, data_path,
+                                    modes, Ks, temps, L, max_new_tokens, _device="cpu",
+                                    load_in_4bit=load_in_4bit)
 
         # Parse tagged output: "Block efficiency (mode=gbv, K=3, T=1.0): 2.345678"
+        # Works on partial output — only fully-printed lines are matched.
         results: dict = {}
         for m in re.finditer(
                 r"Block efficiency \(mode=(\w+), K=(\d+), T=([\d.]+)\):\s*([\d.]+)", out):
             results[(m.group(1), int(m.group(2)), float(m.group(3)))] = float(m.group(4))
 
-        if not results:
+        if _timed_out:
+            if results:
+                remaining = n_combos - len(results)
+                print(f"    [PARTIAL] Recovered {len(results)}/{n_combos} combo(s) from "
+                      f"timed-out run. Re-run to complete {remaining} remaining combo(s) "
+                      f"(--skip_existing will skip the {len(results)} already saved).")
+            else:
+                print(f"    [PARTIAL] No completed combos in timed-out run — "
+                      f"all {n_combos} combo(s) will re-run on restart.")
+        elif not results:
             err_preview = out[:600] or "(no output)"
             print(f"    [WARN] No BE values in GBV batch output "
                   f"(rc={rc}):\n    {err_preview}")
