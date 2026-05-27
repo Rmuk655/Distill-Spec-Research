@@ -50,7 +50,15 @@ def load_models(
     device: str = "cuda",
     dtype: str = "bf16",
     compile_draft: bool = False,
+    load_in_4bit: bool = False,
 ):
+    """Load target (p) and draft (q) models.
+
+    load_in_4bit=True loads the target model in 4-bit NF4 via bitsandbytes
+    (requires: pip install bitsandbytes accelerate).  Use this on free T4
+    GPUs (15 GB) where the 8B target in bfloat16 (~16 GB) does not fit.
+    The draft model is always loaded in the requested dtype.
+    """
     dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
     tok = AutoTokenizer.from_pretrained(p_name, use_fast=False)
     if tok.pad_token_id is None:
@@ -68,14 +76,37 @@ def load_models(
         # Fallback: use bf16 on CUDA, fp32 on CPU — avoids silent float32 OOM on small GPUs
         torch_dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
-    p_model = AutoModelForCausalLM.from_pretrained(
-        p_name,
-        trust_remote_code=True,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-        device_map=None,
-        use_safetensors=True
-    ).to(dev)
+    if load_in_4bit and "cuda" in str(device):
+        # QLoRA / bitsandbytes path: target (large) model in 4-bit NF4 to fit T4 (15 GB).
+        # device_map="auto" is required by bitsandbytes — do NOT call .to(dev) afterwards.
+        try:
+            from transformers import BitsAndBytesConfig
+        except ImportError:
+            raise SystemExit("bitsandbytes required for --load_in_4bit. "
+                             "Run: pip install bitsandbytes accelerate")
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        p_model = AutoModelForCausalLM.from_pretrained(
+            p_name,
+            trust_remote_code=True,
+            quantization_config=bnb_cfg,
+            low_cpu_mem_usage=True,
+            device_map="auto",
+        ).eval()
+        print(f"  [load_models] {p_name} loaded in 4-bit NF4 (target, fits T4)")
+    else:
+        p_model = AutoModelForCausalLM.from_pretrained(
+            p_name,
+            trust_remote_code=True,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=True,
+            device_map=None,
+            use_safetensors=True,
+        ).to(dev)
     p_model.eval()
 
     q_model = AutoModelForCausalLM.from_pretrained(

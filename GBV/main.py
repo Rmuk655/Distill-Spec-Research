@@ -234,6 +234,11 @@ def parse_args():
     ap.add_argument("--p_temps", type=str, default=None,
                     help="Comma-separated target temperatures, e.g. '0.6,1.0'. "
                          "Overrides --p_temp when provided.")
+    ap.add_argument("--load_in_4bit", action="store_true",
+                    help="Load the target model in 4-bit NF4 via bitsandbytes. "
+                         "Required for free T4 GPUs (15 GB) where the 8B target "
+                         "in bfloat16 (~16 GB) does not fit. "
+                         "Requires: pip install bitsandbytes accelerate")
     ap.add_argument("--compile", action="store_true",
                     help="Apply torch.compile(mode='reduce-overhead', dynamic=True) to the "
                          "draft model to cut Python→CUDA dispatch overhead.  Draft-only: "
@@ -258,6 +263,7 @@ if __name__ == "__main__":
     tok, p_model, q_model = load_models(
         args.p_model, args.q_model, device=args.device, dtype=args.dtype,
         compile_draft=args.compile,
+        load_in_4bit=args.load_in_4bit,
     )
 
     # Load prompts.

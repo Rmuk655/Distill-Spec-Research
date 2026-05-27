@@ -513,6 +513,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                                 bnb_4bit_use_double_quant=True)
                     teacher_model = AutoModelForCausalLM.from_pretrained(
                         teacher_path, quantization_config=_bnb, device_map="auto",
+                        low_cpu_mem_usage=True,
                         attn_implementation=_ATTN_IMPL,
                     ).eval()
                     print(f"  [alpha] Teacher loaded in 4-bit NF4")
