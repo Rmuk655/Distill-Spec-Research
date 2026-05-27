@@ -29,8 +29,10 @@ sys.path.insert(0, os.path.join(_GBV_RESEARCH, "db"))
 import results_db
 
 HERE          = _SERVER_HERE
-# Logs live in db/logs/ (written by orchestration/experiment.py and evaluate.py)
-_DB_LOGS      = os.path.join(_GBV_RESEARCH, "db", "logs")
+# Logs live in db/logs/ by default, but respect SPECDIST_LOGS_ROOT so that
+# cloud runs (Colab/Kaggle/Modal) point at the persistent storage logs directory.
+_DB_LOGS      = (os.environ.get("SPECDIST_LOGS_ROOT")
+                 or os.path.join(_GBV_RESEARCH, "db", "logs"))
 _BE_LOG       = os.path.join(_DB_LOGS, "be_progress.log")
 _PIPELINE_LOG = os.path.join(_DB_LOGS, "pipeline_output.log")
 
@@ -3290,7 +3292,8 @@ def index():
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=5000)
-    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="Bind address. Use 0.0.0.0 for Colab/cloud port proxying.")
     p.add_argument("--debug", action="store_true")
     args = p.parse_args()
 
