@@ -659,11 +659,11 @@ _HTML = r"""<!DOCTYPE html>
 
       <!-- Alpha acceptance during online training (written by online_serve.py eval checkpoints) -->
       <div class="chart-card">
-        <h6>Online Training Quality — eval α and estimated block efficiency
+        <h6>Online Training Quality — block efficiency during training
           <small class="text-muted ms-2">
-            online_serve.py measures α (token acceptance rate) at each checkpoint — cheap, no full SD run needed.
-            Block efficiency is <em>estimated</em> from α using BE = (1−α⁶)/(1−α) for L=5.
-            Actual BE is measured in the final eval (Phase 3).
+            <strong>online_ebe:</strong> EBE loss = −BE directly, so right axis = −loss (dense, every step, on training data).
+            <strong>online (KL):</strong> train loss is KL divergence; BE estimated from eval_α via (1−α⁶)/(1−α).
+            Actual BE on test prompts is measured in Phase 3 final eval.
           </small>
         </h6>
         <div id="chart-online-health" style="height:360px"></div>
@@ -2387,31 +2387,41 @@ async function renderOnlineHealth() {
     const valColor   = VAL_COLORS  [colorIdx % VAL_COLORS.length];
     colorIdx++;
 
+    // Is this an EBE-based online run?  EBE loss = −(expected block efficiency),
+    // so  BE_from_loss = −train_loss  is a direct dense signal every training step.
+    // For KL-based online runs the train loss is KL divergence — not BE at all.
+    const isEBE = label.includes('ebe');
+
     if (trainRows.length) {
-      traces.push({
-        type: 'scatter', mode: 'lines',
-        name: `${label} (train loss)`,
-        x: trainRows.map(r => r.step),
-        y: trainRows.map(r => r.loss),
-        line: { color: trainColor, width: 1.5, dash: 'solid' },
-        yaxis: 'y2',
-        hovertemplate: 'step %{x}<br>train loss: %{y:.4f}<extra>' + label + ' train</extra>',
-      });
+      if (isEBE) {
+        // EBE loss ≈ −BE  →  show −loss directly on the BE axis (y3, ~1–6).
+        // This is a dense per-step signal on the *training* distribution.
+        traces.push({
+          type: 'scatter', mode: 'lines',
+          name: `${label} BE (train, from EBE loss)`,
+          x: trainRows.map(r => r.step),
+          y: trainRows.map(r => -r.loss),          // negate: EBE loss = −BE
+          line: { color: trainColor, width: 1.5, dash: 'solid', opacity: 0.6 },
+          yaxis: 'y3',
+          hovertemplate: 'step %{x}<br>BE (train dist.): %{y:.2f}  [= −EBE loss]<extra>' + label + '</extra>',
+        });
+      } else {
+        // KL-based online: train loss is KL divergence — show it on its own muted axis.
+        traces.push({
+          type: 'scatter', mode: 'lines',
+          name: `${label} KL loss`,
+          x: trainRows.map(r => r.step),
+          y: trainRows.map(r => r.loss),
+          line: { color: trainColor, width: 1.2, dash: 'solid' },
+          yaxis: 'y2',
+          hovertemplate: 'step %{x}<br>KL train loss: %{y:.4f}<extra>' + label + '</extra>',
+        });
+      }
     }
 
     if (valRows.length) {
-      // alpha = 1 - rejection_rate = 1 - val_loss
+      // alpha = 1 - rejection_rate = 1 - val_loss   (measured at eval checkpoints)
       const alphaVals = valRows.map(r => Math.min(1, Math.max(0, 1 - r.loss)));
-
-      // Estimated block efficiency from alpha using closed-form formula for
-      // standard speculative decoding with draft length L=5:
-      //   BE_approx = (1 - α^(L+1)) / (1 - α)
-      // This is the expected number of tokens generated per SD round (range ~1–6).
-      // When α→1: BE→L+1=6 (all drafts accepted). When α=0: BE=1 (0 accepted).
-      const L = 5;
-      const beVals = alphaVals.map(a =>
-        a >= 0.9999 ? (L + 1) : (1 - Math.pow(a, L + 1)) / (1 - a)
-      );
 
       // Alpha trace (left axis, 0–1)
       traces.push({
@@ -2426,18 +2436,25 @@ async function renderOnlineHealth() {
         hovertemplate: 'step %{x}<br><b>eval_α: %{y:.3f}</b><extra>' + label + '</extra>',
       });
 
-      // Estimated BE trace (right axis, ~1–6)
-      traces.push({
-        type: 'scatter', mode: 'lines+markers',
-        name: `${label} est. BE`,
-        x: valRows.map(r => r.step),
-        y: beVals,
-        line: { color: valColor, width: 2, dash: 'dot' },
-        marker: { color: valColor, size: 7, symbol: 'diamond',
-                  line: { width: 1.5, color: '#fff' } },
-        yaxis: 'y3',
-        hovertemplate: 'step %{x}<br><b>est. BE: %{y:.2f}</b> (L=5 formula)<extra>' + label + '</extra>',
-      });
+      // For KL-based online (no EBE loss to read from), also show BE estimated
+      // from eval_α via (1−α^(L+1))/(1−α).  For EBE we already have the loss signal.
+      if (!isEBE) {
+        const L = 5;
+        const beVals = alphaVals.map(a =>
+          a >= 0.9999 ? (L + 1) : (1 - Math.pow(a, L + 1)) / (1 - a)
+        );
+        traces.push({
+          type: 'scatter', mode: 'lines+markers',
+          name: `${label} est. BE (from α)`,
+          x: valRows.map(r => r.step),
+          y: beVals,
+          line: { color: valColor, width: 2, dash: 'dot' },
+          marker: { color: valColor, size: 7, symbol: 'diamond',
+                    line: { width: 1.5, color: '#fff' } },
+          yaxis: 'y3',
+          hovertemplate: 'step %{x}<br><b>est. BE: %{y:.2f}</b>  [(1−α⁶)/(1−α)]<extra>' + label + '</extra>',
+        });
+      }
     }
   });
 
@@ -2478,7 +2495,7 @@ async function renderOnlineHealth() {
       line: { color: '#dee2e6', width: 1, dash: 'dot' }
     }],
     annotations: [{
-      text: 'Solid = eval_α · Diamond = est. BE (= (1−α⁶)/(1−α)) · BE not measured directly during training',
+      text: 'online_ebe: BE (right) read directly from −EBE loss (dense, every step) · online (KL): BE estimated from eval_α via (1−α⁶)/(1−α)',
       xref: 'paper', yref: 'paper',
       x: 0, y: 1.07, showarrow: false,
       font: { size: 10, color: '#6c757d' }
