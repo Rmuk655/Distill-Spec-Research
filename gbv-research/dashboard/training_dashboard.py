@@ -804,6 +804,27 @@ _HTML = r"""<!DOCTYPE html>
         Stable at T=0.6 and T=1.0? Generalises beyond GSM8K (Phase 4)?
       </div>
 
+      <!-- Acceptance Rate — derived from BE, no extra eval needed -->
+      <div class="chart-card">
+        <h6>Draft Token Acceptance Rate by Loss Type
+          <small class="text-muted ms-2">α_eff = (BE−1)/K — fraction of draft slots accepted per round. Derived from existing BE data, no extra eval needed.</small>
+        </h6>
+        <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
+          <label class="mb-0">Group by:</label>
+          <select id="sel-arate-group" class="form-select form-select-sm" style="width:120px">
+            <option value="mode">verifier mode</option>
+            <option value="K">K (tree width)</option>
+          </select>
+          <label class="mb-0 ms-2">Show:</label>
+          <select id="sel-arate-show" class="form-select form-select-sm" style="width:160px">
+            <option value="abs">absolute α_eff</option>
+            <option value="gain">gain vs baseline (%)</option>
+          </select>
+        </div>
+        <div id="chart-accept-rate" style="height:400px"></div>
+        <div id="chart-accept-rate-k" style="height:360px"></div>
+      </div>
+
       <!-- Mode comparison -->
       <div class="chart-card">
         <h6>Block Efficiency by Verifier Mode — all loss types compared
@@ -1279,7 +1300,7 @@ async function init() {
       const target = e.target.getAttribute('href');
       if (target === '#tab-training') { loadTrainingCurves(); renderOnlineHealth(); }
       if (target === '#tab-results')  { renderKeyResults(); }
-      if (target === '#tab-robust')   { renderModeComparison(); renderBeVsK(); renderTemperature(); renderRobustness(); }
+      if (target === '#tab-robust')   { renderAcceptanceRate(); renderModeComparison(); renderBeVsK(); renderTemperature(); renderRobustness(); }
       if (target === '#tab-analysis') { renderEfficiency(); renderAlpha(); renderCategory(); renderThroughput(); renderSensitivity(); }
       if (target === '#tab-data')     { renderTable(); renderPivot(); }
     });
@@ -1456,6 +1477,16 @@ async function loadData() {
     }
   });
 
+  // Derive alpha_eff = (BE-1)/K for every BE row.
+  // Exact derivation: gen_tokens = accepted_drafts + target_calls
+  //   => mean_accepted_per_round = BE-1  => alpha_eff = (BE-1)/K
+  // Fills the gap where GBV/main.py tracks gen_tokens/calls but not accepted_drafts separately.
+  runs.forEach(r => {
+    r.alpha_eff = (r.block_eff != null && r.K > 0)
+      ? (r.block_eff - 1) / r.K
+      : null;
+  });
+
   ALL_RUNS = runs;
   document.getElementById('badge-runs').textContent = `${runs.length} runs`;
   document.getElementById('run-count').textContent = `${runs.length} run(s) match current filters`;
@@ -1463,6 +1494,7 @@ async function loadData() {
   renderSummaryStats();
   renderKeyResults();
   renderAlpha();
+  renderAcceptanceRate();
   renderBeVsK();
   renderModeComparison();
   renderTemperature();
@@ -1749,6 +1781,115 @@ document.getElementById('sel-k-mode')?.addEventListener('change', renderModeComp
 document.getElementById('sel-dataset-mode')?.addEventListener('change', renderModeComparison);
 document.getElementById('sel-temp-mode')?.addEventListener('change', renderModeComparison);
 document.getElementById('sel-temp-be')?.addEventListener('change', renderBeVsK);
+
+// ---- Acceptance Rate (derived from BE) ----
+// alpha_eff = (BE-1)/K: exact derivation — no new eval runs needed.
+// Every BE row already encodes accepted_drafts implicitly:
+//   gen_tokens = accepted_drafts + target_calls  =>  (BE-1) = mean_accepted/call  =>  /K = rate
+function renderAcceptanceRate() {
+  const aeRuns = ALL_RUNS.filter(r => r.alpha_eff != null);
+  if (!aeRuns.length) {
+    showNoData('chart-accept-rate', 'Acceptance rate needs BE evals — appears after first eval step');
+    showNoData('chart-accept-rate-k', '');
+    return;
+  }
+
+  const groupBy_ = document.getElementById('sel-arate-group')?.value || 'mode';
+  const showMode = document.getElementById('sel-arate-show')?.value || 'abs';
+
+  // Compute mean alpha_eff per (draft_label, groupKey)
+  const labels    = [...new Set(aeRuns.map(r => r.draft_label))];
+  const groupVals = [...new Set(aeRuns.map(r => String(r[groupBy_])))].sort();
+
+  // Baseline alpha_eff averaged over all conditions (reference line)
+  const blVals = aeRuns.filter(r => r.draft_label === 'baseline').map(r => r.alpha_eff);
+  const blMean = blVals.length ? mean(blVals) : null;
+
+  // ── Chart 1: grouped bar — x=groupVal, one bar series per draft_label ──
+  const LABEL_ORDER = ['baseline','kl','ebe','rev_kl','jsd','l1','online','online_ebe'];
+  const orderedLabels = [...LABEL_ORDER.filter(l => labels.includes(l)),
+                         ...labels.filter(l => !LABEL_ORDER.includes(l))];
+
+  const traces1 = orderedLabels.map(label => {
+    const y = groupVals.map(gv => {
+      const rows = aeRuns.filter(r => r.draft_label === label && String(r[groupBy_]) === gv);
+      if (!rows.length) return null;
+      const avg = mean(rows.map(r => r.alpha_eff));
+      if (showMode === 'gain' && blMean != null) return (avg - blMean) / blMean * 100;
+      return avg;
+    });
+    return {
+      type: 'bar', name: label,
+      x: groupVals, y,
+      marker: { color: draftColor(label) },
+      hovertemplate: showMode === 'gain'
+        ? `${label}<br>${groupBy_}=%{x}<br>gain vs baseline: %{y:.1f}%<extra></extra>`
+        : `${label}<br>${groupBy_}=%{x}<br>α_eff=%{y:.3f}<extra></extra>`,
+    };
+  });
+
+  // Baseline reference line (only for absolute view)
+  const shapes1 = (showMode === 'abs' && blMean != null) ? [{
+    type: 'line', x0: -0.5, x1: groupVals.length - 0.5, y0: blMean, y1: blMean,
+    xref: 'x', yref: 'y',
+    line: { color: '#6c757d', width: 1.5, dash: 'dot' },
+  }] : [];
+  const annotations1 = (showMode === 'abs' && blMean != null) ? [{
+    x: groupVals[groupVals.length - 1], y: blMean, xanchor: 'right', yanchor: 'bottom',
+    text: `baseline ${blMean.toFixed(3)}`, showarrow: false,
+    font: { size: 10, color: '#6c757d' },
+  }] : [];
+
+  const yTitle1 = showMode === 'gain'
+    ? 'α_eff gain vs baseline (%)'
+    : 'α_eff = (BE−1)/K  [0=all rejected, 1=all accepted]';
+
+  Plotly.newPlot('chart-accept-rate', traces1, {
+    barmode: 'group',
+    xaxis: { title: groupBy_ === 'mode' ? 'Verifier Mode' : 'K (tree width)' },
+    yaxis: { title: yTitle1, zeroline: showMode === 'gain' },
+    shapes: shapes1,
+    annotations: annotations1,
+    legend: { orientation: 'h', y: -0.25 },
+    margin: { t: 10, b: 80 },
+  }, { responsive: true });
+
+  // ── Chart 2: α_eff vs K lines — shows how acceptance rate falls with longer horizon ──
+  const modes    = [...new Set(aeRuns.map(r => r.mode))].sort();
+  const Ks       = [...new Set(aeRuns.map(r => r.K))].map(Number).sort((a,b)=>a-b);
+  if (Ks.length < 2) { showNoData('chart-accept-rate-k', 'Need K=3 and K=5 data to show K scaling'); return; }
+
+  const traces2 = orderedLabels.map(label => {
+    const y = Ks.map(k => {
+      const rows = aeRuns.filter(r => r.draft_label === label && r.K === k);
+      return rows.length ? mean(rows.map(r => r.alpha_eff)) : null;
+    });
+    return {
+      type: 'scatter', mode: 'lines+markers',
+      name: label,
+      x: Ks, y,
+      marker: { color: draftColor(label), size: 9 },
+      line: { color: draftColor(label), width: label === 'baseline' ? 1.5 : 2,
+              dash: label === 'baseline' ? 'dot' : 'solid' },
+      hovertemplate: `${label}<br>K=%{x}<br>α_eff=%{y:.3f}<extra></extra>`,
+    };
+  });
+
+  Plotly.newPlot('chart-accept-rate-k', traces2, {
+    xaxis: { title: 'K (tree width)', dtick: 1 },
+    yaxis: { title: 'α_eff = (BE−1)/K  [higher = more draft tokens accepted per round]' },
+    legend: { orientation: 'h', y: -0.25 },
+    margin: { t: 10, b: 80 },
+    annotations: [{
+      xref: 'paper', yref: 'paper', x: 0.5, y: 1.03, xanchor: 'center',
+      text: 'Slope = how fast acceptance rate drops as draft horizon lengthens. Steeper = draft model degrades faster.',
+      showarrow: false, font: { size: 11, color: '#888' },
+    }],
+  }, { responsive: true });
+}
+
+['sel-arate-group','sel-arate-show'].forEach(id =>
+  document.getElementById(id)?.addEventListener('change', renderAcceptanceRate));
 
 // ---- Key Results charts ----
 function renderKeyResults() {
@@ -2708,17 +2849,34 @@ async function renderOnlineHealth() {
 // ---- Table ----
 const TABLE_COLS = ['id','ts','experiment_tag','draft_label','loss_name','train_steps','learning_rate',
                     'dataset','mode','K','temperature','n_prompts',
-                    'alpha_mean','alpha_ci95','block_eff','throughput','ms_per_tok','peak_vram_mb'];
+                    'alpha_mean','alpha_ci95','block_eff','alpha_eff','throughput','ms_per_tok','peak_vram_mb'];
+
+const TABLE_COL_LABELS = {
+  alpha_eff: 'α_eff =(BE−1)/K',
+  alpha_mean: 'α_mean (measured)',
+  block_eff: 'block_eff',
+};
 
 function renderTable() {
   if (!ALL_RUNS.length) return;
   const thead = document.querySelector('#runs-table thead');
   const tbody = document.querySelector('#runs-table tbody');
-  thead.innerHTML = `<tr>${TABLE_COLS.map(c=>`<th>${c}</th>`).join('')}</tr>`;
+  thead.innerHTML = `<tr>${TABLE_COLS.map(c => {
+    const lbl = TABLE_COL_LABELS[c] || c;
+    const tip = c === 'alpha_eff'
+      ? 'title="Derived from BE: mean accepted draft tokens per round / K. Exact: (block_eff−1)/K. No extra eval needed."'
+      : '';
+    return `<th ${tip} style="${c==='alpha_eff'?'background:#fff3cd;cursor:help':''}">${lbl}</th>`;
+  }).join('')}</tr>`;
   tbody.innerHTML = ALL_RUNS.map(row =>
     `<tr>${TABLE_COLS.map(c => {
       const v = row[c];
-      if (v == null) return '<td>—</td>';
+      if (v == null) return '<td style="color:#aaa">—</td>';
+      if (c === 'alpha_eff') {
+        const pct = (v * 100).toFixed(1);
+        const col = v > 0.55 ? '#198754' : v > 0.45 ? '#856404' : '#dc3545';
+        return `<td style="font-weight:600;color:${col}">${v.toFixed(3)} <small style="font-weight:400;color:#888">(${pct}%)</small></td>`;
+      }
       if (typeof v === 'number') return `<td>${Math.abs(v) < 1 ? v.toFixed(4) : v.toFixed(2)}</td>`;
       return `<td>${v}</td>`;
     }).join('')}</tr>`
