@@ -1,4 +1,10 @@
-from ..tree import *
+# tree.py is a sibling in verifiers/ — use single-dot relative import.
+# (The original GBV code used ..tree when tree.py was one level up; after
+# restructuring into distillspec_gbv/verifiers/ the correct path is .tree.)
+try:
+    from .tree import *
+except ImportError:
+    from tree import *  # type: ignore[no-redef]  — direct script execution fallback
 import heapq, math
 import torch
 import torch.nn.functional as F

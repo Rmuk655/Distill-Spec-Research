@@ -545,10 +545,11 @@ _HTML = r"""<!DOCTYPE html>
     <label>Verifier Mode</label>
     <div id="f-mode-tree"></div>
   </div>
-  <div class="filter-section">
-    <label>Measurement</label>
-    <div id="f-mode-scalar"></div>
-  </div>
+  <!-- alpha/perplexity chips hidden — charts filter by mode internally;
+       these row-type chips added no practical value for chart analysis.
+       The divs are kept in the DOM so buildFilterChips() can still populate
+       them (needed to keep chip-based mode filtering consistent). -->
+  <div id="f-mode-scalar" style="display:none"></div>
   <div class="filter-section">
     <label>K (tree width)</label>
     <div id="f-K"></div>

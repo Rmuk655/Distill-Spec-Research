@@ -4,8 +4,16 @@ import json
 import torch.nn.functional as F
 from typing import List, Tuple, Dict, Callable
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
-from .utils import *
-from .khisti import *
+try:
+    from .utils import *
+    from .khisti import *
+except ImportError:
+    import os as _os, sys as _sys
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from utils import *    # type: ignore[no-redef]
+    from khisti import *   # type: ignore[no-redef]
 
 
 """

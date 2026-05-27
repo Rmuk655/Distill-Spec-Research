@@ -4,7 +4,14 @@ import json
 import torch.nn.functional as F
 from typing import List, Tuple, Dict, Mapping
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
-from .utils import *
+try:
+    from .utils import *
+except ImportError:
+    import os as _os, sys as _sys
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from utils import *  # type: ignore[no-redef]
 
 """
 Constructs a draft tree via i.i.d. path sampling.
