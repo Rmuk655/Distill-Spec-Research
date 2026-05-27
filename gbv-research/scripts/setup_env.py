@@ -17,7 +17,7 @@ Requirements: Python 3.10+
 import sys, os, subprocess, platform, argparse, shutil
 
 MIN_PYTHON = (3, 10)
-VENV_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "venv")
+VENV_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "venv")
 
 # ---------------------------------------------------------------------------
 # CUDA version -> PyTorch wheel index
@@ -105,13 +105,16 @@ def install_requirements(pip: str, req_path: str):
 
 def init_db(python: str):
     print("\nInitialising SQLite database ...")
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results_db.py")
+    _gbv = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # gbv-research/
+    script = os.path.join(_gbv, "db", "results_db.py")
     _run([python, script])
 
 
 def fetch_datasets(python: str):
     print("\nFetching evaluation datasets (skip if already present) ...")
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fetch_datasets.py")
+    _osd = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "OSD"))
+    script = os.path.join(_osd, "fetch_datasets.py")
     _run([python, script, "--n", "30"])
 
 
@@ -193,7 +196,7 @@ def main():
               f"found {sys.version_info.major}.{sys.version_info.minor}")
         sys.exit(1)
 
-    _here = os.path.dirname(os.path.abspath(__file__))
+    _here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # gbv-research/
     req_path = os.path.join(_here, "requirements.txt")
     venv_dir = os.path.abspath(VENV_DIR)
 

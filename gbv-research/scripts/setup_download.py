@@ -19,7 +19,8 @@ import argparse
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # gbv-research/
+_OSD = os.path.normpath(os.path.join(HERE, "..", "OSD"))  # OSD/ reference codebase
 
 CONFIGS = {
     "laptop": {
@@ -66,7 +67,7 @@ def download_models(draft_id, target_id):
 
 
 def download_datasets(n_train=None):
-    sys.path.insert(0, HERE)
+    sys.path.insert(0, _OSD)  # fetch_datasets.py lives in OSD/ (reference codebase)
     from fetch_datasets import (
         fetch_gsm8k, fetch_humaneval, fetch_math500, fetch_mtbench, fetch_alpaca,
         fetch_gsm8k_train, fetch_math_train, fetch_alpaca_train,

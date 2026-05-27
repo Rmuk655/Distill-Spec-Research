@@ -18,7 +18,7 @@
 8. [How to Run](#8-how-to-run)
    - 8a. [Checkpoint Progression Analysis](#8a-analysing-training-progress-with-checkpoints)
    - 8b. [Server / Colab / Modal Training](#8b-running-training-on-a-server-colab--modal)
-   - 8c. [New Environment Setup (setup_download.py)](#8c-setting-up-a-new-environment-setup_downloadpy)
+   - 8c. [New Environment Setup (scripts/setup_download.py)](#8c-setting-up-a-new-environment-scriptssetup_downloadpy)
    - 8d. [Results Report (analyze_results.py)](#8d-generating-a-results-report-analyze_resultspy)
    - 8e. [EAGLE Benchmark](#8e-eagle-benchmark)
 9. [Automatic Training Health Checks](#9-automatic-training-health-checks)
@@ -759,9 +759,9 @@ modal volume get specdist-vol /checkpoints ./local_checkpoints
 
 ---
 
-## 8c. Setting Up a New Environment (setup_download.py)
+## 8c. Setting Up a New Environment (scripts/setup_download.py)
 
-`setup_download.py` is a **one-time-per-machine** (or **one-time-per-session** on ephemeral compute) script that downloads all required model weights and datasets.
+`scripts/setup_download.py` is a **one-time-per-machine** (or **one-time-per-session** on ephemeral compute) script that downloads all required model weights and datasets.
 
 ### When to run it
 
@@ -776,13 +776,13 @@ modal volume get specdist-vol /checkpoints ./local_checkpoints
 
 ```bash
 # Laptop (0.5B draft + 0.6B target — default)
-python setup_download.py --config laptop
+python scripts/setup_download.py --config laptop
 
 # Server / Colab / Kaggle (0.6B draft + 8B target)
-python setup_download.py --config server
+python scripts/setup_download.py --config server
 
 # Check what will be downloaded without downloading
-python setup_download.py --config server --dry_run
+python scripts/setup_download.py --config server --dry_run
 ```
 
 ---

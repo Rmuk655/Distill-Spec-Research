@@ -1320,7 +1320,7 @@ def run_smoke_preflight(draft, target):
         print(f"  Check the traceback above.  Common causes:")
         print(f"    OOM        → free GPU VRAM, or run on Colab/server")
         print(f"    Assertion  → GBV/util.py attention_type check failed (wrong model)")
-        print(f"    Offline    → model not cached; run setup_download.py first")
+        print(f"    Offline    → model not cached; run scripts/setup_download.py first")
         print(f"  Fix then re-run.  To skip preflight: --no_smoke_first")
         return False
 
@@ -1425,7 +1425,7 @@ def run_step(step, state, dry_run=False):
                 "  Common fixes:\n"
                 "    OOM       -> evaluate.py retries on CPU automatically;\n"
                 "                 trainer.py: add --no_lora or reduce --max_new_tokens\n"
-                "    Offline   -> run setup_download.py first, or unset TRANSFORMERS_OFFLINE\n"
+                "    Offline   -> run scripts/setup_download.py first, or unset TRANSFORMERS_OFFLINE\n"
                 "    Stale run -> python experiment.py --status\n"
                 "  Restart   -> python experiment.py --config laptop --yes\n"
                 "               (resets 'failed' training steps to 'pending' automatically)\n"

@@ -58,7 +58,7 @@ def main() -> None:
                     help="Print what would happen without making changes.")
     args = ap.parse_args()
 
-    HERE      = os.path.dirname(os.path.abspath(__file__))
+    HERE      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # gbv-research/
     OSD       = os.path.normpath(
         os.path.join(HERE, "..", "OSD"))
     DB        = os.path.join(HERE, "db")

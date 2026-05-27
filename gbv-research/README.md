@@ -94,6 +94,11 @@ python orchestration/experiment.py --config laptop --yes
     |   +-- colab_quickstart.ipynb  Colab / Kaggle quickstart notebook
     |   +-- eval_ebe_sweep.sh       EBE sweep eval script
     |
+    +-- scripts/
+    |   +-- setup_download.py       One-time model + dataset download
+    |   +-- setup_env.py            One-time venv + deps installation
+    |   +-- migrate_outputs.py      Post-pipeline OSD → db/ output migration
+    |
     +-- docs/                       See docs index above
     +-- tests/
     |   +-- unit/                   CPU-only unit tests (~60 s)

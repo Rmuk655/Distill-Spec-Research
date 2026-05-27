@@ -2150,32 +2150,52 @@ function renderBeDecomp() {
   }, { responsive: true });
 }
 
-// Card 2: Quality (task_score) vs Speed (block_eff) Pareto frontier
+// Card 2: Quality vs Speed (block_eff) Pareto frontier
+// Quality metric: task_score if ≥3 labels have it; otherwise log(baseline_PPL/model_PPL) proxy
 function renderPareto() {
   const mode = document.getElementById('eff-pareto-mode')?.value || 'traversal';
   const K    = parseInt(document.getElementById('eff-pareto-k')?.value || '3');
 
-  const beRuns    = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
-  const alpRuns   = ALL_RUNS.filter(r => r.task_score != null && r.mode === 'alpha');
+  const beRuns  = ALL_RUNS.filter(r => r.block_eff != null && r.mode === mode && r.K === K);
+  const tsRuns  = ALL_RUNS.filter(r => r.task_score != null);
 
-  // Build (task_score, block_eff) per draft_label (average across datasets/temps)
+  // PPL fallback: rows where perplexity was measured (mode='perplexity', K=0)
+  const pplRuns     = ALL_RUNS.filter(r => r.perplexity != null);
+  const blPPLVals   = pplRuns.filter(r => r.draft_label === 'baseline').map(r => r.perplexity);
+  const baselinePPL = blPPLVals.length ? mean(blPPLVals) : null;
+
+  // Use task_score if ≥3 distinct labels have it; otherwise fall back to PPL proxy
+  const tsLabels = new Set(tsRuns.map(r => r.draft_label));
+  const usePPL   = tsLabels.size < 3;
+
   const labels = [...new Set(beRuns.map(r => r.draft_label))];
   const points = labels.map(lbl => {
     const be = beRuns.filter(r => r.draft_label === lbl).map(r => r.block_eff);
-    const ts = alpRuns.filter(r => r.draft_label === lbl).map(r => r.task_score);
-    return {
-      label: lbl,
-      be: be.length ? mean(be) : null,
-      ts: ts.length ? mean(ts) : null,
-    };
-  }).filter(p => p.be != null && p.ts != null);
+    if (!be.length) return null;
+    let quality = null;
+    if (!usePPL) {
+      const ts = tsRuns.filter(r => r.draft_label === lbl).map(r => r.task_score);
+      if (ts.length) quality = mean(ts);
+    } else if (baselinePPL != null) {
+      const lblPPL = pplRuns.filter(r => r.draft_label === lbl).map(r => r.perplexity);
+      if (lblPPL.length) quality = Math.log(baselinePPL / mean(lblPPL)); // + = less degradation
+    }
+    return quality != null ? { label: lbl, be: mean(be), ts: quality } : null;
+  }).filter(Boolean);
 
   if (!points.length) {
-    showNoData('chart-pareto', 'Pareto frontier needs task_score (from alpha eval with --task_score) and BE — appears after Phase 3 evals complete');
+    showNoData('chart-pareto',
+      'Pareto frontier needs BE evals + either task_score (--task_score flag) or perplexity data');
     return;
   }
 
-  // Pareto-optimal points (top-right corner dominance)
+  const xAxisTitle = usePPL
+    ? 'Quality proxy  log(baseline_PPL / model_PPL)  — ↑ higher = less degradation vs baseline'
+    : 'Task Score  — ↑ higher = less quality degradation';
+  const hoverXFmt = usePPL
+    ? 'quality proxy=%{x:.3f}' : 'task_score=%{x:.3f}';
+
+  // Pareto-optimal points (top-right corner dominance: high quality AND high BE)
   const sorted = [...points].sort((a, b) => a.ts - b.ts);
   let paretoMaxBE = -Infinity;
   const paretoFront = sorted.filter(p => {
@@ -2195,7 +2215,7 @@ function renderPareto() {
       textfont: { size: 10 },
       marker: { color: points.map(p => draftColor(p.label)), size: 12,
                 line: { width: 1.5, color: '#fff' } },
-      hovertemplate: '%{text}<br>task_score=%{x:.3f}<br>BE=%{y:.3f}<extra></extra>',
+      hovertemplate: `%{text}<br>${hoverXFmt}<br>BE=%{y:.3f}<extra></extra>`,
     },
     // Pareto frontier line
     {
@@ -2208,7 +2228,7 @@ function renderPareto() {
     },
   ];
 
-  // Reference: baseline point
+  // Reference: baseline point (highlighted separately)
   const bl = points.find(p => p.label === 'baseline');
   if (bl) {
     traces.push({
@@ -2217,15 +2237,26 @@ function renderPareto() {
       x: [bl.ts], y: [bl.be],
       marker: { color: '#6c757d', size: 15, symbol: 'diamond',
                 line: { width: 2, color: '#333' } },
-      hovertemplate: 'Baseline<br>task=%{x:.3f}<br>BE=%{y:.3f}<extra></extra>',
+      hovertemplate: `Baseline<br>${hoverXFmt.replace('%{x','%{x')}<br>BE=%{y:.3f}<extra></extra>`,
     });
   }
 
+  const pplNote = usePPL
+    ? ' <span style="font-size:11px;color:#888">(PPL proxy — run eval with --task_score for real quality scores)</span>'
+    : '';
+  document.getElementById('chart-pareto')?.previousElementSibling
+    ?.querySelectorAll('.pareto-note').forEach(n => n.remove());
+
   Plotly.newPlot('chart-pareto', traces, {
-    xaxis: { title: 'Task Score (quality preservation — higher = less degradation)' },
+    xaxis: { title: xAxisTitle },
     yaxis: { title: `Block Efficiency — ${mode} K=${K}` },
     legend: { orientation: 'h', y: -0.2 },
     margin: { t: 10, b: 70 },
+    annotations: usePPL ? [{
+      xref: 'paper', yref: 'paper', x: 0.5, y: 1.04, xanchor: 'center',
+      text: '⚠ quality axis = PPL proxy (log baseline/model PPL) — run eval with --task_score for exact scores',
+      showarrow: false, font: { size: 11, color: '#888' },
+    }] : [],
   }, { responsive: true });
 }
 
@@ -2489,17 +2520,17 @@ async function renderOnlineHealth() {
 
     if (trainRows.length) {
       if (isEBE) {
-        // EBE/EBE-single loss = −BE or −mean(α) → negate so train line goes UP as model improves.
-        const negVals = trainRows.map(r => -r.loss);
-        const trainTraceName = isEBESingle ? 'train mean α (=−loss)' : 'train BE (=−EBE loss)';
+        // EBE loss = −BE (negative, lower = better as training progresses).
+        // Plot raw loss directly — consistent with other training charts (down = better).
+        const trainTraceName = isEBESingle ? 'train loss (= −mean α)' : 'EBE loss (= −BE)';
         const trainHover     = isEBESingle
-          ? 'step %{x}<br><b>train mean α: %{y:.3f}</b>  [=−loss]<extra></extra>'
-          : 'step %{x}<br><b>train BE: %{y:.2f}</b>  [=−EBE loss, train dist.]<extra></extra>';
+          ? 'step %{x}<br><b>EBE-single loss: %{y:.3f}</b>  [= −mean α]<extra></extra>'
+          : 'step %{x}<br><b>EBE loss: %{y:.2f}</b>  [= −BE, lower = better]<extra></extra>';
         traces.push({
           type: 'scatter', mode: 'lines',
           name: trainTraceName,
           x: trainRows.map(r => r.step),
-          y: negVals,
+          y: trainRows.map(r => r.loss),   // raw loss: negative, lower = better
           line: { color: trainColor, width: 1.8, dash: 'solid' },
           yaxis: 'y',
           hovertemplate: trainHover,
@@ -2519,66 +2550,52 @@ async function renderOnlineHealth() {
     }
 
     if (valRows.length) {
-      // alpha = 1 − rejection_rate (higher = better at every checkpoint)
-      const alphaVals = valRows.map(r => Math.min(1, Math.max(0, 1 - r.loss)));
-      const lastAlpha = alphaVals[alphaVals.length - 1];
+      // Rejection rate = 1 − α = val_loss (lower = better, consistent with train loss direction).
+      const rejVals = valRows.map(r => Math.min(1, Math.max(0, r.loss)));
 
-      if (isEBE) {
-        // Both train (−EBE ≈ BE) and eval_α go UP when improving.
-        // They're on different absolute scales (BE ~3–5, alpha ~0.6–0.9) so use y2 for alpha.
-        traces.push({
-          type: 'scatter', mode: 'lines+markers',
-          name: `eval α (checkpoints)`,
-          x: valRows.map(r => r.step),
-          y: alphaVals,
-          line: { color: valColor, width: 2.2, dash: 'dash' },
-          marker: { color: valColor, size: 7, symbol: 'circle', line: { width: 1.5, color: '#fff' } },
-          yaxis: 'y2',
-          hovertemplate: 'step %{x}<br><b>eval α: %{y:.3f}</b><extra></extra>',
-        });
-      } else {
-        // KL run: train loss goes down, alpha goes up — need separate axes.
-        traces.push({
-          type: 'scatter', mode: 'lines+markers',
-          name: `eval α (checkpoints)`,
-          x: valRows.map(r => r.step),
-          y: alphaVals,
-          line: { color: valColor, width: 2.2, dash: 'dash' },
-          marker: { color: valColor, size: 7, symbol: 'circle', line: { width: 1.5, color: '#fff' } },
-          yaxis: 'y2',
-          hovertemplate: 'step %{x}<br><b>eval α: %{y:.3f}</b><extra></extra>',
-        });
-      }
+      // Both EBE and KL: show rejection rate so the eval line also trends down = better.
+      traces.push({
+        type: 'scatter', mode: 'lines+markers',
+        name: `eval 1−α (rejection)`,
+        x: valRows.map(r => r.step),
+        y: rejVals,
+        line: { color: valColor, width: 2.2, dash: 'dash' },
+        marker: { color: valColor, size: 7, symbol: 'circle', line: { width: 1.5, color: '#fff' } },
+        yaxis: 'y2',
+        hovertemplate: 'step %{x}<br><b>eval 1−α: %{y:.3f}</b>  [rejection rate, lower = better]<extra></extra>',
+      });
     }
 
     if (!traces.length) return;
 
     // Build header stats
     const lastTrain    = trainRows.length ? trainRows[trainRows.length - 1] : null;
+    // Show α (acceptance rate) in the header — more interpretable than rejection rate.
     const lastAlpha    = valRows.length
       ? (1 - Math.min(1, Math.max(0, valRows[valRows.length - 1].loss))).toFixed(3)
       : null;
+    // Header shows BE = −loss for EBE (intuitive); raw loss for KL.
     const lastTrainVal = lastTrain
       ? (isEBESingle ? (-lastTrain.loss).toFixed(3)
          : isEBE     ? (-lastTrain.loss).toFixed(2)
          :              lastTrain.loss.toFixed(3))
       : null;
     const trainLabel   = isEBESingle ? 'mean α' : (isEBE ? 'BE' : 'KL loss');
-    const trainDir     = isEBE      ? '↑ higher = better' : '↓ lower = better';
+    const trainDir     = '↓ lower = better';   // both axes now trend downward = better
 
     const statsHtml = [
       lastTrain   ? `step ${lastTrain.step}` : '',
-      lastTrainVal ? `train ${trainLabel} ${lastTrainVal}` : '',
-      lastAlpha   ? `eval α ${lastAlpha}` : '',
+      lastTrainVal ? `Train ${trainLabel} ${lastTrainVal}` : '',
+      lastAlpha   ? `Eval α ${lastAlpha}` : '',
     ].filter(Boolean).join(' · ');
 
-    const yLeftTitle  = isEBESingle ? 'Train mean α = −loss  (↑ better)'
-                      : isEBE       ? 'Train BE = −EBE loss  (↑ better)'
+    const yLeftTitle  = isEBESingle ? 'EBE-single loss = −mean(α)  (↓ better)'
+                      : isEBE       ? 'EBE loss = −BE  (↓ better)'
                       :               'Train KL loss  (↓ better)';
-    const yRightTitle = 'eval α  (↑ better)';
+    const yRightTitle = 'eval 1−α  (↓ better)';
 
-    // Left axis range
-    const trainY  = trainRows.map(r => isEBE ? -r.loss : r.loss);
+    // Left axis range — raw loss (negative for EBE, positive for KL)
+    const trainY  = trainRows.map(r => r.loss);
     const yMin    = Math.min(...trainY);
     const yMax    = Math.max(...trainY);
     const pad     = (yMax - yMin) * 0.15 || 0.5;
