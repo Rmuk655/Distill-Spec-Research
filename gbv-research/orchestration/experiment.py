@@ -1379,10 +1379,30 @@ def run_step(step, state, dry_run=False):
     t0 = time.time()
 
     env = os.environ.copy()
-    # Force HF offline mode (models must already be cached)
-    env["TRANSFORMERS_OFFLINE"] = "1"
-    env["HF_HUB_OFFLINE"]       = "1"
-    env["HF_DATASETS_OFFLINE"]  = "1"
+    # PYTHONPATH: ensure gbv-research/ is importable from every subprocess.
+    # trainer.py does `from core.model_families import ...` and
+    # `from algorithms.distillspec_gbv.losses import ...` — both require gbv-research/
+    # to be on the Python path.  When run_step() launches a subprocess with
+    # cwd=orchestration/, Python's sys.path[0] = the script's own directory
+    # (e.g. algorithms/distillspec_gbv/), not gbv-research/ — so without this
+    # PYTHONPATH fix those imports fail with ModuleNotFoundError on a fresh
+    # Colab/Kaggle session (and on any machine where the user did not do
+    # `pip install -e .` or manually set PYTHONPATH).
+    _existing_pypath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        _GBV_RESEARCH_ROOT + os.pathsep + _existing_pypath
+    ).rstrip(os.pathsep)
+    # HF offline mode: DO NOT force offline here.
+    # On a fresh Colab/Kaggle session models are not cached yet; forcing offline
+    # would make the very first eval step fail with an HF connection error.
+    # Each script manages its own offline preference:
+    #   • evaluate.py  — never forces offline (downloads on first run, cache hit after)
+    #   • trainer.py   — uses os.environ.setdefault("TRANSFORMERS_OFFLINE","1") so it
+    #                    goes offline automatically once models are cached, but won't
+    #                    block the first download if TRANSFORMERS_OFFLINE is not set.
+    #   • online_serve.py — same as trainer.py
+    # If you are running fully air-gapped, set TRANSFORMERS_OFFLINE=1 before launching
+    # experiment.py and it will be inherited by all children via env = os.environ.copy().
     # Force UTF-8 I/O in every child Python process — prevents UnicodeEncodeError
     # when evaluate.py prints box-drawing characters on Windows cp1252 terminals.
     # Also needed for correct text handling on Kaggle (UTF-8 by default but explicit
@@ -1747,7 +1767,7 @@ def main():
     STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                         smoke=args.smoke, eagle=args.eagle,
                         load_in_4bit=_load_4bit,
-                        ckpt_root=args.ckpt_root,
+                        ckpt_root=_effective_ckpt_root,  # was args.ckpt_root — ignored --storage_root
                         train_hparams=train_hparams,
                         losses_to_run=_losses_to_run)
 
