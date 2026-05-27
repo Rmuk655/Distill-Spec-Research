@@ -15,7 +15,8 @@ Loss choices (--loss):
   jsd         : Jensen–Shannon divergence — ablation
   l1          : L1 / total-variation distance — ablation
   reverse_kl  : KL(draft ∥ target) — mode-seeking, not recommended
-  ebe         : Expected Block Efficiency surrogate — novel (discuss with Ram)
+  ebe         : Expected Block Efficiency surrogate, multi-token cumprod — novel
+  ebe_single  : Single-token EBE = -mean(alpha) — ablation vs multi-token EBE
 
 Laptop usage (train on GSM8K train split, eval on test split):
     python train_qwen3.py --loss forward_kl --steps 200 --dataset data/gsm8k_train.jsonl
@@ -309,8 +310,9 @@ def parse_args():
     p.add_argument("--max_new_tokens", type=int, default=80)
     p.add_argument("--output", default="./checkpoints/qwen3-distill")
     p.add_argument("--loss",   default="forward_kl",
-                   choices=["forward_kl", "reverse_kl", "jsd", "l1", "ebe"],
-                   help="Distillation loss. ebe = Expected Block Efficiency (novel).")
+                   choices=["forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single"],
+                   help="Distillation loss. ebe = block-level EBE (novel). "
+                        "ebe_single = single-token EBE ablation (-mean(alpha), no cumprod).")
     p.add_argument("--lora_r",     type=int, default=8)
     p.add_argument("--lora_alpha", type=int, default=16)
     p.add_argument("--log_every",  type=int, default=10)
@@ -546,6 +548,51 @@ def ebe_loss(student_logits, teacher_logits, token_ids, kl_weight=0.1,
     }
 
 
+def ebe_single_loss(student_logits, teacher_logits, token_ids):
+    """Single-token EBE surrogate — Loss = −mean(α) per token.
+
+    Simplified ablation of ebe_loss: no block_len, no cumprod, no KL regulariser.
+
+        L = −mean_{t=1}^{T}( α_t )      where  α_t = min(1, q_t / p_t)
+
+    Direct interpretation: maximise the average per-token acceptance rate.
+
+    Why this matters as an ablation:
+    - Multi-token EBE (ebe_loss) chains 8 α's with cumprod.  If that chain
+      is the source of gradient instability or vanishing, single-token EBE
+      will train stably and the comparison tells us exactly which component
+      was responsible.
+    - No λ means a single, clean objective — no two losses fighting each other.
+    - Dense gradient: every token contributes equally (no block-boundary bias).
+
+    Returns (loss, alpha_stats_dict) — same shape as ebe_loss so callers can
+    use the same logging code.
+    """
+    log_s = F.log_softmax(student_logits, dim=-1)          # [T, V]
+    log_t = F.log_softmax(teacher_logits, dim=-1).detach() # [T, V]  teacher fixed
+
+    log_p = log_s.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
+    log_q = log_t.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
+
+    # α = min(1, q/p) = exp(min(0, log_q − log_p)).  Clamp ≥ 1e-6 for grad safety.
+    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # [T]
+
+    loss = -alpha.mean()
+
+    with torch.no_grad():
+        a = alpha.detach()
+        frac_below_95 = (a < 0.95).float().mean().item()
+        frac_below_80 = (a < 0.80).float().mean().item()
+
+    return loss, {
+        "mean":          a.mean().item(),
+        "std":           a.std().item(),
+        "min":           a.min().item(),
+        "frac_lt_0.95":  frac_below_95,
+        "frac_lt_0.80":  frac_below_80,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Dataset loading
 # ---------------------------------------------------------------------------
@@ -740,6 +787,11 @@ def _compute_val_loss(draft_model, target_model, val_prompts, tok_cache,
             elif args.loss == "ebe":
                 v_loss, v_aw_dict = ebe_loss(s_log, t_log, gen_ids,
                                              kl_weight=getattr(args, "ebe_kl_weight", 0.1))
+                v_aw = v_aw_dict["mean"] if isinstance(v_aw_dict, dict) else v_aw_dict
+                if v_aw is not None:
+                    val_aws.append(v_aw)
+            elif args.loss == "ebe_single":
+                v_loss, v_aw_dict = ebe_single_loss(s_log, t_log, gen_ids)
                 v_aw = v_aw_dict["mean"] if isinstance(v_aw_dict, dict) else v_aw_dict
                 if v_aw is not None:
                     val_aws.append(v_aw)
@@ -1258,6 +1310,26 @@ def main():
                             "ebe/alpha_min":       aw_dict["min"],
                             "ebe/frac_lt_0.95":    aw_dict["frac_lt_0.95"],
                             "ebe/frac_lt_0.80":    aw_dict["frac_lt_0.80"],
+                        }, step=step + 1)
+            elif args.loss == "ebe_single":
+                loss, aw_dict = ebe_single_loss(s_log, t_log, gen_ids)
+                aw = aw_dict["mean"] if isinstance(aw_dict, dict) else aw_dict
+                accept_weights.append(aw)
+                if (step + 1) % args.log_every == 0 and isinstance(aw_dict, dict):
+                    print(
+                        f"  [EBEs-α] mean={aw_dict['mean']:.4f}  "
+                        f"std={aw_dict['std']:.4f}  "
+                        f"min={aw_dict['min']:.4f}  "
+                        f"frac<0.95={aw_dict['frac_lt_0.95']:.3f}  "
+                        f"frac<0.80={aw_dict['frac_lt_0.80']:.3f}"
+                    )
+                    if _wandb:
+                        _wandb.log({
+                            "ebe_single/alpha_mean":   aw_dict["mean"],
+                            "ebe_single/alpha_std":    aw_dict["std"],
+                            "ebe_single/alpha_min":    aw_dict["min"],
+                            "ebe_single/frac_lt_0.95": aw_dict["frac_lt_0.95"],
+                            "ebe_single/frac_lt_0.80": aw_dict["frac_lt_0.80"],
                         }, step=step + 1)
         except Exception as _loss_exc:
             # Catch runtime errors inside loss functions (e.g. EBE cumprod error,

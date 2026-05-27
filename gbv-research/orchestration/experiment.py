@@ -363,13 +363,15 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
 
 # Loss name → step-ID prefixes.  Used to filter steps when --losses is given.
 _LOSS_STEP_PREFIXES: dict = {
-    "kl":     ("train_kl_",      "merge_kl_",      "eval_kl_"),
-    "ebe":    ("train_ebe_",     "merge_ebe_",     "eval_ebe_"),
-    "rev_kl": ("train_rev_kl_",  "merge_rev_kl_",  "eval_rev_kl_"),
-    "jsd":    ("train_jsd_",     "merge_jsd_",     "eval_jsd_"),
-    "l1":     ("train_l1_",      "merge_l1_",      "eval_l1_"),
-    "online":     ("online_adapt_",     "merge_online_",     "eval_online_"),
-    "online_ebe": ("online_ebe_adapt_", "merge_online_ebe_", "eval_online_ebe_"),
+    "kl":               ("train_kl_",               "merge_kl_",               "eval_kl_"),
+    "ebe":              ("train_ebe_",               "merge_ebe_",              "eval_ebe_"),
+    "ebe_single":       ("train_ebe_single_",        "merge_ebe_single_",       "eval_ebe_single_"),
+    "rev_kl":           ("train_rev_kl_",            "merge_rev_kl_",           "eval_rev_kl_"),
+    "jsd":              ("train_jsd_",               "merge_jsd_",              "eval_jsd_"),
+    "l1":               ("train_l1_",                "merge_l1_",               "eval_l1_"),
+    "online":           ("online_adapt_",            "merge_online_",           "eval_online_"),
+    "online_ebe":       ("online_ebe_adapt_",        "merge_online_ebe_",       "eval_online_ebe_"),
+    "online_ebe_single":("online_ebe_single_adapt_", "merge_online_ebe_single_","eval_online_ebe_single_"),
 }
 ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
@@ -580,6 +582,38 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                     "--adapter", _ckpt("ebe-gsm8k"), "--draft", draft],
             "done_check": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
+        # -------------------------------------------------------------------
+        # ebe_single: ablation of multi-token EBE.
+        # Loss = −mean(α), no cumprod, no KL regulariser.  Ran to full --steps
+        # (no early_stop_patience) so it gets the same budget as forward_kl.
+        # Key question: if single-token EBE beats KL, the product structure in
+        # multi-token EBE is the bottleneck; if not, EBE concept fails offline.
+        # -------------------------------------------------------------------
+        {
+            "id": "train_ebe_single_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train ebe_single, {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "ebe_single",
+                "--steps", str(_steps),
+                "--nan_action", "skip",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("ebe_single-gsm8k"),
+                *_train_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("ebe_single-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_ebe_single_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge ebe_single-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("ebe_single-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
+        },
         {
             "id": "train_rev_kl_gsm8k",
             "group": "Phase 2 — Training",
@@ -734,6 +768,42 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                     "--adapter", _ckpt("online-ebe-gsm8k"), "--draft", draft],
             "done_check": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
         },
+        # -------------------------------------------------------------------
+        # online_ebe_single: online ablation — single-token EBE at rejected positions.
+        # Directly comparable to online_ebe (block-level) with the same budget.
+        # Uses the same LR as online_ebe (lower than forward_kl online) since
+        # gradient scale is similar (both O(α) per step).
+        # -------------------------------------------------------------------
+        {
+            "id": "online_ebe_single_adapt_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Online EBE-single adaptation (ebe_single, K=4), {_online_steps} prompts, gsm8k",
+            "cmd": [
+                sys.executable, _ONLINE_SCRIPT,
+                "--prompts", _data("gsm8k_train.jsonl"),
+                "--draft", draft, "--target", target,
+                "--output", _ckpt("online-ebe-single-gsm8k"),
+                "--steps", str(_online_steps),
+                "--update_every", "4",
+                "--K", "4",
+                "--kl_method", "ebe_single",
+                "--lr", str(_h.get("online_ebe_lr", 1e-4)),
+                "--max_new_tokens", str(_online_max_tok),
+                "--milestone_every", "50",
+                "--early_stop_patience", "3",
+                *_online_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("online-ebe-single-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_online_ebe_single_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge online-ebe-single-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("online-ebe-single-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
+        },
 
         # -------------------------------------------------------------------
         # Phase 3 — GSM8K Eval
@@ -789,6 +859,20 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-gsm8k on gsm8k",
             "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", datasets="gsm8k", task_score=True),
+            "done_check": None,
+        },
+        {
+            "id": "eval_ebe_single_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval ebe_single-gsm8k on gsm8k",
+            "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single", datasets="gsm8k", task_score=True),
+            "done_check": None,
+        },
+        {
+            "id": "eval_online_ebe_single_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval online-ebe-single-gsm8k on gsm8k",
+            "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", datasets="gsm8k", task_score=True),
             "done_check": None,
         },
 
@@ -866,6 +950,24 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online_ebe on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+            "done_check": None,
+            "smoke_skip": smoke,
+        },
+        {
+            "id": "eval_ebe_single_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval ebe_single on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+            "done_check": None,
+            "smoke_skip": smoke,
+        },
+        {
+            "id": "eval_online_ebe_single_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval online_ebe_single on humaneval,math500,mtbench,alpaca",
+            "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
@@ -1468,9 +1570,9 @@ def main():
     # ── MLOps / sweep overrides ───────────────────────────────────────────────
     p.add_argument("--losses", default=None,
                    help="Comma-separated subset of losses to train/eval. "
-                        "Default: run all 6 (kl,ebe,rev_kl,jsd,l1,online). "
-                        "Example: --losses kl,ebe  runs only KL and EBE. "
-                        "Useful for debugging a single loss or for parallel experiments.")
+                        "Default: run all (kl,ebe,ebe_single,rev_kl,jsd,l1,online,online_ebe,online_ebe_single). "
+                        "Example: --losses ebe_single,online_ebe_single  runs only the EBE-single ablation. "
+                        "Useful for running a single loss without the full pipeline.")
     p.add_argument("--train_steps", type=int, default=None,
                    help="Override per-loss training step count. "
                         "Overrides the smoke (50) / full (1000) default. "

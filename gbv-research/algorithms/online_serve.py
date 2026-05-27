@@ -310,6 +310,53 @@ def _ebe_online(
 
 
 # ---------------------------------------------------------------------------
+# EBE-single loss for online speculative decoding
+# ---------------------------------------------------------------------------
+
+def _ebe_single_online(
+    student_logits: torch.Tensor,   # (B, T, V) — grad required
+    teacher_logits: torch.Tensor,   # (B, T, V) — detached (no grad)
+    token_ids: torch.Tensor,        # (B, T)    — actual generated tokens
+    wrong_mask: torch.Tensor,       # (B, T)    — True at rejected positions
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Single-token EBE at rejected positions: Loss = −mean(α) where α = min(1, q/p).
+
+    Ablation of _ebe_online: removes the block cumprod structure entirely.
+    Only computes gradients at rejected positions (wrong_mask=True) to stay
+    consistent with OSD's principle of not updating at well-aligned positions.
+
+    This tests whether the product structure in _ebe_online is the bottleneck
+    (gradient vanishing through 4-8 chained multiplications) vs. the EBE
+    concept itself.
+    """
+    B, T, V = student_logits.shape
+    mask_flat = wrong_mask.reshape(-1)                              # (B*T,)
+
+    if mask_flat.sum() == 0:
+        return (student_logits * 0).sum()
+
+    # Select only rejected positions (N_rej ≪ B*T — memory-efficient)
+    s_sel = student_logits.reshape(-1, V)[mask_flat].float() / temperature   # (N_rej, V) grad
+    t_sel = teacher_logits.reshape(-1, V)[mask_flat].detach().float() / temperature  # no grad
+    del student_logits, teacher_logits
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    log_s = F.log_softmax(s_sel, dim=-1)   # (N_rej, V)
+    with torch.no_grad():
+        log_t = F.log_softmax(t_sel, dim=-1)
+
+    # Gather token log-probs at rejected positions
+    ids_flat = token_ids.reshape(-1)[mask_flat]                     # (N_rej,)
+    log_p = log_s.gather(-1, ids_flat.unsqueeze(-1)).squeeze(-1)    # (N_rej,)
+    log_q = log_t.gather(-1, ids_flat.unsqueeze(-1)).squeeze(-1)    # (N_rej,)
+
+    alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # (N_rej,)
+    return -alpha.mean()
+
+
+# ---------------------------------------------------------------------------
 # Speculative decoding (single sequence, K tokens per step)
 # ---------------------------------------------------------------------------
 
@@ -781,6 +828,13 @@ def update_step(
             kl_weight=ebe_kl_weight,
             temperature=temperature,
         )
+    elif kl_method == "ebe_single":
+        # _ebe_single_online: −mean(α) at rejected positions only.
+        # Ablation: tests whether the cumprod chain is the source of instability.
+        loss = _ebe_single_online(
+            stu_logits, tgt_logits, token_ids, shifted_mask,
+            temperature=temperature,
+        )
     else:
         # _kl_at_positions selects rejected positions FIRST (N_rej ≪ B*T) and
         # frees the full (B, T-1, V) logit tensors inside before softmax.
@@ -834,11 +888,12 @@ def main():
     parser.add_argument(
         "--kl_method",
         default="forward_kl",
-        choices=["forward_kl", "reverse_kl", "jsd", "ebe"],
+        choices=["forward_kl", "reverse_kl", "jsd", "ebe", "ebe_single"],
         help=(
             "Training objective. "
             "'forward_kl'/'reverse_kl'/'jsd': KL variant at rejected positions (OSD original). "
-            "'ebe': block-level EBE over full sequences + KL reg at rejected positions."
+            "'ebe': block-level EBE over full sequences + KL reg at rejected positions. "
+            "'ebe_single': single-token EBE = −mean(α) at rejected positions (ablation vs ebe)."
         ),
     )
     parser.add_argument(

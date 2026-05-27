@@ -115,87 +115,103 @@ def api_pipeline_status():
         # Phase 1 — Baseline
         "eval_baseline_gsm8k",
         # Phase 2 — Training (offline losses)
-        "train_kl_gsm8k",          "merge_kl_gsm8k",
-        "train_ebe_gsm8k",         "merge_ebe_gsm8k",
-        "train_rev_kl_gsm8k",      "merge_rev_kl_gsm8k",
-        "train_jsd_gsm8k",         "merge_jsd_gsm8k",
-        "train_l1_gsm8k",          "merge_l1_gsm8k",
+        "train_kl_gsm8k",              "merge_kl_gsm8k",
+        "train_ebe_gsm8k",             "merge_ebe_gsm8k",
+        "train_ebe_single_gsm8k",      "merge_ebe_single_gsm8k",
+        "train_rev_kl_gsm8k",          "merge_rev_kl_gsm8k",
+        "train_jsd_gsm8k",             "merge_jsd_gsm8k",
+        "train_l1_gsm8k",              "merge_l1_gsm8k",
         # Phase 2 — Online training
-        "online_adapt_gsm8k",      "merge_online_gsm8k",
-        "online_ebe_adapt_gsm8k",  "merge_online_ebe_gsm8k",
+        "online_adapt_gsm8k",              "merge_online_gsm8k",
+        "online_ebe_adapt_gsm8k",          "merge_online_ebe_gsm8k",
+        "online_ebe_single_adapt_gsm8k",   "merge_online_ebe_single_gsm8k",
         # Phase 3 — GSM8K Eval
         "eval_kl_gsm8k",
         "eval_ebe_gsm8k",
+        "eval_ebe_single_gsm8k",
         "eval_rev_kl_gsm8k",
         "eval_jsd_gsm8k",
         "eval_l1_gsm8k",
         "eval_online_gsm8k",
         "eval_online_ebe_gsm8k",
+        "eval_online_ebe_single_gsm8k",
         # Phase 4 — Multi-Dataset
         "eval_baseline_all",
         "eval_kl_all",
         "eval_ebe_all",
+        "eval_ebe_single_all",
         "eval_rev_kl_all",
         "eval_jsd_all",
         "eval_l1_all",
         "eval_online_all",
         "eval_online_ebe_all",
+        "eval_online_ebe_single_all",
         # Phase 5 — EAGLE benchmark
         "eagle_gen", "eagle_train", "eagle_eval",
     ]
     PHASE_LABELS = {
-        "eval_baseline_gsm8k":    "Ph 1 — Baseline",
-        "train_kl_gsm8k":         "Ph 2 — Training",
-        "merge_kl_gsm8k":         "Ph 2 — Training",
-        "train_ebe_gsm8k":        "Ph 2 — Training",
-        "merge_ebe_gsm8k":        "Ph 2 — Training",
-        "train_rev_kl_gsm8k":     "Ph 2 — Training",
-        "merge_rev_kl_gsm8k":     "Ph 2 — Training",
-        "train_jsd_gsm8k":        "Ph 2 — Training",
-        "merge_jsd_gsm8k":        "Ph 2 — Training",
-        "train_l1_gsm8k":         "Ph 2 — Training",
-        "merge_l1_gsm8k":         "Ph 2 — Training",
-        "online_adapt_gsm8k":     "Ph 2 — Training",
-        "merge_online_gsm8k":     "Ph 2 — Training",
-        "online_ebe_adapt_gsm8k": "Ph 2 — Training",
-        "merge_online_ebe_gsm8k": "Ph 2 — Training",
-        "eval_kl_gsm8k":          "Ph 3 — GSM8K Eval",
-        "eval_ebe_gsm8k":         "Ph 3 — GSM8K Eval",
-        "eval_rev_kl_gsm8k":      "Ph 3 — GSM8K Eval",
-        "eval_jsd_gsm8k":         "Ph 3 — GSM8K Eval",
-        "eval_l1_gsm8k":          "Ph 3 — GSM8K Eval",
-        "eval_online_gsm8k":      "Ph 3 — GSM8K Eval",
-        "eval_online_ebe_gsm8k":  "Ph 3 — GSM8K Eval",
-        "eval_baseline_all":      "Ph 4 — Multi-DS",
-        "eval_kl_all":            "Ph 4 — Multi-DS",
-        "eval_ebe_all":           "Ph 4 — Multi-DS",
-        "eval_rev_kl_all":        "Ph 4 — Multi-DS",
-        "eval_jsd_all":           "Ph 4 — Multi-DS",
-        "eval_l1_all":            "Ph 4 — Multi-DS",
-        "eval_online_all":        "Ph 4 — Multi-DS",
-        "eval_online_ebe_all":    "Ph 4 — Multi-DS",
-        "eagle_gen":              "Ph 5 — EAGLE",
-        "eagle_train":            "Ph 5 — EAGLE",
-        "eagle_eval":             "Ph 5 — EAGLE",
+        "eval_baseline_gsm8k":           "Ph 1 — Baseline",
+        "train_kl_gsm8k":                "Ph 2 — Training",
+        "merge_kl_gsm8k":                "Ph 2 — Training",
+        "train_ebe_gsm8k":               "Ph 2 — Training",
+        "merge_ebe_gsm8k":               "Ph 2 — Training",
+        "train_ebe_single_gsm8k":        "Ph 2 — Training",
+        "merge_ebe_single_gsm8k":        "Ph 2 — Training",
+        "train_rev_kl_gsm8k":            "Ph 2 — Training",
+        "merge_rev_kl_gsm8k":            "Ph 2 — Training",
+        "train_jsd_gsm8k":               "Ph 2 — Training",
+        "merge_jsd_gsm8k":               "Ph 2 — Training",
+        "train_l1_gsm8k":                "Ph 2 — Training",
+        "merge_l1_gsm8k":                "Ph 2 — Training",
+        "online_adapt_gsm8k":            "Ph 2 — Training",
+        "merge_online_gsm8k":            "Ph 2 — Training",
+        "online_ebe_adapt_gsm8k":        "Ph 2 — Training",
+        "merge_online_ebe_gsm8k":        "Ph 2 — Training",
+        "online_ebe_single_adapt_gsm8k": "Ph 2 — Training",
+        "merge_online_ebe_single_gsm8k": "Ph 2 — Training",
+        "eval_kl_gsm8k":                 "Ph 3 — GSM8K Eval",
+        "eval_ebe_gsm8k":                "Ph 3 — GSM8K Eval",
+        "eval_ebe_single_gsm8k":         "Ph 3 — GSM8K Eval",
+        "eval_rev_kl_gsm8k":             "Ph 3 — GSM8K Eval",
+        "eval_jsd_gsm8k":                "Ph 3 — GSM8K Eval",
+        "eval_l1_gsm8k":                 "Ph 3 — GSM8K Eval",
+        "eval_online_gsm8k":             "Ph 3 — GSM8K Eval",
+        "eval_online_ebe_gsm8k":         "Ph 3 — GSM8K Eval",
+        "eval_online_ebe_single_gsm8k":  "Ph 3 — GSM8K Eval",
+        "eval_baseline_all":             "Ph 4 — Multi-DS",
+        "eval_kl_all":                   "Ph 4 — Multi-DS",
+        "eval_ebe_all":                  "Ph 4 — Multi-DS",
+        "eval_ebe_single_all":           "Ph 4 — Multi-DS",
+        "eval_rev_kl_all":               "Ph 4 — Multi-DS",
+        "eval_jsd_all":                  "Ph 4 — Multi-DS",
+        "eval_l1_all":                   "Ph 4 — Multi-DS",
+        "eval_online_all":               "Ph 4 — Multi-DS",
+        "eval_online_ebe_all":           "Ph 4 — Multi-DS",
+        "eval_online_ebe_single_all":    "Ph 4 — Multi-DS",
+        "eagle_gen":                     "Ph 5 — EAGLE",
+        "eagle_train":                   "Ph 5 — EAGLE",
+        "eagle_eval":                    "Ph 5 — EAGLE",
     }
 
     # Training steps that stopped early (NaN / early-stop) but produced a partial
     # checkpoint are not real failures — pipeline can still merge + eval them.
     # Remap status from "failed" → "stopped" so badge shows orange not red.
     TRAIN_STEP_IDS = {
-        "train_kl_gsm8k", "train_ebe_gsm8k", "train_rev_kl_gsm8k",
-        "train_jsd_gsm8k", "train_l1_gsm8k",
-        "online_adapt_gsm8k", "online_ebe_adapt_gsm8k",
+        "train_kl_gsm8k", "train_ebe_gsm8k", "train_ebe_single_gsm8k",
+        "train_rev_kl_gsm8k", "train_jsd_gsm8k", "train_l1_gsm8k",
+        "online_adapt_gsm8k", "online_ebe_adapt_gsm8k", "online_ebe_single_adapt_gsm8k",
     }
     CKPT_DIR = os.path.join(HERE, "checkpoints")
     _CKPT_SUFFIXES = {
-        "train_kl_gsm8k":         "kl-gsm8k",
-        "train_ebe_gsm8k":        "ebe-gsm8k",
-        "train_rev_kl_gsm8k":     "rev_kl-gsm8k",
-        "train_jsd_gsm8k":        "jsd-gsm8k",
-        "train_l1_gsm8k":         "l1-gsm8k",
-        "online_adapt_gsm8k":     "online-gsm8k",
-        "online_ebe_adapt_gsm8k": "online-ebe-gsm8k",
+        "train_kl_gsm8k":                "kl-gsm8k",
+        "train_ebe_gsm8k":               "ebe-gsm8k",
+        "train_ebe_single_gsm8k":        "ebe_single-gsm8k",
+        "train_rev_kl_gsm8k":            "rev_kl-gsm8k",
+        "train_jsd_gsm8k":               "jsd-gsm8k",
+        "train_l1_gsm8k":                "l1-gsm8k",
+        "online_adapt_gsm8k":            "online-gsm8k",
+        "online_ebe_adapt_gsm8k":        "online-ebe-gsm8k",
+        "online_ebe_single_adapt_gsm8k": "online-ebe-single-gsm8k",
     }
 
     def _has_partial_output(sid):
@@ -1110,8 +1126,10 @@ const STEP_DESC = {
   // Phase 2 — offline losses
   'train_kl_gsm8k':         'Ph 2 — Training: Train forward-KL distillation (DistillSpec baseline)',
   'merge_kl_gsm8k':         'Ph 2 — Training: Merge KL LoRA into base model',
-  'train_ebe_gsm8k':        'Ph 2 — Training: Train offline EBE (ablation — no live SD; weak signal early)',
+  'train_ebe_gsm8k':        'Ph 2 — Training: Train offline EBE, multi-token cumprod (ablation — weak signal offline)',
   'merge_ebe_gsm8k':        'Ph 2 — Training: Merge EBE LoRA into base model',
+  'train_ebe_single_gsm8k': 'Ph 2 — Training: Train EBE-single = −mean(α), no cumprod (ablation: tests if product structure is the bottleneck)',
+  'merge_ebe_single_gsm8k': 'Ph 2 — Training: Merge EBE-single LoRA',
   'train_rev_kl_gsm8k':     'Ph 2 — Training: Train reverse-KL (mode-seeking ablation)',
   'merge_rev_kl_gsm8k':     'Ph 2 — Training: Merge rev-KL LoRA',
   'train_jsd_gsm8k':        'Ph 2 — Training: Train JSD (symmetric ablation)',
@@ -1121,25 +1139,31 @@ const STEP_DESC = {
   // Phase 2 — online
   'online_adapt_gsm8k':     'Ph 2 — Training: Online forward-KL (OSD baseline — KL at rejected positions from live SD)',
   'merge_online_gsm8k':     'Ph 2 — Training: Merge online-KL LoRA',
-  'online_ebe_adapt_gsm8k': 'Ph 2 — Training: Online EBE (NOVEL — block-level EBE at live rejected positions)',
-  'merge_online_ebe_gsm8k': 'Ph 2 — Training: Merge online-EBE LoRA',
+  'online_ebe_adapt_gsm8k':        'Ph 2 — Training: Online EBE block-level (NOVEL — cumprod at live rejected positions)',
+  'merge_online_ebe_gsm8k':        'Ph 2 — Training: Merge online-EBE LoRA',
+  'online_ebe_single_adapt_gsm8k': 'Ph 2 — Training: Online EBE-single = −mean(α) at rejected positions (ablation vs block-level)',
+  'merge_online_ebe_single_gsm8k': 'Ph 2 — Training: Merge online-EBE-single LoRA',
   // Phase 3
-  'eval_kl_gsm8k':          'Ph 3 — GSM8K Eval: Eval KL draft — DistillSpec baseline result',
-  'eval_ebe_gsm8k':         'Ph 3 — GSM8K Eval: Eval offline-EBE draft — ablation vs online-EBE',
-  'eval_rev_kl_gsm8k':      'Ph 3 — GSM8K Eval: Eval rev-KL draft',
-  'eval_jsd_gsm8k':         'Ph 3 — GSM8K Eval: Eval JSD draft',
-  'eval_l1_gsm8k':          'Ph 3 — GSM8K Eval: Eval L1 draft',
-  'eval_online_gsm8k':      'Ph 3 — GSM8K Eval: Eval online-KL draft (OSD baseline)',
-  'eval_online_ebe_gsm8k':  'Ph 3 — GSM8K Eval: Eval online-EBE draft — KEY result: does online EBE beat online KL?',
+  'eval_kl_gsm8k':                 'Ph 3 — GSM8K Eval: Eval KL draft — DistillSpec baseline result',
+  'eval_ebe_gsm8k':                'Ph 3 — GSM8K Eval: Eval offline-EBE (multi-token) draft',
+  'eval_ebe_single_gsm8k':         'Ph 3 — GSM8K Eval: Eval offline EBE-single draft — ablation: does removing cumprod help?',
+  'eval_rev_kl_gsm8k':             'Ph 3 — GSM8K Eval: Eval rev-KL draft',
+  'eval_jsd_gsm8k':                'Ph 3 — GSM8K Eval: Eval JSD draft',
+  'eval_l1_gsm8k':                 'Ph 3 — GSM8K Eval: Eval L1 draft',
+  'eval_online_gsm8k':             'Ph 3 — GSM8K Eval: Eval online-KL draft (OSD baseline)',
+  'eval_online_ebe_gsm8k':         'Ph 3 — GSM8K Eval: Eval online-EBE (block-level) — KEY result vs online-KL',
+  'eval_online_ebe_single_gsm8k':  'Ph 3 — GSM8K Eval: Eval online-EBE-single — ablation: block-level vs single-token online',
   // Phase 4
-  'eval_baseline_all':      'Ph 4 — Multi-DS: Baseline on HumanEval, MATH-500, MTBench, Alpaca',
-  'eval_kl_all':            'Ph 4 — Multi-DS: KL draft cross-domain',
-  'eval_ebe_all':           'Ph 4 — Multi-DS: Offline-EBE draft cross-domain',
-  'eval_rev_kl_all':        'Ph 4 — Multi-DS: Rev-KL draft cross-domain',
-  'eval_jsd_all':           'Ph 4 — Multi-DS: JSD draft cross-domain',
-  'eval_l1_all':            'Ph 4 — Multi-DS: L1 draft cross-domain',
-  'eval_online_all':        'Ph 4 — Multi-DS: Online-KL draft cross-domain',
-  'eval_online_ebe_all':    'Ph 4 — Multi-DS: Online-EBE draft cross-domain — proves generalization',
+  'eval_baseline_all':             'Ph 4 — Multi-DS: Baseline on HumanEval, MATH-500, MTBench, Alpaca',
+  'eval_kl_all':                   'Ph 4 — Multi-DS: KL draft cross-domain',
+  'eval_ebe_all':                  'Ph 4 — Multi-DS: Offline-EBE (multi-token) draft cross-domain',
+  'eval_ebe_single_all':           'Ph 4 — Multi-DS: EBE-single draft cross-domain',
+  'eval_rev_kl_all':               'Ph 4 — Multi-DS: Rev-KL draft cross-domain',
+  'eval_jsd_all':                  'Ph 4 — Multi-DS: JSD draft cross-domain',
+  'eval_l1_all':                   'Ph 4 — Multi-DS: L1 draft cross-domain',
+  'eval_online_all':               'Ph 4 — Multi-DS: Online-KL draft cross-domain',
+  'eval_online_ebe_all':           'Ph 4 — Multi-DS: Online-EBE (block-level) cross-domain',
+  'eval_online_ebe_single_all':    'Ph 4 — Multi-DS: Online-EBE-single cross-domain',
   // Phase 5
   'eagle_gen':   'Ph 5 — EAGLE: Generate EAGLE training data from target model hidden states',
   'eagle_train': 'Ph 5 — EAGLE: Train 1-layer EAGLE head on hidden states',
@@ -1153,22 +1177,24 @@ const PHASE_GROUPS = [
   { label: 'Ph 2 — Training',  steps: [
       'train_kl_gsm8k','merge_kl_gsm8k',
       'train_ebe_gsm8k','merge_ebe_gsm8k',
+      'train_ebe_single_gsm8k','merge_ebe_single_gsm8k',
       'train_rev_kl_gsm8k','merge_rev_kl_gsm8k',
       'train_jsd_gsm8k','merge_jsd_gsm8k',
       'train_l1_gsm8k','merge_l1_gsm8k',
       'online_adapt_gsm8k','merge_online_gsm8k',
       'online_ebe_adapt_gsm8k','merge_online_ebe_gsm8k',
+      'online_ebe_single_adapt_gsm8k','merge_online_ebe_single_gsm8k',
   ]},
   { label: 'Ph 3 — GSM8K Eval', steps: [
-      'eval_kl_gsm8k','eval_ebe_gsm8k','eval_rev_kl_gsm8k',
-      'eval_jsd_gsm8k','eval_l1_gsm8k',
-      'eval_online_gsm8k','eval_online_ebe_gsm8k',
+      'eval_kl_gsm8k','eval_ebe_gsm8k','eval_ebe_single_gsm8k',
+      'eval_rev_kl_gsm8k','eval_jsd_gsm8k','eval_l1_gsm8k',
+      'eval_online_gsm8k','eval_online_ebe_gsm8k','eval_online_ebe_single_gsm8k',
   ]},
   { label: 'Ph 4 — Multi-DS',   steps: [
       'eval_baseline_all',
-      'eval_kl_all','eval_ebe_all','eval_rev_kl_all',
+      'eval_kl_all','eval_ebe_all','eval_ebe_single_all','eval_rev_kl_all',
       'eval_jsd_all','eval_l1_all',
-      'eval_online_all','eval_online_ebe_all',
+      'eval_online_all','eval_online_ebe_all','eval_online_ebe_single_all',
   ]},
   { label: 'Ph 5 — EAGLE',     steps: ['eagle_gen','eagle_train','eagle_eval'] },
 ];
@@ -2395,7 +2421,11 @@ async function renderOnlineHealth() {
 
   onlineLabels.forEach((label, colorIdx) => {
     const labelRows = curves.filter(r => r.label === label);
-    const isEBE = label.includes('ebe');
+    // ebe_single: loss = −mean(α), negate → mean α goes up as training improves.
+    // ebe (block-level): loss = −BE, negate → BE goes up as training improves.
+    // Both benefit from negation; distinguish for axis labels only.
+    const isEBE       = label.includes('ebe');
+    const isEBESingle = label.includes('ebe-single') || label.includes('ebe_single');
 
     // De-duplicate train rows by step
     const trainMap = {};
@@ -2415,18 +2445,20 @@ async function renderOnlineHealth() {
 
     if (trainRows.length) {
       if (isEBE) {
-        // EBE loss = −BE  →  plot −loss so the train line goes UP as BE improves.
-        // This makes both train and eval lines read "higher = better."
-        const beVals = trainRows.map(r => -r.loss);
-        const lastBE = beVals[beVals.length - 1];
+        // EBE/EBE-single loss = −BE or −mean(α) → negate so train line goes UP as model improves.
+        const negVals = trainRows.map(r => -r.loss);
+        const trainTraceName = isEBESingle ? 'train mean α (=−loss)' : 'train BE (=−EBE loss)';
+        const trainHover     = isEBESingle
+          ? 'step %{x}<br><b>train mean α: %{y:.3f}</b>  [=−loss]<extra></extra>'
+          : 'step %{x}<br><b>train BE: %{y:.2f}</b>  [=−EBE loss, train dist.]<extra></extra>';
         traces.push({
           type: 'scatter', mode: 'lines',
-          name: `train BE (=−EBE loss)`,
+          name: trainTraceName,
           x: trainRows.map(r => r.step),
-          y: beVals,
+          y: negVals,
           line: { color: trainColor, width: 1.8, dash: 'solid' },
           yaxis: 'y',
-          hovertemplate: 'step %{x}<br><b>train BE: %{y:.2f}</b>  [=−EBE loss, train dist.]<extra></extra>',
+          hovertemplate: trainHover,
         });
       } else {
         // KL loss: lower = better — show on left axis, down = better
@@ -2483,10 +2515,12 @@ async function renderOnlineHealth() {
       ? (1 - Math.min(1, Math.max(0, valRows[valRows.length - 1].loss))).toFixed(3)
       : null;
     const lastTrainVal = lastTrain
-      ? (isEBE ? (-lastTrain.loss).toFixed(2) : lastTrain.loss.toFixed(3))
+      ? (isEBESingle ? (-lastTrain.loss).toFixed(3)
+         : isEBE     ? (-lastTrain.loss).toFixed(2)
+         :              lastTrain.loss.toFixed(3))
       : null;
-    const trainLabel   = isEBE ? 'BE' : 'KL loss';
-    const trainDir     = isEBE ? '↑ higher = better' : '↓ lower = better';
+    const trainLabel   = isEBESingle ? 'mean α' : (isEBE ? 'BE' : 'KL loss');
+    const trainDir     = isEBE      ? '↑ higher = better' : '↓ lower = better';
 
     const statsHtml = [
       lastTrain   ? `step ${lastTrain.step}` : '',
@@ -2494,7 +2528,9 @@ async function renderOnlineHealth() {
       lastAlpha   ? `eval α ${lastAlpha}` : '',
     ].filter(Boolean).join(' · ');
 
-    const yLeftTitle  = isEBE ? 'Train BE = −EBE loss  (↑ better)' : 'Train KL loss  (↓ better)';
+    const yLeftTitle  = isEBESingle ? 'Train mean α = −loss  (↑ better)'
+                      : isEBE       ? 'Train BE = −EBE loss  (↑ better)'
+                      :               'Train KL loss  (↓ better)';
     const yRightTitle = 'eval α  (↑ better)';
 
     // Left axis range
@@ -2539,8 +2575,10 @@ async function renderOnlineHealth() {
   // completed before results_db logging was added to online_serve.py.
   // Only the EBE online run was captured.
   const hasEBE = onlineLabels.some(l => l.includes('ebe'));
+  // KL = any online label that is NOT ebe-flavoured (matches online-gsm8k but not ebe variants)
   const hasKL  = onlineLabels.some(l => !l.includes('ebe'));
   if (hasEBE && !hasKL) {
+    // online-gsm8k (KL) run completed before DB logging was added to online_serve.py
     const note = document.createElement('div');
     note.className = 'chart-card';
     note.style.cssText = 'grid-column:1/-1;background:#fffbf0;border-left:3px solid #fd7e14';
