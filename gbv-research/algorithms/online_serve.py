@@ -76,6 +76,23 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# ---------------------------------------------------------------------------
+# Results DB — same wiring as train_qwen3.py.
+# online_serve.py lives at gbv-research/algorithms/, so db/ is one level up.
+# Writes to gbv-research/db/results.db (the same DB the dashboard reads).
+# train_curves rows from online runs have split="train" (KL loss) and
+# split="val" (1 - eval_alpha = rejection rate, so lower = better like other
+# val curves).
+# ---------------------------------------------------------------------------
+_GBV_DB_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "db"))
+if os.path.isdir(_GBV_DB_DIR) and _GBV_DB_DIR not in sys.path:
+    sys.path.insert(0, _GBV_DB_DIR)
+try:
+    import results_db as _results_db          # gbv-research/db/results_db.py
+except ImportError:
+    _results_db = None                        # DB optional — script still works without it
+
 # peft is optional at import time so we give a clear error if missing
 try:
     from peft import LoraConfig, PeftModel, TaskType, get_peft_model
@@ -972,6 +989,21 @@ def main():
                     },
                     step=step + 1,
                 )
+            # Write KL loss to results.db so the dashboard Training Loss Curves
+            # panel shows the online run alongside kl/ebe/rev_kl/jsd/l1 curves.
+            if _results_db is not None:
+                try:
+                    _results_db.insert_train_step(
+                        label=os.path.basename(args.output),
+                        loss_name=args.kl_method,
+                        step=step + 1,
+                        loss=last_loss,
+                        learning_rate=args.lr,
+                        lora_rank=args.lora_r,
+                        split="train",
+                    )
+                except Exception:
+                    pass  # DB write failure never crashes training
 
         # 6. Periodic held-out eval
         if (step + 1) % args.eval_alpha_every == 0:
@@ -990,6 +1022,21 @@ def main():
             log.info("step=%d  eval_alpha=%.4f", step + 1, eval_alpha)
             if use_wandb:
                 _wandb.log({"online/eval_alpha": eval_alpha}, step=step + 1)
+            # Write rejection rate (1 - eval_alpha) as val "loss" so the curve
+            # goes DOWN like other val curves (lower rejection = better draft).
+            if _results_db is not None:
+                try:
+                    _results_db.insert_train_step(
+                        label=os.path.basename(args.output),
+                        loss_name=args.kl_method,
+                        step=step + 1,
+                        loss=1.0 - eval_alpha,   # rejection rate: lower = better
+                        learning_rate=args.lr,
+                        lora_rank=args.lora_r,
+                        split="val",
+                    )
+                except Exception:
+                    pass
 
     # --- Final evaluation ---
     draft_model.eval()
