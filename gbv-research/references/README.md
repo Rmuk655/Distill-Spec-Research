@@ -16,7 +16,7 @@ root as `GBV/` (reference copy from anonymous.4open.science/r/GBV-BED8/).
 
 ### vs. OSD (upstream: LiuXiaoxuanPKU/OSD)
 Our research code does **not** use OSD's training classes. We wrote a new
-training loop in `algorithms/train_qwen3.py` with the following differences:
+training loop in `algorithms/distillspec_gbv/trainer.py` with the following differences:
 - Plain PyTorch loop instead of `transformers.Trainer` subclass
 - LoRA adapters (PEFT) instead of full fine-tuning
 - Teacher-sample-only mode (no wrong_token_ids masking)

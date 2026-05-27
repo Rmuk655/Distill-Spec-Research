@@ -35,7 +35,7 @@ Monitor W&B:
 Crash recovery:
     Modal containers can be killed mid-run (preemption, OOM, timeout).
     A background thread flushes vol.commit() every 5 min so at most
-    5 min of work is lost.  train_qwen3.py auto-resumes from ckpt_latest/.
+    5 min of work is lost.  trainer.py auto-resumes from ckpt_latest/.
     Just re-run the same command to continue.
 """
 
@@ -125,7 +125,7 @@ def _start_commit_daemon(stop_event: threading.Event) -> threading.Thread:
 # ---------------------------------------------------------------------------
 
 def _setup_env(wandb_key: str | None = None, hf_token: str | None = None):
-    """Set environment variables used by experiment.py and train_qwen3.py."""
+    """Set environment variables used by experiment.py and trainer.py."""
     os.environ["HF_HOME"]              = HF_CACHE
     os.environ["TRANSFORMERS_OFFLINE"] = "0"   # always online on Modal
     os.environ["HF_HUB_OFFLINE"]       = "0"

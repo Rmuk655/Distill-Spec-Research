@@ -270,7 +270,7 @@ def _load_config_yaml(config_name: str) -> dict:
         # set persistent storage without a CLI flag every run.
         if checkpointing.get("storage_root"):
             out["storage_root"] = checkpointing["storage_root"]
-        # hardware.compile → compile flag passed to train_qwen3.py and online_serve.py.
+        # hardware.compile → compile flag passed to trainer.py and online_serve.py.
         # server.yaml: compile: true (Linux/A100 — torch.compile gives 10-30% speedup).
         # colab.yaml:  compile: false (torch.compile unreliable in Colab environment).
         # laptop.yaml: not set   (Windows — scripts skip compile automatically).
@@ -445,7 +445,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--lora_r",     str(_h.get("lora_r", 8)),
         "--lora_alpha", str(_h.get("lora_alpha", 16)),
     ]
-    # --compile: passed to train_qwen3.py and online_serve.py when YAML sets
+    # --compile: passed to trainer.py and online_serve.py when YAML sets
     # hardware.compile: true (server/A100 Linux).  Both scripts skip compile
     # automatically on Windows and PyTorch < 2.0 so this is always safe to pass.
     _compile_flag = ["--compile"] if _h.get("compile") else []
@@ -1365,7 +1365,7 @@ def run_step(step, state, dry_run=False):
     # is safer) and Colab (same).
     env["PYTHONIOENCODING"]  = "utf-8"
     env["PYTHONUNBUFFERED"]  = "1"   # flush every print() immediately — no more silent 5-min gaps
-    # Propagate storage paths so every child (train_qwen3, run_all, online_serve)
+    # Propagate storage paths so every child (trainer, run_all, online_serve)
     # writes to the same DB and logs directory regardless of where it runs from.
     # These are already set on os.environ when --storage_root is active, so the
     # copy above already includes them — but set them explicitly here as insurance
@@ -1424,7 +1424,7 @@ def run_step(step, state, dry_run=False):
                 "  Hint: check output above for [OOM] / [ERROR] / Traceback.\n"
                 "  Common fixes:\n"
                 "    OOM       -> evaluate.py retries on CPU automatically;\n"
-                "                 train_qwen3.py: add --no_lora or reduce --max_new_tokens\n"
+                "                 trainer.py: add --no_lora or reduce --max_new_tokens\n"
                 "    Offline   -> run setup_download.py first, or unset TRANSFORMERS_OFFLINE\n"
                 "    Stale run -> python experiment.py --status\n"
                 "  Restart   -> python experiment.py --config laptop --yes\n"

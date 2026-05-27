@@ -1,7 +1,7 @@
 """
 training_scaffold.py — shared training utilities for all gbv-research training scripts.
 
-Every training script (train_qwen3.py, online_serve.py, eagle_train.py, …) imports
+Every training script (distillspec_gbv/trainer.py, online_serve.py, eagle_train.py, …) imports
 from here instead of copy-pasting the same WandB, checkpoint, DB, hardware, and model
 loading boilerplate.
 
