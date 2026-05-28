@@ -245,14 +245,30 @@ def load_prompts(path: str | None) -> list[str]:
 def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
     """Merge a LoRA adapter into the base model and save to <adapter_path>_merged/."""
     print(f"Loading base: {draft_model_id}")
-    base   = transformers.AutoModelForCausalLM.from_pretrained(
+    base = transformers.AutoModelForCausalLM.from_pretrained(
         draft_model_id, torch_dtype=torch.bfloat16)
+
     print(f"Loading LoRA: {adapter_path}")
-    # local_files_only=True bypasses HuggingFace Hub validation entirely.
-    # Without it, PEFT calls hf_hub_download which validates the path as a
-    # repo ID — Windows paths with spaces exceed the 96-char limit and fail
-    # with HFValidationError before PEFT ever checks the local filesystem.
-    model  = PeftModel.from_pretrained(base, adapter_path, local_files_only=True)
+    # On Windows + OneDrive, PEFT's _get_peft_type calls os.path.isfile on
+    # the adapter_config.json path.  OneDrive virtualises files so
+    # os.path.isfile returns False even when the file is present, causing
+    # PEFT to fall through to hf_hub_download → validate_repo_id which
+    # rejects Windows paths (spaces, backslashes, length > 96 chars) with
+    # HFValidationError.  Workaround: read adapter_config.json ourselves and
+    # pass the constructed LoraConfig via `config=` so _get_peft_type is
+    # never called.
+    config_path = os.path.join(adapter_path, "adapter_config.json")
+    with open(config_path, encoding="utf-8") as _f:
+        _cfg = json.load(_f)
+    # Strip metadata-only keys that LoraConfig.__init__ does not accept.
+    for _k in (
+        "peft_type", "base_model_name_or_path", "revision",
+        "auto_mapping", "pipeline_tag", "transformers_version",
+    ):
+        _cfg.pop(_k, None)
+    lora_config = LoraConfig(**_cfg)
+
+    model  = PeftModel.from_pretrained(base, adapter_path, config=lora_config)
     merged = model.merge_and_unload()
     out    = adapter_path + "_merged"
     merged.save_pretrained(out)
