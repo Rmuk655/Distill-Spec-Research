@@ -1,0 +1,142 @@
+# Profile: a100_tree_losses — Full tree-structured distillation loss family (A100)
+#
+# Purpose: Train and evaluate the complete on-policy tree loss family.
+#
+#   7 offline tree losses:
+#     kl_tree        — forward KL at each tree node; universal on-policy baseline
+#     rev_kl_tree    — reverse KL; mode-seeking at each node
+#     jsd_tree       — symmetric JSD; bounded, stable
+#     bv_tree        — surrogate for bv_verify block-acceptance integral
+#     gbv_tree       — surrogate for gbv_verify (bv with q_skew substituted)
+#     traversal_tree — surrogate for traversal_verify leaf-weight product
+#     ebe_tree       — on-policy EBE: same token formula as flat EBE, trained on
+#                      the student's own draft tree paths (off-policy mismatch ablation)
+#
+#   2 online tree variants:
+#     online_kl_tree  — online adaptation with kl_tree loss; no replay buffer
+#     online_ebe_tree — online adaptation with ebe_tree loss
+#
+# Why tree losses must be evaluated with non-OT verifiers only:
+#   Tree losses are derived from the acceptance criteria of bv_verify,
+#   gbv_verify, and traversal_verify — the three non-OT speculative decoding
+#   algorithms.  Evaluating them against OT-based verifiers (specinfer,
+#   naive, alpha) would be an off-distribution comparison: those verifiers
+#   reject tokens via a different criterion that the tree losses never saw.
+#   The pipeline already hardcodes _TREE_NON_OT = "bv,gbv,traversal" for all
+#   tree-loss eval steps; the evaluation.modes setting below is for reference.
+#
+# Key question answered by this profile (H5/H6 from GUIDE.md):
+#   H5: Do tree losses outperform their flat counterparts when evaluated with
+#       the matching non-OT verifier?  (kl_tree vs kl, bv_tree vs kl, etc.)
+#   H6: Does on-policy training (tree) close the off-policy gap vs flat losses?
+#
+# Run order:
+#   Prerequisite — a100_baseline_losses (run first; needed for comparison numbers
+#                  in the paper table — train_kl_tree_gsm8k will be skipped via
+#                  done_check if a checkpoint already exists)
+#   Standalone   — can run on its own; baseline numbers come from results.db
+#
+# Usage:
+#   # Smoke test first (crash check, ~5-10 min on A100):
+#   python orchestration/experiment.py --config profiles/a100_tree_losses --smoke --yes \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+#   # Full run (~4-6 h on A100 for 9 losses × 2000 steps):
+#   python orchestration/experiment.py --config profiles/a100_tree_losses --yes \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+#   # Offline tree losses only (skip online variants):
+#   python orchestration/experiment.py --config profiles/a100_tree_losses --yes \
+#     --losses kl_tree,rev_kl_tree,jsd_tree,bv_tree,gbv_tree,traversal_tree,ebe_tree \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+#   # Second-seed reproducibility:
+#   python orchestration/experiment.py --config profiles/a100_tree_losses --yes \
+#     --storage_root /content/drive/MyDrive/specdist/seed456 \
+#     --experiment_tag seed456
+#   (or add experiment.seed_override: 456 below)
+
+hardware:
+  device: cuda
+  load_in_4bit: false           # A100 40 GB fits Qwen3-8B in bfloat16 comfortably
+  compile: true                 # torch.compile ~10-30% speedup on A100 Linux
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B
+
+training:
+  steps: 2000                   # ~10-17 min training per loss on A100; 9 losses ≈ 2-3 h
+  lr: 3.0e-5
+  lora_r: 16                    # matches a100_baseline_losses for fair comparison
+  lora_alpha: 32
+  max_new_tokens: 128
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+# ── Tree-structured loss hyperparameters ─────────────────────────────────────
+# These control the Phase A → B → C training loop inside trainer.py.
+#   tree_K: i.i.d. draft paths sampled per step from the student's current policy.
+#            Each path adds ~tree_L forward steps to the Phase B target pass.
+#            Keep tree_K ≤ 4 for gbv_tree numerical stability (q_skew integral).
+#   tree_L: block depth — number of tokens per draft path.
+#            Should match evaluation L so the training distribution aligns
+#            with the acceptance structure being measured at eval time.
+tree_training:
+  tree_K: 4     # 4 paths × 128 tokens × 2 models ≈ 1 GB VRAM overhead; safe on A100
+  tree_L: 8     # matches evaluation.L below
+
+checkpointing:
+  save_every: 100
+  milestone_every: 500
+  max_checkpoints: 8
+  storage_root: /content/drive/MyDrive/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-a100-tree
+  # run_label is prepended to every W&B run name:
+  # e.g. "8B-A100-tree-kl_tree_qwen_2000steps"
+  run_label: "8B-A100-tree"
+
+health:
+  val_every: 100                # val loss uses forward KL proxy for tree losses (see trainer.py)
+  ppl_check_every: 500
+  ppl_threshold: 1.25
+  nan_action: stop
+  early_stop_patience: 5
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+# NOTE: experiment.py hardcodes _TREE_NON_OT = "bv,gbv,traversal" for ALL tree
+# loss eval steps — this config value applies only to any flat-loss eval steps
+# that might be included (e.g. baseline).  It is set here for documentation.
+evaluation:
+  modes: [bv, gbv, traversal]  # non-OT verifiers only — matches tree loss design
+  K_values: [1, 3, 5, 8]
+  L: 8                          # must match tree_training.tree_L above
+  n_prompts: 50
+
+# ── Experiment scope ─────────────────────────────────────────────────────────
+experiment:
+  losses:
+    # ── Offline tree losses (7) ──────────────────────────────────────────────
+    # Universal divergence baselines — compare against flat KL/rev_kl/JSD:
+    - kl_tree           # on-policy forward KL; primary H5 comparison point
+    - rev_kl_tree       # mode-seeking variant
+    - jsd_tree          # symmetric; bounded in [0, log 2]
+    # Verifier-specific surrogates — directly optimise each non-OT criterion:
+    - bv_tree           # targets bv_verify (block acceptance integral)
+    - gbv_tree          # targets gbv_verify (bv + q_skew substitution)
+    - traversal_tree    # targets traversal_verify (leaf-weight product)
+    # Off-policy mismatch ablation — same token formula as flat EBE but on-policy:
+    - ebe_tree          # isolates whether off-policy mismatch explains flat EBE gap
+    # ── Online tree variants (2) ─────────────────────────────────────────────
+    # No replay buffer; each update uses a fresh K-path tree from live prompts:
+    - online_kl_tree    # online adaptation with kl_tree loss (H6 primary point)
+    - online_ebe_tree   # online adaptation with ebe_tree loss
