@@ -78,8 +78,11 @@ class GenerationResult:
     n_draft_tokens:     int               # total draft tokens proposed
     n_accepted_tokens:  int               # total draft tokens accepted
     n_target_calls:     int               # number of target model forward passes
-    time_draft_s:       float = 0.0      # wall time in draft model
-    time_target_s:      float = 0.0      # wall time in target model
+    time_draft_s:       float = 0.0      # wall time inside draft model forward passes
+    time_target_s:      float = 0.0      # wall time inside target model forward passes
+    time_total_s:       float = 0.0      # total wall-clock time for the full generate() call
+                                          # (includes sampling, tree ops, Python overhead)
+                                          # Use for throughput: len(token_ids) / time_total_s
     extra:              Dict[str, Any] = field(default_factory=dict)
 
     @property

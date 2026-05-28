@@ -90,7 +90,21 @@ class GBVAlgorithm(SpecDecAlgorithm):
         """
         from .verifiers.runner import speculative_decoding_loop
 
-        prompt = self.tokenizer.decode(prompt_ids[0], skip_special_tokens=False)
+        # prompt_ids contract: shape [1, prompt_len] (single prompt, batch dim present).
+        # Reject larger batches explicitly — silently slicing [0] would drop all rows
+        # after the first with no error.
+        if prompt_ids.dim() == 2:
+            if prompt_ids.shape[0] != 1:
+                raise ValueError(
+                    f"GBVAlgorithm.generate() processes one prompt at a time; "
+                    f"got batch_size={prompt_ids.shape[0]}. "
+                    "Loop over prompts in the caller."
+                )
+            ids = prompt_ids[0]       # [1, L] → [L]
+        else:
+            ids = prompt_ids          # already [L] (caller passed 1-D tensor)
+
+        prompt = self.tokenizer.decode(ids, skip_special_tokens=False)
 
         t0 = time.perf_counter()
         result_tokens, stats = speculative_decoding_loop(
@@ -114,6 +128,7 @@ class GBVAlgorithm(SpecDecAlgorithm):
             n_target_calls    = stats.get("n_target_calls", 0),
             time_draft_s      = stats.get("time_draft", 0.0),
             time_target_s     = stats.get("time_target", 0.0),
+            time_total_s      = elapsed,
             extra             = {"verifier": verifier, "K": K, "L": L},
         )
 

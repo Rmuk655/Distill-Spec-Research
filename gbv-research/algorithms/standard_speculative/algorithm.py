@@ -63,7 +63,20 @@ class StandardSpecAlgorithm(SpecDecAlgorithm):
           3. Accept / reject each draft token via rejection sampling.
           4. Always append at least one target-sampled token.
         """
-        ids   = prompt_ids.clone().to(self.device)  # [1, prompt_len]
+        # prompt_ids contract: shape [1, prompt_len] (single prompt, batch dim present).
+        # Reject larger batches explicitly — silently using ids[0] would drop all rows
+        # after the first with no error.
+        if prompt_ids.dim() == 2:
+            if prompt_ids.shape[0] != 1:
+                raise ValueError(
+                    f"StandardSpecAlgorithm.generate() processes one prompt at a time; "
+                    f"got batch_size={prompt_ids.shape[0]}. "
+                    "Loop over prompts in the caller."
+                )
+            ids = prompt_ids.clone().to(self.device)   # [1, prompt_len]
+        else:
+            ids = prompt_ids.unsqueeze(0).to(self.device)  # [prompt_len] → [1, prompt_len]
+
         n_draft = 0
         n_accept = 0
         n_target_calls = 0
@@ -71,6 +84,7 @@ class StandardSpecAlgorithm(SpecDecAlgorithm):
         t_target = 0.0
 
         generated = []
+        t0_total = time.perf_counter()
 
         while len(generated) < max_new_tokens:
             # ── Step 1: draft K tokens ──────────────────────────────────────
@@ -141,6 +155,8 @@ class StandardSpecAlgorithm(SpecDecAlgorithm):
             if self.tok.eos_token_id in generated[-K - 1:]:
                 break
 
+        elapsed = time.perf_counter() - t0_total
+
         return GenerationResult(
             token_ids         = generated,
             n_draft_tokens    = n_draft,
@@ -148,6 +164,7 @@ class StandardSpecAlgorithm(SpecDecAlgorithm):
             n_target_calls    = n_target_calls,
             time_draft_s      = t_draft,
             time_target_s     = t_target,
+            time_total_s      = elapsed,
         )
 
     def train(self, *args, **kwargs) -> None:
