@@ -272,7 +272,180 @@ This is the `Loss × Mode` interaction the viz dashboard's Key Results tab plots
 
 ---
 
-## 7. Pipeline Phases
+## 7. Tree-Structured Distillation (H5 — On-Policy Training)
+
+### 7.1 The Off-Policy Problem in Flat Losses
+
+All flat losses (forward KL, EBE, L1, …) share the same training data source:
+
+```python
+with torch.no_grad():
+    full_ids = target_model.generate(prompt_ids, ...)  # teacher tokens
+teacher_logits = target_model(full_ids).logits
+student_logits = draft_model(full_ids).logits          # scored on teacher tokens
+loss = forward_kl(student_logits, teacher_logits, ...)
+```
+
+The tokens `full_ids` are drawn from the **teacher's** distribution.  At inference time,
+the verifier scores the **student's** proposed tokens.  This off-policy mismatch means:
+
+1. The student learns to have the right distribution conditional on teacher-generated
+   prefixes, but at inference it conditions on its own prefix continuations.
+2. For EBE specifically: `α_i = min(1, q(t_i)/p(t_i))` uses the teacher's token `t_i`.
+   The verifier at inference evaluates `min(1, q(s_i)/p(s_i))` where `s_i` is the
+   student's own token.  These two ratios can be very different.
+
+### 7.2 Tree Training: Three-Phase Loop
+
+Tree training eliminates the off-policy mismatch by building the training tree entirely
+from the student's own samples:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Phase A — Draft tree sampling (no_grad)                                      │
+│                                                                                │
+│  q_paths = iid_draft(student, prompt_ids, K=4, L=8)                          │
+│    → Run student K times independently (temperature > 0)                     │
+│    → Each run produces L new tokens → q_paths: list of K lists of L ints     │
+│    → NO gradient here — we don't want autograd through Phase A               │
+│                                                                                │
+│  Why K independent runs?  → K i.i.d. paths give unbiased Monte Carlo          │
+│  estimate of the expectation each loss minimises.  Beam search introduces     │
+│  correlation; i.i.d. sampling does not.                                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Phase B — Teacher scoring (no_grad)                                          │
+│                                                                                │
+│  p_probs_dict = target_tree_pass(teacher, q_paths)                           │
+│    → For each unique prefix in the q_paths tree, run one teacher forward pass │
+│    → Return dict: { ",".join(path[:d]) → teacher_prob_tensor [V] }           │
+│    → Detached: teacher is always frozen                                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Phase C — Student scoring WITH grad + loss                                   │
+│                                                                                │
+│  q_probs_dict = draft_tree_forward_with_grad(student, q_paths)               │
+│    → Same prefix enumeration as Phase B, but WITH autograd enabled           │
+│    → Return dict: { prefix → student_prob_tensor [V] }  (has .grad_fn)       │
+│                                                                                │
+│  loss = compute_tree_loss(loss_name, q_probs_dict, p_probs_dict, q_paths)    │
+│  loss.backward()                                                              │
+│  optimizer.step()                                                             │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why Phase A must be no_grad**: if Phase A ran with gradient, Phase C's call to
+`draft_tree_forward_with_grad` would create a second autograd graph through the same model
+parameters, duplicating every computation in the graph.  Detaching Phase A's sampling
+gives a fixed set of paths for Phase B/C to score — no graph doubling.
+
+**Memory cost**: Phase B and Phase C each forward-pass the student/teacher once per unique
+prefix in the tree.  For K=4, L=8, the tree has ≤ 32 unique prefixes (fewer when paths
+share a prefix) plus the K × L leaf nodes.  Peak VRAM is approximately 2× a single
+forward pass.
+
+### 7.3 Loss Functions
+
+Each tree loss iterates over all `(prefix, token)` pairs and computes a per-node
+contribution.  All losses use the same node iteration:
+
+```python
+for path in q_paths:                        # K paths
+    for depth in range(1, L + 1):           # L nodes per path
+        prefix = ",".join(str(x) for x in path[:depth])
+        token  = path[depth]
+        p = p_probs_dict[prefix].detach()   # teacher [V]
+        q = q_probs_dict[prefix]            # student [V], WITH grad
+```
+
+**`kl_tree`**: forward KL at each node.
+```
+loss_node = −Σ_v p(v) · log q(v)       (= KL(p ∥ q) + H(p), const wrt q)
+```
+Mode-covering.  Numerically stable for all K and L.  Universal baseline for tree training.
+
+**`rev_kl_tree`**: reverse KL at each node.
+```
+loss_node = Σ_v q(v) · log(q(v)/p(v))  (= KL(q ∥ p))
+```
+Mode-seeking: draft concentrates mass on teacher's highest-probability tokens.  Clamps
+`p.clamp(min=1e-9)` before log to handle Qwen3's −∞ forbidden-token logits.
+
+**`jsd_tree`**: symmetric JSD at each node.
+```
+m = α·q + (1−α)·p,  α = 0.5
+loss_node = ½·KL(q ∥ m) + ½·KL(p ∥ m)
+```
+Bounded [0, log 2].  The mixture m always has non-negligible mass at any token that
+either model assigns non-negligible mass to, so log(q/m) is always finite.
+
+**`bv_tree`**: BV acceptance integral loss.  Maximises `E_q[min(1, p/q)]` at each node
+by minimising its negative.  Directly targets the BV verifier's acceptance probability.
+
+**`gbv_tree`**: GBV acceptance integral with q-skew.  The q-skew term weights paths by
+their cumulative acceptance probability, so the gradient concentrates on paths the GBV
+verifier is most likely to accept.  **Numerically stable for `tree_K ≤ 4` only.**
+
+**`traversal_tree`**: traversal leaf-weight product loss.  Traversal verifier scores each
+path by the product of acceptance weights along it.  This loss targets that product
+directly, making it the best-matched loss for the traversal verifier.
+
+**`ebe_tree`**: on-policy EBE ablation.  Same formula as flat EBE:
+```
+loss = −(1 + Σ_{i=1}^{L} Π_{j≤i} α_j)  +  λ·KL_tree
+where α_j = min(1, p[t_j] / q[t_j].clamp(min=1e-9))
+```
+but `t_j` is the **student's own token** at position j (from Phase A sampling).  This
+isolates the off-policy mismatch: same formula as flat EBE, completely on-policy data.
+
+### 7.4 Verifier Compatibility
+
+OT-based verifiers (`specinfer`, `naive`) do not have a differentiable acceptance
+integral.  All tree losses are evaluated exclusively on non-OT verifiers:
+
+```
+bv         — BV batch verification
+gbv        — GBV with q-skew
+traversal  — traversal leaf-weight product
+```
+
+This is enforced in `experiment.py` via `_TREE_NON_OT = "bv,gbv,traversal"` and the
+`_TREE_PAIRED` dict which maps each tree loss to its primary verifier(s).
+
+### 7.5 Online Tree Distillation
+
+The flat online training loop collects a buffer of `(token_ids, teacher_logits,
+wrong_mask)` from prior speculative decoding calls, then trains on the buffer.  The
+buffer tokens come from the teacher — off-policy, same problem as flat offline.
+
+**Online tree mode** (CLI: `--tree_loss kl_tree --tree_K 2 --tree_L 8`) discards the
+buffer entirely.  At each update interval, the three-phase tree loop runs on the **current
+prompt** just served:
+
+```python
+if args.tree_loss:
+    # No buffer needed — build a fresh tree from the current prompt
+    loss_val = _tree_online_update(
+        draft_model, target_model, input_ids,
+        optimizer, loss_name=args.tree_loss,
+        tree_K=args.tree_K, tree_L=args.tree_L, temperature=args.temperature,
+    )
+```
+
+This also fixes the **zero-gradient EBE bug** (documented in `online_serve.py` lines
+197–228): flat EBE produces zero gradient when the draft over-estimates a position (α=1),
+which is most positions for a well-trained model.  Tree EBE samples fresh paths on every
+update, so it always hits some positions where the student's token is suboptimal.
+
+Two online tree variants are in the pipeline:
+- `online_kl_tree`: tree forward-KL update — numerically stable, universal
+- `online_ebe_tree`: tree EBE update — directly optimises acceptance product
+
+---
+
+## 8. Pipeline Phases
 
 `experiment.py --config laptop --yes` runs 18 steps across 5 phases:
 
@@ -290,6 +463,6 @@ Eval steps are skipped if the result is already in `results.db` (`--skip_existin
 
 ---
 
-## 8. File Layout
+## 9. File Layout
 
 → For the current file map, see **PROJECT_CONTEXT.md § Codebase Architecture**.

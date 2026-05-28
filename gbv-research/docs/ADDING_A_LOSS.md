@@ -161,6 +161,241 @@ clean restarts reset them correctly.
 
 ---
 
+---
+
+## Adding a Tree-Structured Loss
+
+Tree losses differ fundamentally from flat losses: they train on a **K-path draft tree sampled
+from the student's own distribution** rather than on the teacher's linear rollout.  This
+eliminates the off-policy mismatch that causes flat EBE numbers to be poor (see DESIGN.md §9
+for the full theory).
+
+### Why a separate code path?
+
+Flat losses (`forward_kl`, `ebe`, …) operate on `[T, V]` logit tensors produced by a
+single teacher forward pass.  Tree losses operate on **two dicts keyed by node prefix**:
+
+```
+q_probs_dict[prefix]  — student probabilities at that node  (with grad)
+p_probs_dict[prefix]  — teacher probabilities at that node  (detached)
+q_paths               — list of K full token paths (list of lists)
+```
+
+The pipeline uses three serial, no-overlap phases to avoid materialising a tree with
+gradients through the draft model twice:
+
+```
+Phase A  iid_draft(draft_model, prompt, K, L, no_grad)
+          → q_paths: K independent L-token paths (no gradient needed)
+
+Phase B  target_tree_pass(target_model, q_paths, no_grad)
+          → p_probs_dict: teacher logit dicts for every tree node
+
+Phase C  draft_tree_forward_with_grad(draft_model, q_paths)
+          → q_probs_dict: student logit dicts WITH gradient
+
+          compute_tree_loss(loss_name, q_probs_dict, p_probs_dict, q_paths, L, K)
+          → scalar loss → .backward() → optimizer.step()
+```
+
+Phase A is no-grad so Phase C's autograd graph stays clean.  Phase B is always no-grad
+(target is frozen).
+
+---
+
+### Step 1. Write the tree loss function
+
+Add your function to `algorithms/distillspec_gbv/losses/tree_losses.py`.
+
+**Required signature**:
+
+```python
+def my_tree_loss(
+    q_probs_dict: dict,   # {prefix: student prob tensor [V]}  WITH grad
+    p_probs_dict: dict,   # {prefix: teacher prob tensor [V]}  detached
+    q_paths:      list,   # [[tok, tok, ...], ...]  K paths of length L
+    L: int,               # tree depth
+    K: int,               # number of paths
+    **kwargs,             # kl_weight, skew_alpha, …
+) -> torch.Tensor:        # scalar loss WITH gradient
+```
+
+**Node iteration pattern** (same in all tree losses):
+
+```python
+for path in q_paths:
+    for depth in range(1, L + 1):
+        prefix = ",".join(str(x) for x in path[:depth])
+        token  = path[depth]               # the token sampled at this node
+        p = p_probs_dict[prefix].detach()  # teacher probs [V]
+        q = q_probs_dict[prefix]           # student probs [V], WITH grad
+        # ... compute your per-node loss contribution ...
+```
+
+**Numeric guards** (mandatory for Qwen3):
+
+```python
+# Qwen3 sets -inf logits on forbidden tokens; clamp before ratio computations
+p = p_probs_dict[prefix].detach().clamp(min=0.0)
+q = q_probs_dict[prefix].clamp(min=1e-9)
+# For log quantities clamp log(q) from below:
+log_q = torch.log(q)  # already guarded by clamp above
+log_p = torch.log(p.clamp(min=1e-9))
+```
+
+**Reference: existing tree losses and their theory**
+
+| Name | Formula | Behaviour |
+|---|---|---|
+| `kl_tree` | KL(p ∥ q) at each node | Mode-covering; universal baseline |
+| `rev_kl_tree` | KL(q ∥ p) at each node | Mode-seeking; draft concentrates on target peaks |
+| `jsd_tree` | ½KL(q∥m)+½KL(p∥m), m=½(q+p) | Symmetric; bounded [0, log 2]; numerically softer |
+| `bv_tree` | −E[block accept] under BV verifier | Directly optimises BV acceptance integral |
+| `gbv_tree` | −E[block accept] under GBV w/ q-skew | Optimises GBV acceptance; numerically stable ≤ K=4 |
+| `traversal_tree` | −E[accept] under traversal leaf-weight product | Best match to traversal verifier |
+| `ebe_tree` | −(1 + Σ cumprod(α)) on student's own paths | On-policy EBE; ablates off-policy mismatch in flat EBE |
+
+---
+
+### Step 2. Register in `TREE_LOSS_NAMES` and dispatch
+
+In `algorithms/distillspec_gbv/losses/tree_losses.py`:
+
+```python
+# 1. Add to the frozenset
+TREE_LOSS_NAMES = frozenset({
+    "kl_tree", "rev_kl_tree", "jsd_tree",
+    "bv_tree", "gbv_tree", "traversal_tree",
+    "ebe_tree",
+    "my_tree",   # ← add here
+})
+
+# 2. Add a branch in compute_tree_loss()
+def compute_tree_loss(loss_name, q_probs_dict, p_probs_dict, q_paths, L, K, **kw):
+    ...
+    elif loss_name == "my_tree":
+        return my_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K, **kw)
+    ...
+```
+
+Also add `"my_tree"` to the `choices=` list in `algorithms/distillspec_gbv/trainer.py`
+(look for the `# Tree-structured loss names` comment block).
+
+---
+
+### Step 3. Add to pipeline
+
+In `orchestration/experiment.py`:
+
+**3a. Add prefix tuple** to `_LOSS_STEP_PREFIXES`:
+```python
+"my_tree": ("train_my_tree_", "merge_my_tree_", "eval_my_tree_"),
+```
+
+**3b. Register smoke verifier pairing** in `_TREE_PAIRED`:
+```python
+# universal: evaluated against all 3 non-OT verifiers even in smoke
+"my_tree":  _TREE_NON_OT,
+
+# or targeted: only one verifier in smoke, all 3 in full
+"my_tree":  "bv",  # smoke uses BV; full evals add GBV + traversal
+```
+The `_TREE_NON_OT` constant is `"bv,gbv,traversal"`.  OT-based verifiers (`specinfer`,
+`naive`) are incompatible with tree losses and are never included.
+
+**3c. Add train / merge / eval steps**:
+
+```python
+# Phase 2 — Training:
+{
+    "id":   "train_my_tree_gsm8k",
+    "group": "Phase 2 — Training",
+    "desc": f"Train my_tree, {_steps} steps, gsm8k_train",
+    "cmd":  [sys.executable, _TRAIN_SCRIPT,
+             "--loss", "my_tree", "--tree_K", str(_tree_K), "--tree_L", str(_tree_L),
+             "--steps", str(_steps), "--lr", "3e-5",
+             "--draft", draft, "--target", target,
+             "--dataset", _data("gsm8k_train.jsonl"),
+             "--output", _ckpt("my-tree-gsm8k")],
+    "done_check": os.path.join(_ckpt("my-tree-gsm8k"), "adapter_model.safetensors"),
+    "retryable": True,
+},
+{
+    "id":   "merge_my_tree_gsm8k",
+    "group": "Phase 2 — Training",
+    "desc": "Merge my-tree-gsm8k LoRA",
+    "cmd":  [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+             "--adapter", _ckpt("my-tree-gsm8k"), "--draft", draft],
+    "done_check": os.path.join(_merged("my-tree-gsm8k"), "config.json"),
+},
+
+# Phase 3 — GSM8K Eval (non-OT verifiers only):
+{
+    "id":   "eval_my_tree_gsm8k",
+    "group": "Phase 3 — GSM8K Eval",
+    "desc": "Eval my-tree-gsm8k on gsm8k",
+    "cmd":  _ec(_merged("my-tree-gsm8k"), "my_tree",
+                modes=_TREE_PAIRED.get("my_tree", _TREE_NON_OT), task_score=True),
+    "done_check": None,
+    "smoke_skip": smoke and "my_tree" not in _TREE_PAIRED,
+},
+
+# Phase 4 — Multi-Dataset:
+{
+    "id":   "eval_my_tree_all",
+    "group": "Phase 4 — Multi-Dataset",
+    "desc": "Eval my_tree on humaneval,math500,mtbench,alpaca",
+    "cmd":  _ec(_merged("my-tree-gsm8k"), "my_tree",
+                datasets="humaneval,math500,mtbench,alpaca",
+                modes=_TREE_NON_OT, task_score=True),
+    "done_check": None,
+    "smoke_skip": smoke,
+},
+```
+
+Note: **do not** add `my_tree` to the flat-loss online training blocks.  Online tree
+training uses a separate code path (`--tree_loss` in `online_serve.py`).
+
+---
+
+### Numerical checklist for tree losses
+
+- [ ] No NaN/Inf in forward pass for K=2, L=8, V=32 (tiny vocab smoke test)
+- [ ] `loss.backward()` succeeds; all student-path gradients are finite
+- [ ] Loss is a scalar (not shape `[1]` or `[K]`)
+- [ ] `p_probs_dict` entries are `.detach()`-ed before any ratio or log operation
+- [ ] Qwen3 −∞ logit guard applied (clamp before log/ratio)
+- [ ] Tested at K=1 (degenerate single-path edge case)
+
+Quick smoke test (CPU, no GPU needed):
+
+```bash
+python -c "
+import torch, sys
+sys.path.insert(0, '.')
+from algorithms.distillspec_gbv.losses.tree_losses import compute_tree_loss, TREE_LOSS_NAMES
+V, L, K = 64, 4, 2
+# Build synthetic K-path tree
+q_paths = [[torch.randint(0, V, (1,)).item() for _ in range(L)] for _ in range(K)]
+q_probs = {}; p_probs = {}
+for path in q_paths:
+    for d in range(1, L + 1):
+        pref = ','.join(str(x) for x in path[:d])
+        if pref not in q_probs:
+            q_raw = torch.randn(V, requires_grad=True)
+            p_raw = torch.randn(V).detach()
+            q_probs[pref] = torch.softmax(q_raw, dim=-1)
+            p_probs[pref] = torch.softmax(p_raw, dim=-1)
+loss = compute_tree_loss('my_tree', q_probs, p_probs, q_paths, L, K)
+assert loss.shape == torch.Size([]), f'Expected scalar, got {loss.shape}'
+assert torch.isfinite(loss), f'NaN/Inf loss: {loss}'
+loss.backward()
+print(f'PASS  loss={loss.item():.4f}')
+"
+```
+
+---
+
 ## Numerical checklist before merging
 
 - [ ] No NaN/Inf in forward pass for random inputs (seeds 0–4)

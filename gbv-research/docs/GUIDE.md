@@ -160,6 +160,58 @@ The paper tests four hypotheses. Every experiment should be designed to confirm 
 
 ---
 
+### H5 — Tree losses beat their flat counterparts
+
+**Prediction**: When trained on the student's own K-path draft tree (on-policy), tree-structured
+losses outperform their flat equivalents under non-OT verifiers (bv, gbv, traversal).
+Specifically:
+
+- `kl_tree` BE > `forward_kl` BE under gbv/traversal
+- `ebe_tree` BE > flat `ebe` BE under bv/gbv/traversal
+- Among tree losses, the best loss matches its paired verifier: `bv_tree`→bv,
+  `gbv_tree`→gbv, `traversal_tree`→traversal
+
+**What "beats" means**: consistent improvement of ≥ 0.1 BE averaged over K=3 and K=5,
+both temperatures.
+
+**Rationale**: Flat losses train on teacher-generated tokens — the teacher's own draft, not
+the student's.  At evaluation time the verifier scores the student's tokens.  This
+off-policy mismatch means the gradient signal never touches the distribution the verifier
+actually sees.  Tree losses train on the student's own K-path tree, so the training
+distribution exactly matches the inference distribution.  In addition, verifier-specific
+tree losses (bv_tree, gbv_tree, traversal_tree) optimise the exact acceptance integral that
+each verifier computes, rather than a proxy divergence.
+
+**Key ablation** (H5a): `ebe_tree` > flat `ebe` isolates the off-policy mismatch effect
+alone (same formula, different training distribution).
+
+**What would refute H5**: tree losses performing ≤ flat losses across ≥ 4 of 6
+(K × temperature) cells, ruling out run-to-run variance.
+
+---
+
+### H6 — Online tree training beats flat online
+
+**Prediction**: `online_kl_tree` adaptation (trains on a fresh K-path draft tree at each
+update interval) achieves higher block efficiency than flat `online` adaptation under
+gbv and traversal verifiers, with the gap widening over adaptation steps.
+
+**Rationale**: Flat online training uses a replay buffer of
+`(accepted+residual tokens, teacher_logits, wrong_mask)` tuples.  The buffer is
+collected under the teacher's sampling, not the student's, so the on-policy correction
+that tree training provides also applies to the online setting.  Additionally, training
+on a structured tree allows the loss to see K simultaneous candidate paths per prompt
+rather than a single linear rollout, providing a richer gradient signal per update.
+
+**What to measure**: Steps 0–500 of `online_kl_tree` adaptation vs `online` adaptation,
+tracked as rolling block efficiency under gbv at K=3, T=0.8.
+
+**What would refute H6**: `online_kl_tree` showing no improvement over `online` at step
+500 under gbv, after controlling for total compute (each tree update costs K× more than a
+flat update).
+
+---
+
 ## 2. Verifier Hierarchy and What We Need to Prove
 
 The verifier is the algorithm that decides, given a draft tree of K paths each of length L, which prefix to accept.
@@ -386,10 +438,21 @@ Pre-trained LoRA adapters (from an earlier LR sweep) are merged into a copy of t
 
 ## 6. Training Losses
 
-### KL Distillation (baseline training method)
+Losses fall into two families: **flat** (train on teacher's linear rollout) and
+**tree-structured** (train on the student's own K-path draft tree).
+
+### Flat Losses
+
+Flat losses operate on a sequence of `[T, V]` logit tensors produced by a single teacher
+forward pass.  Because the training tokens come from the **teacher's** distribution,
+flat losses are off-policy with respect to the student's inference-time distribution.
+
+---
+
+#### KL Distillation (baseline training method)
 
 ```
-L_KL = KL( q_target || p_draft ) = Σ_v  q(v) · log( q(v) / p_draft(v) )
+L_KL = KL( q_target ∥ p_draft ) = Σ_v  q(v) · log( q(v) / p_draft(v) )
 ```
 
 Standard knowledge distillation. Minimizes the KL divergence from target to draft over the full vocabulary at every token position.
@@ -398,10 +461,10 @@ Standard knowledge distillation. Minimizes the KL divergence from target to draf
 
 ---
 
-### EBE Loss — Block-Level Expected Block Efficiency (novel contribution)
+#### EBE Loss — Block-Level Expected Block Efficiency (novel contribution)
 
 ```
-L_EBE = -(1 + Σ_{k=1}^{T} Π_{i=1}^{k} α_i)  +  λ · KL(q || p_draft)
+L_EBE = -(1 + Σ_{k=1}^{T} Π_{i=1}^{k} α_i)  +  λ · KL(q ∥ p_draft)
 
 where  α_i = min(1, q(token_i) / p_draft(token_i))
 ```
@@ -413,6 +476,166 @@ where  α_i = min(1, q(token_i) / p_draft(token_i))
 **KL regularizer** (λ=0.1): the EBE gradient vanishes when `p_draft ≤ q` (the token is already under-estimated, α=1). Without KL, under-estimated token probabilities drift unconstrained, causing perplexity collapse. The KL term provides gradient for those positions.
 
 **Key difference from KL**: KL only pushes draft probabilities toward the target; it cannot push them away when the draft is over-confident. EBE explicitly corrects over-estimates, which is the root cause of low acceptance rates.
+
+**Off-policy caveat**: flat EBE computes `α_i = min(1, q(t_i)/p(t_i))` where `t_i` is the
+**teacher's** sampled token.  At inference, the verifier evaluates the **student's** draft
+token.  This mismatch (H5) is why flat EBE numbers are sometimes disappointing — use
+`ebe_tree` to eliminate it.
+
+---
+
+#### Other flat losses
+
+| Loss | CLI name | Formula | Notes |
+|---|---|---|---|
+| Reverse KL | `reverse_kl` | KL(p_draft ∥ q_target) | Mode-seeking; collapses to target peaks |
+| JSD | `jsd` | ½KL(p∥m)+½KL(q∥m) | Symmetric; bounded [0, log 2] |
+| L1 | `l1` | Σ |p(v) − q(v)| | Dense, distribution-spread; simple baseline |
+| EBE single | `ebe_single` | same as ebe, block_len=1 | Token-level EBE; no cumprod |
+
+---
+
+### Tree-Structured Losses
+
+Tree losses train on a **K-path draft tree** sampled from the student's own distribution.
+This makes the training data on-policy: the student's distribution at training time
+exactly matches the student's distribution at inference time.
+
+**Three-phase training loop** (see DESIGN.md §9 for full details):
+
+```
+Phase A  iid_draft(student, prompt, K=4, L=8, no_grad)
+          → K independent paths of length L from the student
+
+Phase B  target_tree_pass(teacher, q_paths, no_grad)
+          → p_probs_dict: teacher logits for every tree node
+
+Phase C  draft_tree_forward_with_grad(student, q_paths)
+          → q_probs_dict: student logits WITH autograd
+          → compute_tree_loss(...) → .backward()
+```
+
+Phase A is no-grad so Phase C's autograd graph is clean.
+
+**Verifier compatibility**: tree losses are evaluated only on non-OT verifiers (`bv`,
+`gbv`, `traversal`).  OT-based verifiers (`specinfer`, `naive`) do not have a differentiable
+acceptance integral and cannot guide a tree-specific loss.
+
+---
+
+#### `kl_tree` — On-policy Forward KL (universal baseline)
+
+```
+L = Σ_{nodes} KL(p_teacher ∥ q_student)  =  −Σ p · log(q)
+```
+
+The same forward-KL formula as flat KL, but applied at every node of the student's own
+draft tree.  This is the on-policy counterpart of the flat KL baseline: it provides a
+strong numerically-stable tree training signal without any verifier assumptions.
+
+Evaluated against: **bv, gbv, traversal** (all three non-OT verifiers).
+
+---
+
+#### `rev_kl_tree` — On-policy Reverse KL
+
+```
+L = Σ_{nodes} KL(q_student ∥ p_teacher)  =  Σ q · log(q/p)
+```
+
+Mode-seeking: the student concentrates mass on the teacher's high-probability tokens.
+Qwen3 sets −∞ logits on forbidden tokens; all log computations clamp `p` to [1e-9, ∞)
+before taking logs.
+
+Evaluated against: **bv, gbv, traversal**.
+
+---
+
+#### `jsd_tree` — On-policy Symmetric JSD
+
+```
+m = ½(q + p)
+L = Σ_{nodes}  ½·KL(q ∥ m)  +  ½·KL(p ∥ m)
+```
+
+Bounded [0, log 2] regardless of how peaked q or p are.  Numerically softer than either
+KL direction: the mixture m always has non-negligible mass at any token that either model
+assigns non-negligible mass to.
+
+Evaluated against: **bv, gbv, traversal**.
+
+---
+
+#### `bv_tree` — BV Acceptance Integral Loss
+
+Directly optimises the batch-verification (BV) acceptance integral at each tree node.
+BV acceptance at a node = `min(1, p/q)` integrated over the token distribution.
+Maximising this integral (minimising its negative) trains the student to increase the
+probability that BV accepts the tokens it proposes.
+
+Evaluated primarily against: **bv**.  Also evaluated against gbv/traversal in full runs.
+
+---
+
+#### `gbv_tree` — GBV Acceptance Integral Loss (with q-skew)
+
+GBV extends BV with a query-skew reweighting that gives more weight to paths with higher
+cumulative acceptance probability.  `gbv_tree` targets the resulting acceptance integral.
+
+**Numerical stability note**: `gbv_tree` is stable only for `tree_K ≤ 4`.  At K=5+, the
+q-skew term in `compute_skew` can underflow.  Always set `tree_K: 4` in YAML configs when
+using `gbv_tree`.
+
+Evaluated primarily against: **gbv**.
+
+---
+
+#### `traversal_tree` — Traversal Leaf-Weight Product Loss
+
+Traversal uses a leaf-weight product (bottom-up acceptance) that assigns each path a
+weight equal to the product of acceptance probabilities along it.  `traversal_tree` targets
+this exact weight product, making it the best-matched loss for the traversal verifier.
+
+Evaluated primarily against: **traversal**.
+
+---
+
+#### `ebe_tree` — On-policy EBE Ablation
+
+Same EBE formula as flat EBE (`1 + Σ cumprod(α)`), but `α_i = min(1, p[t_i]/q[t_i])`
+where `t_i` is the **student's own draft token** at position i (not the teacher's token).
+
+This loss is a direct ablation designed to answer one question:
+
+> How much of flat EBE's underperformance is due to **off-policy training data**
+> (teacher tokens) vs the **EBE formula itself**?
+
+If `ebe_tree` >> flat `ebe`, the off-policy mismatch is the root cause.
+If `ebe_tree` ≈ flat `ebe`, the EBE formula itself is the bottleneck.
+
+Evaluated against: **bv** (smoke), **bv, gbv, traversal** (full runs).
+
+---
+
+#### Summary table
+
+| Loss | Family | CLI name | Verifiers |
+|---|---|---|---|
+| Forward KL | flat | `forward_kl` | all |
+| Reverse KL | flat | `reverse_kl` | all |
+| JSD | flat | `jsd` | all |
+| L1 | flat | `l1` | all |
+| EBE | flat | `ebe` | all |
+| EBE single | flat | `ebe_single` | all |
+| On-policy KL | tree | `kl_tree` | bv, gbv, traversal |
+| On-policy Reverse KL | tree | `rev_kl_tree` | bv, gbv, traversal |
+| On-policy JSD | tree | `jsd_tree` | bv, gbv, traversal |
+| BV integral | tree | `bv_tree` | bv (+ gbv/traversal in full) |
+| GBV integral | tree | `gbv_tree` | gbv (K ≤ 4 only) |
+| Traversal leaf-weight | tree | `traversal_tree` | traversal |
+| On-policy EBE | tree | `ebe_tree` | bv (+ gbv/traversal in full) |
+| Online KL (tree mode) | online+tree | `online_kl_tree` | bv, gbv, traversal, + OT modes |
+| Online EBE (tree mode) | online+tree | `online_ebe_tree` | bv, gbv, traversal, + OT modes |
 
 ---
 
@@ -1122,12 +1345,63 @@ python algorithms/online_serve.py --kl_method reverse_kl ...  # ablation
 python algorithms/online_serve.py --kl_method jsd ...          # symmetric blend
 ```
 
+### Online Tree Distillation (new)
+
+Standard flat online training uses a **replay buffer** of `(token_ids, teacher_logits,
+wrong_mask)` tuples collected from prior speculative decoding calls.  The training data
+comes from the teacher's sampling — the same off-policy problem as flat offline losses.
+
+**Online tree mode** replaces the buffer update with a fresh K-path tree update:
+
+```
+For each incoming prompt (serve loop — unchanged):
+  1. Run speculative decoding as normal (linear, alpha measurement)
+  2. No token goes into the buffer
+
+Every update_every prompts (update loop):
+  3. Re-run the CURRENT prompt through the three-phase tree loop:
+     A. iid_draft(student, prompt, K, L, no_grad)  → q_paths
+     B. target_tree_pass(teacher, q_paths, no_grad) → p_probs_dict
+     C. draft_tree_forward_with_grad(student, q_paths) → q_probs_dict
+     D. compute_tree_loss(loss_name, ...) → .backward() → step
+```
+
+Serving and tree-update phases are strictly interleaved, not concurrent.
+No replay buffer is needed; the tree is always built from the current prompt.
+
+**Online tree fixes the zero-gradient bug documented in online_serve.py lines 197–228**:
+flat EBE online produces zero gradient when the draft over-estimates a position (α=1),
+which is the majority of positions for a well-trained model.  Tree EBE and tree KL
+always have non-zero gradient because the tree samples fresh on-policy paths every update.
+
+**CLI flags** (added to `algorithms/online_serve.py`):
+```bash
+# Use tree KL update instead of flat buffer update
+python algorithms/online_serve.py \
+    --prompts core/datasets/raw/gsm8k_train.jsonl \
+    --tree_loss kl_tree --tree_K 2 --tree_L 8 \
+    --steps 500 --output db/checkpoints/online-kl-tree-gsm8k
+
+# Use tree EBE update
+python algorithms/online_serve.py \
+    --prompts core/datasets/raw/gsm8k_train.jsonl \
+    --tree_loss ebe_tree --tree_K 2 --tree_L 8 \
+    --steps 500 --output db/checkpoints/online-ebe-tree-gsm8k
+```
+
+When `--tree_loss` is set, `--kl_method` is ignored.  All 7 tree loss names are accepted.
+Keep `tree_K ≤ 4` if using `gbv_tree` (numerical stability constraint).
+
 ### In-pipeline integration
 
 ```
-Phase 2  — train_kl_gsm8k, train_ebe_gsm8k    (offline, 1000 steps each)
-Phase 2b — train_rev_kl_gsm8k, train_jsd_gsm8k (KL variant comparison)
-Phase 2c — online_adapt_gsm8k                  (online OSD, 500 prompts, forward_kl)
-Phase 3  — full eval on gsm8k (all 5 variants: baseline, kl, ebe, rev_kl, jsd, online)
+Phase 2  — train_kl_gsm8k, train_ebe_gsm8k              (offline flat, 1000 steps each)
+Phase 2b — train_rev_kl_gsm8k, train_jsd_gsm8k          (flat KL variant comparison)
+Phase 2c — online_adapt_gsm8k, online_ebe_adapt_gsm8k    (flat online, 500 prompts)
+Phase 2d — train_kl_tree, train_bv_tree, train_gbv_tree, (offline tree, 1000 steps each)
+           train_traversal_tree, train_ebe_tree,
+           train_rev_kl_tree, train_jsd_tree
+Phase 2e — online_kl_tree_adapt, online_ebe_tree_adapt   (online tree, 500 prompts)
+Phase 3  — full eval on gsm8k (ALL variants)
 Phase 4  — full eval on all datasets
 ```
