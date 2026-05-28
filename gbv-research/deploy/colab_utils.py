@@ -81,6 +81,36 @@ def install_deps(gbv_dir: str = GBV_DIR) -> None:
     print("[3/5] Dependencies installed")
 
 
+def fetch_training_data(gbv_dir: str = GBV_DIR) -> None:
+    """Download gsm8k_train.jsonl to core/datasets/raw/ if not already present.
+
+    This is a one-time setup step — safe to re-run (skips if file exists).
+    Call this from the Colab setup cell after install_deps().
+
+    The file is gitignored (7,473 prompts, ~3 MB) so it must be fetched on
+    every fresh Colab session.  The downloader falls back to 30 hardcoded
+    GSM8K prompts if HuggingFace is unreachable.
+    """
+    raw_dir   = os.path.join(gbv_dir, "core", "datasets", "raw")
+    train_path = os.path.join(raw_dir, "gsm8k_train.jsonl")
+    if os.path.exists(train_path):
+        print(f"[data] gsm8k_train.jsonl already present — skipping download.")
+        return
+    print("[data] Downloading gsm8k_train.jsonl from HuggingFace…")
+    downloader = os.path.join(gbv_dir, "core", "datasets", "downloader.py")
+    subprocess.run(
+        [sys.executable, downloader, "--datasets", "gsm8k_train"],
+        cwd=gbv_dir,
+        check=False,   # downloader has built-in fallback; never hard-fail setup
+    )
+    if os.path.exists(train_path):
+        import pathlib
+        size_kb = pathlib.Path(train_path).stat().st_size // 1024
+        print(f"[data] ✓ gsm8k_train.jsonl ready ({size_kb} KB)")
+    else:
+        print("[data] ⚠ Download may have failed — training will use fallback prompts.")
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
