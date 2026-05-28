@@ -1242,6 +1242,89 @@ STATUS_COLOR = {
 }
 RESET = "\033[0m"
 
+# ---------------------------------------------------------------------------
+# Log Anomaly Scanner
+# ---------------------------------------------------------------------------
+# Runs automatically after every training step and again at pipeline end.
+# Emits a clearly visible warning block when it finds anything suspicious.
+# The full pipeline log is at _PIPELINE_LOG; per-step error snapshots are at
+# db/logs/step_{sid}_error.log — both are scanned here.
+
+_ANOMALY_PATTERNS = [
+    # (regex_pattern, severity, label)
+    (r"train_loss:\s*(nan|inf)",          "CRITICAL", "NaN/Inf loss"),
+    (r"traceback \(most recent",          "CRITICAL", "Python traceback"),
+    (r"cuda\s*(error|out of memory)",     "CRITICAL", "CUDA error"),
+    (r"(sigkill|killed|exit code -9|exit code 247)", "CRITICAL", "OOM / killed"),
+    (r"exit code 14[23]",                 "CRITICAL", "Killed (exit 143)"),
+    (r"\[early stop\]",                   "WARNING",  "Early stopping triggered"),
+    (r"ppl.*exceeded|ppl_threshold",      "WARNING",  "PPL threshold exceeded"),
+    (r"(out of memory|oom)",              "WARNING",  "Out-of-memory hint"),
+    (r"nan_count.*[1-9]",                 "WARNING",  "NaN count > 0"),
+    (r"\[health\].*warn",                 "WARNING",  "Health check warning"),
+    (r"loss.*spike|spike.*loss",          "WARNING",  "Loss spike"),
+    (r"val loss.*not improved.*consecut", "INFO",     "Val not improving"),
+    (r"no improvement.*streak",           "INFO",     "Improvement streak stalled"),
+]
+
+import re as _re_mod
+
+
+def _scan_log_anomalies(log_path: str, tail_lines: int = 300) -> list[tuple[str, str, str]]:
+    """
+    Scan the tail of a log file for anomaly patterns.
+    Returns a list of (severity, label, line) tuples, deduped.
+    severity is one of: CRITICAL | WARNING | INFO
+    """
+    if not log_path or not os.path.exists(log_path):
+        return []
+    with open(log_path, encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+    tail = lines[-tail_lines:]
+    seen_labels: set[str] = set()
+    results: list[tuple[str, str, str]] = []
+    for raw in tail:
+        lo = raw.lower().strip()
+        for pattern, severity, label in _ANOMALY_PATTERNS:
+            if label in seen_labels:
+                continue
+            if _re_mod.search(pattern, lo):
+                results.append((severity, label, raw.rstrip()))
+                seen_labels.add(label)
+    # Sort: CRITICAL first, then WARNING, then INFO
+    order = {"CRITICAL": 0, "WARNING": 1, "INFO": 2}
+    results.sort(key=lambda x: order.get(x[0], 3))
+    return results
+
+
+def _print_anomaly_report(anomalies: list[tuple[str, str, str]],
+                           step_id: str = "", header: str = "") -> None:
+    """Pretty-print anomaly results. Noop if anomalies is empty."""
+    if not anomalies:
+        return
+    criticals = [a for a in anomalies if a[0] == "CRITICAL"]
+    warnings  = [a for a in anomalies if a[0] == "WARNING"]
+    infos     = [a for a in anomalies if a[0] == "INFO"]
+
+    sep = "!" * 65 if criticals else "-" * 65
+    title = header or (f"Post-step health check: {step_id}" if step_id else "Pipeline health check")
+    print(f"\n  {sep}")
+    print(f"  ANOMALY REPORT — {title}")
+    print(f"  {sep}")
+    _COLOR = {"CRITICAL": "\033[91m", "WARNING": "\033[93m", "INFO": "\033[96m"}
+    for sev, label, line in anomalies:
+        color = _COLOR.get(sev, "")
+        print(f"  {color}[{sev:8s}]{RESET} {label}")
+        # Show the raw log line, truncated to 120 chars
+        short = line[:120] + ("…" if len(line) > 120 else "")
+        print(f"             {short}")
+    print(f"  {sep}")
+    if criticals:
+        print(f"  \033[91m{len(criticals)} CRITICAL anomaly(s) — investigate before continuing.\033[0m")
+    elif warnings:
+        print(f"  \033[93m{len(warnings)} WARNING(s) — review before promoting to next tier.\033[0m")
+    print()
+
 
 def print_plan(steps, state, highlight_from=None):
     print()
@@ -1532,6 +1615,13 @@ def run_step(step, state, dry_run=False):
 
         if rc == 0:
             mark_step(state, sid, "done", f"elapsed={elapsed:.0f}s")
+            # Post-step anomaly scan — only for training steps (they produce the big logs).
+            # Eval steps are fast and their errors are obvious; training steps can
+            # silently degrade (NaN loss, early stop, OOM-recovered) without a clear signal.
+            if step.get("retryable", False):  # training steps set retryable=True
+                _anomalies = _scan_log_anomalies(_PIPELINE_LOG, tail_lines=400)
+                if _anomalies:
+                    _print_anomaly_report(_anomalies, step_id=sid)
             return True
         else:
             mark_step(state, sid, "failed", f"rc={rc}")
@@ -2010,9 +2100,32 @@ def main():
             print(f"   Restart: python experiment.py --config {args.config} --yes")
             sys.exit(1)
 
+    # ── End-of-pipeline anomaly sweep ──────────────────────────────────────────
+    # Scan the full log (not just tail) so we catch anything from any step.
+    # This is the last thing the user sees — make it actionable.
+    _final_anomalies = _scan_log_anomalies(_PIPELINE_LOG, tail_lines=2000)
+    _print_anomaly_report(
+        _final_anomalies,
+        header=f"Full pipeline — {n_run} step(s) complete",
+    )
+    # Also write a persistent anomaly report next to the pipeline log.
+    if _final_anomalies:
+        _anom_path = os.path.join(_DB_LOGS, "anomaly_report.txt")
+        try:
+            with open(_anom_path, "w", encoding="utf-8") as _af:
+                _af.write(f"Anomaly report — {datetime.now().isoformat()}\n")
+                _af.write(f"Pipeline log   : {_PIPELINE_LOG}\n\n")
+                for sev, label, line in _final_anomalies:
+                    _af.write(f"[{sev:8s}] {label}\n  {line}\n\n")
+            print(f"  Anomaly report saved: {_anom_path}")
+        except OSError:
+            pass
+
     print(f"\n{'='*65}")
     print(f"  {TICK} Pipeline complete! {n_run} step(s) executed.")
-    print(f"  View results: python viz_server.py")
+    print(f"  View results: python dashboard/training_dashboard.py")
+    if _final_anomalies:
+        print(f"  \033[93mReview anomaly report before promoting to next tier.\033[0m")
     print(f"{'='*65}\n")
 
 

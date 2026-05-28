@@ -193,6 +193,38 @@ def _kl_at_positions(
 
 # ---------------------------------------------------------------------------
 # EBE loss for online speculative decoding
+#
+# !! BUG — EBE GRADIENT IS EFFECTIVELY ZERO (2026-05-28, diagnosed by Rahul)
+# !! DO NOT USE this function until the buffer is redesigned.
+# !! See DECISIONS.md §2 for the full root-cause analysis and fix plan.
+#
+# Root cause:
+#   speculative_step() stores the *accepted + residual* sequence in the buffer.
+#   At each rejected position, the stored token is the *teacher-resampled residual*
+#   token, NOT the draft's actual proposal.
+#
+#   For a residual token t_res:
+#     q_teacher(t_res) is HIGH  — teacher assigned it reasonable prob (it was sampled
+#                                  from the teacher's adjusted distribution (p_t - p_d)+)
+#     p_draft(t_res) is LOW     — draft didn't like it (that's why it was in the residual)
+#     → log_q - log_p >> 0  → clamped to 0  → α(t_res) = 1.0
+#
+#   For an accepted token t_acc:
+#     α(t_acc) = 1.0 by the definition of speculative decoding acceptance.
+#
+#   RESULT: α = 1.0 everywhere → EBE gradient = 0 everywhere.
+#   Only the KL regulariser runs, and it's operating on the wrong tokens.
+#   The incoherent KL update corrupts the draft → PPL rises → BE → 1.0.
+#   This explains the "far left" scatter in the dashboard.
+#
+# Fix (requires buffer redesign):
+#   The replay buffer must separately store "what the draft actually proposed
+#   at each position" (draft_proposed_ids: Tensor[T]), alongside the
+#   accepted+residual sequence. _ebe_online must then:
+#     - For accepted positions:    use stored token (same as now, α = 1, ∂/∂θ = 0)
+#     - For rejected positions:    use draft_proposed_ids[pos] (not the residual)
+#                                  so p_draft is HIGH and q_teacher can be LOW → α < 1 → real gradient
+#
 # ---------------------------------------------------------------------------
 
 def _ebe_online(
@@ -206,24 +238,9 @@ def _ebe_online(
 ) -> torch.Tensor:
     """Block-level Expected Block Efficiency loss for online speculative decoding.
 
-    Unlike _kl_at_positions, this function does NOT pre-select rejected positions:
-    EBE is computed over full sequences and the gradient is naturally zero at
-    accepted positions — ∂α/∂θ = 0 when α = min(1, q/p) = 1 (i.e. p ≤ q, draft
-    already under-estimates or matches the target).  No wrong_mask surgery needed.
-
-    The KL regulariser is applied only at rejected positions (wrong_mask=True),
-    consistent with OSD's principle of not updating the draft at positions it
-    already gets right.
-
-    Why this works where offline EBE doesn't
-    ----------------------------------------
-    Offline EBE trains on teacher-sampled tokens: q(t) is always high (the teacher
-    chose t), so min(1, q/p) ≈ 1 for almost every token → EBE gradient ≈ 0.
-
-    Here tokens come from an actual speculative decoding run.  At rejected positions
-    the draft proposed token t_draft with high p_draft but the target gave it low
-    q_target → α = q/p < 1 → real EBE gradient.  The block-level cumprod then
-    amplifies that gradient for positions deep in an accepted run (high-value fixes).
+    ** BROKEN ** — see the BUG comment above. The EBE gradient is zero everywhere
+    because token_ids contains residual-resampled tokens at rejected positions,
+    not the draft's actual proposals. Do not use until buffer is redesigned.
 
     Args:
         student_logits  (B, T, V)  Draft logits; gradient required.
