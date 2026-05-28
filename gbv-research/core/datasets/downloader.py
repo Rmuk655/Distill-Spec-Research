@@ -1,5 +1,5 @@
 """
-fetch_datasets.py — download eval + train datasets to data/ as JSONL files.
+fetch_datasets.py — download eval + train datasets to raw/ as JSONL files.
 
 Usage:
     python fetch_datasets.py                       # fetch all eval sets
@@ -24,7 +24,8 @@ Falls back to hardcoded representative samples if HuggingFace datasets API fails
 import os, sys, json, random, argparse
 
 random.seed(42)
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# Save to raw/ — matches experiment.py _data(), all YAML configs, and .gitignore.
+DATA_DIR = os.path.join(os.path.dirname(__file__), "raw")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 

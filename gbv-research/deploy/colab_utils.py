@@ -317,8 +317,12 @@ def monitor(
     """
     from IPython.display import clear_output  # type: ignore
 
+    # Normalise config → slug (matches experiment.py _config_slug logic).
+    # Accepts both slash form ("profiles/colab_lite_tree_losses") and
+    # already-normalised form ("profiles_colab_lite_tree_losses").
+    _config_slug = config.replace("/", "_").replace(os.sep, "_")
     log_file   = os.path.join(drive_root, "logs", "pipeline_output.log")
-    state_file = os.path.join(drive_root, f"pipeline_state_{config}.json")
+    state_file = os.path.join(drive_root, f"pipeline_state_{_config_slug}.json")
 
     def _show():
         sep = "=" * 62

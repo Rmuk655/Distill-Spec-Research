@@ -2552,6 +2552,28 @@ def main():
     os.makedirs(_DB_LOGS, exist_ok=True)   # ensure db/logs/ exists before first log write
     _acquire_lock()
 
+    # ── Ensure training data exists ───────────────────────────────────────────
+    # gsm8k_train.jsonl is gitignored (7 K prompts, too large to commit).
+    # On a fresh Colab/cloud session it must be downloaded before the first
+    # training step.  We do it here — after acquiring the lock but before building
+    # steps — so the auto-download is visible in the pipeline log.
+    _train_data_path = _data("gsm8k_train.jsonl")
+    if not os.path.exists(_train_data_path):
+        print(f"\n  [data] Training dataset not found — downloading from HuggingFace...")
+        print(f"  → {_train_data_path}")
+        _downloader = os.path.join(_GBV_RESEARCH, "core", "datasets", "downloader.py")
+        _dl_result = subprocess.run(
+            [sys.executable, _downloader, "--datasets", "gsm8k_train"],
+            cwd=_GBV_RESEARCH,
+        )
+        if os.path.exists(_train_data_path):
+            print(f"  [data] ✓ gsm8k_train.jsonl downloaded ({_train_data_path})\n")
+        else:
+            # Downloader has hardcoded fallback prompts — it should never reach here,
+            # but warn loudly so the user knows something is wrong.
+            print(f"  [data] WARNING: download may have failed; training will use "
+                  f"the downloader's built-in fallback prompts.\n")
+
     STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                         smoke=args.smoke, eagle=args.eagle,
                         load_in_4bit=_load_4bit,
