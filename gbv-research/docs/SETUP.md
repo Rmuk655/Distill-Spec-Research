@@ -302,15 +302,39 @@ subprocess.run([sys.executable, "orchestration/experiment.py",
 
 ### 9b. Colab Pro / Kaggle / any A100 (24 GB+)
 
-No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB:
+No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB.
 
-```python
-# Colab Pro / A100: use server config (bf16 teacher, no quantisation)
-DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
+A100 runs use the **3-tier profile system** (`orchestration/configs/profiles/`).
+See `deploy/PROGRESSION.md` Step 4 or `orchestration/configs/profiles/README.md`
+for the full workflow. The three tiers in order:
+
+```bash
+# Tier 1 — train baseline losses (KL/JSD/L1/online):
 !python orchestration/experiment.py \
-    --config server \
-    --ckpt_root {DRIVE_CKPT} \
-    --yes
+    --config profiles/a100_baseline_losses --yes \
+    --storage_root /content/drive/MyDrive/specdist
+
+# Tier 2 — verifier sweep (eval_only, no training, uses Tier 1 checkpoints):
+!python orchestration/experiment.py \
+    --config profiles/a100_verifier_sweep --yes \
+    --storage_root /content/drive/MyDrive/specdist
+
+# Tier 3 — new loss (copy template, set losses: [new_loss, kl, jsd, l1, online]):
+!python orchestration/experiment.py \
+    --config profiles/a100_my_loss --yes \
+    --storage_root /content/drive/MyDrive/specdist
+```
+
+To run a specific subset of losses without a profile file:
+```bash
+python orchestration/experiment.py --config colab_a100 --losses kl,jsd --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+
+To re-evaluate existing checkpoints without retraining:
+```bash
+python orchestration/experiment.py --config profiles/a100_baseline_losses \
+  --eval_only --yes --storage_root /content/drive/MyDrive/specdist
 ```
 
 ```bash

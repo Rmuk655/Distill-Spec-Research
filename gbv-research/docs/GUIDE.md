@@ -587,46 +587,84 @@ Full table of every evaluation row in the database. Supports sorting and can be 
 
 ## 8. How to Run
 
-### Laptop smoke test (verify setup, ~10 min)
+### Laptop smoke test (verify setup, ~5 min)
 ```bash
-python experiment.py --config laptop --yes --smoke
+python orchestration/experiment.py --config laptop --smoke --yes
 ```
-Runs 5 prompts, max 30 tokens, K=3, modes=gbv+specinfer, temp=0.6.  
-Also runs Phase 5 laptop_smoke: ALL verifiers including naive and bv, ALL losses (200 steps) on diverse50 — exercises every code path.
 
-### Full colab run (trend formation, ~8-12 hr on T4)
+### Full laptop code-path run (~15-20 min)
 ```bash
-python experiment.py --config colab --yes
+python orchestration/experiment.py --config laptop --yes
 ```
-`--load_in_4bit` is added automatically. Do NOT add it manually.
 
-### Full A100 run (paper-quality, ~24-48 hr on A100)
+### Run only specific losses (no config file change needed)
 ```bash
-python experiment.py --config server --yes
+# CLI flag — runs only kl and jsd, skips everything else:
+python orchestration/experiment.py --config laptop --losses kl,jsd --yes
+
+# Via profile YAML — set experiment: losses: [kl, jsd] in the config
+python orchestration/experiment.py --config profiles/online_only_laptop --yes
 ```
-No quantization. Full bf16. Results tagged `hw_tier=a100`.
+
+### A100 paper runs — 3-tier profile system
+
+A100 runs use profiles, not raw `--config colab_a100`. Run in order:
+
+**Tier 1 — baseline losses** (train KL/JSD/L1/online, ~2-3 h):
+```bash
+python orchestration/experiment.py --config profiles/a100_baseline_losses --smoke --yes \
+  --storage_root /content/drive/MyDrive/specdist
+python orchestration/experiment.py --config profiles/a100_baseline_losses --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+
+**Tier 2 — verifier sweep** (eval-only on Tier 1 checkpoints, ~1-2 h):
+```bash
+python orchestration/experiment.py --config profiles/a100_verifier_sweep --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+
+**Tier 3 — new loss** (train new loss, compare vs baselines):
+```bash
+cp orchestration/configs/profiles/a100_new_loss_template.yaml \
+   orchestration/configs/profiles/a100_my_loss.yaml
+# edit: losses: [my_loss, kl, jsd, l1, online]
+python orchestration/experiment.py --config profiles/a100_my_loss --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+
+### Eval-only (re-evaluate existing checkpoints, no training)
+```bash
+# Via YAML: set experiment: eval_only: true  (see a100_verifier_sweep.yaml)
+# Via CLI flag:
+python orchestration/experiment.py --config profiles/a100_baseline_losses --eval_only --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
 
 ### Check status without running
 ```bash
-python experiment.py --status
+python orchestration/experiment.py --status
+python orchestration/experiment.py --dry_run   # shows full plan with step states
 ```
 
 ### Resume after a crash
-The pipeline saves state after every step and resumes from the first `pending` step:
+State is saved after every step. Just re-run the same command — already-done steps are skipped:
 ```bash
-python experiment.py --config server --yes
+python orchestration/experiment.py --config profiles/a100_baseline_losses --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+
+### Jump to a specific step
+```bash
+python orchestration/experiment.py --config profiles/a100_baseline_losses --yes \
+  --from eval_kl_gsm8k --storage_root /content/drive/MyDrive/specdist
 ```
 
 ### View dashboard
 ```bash
 python dashboard/training_dashboard.py
 ```
-Open http://127.0.0.1:5000 in a browser. Use the HW TIER filter in the sidebar to select which tier's results to display.
-
-### Force restart from a specific step
-```bash
-python experiment.py --config server --from eval_baseline_gsm8k --yes
-```
+Open http://127.0.0.1:5000 — use HW TIER filter to isolate a specific tier's results.
 
 ---
 

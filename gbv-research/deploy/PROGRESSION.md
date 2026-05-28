@@ -221,7 +221,35 @@ larger than run-to-run variance (compare two seeds).
 
 Open `deploy/colab_a100_quickstart.ipynb` on a **Colab Pro/Pro+ A100 runtime**.
 
-Run with `CONFIG = "colab_a100"` (default). 2000 steps, ~2-3 h.
+A100 runs use the **3-tier profile system** — do not call `--config colab_a100` directly.
+Full workflow: `orchestration/configs/profiles/README.md`.
+
+**Tier 1 — train baseline losses** (~2-3 h, run first):
+```bash
+# Smoke first (catches crashes in ~5 min):
+python orchestration/experiment.py --config profiles/a100_baseline_losses --smoke --yes \
+  --storage_root /content/drive/MyDrive/specdist
+# Full run:
+python orchestration/experiment.py --config profiles/a100_baseline_losses --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+Trains KL, JSD, L1, online KL. Produces 4 merged model checkpoints.
+
+**Tier 2 — verifier sweep** (~1-2 h, after Tier 1 checkpoints exist):
+```bash
+python orchestration/experiment.py --config profiles/a100_verifier_sweep --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
+`eval_only: true` — no training. Re-evaluates all baselines at n=200 across all 6 verifiers.
+
+**Tier 3 — new loss** (~2-3 h, when a new algorithm is ready):
+```bash
+cp orchestration/configs/profiles/a100_new_loss_template.yaml \
+   orchestration/configs/profiles/a100_ebe_v2.yaml
+# edit: set losses: [ebe, kl, jsd, l1, online], update wandb_group and run_label
+python orchestration/experiment.py --config profiles/a100_ebe_v2 --yes \
+  --storage_root /content/drive/MyDrive/specdist
+```
 
 **Requirements before running Level 4** (all gates above must be closed):
 - Level 3 results are clean and reproducible
@@ -229,7 +257,7 @@ Run with `CONFIG = "colab_a100"` (default). 2000 steps, ~2-3 h.
 - At least 2 Level 3 seeds confirm the direction
 - Ablation plan is written down
 
-**After the run — summarize and log:**
+**After each tier — summarize and log:**
 ```bash
 python tools/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
 # paste into deploy/RUN_LOG.md Level 4 section
@@ -240,7 +268,7 @@ python tools/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
 - More steps (2000 vs 500) → converged model
 - Larger LoRA rank (r=16 vs r=8) → better adaptation
 - `torch.compile` enabled → ~10-30% faster training
-- More eval prompts (50 vs 20) → tighter confidence intervals
+- Tier 2 verifier sweep uses n=200 → paper-quality confidence intervals
 
 ---
 
