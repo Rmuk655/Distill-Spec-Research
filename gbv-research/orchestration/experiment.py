@@ -323,6 +323,16 @@ def _load_config_yaml(config_name: str) -> dict:
         # you only want to measure verifier performance, not re-train.
         if "eval_only" in experiment_cfg:
             out["eval_only"] = bool(experiment_cfg["eval_only"])
+        # models.draft / models.target — present only when the YAML sets them.
+        # Consumed by main() when the config is a YAML-based profile (not a
+        # legacy CONFIGS preset) so we know which model pair to load.
+        if models_cfg.get("draft"):
+            out["draft"] = models_cfg["draft"]
+        if models_cfg.get("target"):
+            out["target"] = models_cfg["target"]
+        # hardware.load_in_4bit — forwarded so YAML profiles control 4-bit loading.
+        if "load_in_4bit" in hardware:
+            out["load_in_4bit"] = hardware["load_in_4bit"]
         # models.target → teacher_tag: short human-readable size label extracted from
         # the model name (e.g. "Qwen/Qwen3-4B" → "4B").  Used in run names if
         # run_label is not explicitly set.
@@ -2298,8 +2308,10 @@ def _print_header(cfg, draft, target, args):
 
 def main():
     p = argparse.ArgumentParser(description="SpecDist pipeline with crash-safe resume")
-    p.add_argument("--config", default="laptop", choices=list(CONFIGS.keys()),
-                   help="Hardware config: laptop (0.5B->0.6B) or server/colab (0.6B->8B)")
+    p.add_argument("--config", default="laptop",
+                   help="Hardware config preset (laptop/server/colab) or a YAML profile name "
+                        "relative to orchestration/configs/ "
+                        "(e.g. profiles/colab_tree_losses, colab_lite, colab_a100).")
     p.add_argument("--draft",  default=None,
                    help="Override draft model HF ID (overrides --config)")
     p.add_argument("--target", default=None,
@@ -2378,12 +2390,27 @@ def main():
                         "(overrides YAML config, default 0.8).")
     args = p.parse_args()
 
-    cfg = CONFIGS[args.config]
+    # Load YAML config first — YAML profiles define models, hardware, training, etc.
+    # Must happen before cfg is built so YAML models.draft/target are available.
+    _yaml_cfg = _load_config_yaml(args.config)
+
+    if args.config in CONFIGS:
+        # Legacy preset (laptop / server / colab) — hardware baked into CONFIGS dict.
+        # If the YAML also sets load_in_4bit, let it override the preset.
+        cfg = dict(CONFIGS[args.config])
+        if "load_in_4bit" in _yaml_cfg:
+            cfg["load_in_4bit"] = _yaml_cfg["load_in_4bit"]
+    else:
+        # YAML-based profile (e.g. colab_lite, colab_a100, profiles/colab_tree_losses).
+        # _load_config_yaml now exposes draft/target/load_in_4bit from the YAML.
+        cfg = {
+            "draft":        _yaml_cfg.get("draft",  "Qwen/Qwen3-0.6B"),
+            "target":       _yaml_cfg.get("target", "Qwen/Qwen3-8B"),
+            "load_in_4bit": _yaml_cfg.get("load_in_4bit", False),
+            "desc":         f"YAML profile: {args.config}",
+        }
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
-
-    # Load YAML config first — needed by storage_root block below.
-    _yaml_cfg = _load_config_yaml(args.config)
 
     # ── Storage root — single source of truth for all persistent paths ────────
     # --storage_root moves checkpoints, DB, logs, and state file to one directory
