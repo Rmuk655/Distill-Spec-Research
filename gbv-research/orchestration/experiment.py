@@ -2504,8 +2504,11 @@ def main():
     # Smoke gets its OWN state file so smoke "done" marks never block the real run.
     # When --storage_root is set, state file lives there (survives cloud restarts).
     _smoke_tag = "_smoke" if args.smoke else ""
+    # Sanitise config name: "profiles/colab_tree_losses" → "profiles_colab_tree_losses"
+    # so the state file is a flat filename with no subdirectory components.
+    _config_slug = args.config.replace("/", "_").replace(os.sep, "_")
     STATE_FILE = os.path.join(
-        _effective_state_dir, f"pipeline_state_{args.config}{_smoke_tag}.json"
+        _effective_state_dir, f"pipeline_state_{_config_slug}{_smoke_tag}.json"
     )
 
     # eval_only: CLI --eval_only wins over YAML experiment.eval_only.
