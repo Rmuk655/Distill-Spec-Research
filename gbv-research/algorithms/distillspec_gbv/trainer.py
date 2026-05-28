@@ -356,7 +356,14 @@ def _compute_val_loss(
             s_log   = student_logits[:, plen - 1:, :].squeeze(0)
             gen_ids = full_ids[0, plen:]
 
-            out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids,
+            # Tree losses cannot be evaluated with get_loss() — they require a
+            # structured K-path tree built from the student's own samples, which
+            # would be expensive to build per val prompt and unnecessary for a
+            # health metric.  Use forward KL as a proxy: it is a tight upper
+            # bound on the tree loss's language-quality component and will
+            # correctly signal PPL collapse / distribution drift.
+            val_loss_name = "forward_kl" if args.loss in TREE_LOSS_NAMES else args.loss
+            out = get_loss(val_loss_name, s_log, t_log, token_ids=gen_ids,
                           kl_weight=args.ebe_kl_weight, alpha=args.jsd_alpha)
             val_losses.append(out.loss.item())
             if out.accept_weight is not None:
