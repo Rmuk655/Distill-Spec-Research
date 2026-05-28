@@ -53,3 +53,12 @@ evaluation:
   K_values: [1, 3, 5, 8]
   L: 8
   n_prompts: 100               # more prompts for reliable numbers on server
+
+tree_training:
+  # K=8 on A100 — more paths per step = stronger on-policy gradient signal.
+  # L=8 matches the evaluation block depth so training and eval see the same tree size.
+  # NOTE: K > 4 can cause numerical instability in gbv_tree (compute_skew is unstable
+  # for large K by design — see otlp_registry.py "not recommended for K > 4").
+  # Use gbv_tree with tree_K: 4 even on A100 unless you have verified stability.
+  tree_K: 8
+  tree_L: 8

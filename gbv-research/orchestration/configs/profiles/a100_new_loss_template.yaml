@@ -97,5 +97,20 @@ experiment:
   #   - TRAIN only YOUR_LOSS_HERE (kl/jsd/l1/online checkpoints exist → done_check skips)
   #   - EVAL all five losses on gsm8k (Phase 3) and multi-dataset (Phase 4)
   #
-  # Valid loss names (from experiment.py ALL_LOSSES):
+  # Valid flat-sequence loss names (from experiment.py ALL_LOSSES):
   #   kl  ebe  ebe_single  rev_kl  jsd  l1  online  online_ebe  online_ebe_single
+  #
+  # Valid tree-structured loss names (non-OT verifiers only):
+  #   kl_tree        — on-policy KL at each tree node; universal baseline
+  #   bv_tree        — targets bv_verify block-acceptance integral
+  #   gbv_tree       — targets gbv_verify (bv with q_skew substituted)
+  #   traversal_tree — targets traversal_verify leaf-weight product
+  #
+  # For tree losses, also set tree_training.tree_K and tree_training.tree_L below.
+  # NOTE: gbv_tree is numerically stable only for tree_K ≤ 4 (see compute_skew in
+  # otlp_registry.py).
+
+# ── Tree-loss hyperparameters (only needed when losses includes a *_tree loss) ──
+tree_training:
+  tree_K: 4     # paths per step; keep ≤ 4 for gbv_tree (numerical stability)
+  tree_L: 8     # block depth; should match evaluation L

@@ -76,3 +76,9 @@ evaluation:
   K_values: [3, 5]
   L: 8
   n_prompts: 20                 # fewer than server -- T4 eval is slow
+
+tree_training:
+  # K=4 on T4 — safe VRAM budget; each path adds ~L forward steps to the tree pass.
+  # gbv_tree is numerically stable at K≤4 (see otlp_registry.py compute_skew note).
+  tree_K: 4
+  tree_L: 8

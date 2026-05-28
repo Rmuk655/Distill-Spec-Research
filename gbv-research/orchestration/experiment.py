@@ -301,6 +301,13 @@ def _load_config_yaml(config_name: str) -> dict:
         # training.online_ebe_lr → LR for EBE online adapt (lower than online_lr).
         if "online_ebe_lr" in training:
             out["online_ebe_lr"] = training["online_ebe_lr"]
+        # tree_training section — hyperparameters for tree-structured distillation losses.
+        # Used when --loss is one of {kl_tree, bv_tree, gbv_tree, traversal_tree}.
+        # trainer.py accepts --tree_K (number of i.i.d. draft paths) and
+        # --tree_L (draft block depth).  Defaults match trainer.py built-in defaults.
+        tree_cfg = data.get("tree_training", {})
+        out["tree_K"] = tree_cfg.get("tree_K", 4)
+        out["tree_L"] = tree_cfg.get("tree_L", 8)
         # experiment.losses → which loss variants to train/eval.
         # If set, only those losses run; all others are silently skipped.
         # Overridden by --losses CLI flag (CLI always wins).
@@ -428,6 +435,20 @@ _LOSS_STEP_PREFIXES: dict = {
     "online":           ("online_adapt_",            "merge_online_gsm8k",      "eval_online_gsm8k", "eval_online_all"),
     "online_ebe":       ("online_ebe_adapt_",        "merge_online_ebe_",       "eval_online_ebe_"),
     "online_ebe_single":("online_ebe_single_adapt_", "merge_online_ebe_single_","eval_online_ebe_single_"),
+    # ── Tree-structured losses (non-OT verifiers only) ──────────────────────
+    # These train the draft model to match the verifier's actual optimization
+    # target — not just the per-token KL.  Paired verifiers:
+    #   kl_tree       → universal on-policy KL baseline (any verifier)
+    #   bv_tree       → bv_verify (block acceptance integral)
+    #   gbv_tree      → gbv_verify (bv with q_skew substituted)
+    #   traversal_tree → traversal_verify (leaf-weight product)
+    # OT-based verifiers (naive, nss, spectr, specinfer, khisti) are trained
+    # with flat sequence losses (forward_kl, ebe) — their per-token OTLP
+    # solvers are not improved by tree-structured distillation objectives.
+    "kl_tree":        ("train_kl_tree_",   "merge_kl_tree_",   "eval_kl_tree_"),
+    "bv_tree":        ("train_bv_tree_",   "merge_bv_tree_",   "eval_bv_tree_"),
+    "gbv_tree":       ("train_gbv_tree_",  "merge_gbv_tree_",  "eval_gbv_tree_"),
+    "traversal_tree": ("train_trav_tree_", "merge_trav_tree_", "eval_trav_tree_"),
 }
 ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
@@ -530,6 +551,15 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # hardware.compile: true (server/A100 Linux).  Both scripts skip compile
     # automatically on Windows and PyTorch < 2.0 so this is always safe to pass.
     _compile_flag = ["--compile"] if _h.get("compile") else []
+
+    # Tree-loss extra args — only appended to tree-loss training commands.
+    # tree_K: number of i.i.d. draft paths sampled per training step.
+    # tree_L: draft block depth (how many tokens per path).
+    # Both read from YAML tree_training: section; defaults match trainer.py.
+    _tree_hargs = [
+        "--tree_K", str(_h.get("tree_K", 4)),
+        "--tree_L", str(_h.get("tree_L", 8)),
+    ]
 
     # Override step count if train_steps was specified via CLI
     if _h.get("train_steps") is not None:
@@ -904,6 +934,132 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         },
 
         # -------------------------------------------------------------------
+        # Tree-structured distillation losses — Phase 2 (Training)
+        #
+        # Unlike flat sequence losses (forward_kl, ebe, …) which train on the
+        # teacher's linear rollout, tree losses train on the STUDENT's own
+        # draft tree:
+        #   1. iid_draft()  — sample K paths without grad
+        #   2. target_tree_pass()  — score each node with teacher (no grad)
+        #   3. draft_tree_forward_with_grad()  — re-run student WITH grad
+        #   4. compute_tree_loss()  — verifier-specific differentiable surrogate
+        #
+        # Verifier ↔ loss pairing:
+        #   kl_tree        → universal on-policy KL baseline; works with all verifiers
+        #   bv_tree        → targets bv_verify block acceptance integral exactly
+        #   gbv_tree       → targets gbv_verify (bv with q_skew substituted)
+        #   traversal_tree → targets traversal_verify leaf-weight product
+        #
+        # OT-based verifiers (naive, nss, spectr, specinfer, khisti) are NOT
+        # included here — those use per-token OTLP solvers that flat sequence
+        # losses (forward_kl, ebe) already target correctly.
+        #
+        # All tree losses use --nan_action skip + --early_stop_patience 3 as
+        # a safety net: the tree forward pass involves cumsum + clamp + relu
+        # chains that can produce very small gradients under certain q_skew
+        # fallbacks, and numerical instability (though rare) is possible.
+        # -------------------------------------------------------------------
+        {
+            "id": "train_kl_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train kl_tree (on-policy KL), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "kl_tree",
+                "--steps", str(_steps),
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("kl_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("kl_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_kl_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge kl_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("kl_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_bv_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train bv_tree (BV block acceptance), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "bv_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("bv_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("bv_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_bv_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge bv_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("bv_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_gbv_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train gbv_tree (GBV with q_skew), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "gbv_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("gbv_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("gbv_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_gbv_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge gbv_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("gbv_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_trav_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train traversal_tree (leaf weight), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "traversal_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("trav_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("trav_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_trav_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge trav_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("trav_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
+        },
+
+        # -------------------------------------------------------------------
         # Phase 3 — GSM8K Eval
         # All 6 verifier modes (alpha · bv · gbv · traversal · specinfer · naive)
         # smoke: n=5 prompts, max_tokens=30, K=3, temp=0.6
@@ -981,6 +1137,42 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", datasets="gsm8k", task_score=True),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
+        },
+        # Tree losses — Phase 3 evals.
+        # Each is evaluated on all 6 verifier modes (same as flat losses) so the
+        # paper table can show cross-matrix results: e.g. does gbv_tree training
+        # improve gbv BE without hurting traversal or specinfer BE?
+        {
+            "id": "eval_kl_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval kl_tree-gsm8k on gsm8k",
+            "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree", datasets="gsm8k", task_score=True),
+            "done_check": None,
+            "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_bv_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval bv_tree-gsm8k on gsm8k",
+            "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", datasets="gsm8k", task_score=True),
+            "done_check": None,
+            "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_gbv_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval gbv_tree-gsm8k on gsm8k",
+            "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", datasets="gsm8k", task_score=True),
+            "done_check": None,
+            "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_trav_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval trav_tree-gsm8k on gsm8k",
+            "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", datasets="gsm8k", task_score=True),
+            "done_check": None,
+            "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------
