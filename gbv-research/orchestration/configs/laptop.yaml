@@ -1,6 +1,32 @@
-# Laptop configuration — Mukund's machine, RTX 500 Ada, 6 GB VRAM
-# Qwen2.5-0.5B draft (494 M)  →  Qwen3-0.6B target (600 M)
-# Both fit in ~3 GB VRAM.  No 4-bit quantisation needed.
+# Laptop configuration — code verification only (no trend detection)
+# Hardware: RTX 500 Ada, 6 GB VRAM
+# Draft: Qwen2.5-0.5B (0.5B, ~1 GB BF16)   Teacher: Qwen3-0.6B (0.6B, ~1.2 GB BF16)
+# Total VRAM: ~3 GB.  No 4-bit quantization needed.
+#
+# WHY TRENDS ARE IMPOSSIBLE HERE:
+#   The teacher (0.6B) is the same size class as the draft (0.5B).
+#   Distillation signal from a model barely larger than the student is
+#   essentially noise.  Do not interpret laptop results as research findings.
+#
+# PURPOSE: Verify that every code path runs without crashing:
+#   train loop → checkpoint save/load cycle → merge → all eval modes
+#   Use --smoke for a fast crash test (~3-5 min, 10 steps).
+#   Run without --smoke to exercise ALL paths (~15-20 min, 100 steps).
+#
+# TWO-STAGE LAPTOP GATE:
+#   1. python orchestration/experiment.py --config laptop --smoke --yes
+#      Fast crash detector.  Should complete < 5 min.
+#      Gate: no exceptions, losses are finite numbers.
+#   2. python orchestration/experiment.py --config laptop --yes
+#      Code-path exerciser.  Should complete < 20 min.
+#      Gate: all eval modes produce output, checkpoint resume works,
+#      merge completes, W&B run appears in wandb.ai.
+#      (Block efficiency numbers from this run are meaningless -- ignore them.)
+#
+# WHEN TO MOVE TO colab_lite:
+#   Both gates pass AND you want to assess whether a new loss function or
+#   verifier implementation actually helps.  colab_lite uses Qwen3-1.7B
+#   teacher → real distillation signal → real trends.
 
 hardware:
   device: cuda
@@ -13,11 +39,11 @@ models:
   target: Qwen/Qwen3-0.6B
 
 training:
-  steps: 1000
+  steps: 100                    # enough to exercise all code paths; NOT enough for trends
   lr: 3.0e-5
-  lora_r: 8
-  lora_alpha: 16
-  max_new_tokens: 80
+  lora_r: 4                     # smallest rank -- this run is about code, not capacity
+  lora_alpha: 8
+  max_new_tokens: 32            # keep inference fast; we're not measuring quality
   teacher_temperature: 0.8
   online_lr: 3.0e-4             # LR for online adapt (higher than offline distillation LR)
   seed: 42
@@ -28,9 +54,9 @@ dataset:
   eval:  core/datasets/raw/gsm8k_30.jsonl       # 30-prompt fixed eval set (block-efficiency only)
 
 checkpointing:
-  save_every: 100
-  milestone_every: 200
-  max_checkpoints: 5
+  save_every: 10                # fires 10x in 100 steps -- exercises rolling checkpoint logic
+  milestone_every: 50           # fires 2x in 100 steps -- exercises permanent checkpoint logic
+  max_checkpoints: 3
   output_root: db/checkpoints
 
 logging:
@@ -41,14 +67,17 @@ logging:
   run_label: "0.6B-laptop"
 
 health:
-  val_every: 50
-  ppl_check_every: 200
+  val_every: 25                 # fires 4x in 100 steps -- exercises validation path
+  ppl_check_every: 50           # fires 2x in 100 steps -- exercises ppl health check
   ppl_threshold: 1.25
   nan_action: stop
   early_stop_patience: 3
 
 evaluation:
-  modes: [alpha, specinfer, traversal, gbv]
-  K_values: [1, 3, 5, 8]
+  # All 6 modes to verify every evaluator runs without crashing.
+  # n_prompts=5 and K_values=[3] to keep eval fast (~2-3 min total).
+  # The numbers produced are meaningless (0.6B teacher) -- only check for errors.
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3]                 # single K value -- fast; we're testing code not tuning
   L: 8
-  n_prompts: 30
+  n_prompts: 5                  # just enough to exercise each evaluator

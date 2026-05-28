@@ -11,12 +11,18 @@ results on production hardware, finalize on the largest scale.**
 
 ## The 4-Level Ladder
 
-| Level | Config | Teacher | Hardware | Steps | Wall time | W&B group | Purpose |
-|-------|--------|---------|----------|-------|-----------|-----------|---------|
-| 1 | `laptop` | Qwen3-0.6B (0.6 GB) | Your laptop CPU/MPS/CUDA | 50-100 | ~5-15 min | `laptop-gsm8k` | Debug: verify code runs, losses go down |
-| 2 | `colab_lite` | Qwen3-1.7B BF16 (3.4 GB) | Free T4 (15 GB VRAM) | 300 | ~25 min | `colab-lite` | Trend: does the loss function help? |
-| 3 | `colab` | Qwen3-4B BF16 (8 GB) | Free T4 (15 GB VRAM) | 500 | ~2-4 h | `colab-t4` | Results: publishable block-efficiency numbers |
-| 4 | `colab_a100` | Qwen3-8B BF16 (16 GB) | Colab Pro/Pro+ A100 (40 GB) | 2000 | ~2-3 h | `colab-a100` | Paper: best quality, full eval, ablations |
+| Level | Mode | Config | Teacher | Steps | Wall time | W&B group | Purpose |
+|-------|------|--------|---------|-------|-----------|-----------|---------|
+| 1a | `--smoke` | `laptop` | 0.6B | 10 | ~3-5 min | `laptop-gsm8k` | Crash test: does the pipeline start? |
+| 1b | full | `laptop` | 0.6B | 100 | ~15-20 min | `laptop-gsm8k` | Code exercise: does every path work? |
+| 2 | full | `colab_lite` | 1.7B BF16 | 300 | ~25 min | `colab-lite` | Trend: does the loss function help? |
+| 3 | full | `colab` | 4B BF16 | 500 | ~2-4 h | `colab-t4` | Results: publishable block-efficiency numbers |
+| 4 | full | `colab_a100` | 8B BF16 | 2000 | ~2-3 h | `colab-a100` | Paper: best quality, full eval, ablations |
+
+> **Why can't Level 1 produce trends?**
+> The laptop teacher (Qwen3-0.6B) is the *same size class* as the draft (Qwen2.5-0.5B).
+> Distillation from an equal-capacity model produces near-zero signal.
+> Level 1 is purely a code correctness gate. Start looking for trends at Level 2.
 
 ---
 
@@ -81,17 +87,55 @@ VRAM budget notes in the title cell.
 
 ## Standard Experiment Workflow
 
-### Step 1 — Laptop sanity check (Level 1)
+### Step 1a — Crash test (Level 1a)
 
 ```bash
 # In gbv-research/
 python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
-Smoke test runs 10 training steps and a tiny eval. Should complete in < 5 min.
+Runs **10 training steps** and a minimal eval. Should complete in **< 5 min**.
 
-**Gate**: losses go down, no exceptions, eval modes produce numbers.
-**If this fails**: fix the code. Nothing else should run until this passes.
+What `--smoke` exercises:
+- Python imports, CUDA device detection
+- One forward + backward pass per loss function
+- Dataset loading
+- One checkpoint save
+- A tiny eval (1-2 prompts per mode)
+
+**Gate**: no exceptions, loss values are finite numbers.
+**If this fails**: fix the code. Do not proceed to 1b until 1a passes.
+
+---
+
+### Step 1b — Full code-path exercise (Level 1b)
+
+```bash
+# In gbv-research/
+python orchestration/experiment.py --config laptop --yes
+```
+
+Runs **100 training steps**, full eval suite. Should complete in **< 20 min**.
+
+What the full laptop run exercises that smoke does NOT:
+- Rolling checkpoint save/load cycle (save_every=10 → 10 saves)
+- Milestone checkpoints (milestone_every=50 → 2 permanent saves)
+- Validation health check (val_every=25 → 4 validation passes)
+- PPL threshold check (ppl_check_every=50 → 2 checks)
+- Full merge step (LoRA → base model)
+- All 6 eval modes: alpha, bv, gbv, traversal, specinfer, naive
+- W&B logging (run appears in wandb.ai under group `laptop-gsm8k`)
+- Database writes (results.db)
+- Pipeline state machine (done_check files)
+
+**Gate**: all 6 eval modes produce output, W&B run visible, no exceptions.
+
+> **Important**: do NOT interpret block-efficiency numbers from this run.
+> The 0.6B teacher is the same size as the draft — distillation signal is
+> near-zero. The numbers are structurally meaningless at this level.
+> Only check that the eval modes *ran* and produced valid-looking numbers.
+
+**If this fails**: fix the code. Do not run colab_lite until 1b passes.
 
 ---
 
@@ -162,20 +206,21 @@ Run with `CONFIG = "colab_a100"` (default). 2000 steps, ~2-3 h.
 - Crash-safe checkpoint resume
 
 ### Varies by level:
-| Parameter | laptop | colab_lite | colab | colab_a100 |
-|-----------|--------|------------|-------|------------|
+| Parameter | laptop (1a/1b) | colab_lite (2) | colab (3) | colab_a100 (4) |
+|-----------|---------------|----------------|-----------|----------------|
 | `target` (teacher) | Qwen3-0.6B | Qwen3-1.7B | Qwen3-4B | Qwen3-8B |
-| `steps` | 50-100 | 300 | 500 | 2000 |
+| `steps` | 10 (smoke) / 100 | 300 | 500 | 2000 |
 | `lora_r` | 4 | 4 | 8 | 16 |
 | `lora_alpha` | 8 | 8 | 16 | 32 |
 | `save_every` | 10 | 25 | 25 | 100 |
 | `max_new_tokens` | 32 | 128 | 96 | 128 |
-| `n_prompts` (eval) | 10 | 20 | 20 | 50 |
+| `n_prompts` (eval) | 5 | 20 | 20 | 50 |
 | `K_values` (eval) | [3] | [3,5] | [3,5] | [1,3,5,8] |
 | `compile` | false | false | false | true |
 | `load_in_4bit` | false | false | false | false |
 | `wandb_group` | laptop-gsm8k | colab-lite | colab-t4 | colab-a100 |
 | `run_label` | 0.6B-laptop | 1.7B-T4-lite | 4B-T4 | 8B-A100 |
+| Results meaningful? | **No** (code check only) | Yes (trends) | Yes (publishable) | Yes (paper) |
 
 ---
 
