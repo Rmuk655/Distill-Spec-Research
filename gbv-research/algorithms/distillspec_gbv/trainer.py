@@ -64,6 +64,13 @@ from algorithms.distillspec_gbv.tree_training import (
     draft_tree_forward_with_grad, verify_tree_forward_grad,
 )
 
+# Optional: log training curves to results.db so the dashboard shows loss plots.
+# Silently disabled if results_db can't be imported (e.g. wrong cwd or missing dep).
+try:
+    from db import results_db as _results_db
+except Exception:
+    _results_db = None
+
 
 # ---------------------------------------------------------------------------
 # Attention backend selection
@@ -607,6 +614,11 @@ def main() -> None:
         return
 
     # ── W&B (optional) ────────────────────────────────────────────────────────
+    # Label used for results.db train_curves rows — basename of the output dir,
+    # e.g. "kl_tree-gsm8k".  Matches the checkpoint directory name the dashboard
+    # uses when linking curves to pipeline steps.
+    _db_label = os.path.basename(os.path.normpath(args.output))
+
     _wandb = None
     if not args.no_wandb:
         try:
@@ -821,6 +833,19 @@ def main() -> None:
                     "train/peak_vram_mb": peak_vram,
                     "step": step + 1,
                 })
+            if _results_db is not None:
+                try:
+                    _results_db.insert_train_step(
+                        label=_db_label,
+                        loss_name=args.loss,
+                        step=step + 1,
+                        loss=loss_val,
+                        learning_rate=args.lr,
+                        lora_rank=args.lora_r,
+                        split="train",
+                    )
+                except Exception:
+                    pass  # never crash training due to DB write failure
 
         # ── Crash-safe checkpoint ─────────────────────────────────────────────
         if args.save_every > 0 and (step + 1) % args.save_every == 0:
@@ -868,6 +893,19 @@ def main() -> None:
                 if v_aw is not None:
                     log["val/accept_weight"] = v_aw
                 _wandb.log(log)
+            if _results_db is not None:
+                try:
+                    _results_db.insert_train_step(
+                        label=_db_label,
+                        loss_name=args.loss,
+                        step=step + 1,
+                        loss=v_loss,
+                        learning_rate=args.lr,
+                        lora_rank=args.lora_r,
+                        split="val",
+                    )
+                except Exception:
+                    pass
 
             if (args.early_stop_patience > 0
                     and _val_no_improve_count >= args.early_stop_patience):
