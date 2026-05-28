@@ -1594,24 +1594,30 @@ function renderSummaryStats() {
     html += statBox('Best α (measured)', best.alpha_mean.toFixed(4),
       `${best.draft_label} · only ${onlyLabels} measured`);
   }
-  // Best BE — normalised by (K+1) so K=3 and K=5 are on the same scale.
-  // Max possible BE at any K is K+1 (all K drafts accepted + 1 bonus target token).
+  // Best BE — normalised by (L+1) so different K values are on the same scale.
+  // Max possible BE is L+1, NOT K+1:
+  //   K = tree width (# parallel draft paths) — affects hit probability, not max depth
+  //   L = draft block length (# tokens per path) — each target call verifies up to L drafts
+  //   In one target forward pass: accept ≤ L draft tokens + 1 residual = L+1 max tokens out.
+  //   K has no effect on the ceiling; more K just raises the probability of hitting it.
   if (beRuns.length) {
-    // Best by normalised efficiency BE/(K+1)
+    // Best by normalised efficiency BE/(L+1); fall back to K+1 if L absent (legacy rows)
+    const _maxBE = r => (r.L != null ? r.L + 1 : r.K + 1);
     const bestNorm = beRuns.reduce((a,b) =>
-      (a.block_eff/(a.K+1) > b.block_eff/(b.K+1) ? a : b));
-    const normPct = (bestNorm.block_eff / (bestNorm.K+1) * 100).toFixed(0);
+      (a.block_eff/_maxBE(a) > b.block_eff/_maxBE(b) ? a : b));
+    const normPct = (bestNorm.block_eff / _maxBE(bestNorm) * 100).toFixed(0);
     html += statBox('Best BE (norm)', `${bestNorm.block_eff.toFixed(3)} · ${normPct}%`,
-      `${bestNorm.draft_label} ${bestNorm.mode} K=${bestNorm.K} (of max ${bestNorm.K+1})`);
+      `${bestNorm.draft_label} ${bestNorm.mode} K=${bestNorm.K} L=${bestNorm.L ?? '?'} (of max L+1=${_maxBE(bestNorm)})`);
 
     // Also show best raw BE per K so both are visible
     [3, 5].forEach(k => {
       const kRuns = beRuns.filter(r => r.K === k);
       if (!kRuns.length) return;
-      const bestK = kRuns.reduce((a,b) => (a.block_eff > b.block_eff ? a : b));
-      const kEff  = (bestK.block_eff / (k+1) * 100).toFixed(0);
+      const bestK  = kRuns.reduce((a,b) => (a.block_eff > b.block_eff ? a : b));
+      const maxPoss = _maxBE(bestK);
+      const kEff   = (bestK.block_eff / maxPoss * 100).toFixed(0);
       html += statBox(`Best BE K=${k}`, bestK.block_eff.toFixed(3),
-        `${bestK.draft_label} ${bestK.mode} · ${kEff}% of ${k+1}`);
+        `${bestK.draft_label} ${bestK.mode} · ${kEff}% of L+1=${maxPoss}`);
     });
   }
 
