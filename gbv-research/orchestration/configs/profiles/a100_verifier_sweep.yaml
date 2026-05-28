@@ -1,0 +1,93 @@
+# Profile: a100_verifier_sweep — Deep verifier comparison on pre-built checkpoints
+#
+# Purpose: Evaluate trained checkpoints (from a100_baseline_losses) across every
+#          speculative decoding verifier algorithm — GBV, SpecInfer, BV, Traversal,
+#          naive, and alpha — at multiple K values with a larger prompt set.
+#          No training. All Phase 2 (train + merge) steps are skipped.
+#
+#          This is the "which verifier works best with which loss?" sweep.
+#          Run once after baseline losses are trained. Results feed directly
+#          into the paper's verifier comparison table.
+#
+# Run order in the 3-profile A100 workflow:
+#   Step 1 → a100_baseline_losses.yaml  (train first — produces the checkpoints)
+#   Step 2 → THIS FILE                  (eval-only on those checkpoints)
+#   Step 3 → a100_new_loss.yaml         (train new loss; add to the same comparison)
+#
+# Prerequisite: run a100_baseline_losses (full, not smoke) first.
+#   Requires these merged models to exist in --storage_root:
+#     kl-gsm8k_merged/   jsd-gsm8k_merged/   l1-gsm8k_merged/   online-gsm8k_merged/
+#
+# Usage:
+#   python orchestration/experiment.py --config profiles/a100_verifier_sweep --yes \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+#   # Dry-run to see which steps will execute before starting:
+#   python orchestration/experiment.py --config profiles/a100_verifier_sweep --dry_run \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+# What runs:
+#   Phase 1 — baseline eval on gsm8k (untrained draft; always)
+#   Phase 3 — eval kl, jsd, l1, online on gsm8k          (n=200, all 6 verifiers)
+#   Phase 4 — eval kl, jsd, l1, online on humaneval, math500, mtbench, alpaca
+#   Phase 2 — SKIPPED (eval_only: true — no training, no merging)
+#
+# Why more prompts (200 vs 50)?
+#   At K=8, L=8, the variance across prompts is high. 50 prompts gives ±0.15 CI95.
+#   200 prompts cuts that to ±0.07 — enough to distinguish GBV vs SpecInfer reliably.
+
+hardware:
+  device: cuda
+  load_in_4bit: false
+  compile: true
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B
+
+training:
+  steps: 2000        # ignored — eval_only skips all training
+  lr: 3.0e-5
+  lora_r: 16
+  lora_alpha: 32
+  max_new_tokens: 128
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 100
+  milestone_every: 500
+  max_checkpoints: 8
+  storage_root: /content/drive/MyDrive/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-a100-verifier-sweep
+  run_label: "8B-A100-sweep"
+
+health:
+  val_every: 100
+  ppl_check_every: 500
+  ppl_threshold: 1.25
+  nan_action: stop
+  early_stop_patience: 5
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]   # all 6 verifier algorithms
+  K_values: [1, 3, 5, 8]                                 # full K sweep
+  L: 8
+  n_prompts: 200    # larger than baseline (50) for reliable verifier comparison numbers
+
+# ── Experiment scope ─────────────────────────────────────────────────────────
+experiment:
+  losses: [kl, jsd, l1, online]   # eval only for these losses (must have checkpoints)
+  eval_only: true                  # SKIP Phase 2 — no training, no merging.
+                                   # eval steps will be BLOCKED (requires guard) if the
+                                   # corresponding merged model does not exist.
+                                   # Run a100_baseline_losses first.

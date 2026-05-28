@@ -311,6 +311,11 @@ def _load_config_yaml(config_name: str) -> dict:
         # experiment.seed_override → run a specific seed without editing training.seed
         if "seed_override" in experiment_cfg:
             out["seed"] = experiment_cfg["seed_override"]
+        # experiment.eval_only → skip Phase 2 (train + merge); only run Phase 1/3/4 evals.
+        # Use this when trained checkpoints already exist (e.g. from a previous run) and
+        # you only want to measure verifier performance, not re-train.
+        if "eval_only" in experiment_cfg:
+            out["eval_only"] = bool(experiment_cfg["eval_only"])
         # models.target → teacher_tag: short human-readable size label extracted from
         # the model name (e.g. "Qwen/Qwen3-4B" → "4B").  Used in run names if
         # run_label is not explicitly set.
@@ -1813,6 +1818,11 @@ def main():
                         "Default: run all (kl,ebe,ebe_single,rev_kl,jsd,l1,online,online_ebe,online_ebe_single). "
                         "Example: --losses ebe_single,online_ebe_single  runs only the EBE-single ablation. "
                         "Useful for running a single loss without the full pipeline.")
+    p.add_argument("--eval_only", action="store_true",
+                   help="Skip all Phase 2 training + merge steps. Only run Phase 1 baseline eval "
+                        "and Phase 3/4 evals. Requires pre-built merged models in the checkpoint root. "
+                        "Use after a baseline run to re-evaluate with different settings, or for the "
+                        "verifier sweep profile. Overrides experiment.eval_only in YAML.")
     p.add_argument("--train_steps", type=int, default=None,
                    help="Override per-loss training step count. "
                         "Overrides the smoke (50) / full (1000) default. "
@@ -1932,6 +1942,9 @@ def main():
         _effective_state_dir, f"pipeline_state_{args.config}{_smoke_tag}.json"
     )
 
+    # eval_only: CLI --eval_only wins over YAML experiment.eval_only.
+    _eval_only = args.eval_only or cfg.get("eval_only", False)
+
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
     _load_4bit = cfg.get("load_in_4bit", False)
@@ -1942,6 +1955,11 @@ def main():
                             ckpt_root=_effective_ckpt_root,
                             train_hparams=train_hparams,
                             losses_to_run=_losses_to_run)
+        if _eval_only:
+            _n_before = len(STEPS)
+            STEPS = [s for s in STEPS if "Phase 2" not in s.get("group", "")]
+            print(f"  [pipeline] eval_only — skipped {_n_before - len(STEPS)} Phase 2 "
+                  f"train/merge steps (requires pre-built merged models)")
         _print_header(cfg, draft, target, args)
         state = load_state()
         for step in STEPS:                          # sync done_check files
@@ -1971,6 +1989,12 @@ def main():
                         ckpt_root=_effective_ckpt_root,  # was args.ckpt_root — ignored --storage_root
                         train_hparams=train_hparams,
                         losses_to_run=_losses_to_run)
+
+    if _eval_only:
+        _n_before = len(STEPS)
+        STEPS = [s for s in STEPS if "Phase 2" not in s.get("group", "")]
+        print(f"  [pipeline] eval_only — skipped {_n_before - len(STEPS)} Phase 2 "
+              f"train/merge steps (using pre-built merged models)")
 
     _print_header(cfg, draft, target, args)
 
