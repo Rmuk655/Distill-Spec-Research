@@ -137,6 +137,19 @@ What the full laptop run exercises that smoke does NOT:
 
 **If this fails**: fix the code. Do not run colab_lite until 1b passes.
 
+**After 1b passes — summarize and log:**
+```bash
+python orchestration/run_summary.py --hw_tier laptop --markdown --log_id 20260528-001
+# paste output into deploy/RUN_LOG.md Level 1 section
+```
+
+**🔐 Code Review Gate → Level 2** (must complete before first colab_lite run):
+- [ ] Level 1b passes (all 6 modes, no errors)
+- [ ] PR opened with all changes since last review
+- [ ] Loss function implementation reviewed against paper/spec
+- [ ] Verifier implementation reviewed against GBV spec
+- [ ] Reviewer sign-off recorded in `deploy/RUN_LOG.md` Level 1 section
+
 ---
 
 ### Step 2 — Colab Lite trend run (Level 2)
@@ -151,9 +164,24 @@ in ~10 min before committing to the full 25 min run).
 - Block efficiency: any improvement over the naive baseline?
 - Alpha eval (token acceptance): direction consistent with loss improvement?
 
+**After the run — summarize and log:**
+```bash
+python orchestration/run_summary.py --hw_tier colab_lite --markdown --log_id 20260528-002
+# paste output into deploy/RUN_LOG.md Level 2 section
+# record W&B run URL immediately
+```
+
 **Gate**: at least one loss function shows a consistent positive trend.
 **If no trend**: revisit the loss implementation before moving to Level 3.
-**Cost if wrong**: 25 min, not 4 hours.
+**Cost if wrong**: 25 min × 2 seeds, not 4 hours × 2 seeds.
+
+**🔐 Code Review Gate → Level 3** (must complete before first colab run):
+- [ ] Level 2 shows positive trend on ≥2 verifiers
+- [ ] Second Level 2 seed (different `seed:` in YAML) confirms direction
+- [ ] PR reviewed: hypothesis matches what the code actually tests
+- [ ] PR reviewed: no data leakage (eval prompts not in train set)
+- [ ] W&B run URLs recorded in `deploy/RUN_LOG.md`
+- [ ] Reviewer sign-off recorded
 
 ---
 
@@ -168,9 +196,24 @@ Run with `CONFIG = "colab"` (default). 500 steps, ~2-4 h.
 - Results reproducible across 2 seeds
 - Alpha eval consistent with block efficiency improvement
 
+**After the run — summarize and log:**
+```bash
+python orchestration/run_summary.py --hw_tier colab --markdown --log_id 20260528-003
+# paste into deploy/RUN_LOG.md Level 3 section
+```
+
 **Gate**: effect is statistically meaningful, directionally consistent, and
 larger than run-to-run variance (compare two seeds).
-**These are publishable numbers.** Record the W&B run IDs.
+**These are publishable numbers.** Record the W&B run IDs immediately.
+
+**🔐 Code Review Gate → Level 4** (must complete before any A100 run):
+- [ ] Level 3 confirmed across ≥2 seeds
+- [ ] Effect > 5% on ≥1 verifier × K combination
+- [ ] PR reviewed: no bugs introduced since Level 2 review
+- [ ] Hypothesis text finalized and written into `GUIDE.md` — no more code changes
+- [ ] Ablation plan agreed (what to ablate on A100, which seeds, which K values)
+- [ ] Both researchers sign off — this is the commitment point before expensive compute
+- [ ] Sign-off recorded in `deploy/RUN_LOG.md`
 
 ---
 
@@ -180,10 +223,17 @@ Open `deploy/colab_a100_quickstart.ipynb` on a **Colab Pro/Pro+ A100 runtime**.
 
 Run with `CONFIG = "colab_a100"` (default). 2000 steps, ~2-3 h.
 
-**Requirements before running Level 4:**
+**Requirements before running Level 4** (all gates above must be closed):
 - Level 3 results are clean and reproducible
 - The hypothesis being tested is finalized (no more code changes)
 - At least 2 Level 3 seeds confirm the direction
+- Ablation plan is written down
+
+**After the run — summarize and log:**
+```bash
+python orchestration/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
+# paste into deploy/RUN_LOG.md Level 4 section
+```
 
 **What's different from Level 3:**
 - Larger teacher (8B vs 4B) → stronger distillation signal
