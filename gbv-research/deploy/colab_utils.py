@@ -111,6 +111,33 @@ def auth_hf() -> None:
         print("     HF_TOKEN not set (OK for public Qwen3 models)")
 
 
+def keep_alive() -> None:
+    """Inject a 45-second JS heartbeat to prevent Colab idle-timeout.
+
+    Call this at the top of any long-running cell (Cell 7, Cell 8, etc.).
+    The heartbeat fires a synthetic mousemove event and clicks the reconnect
+    button if it appears, keeping the browser from triggering idle logout.
+
+    Safe to call multiple times — the JS guard (window.__sd_ka) ensures only
+    one interval is registered per page.
+    """
+    try:
+        from IPython.display import display, Javascript  # type: ignore
+        display(Javascript("""
+(function(){
+  if(window.__sd_ka)return;
+  window.__sd_ka=setInterval(function(){
+    document.dispatchEvent(new MouseEvent('mousemove',{bubbles:true}));
+    var b=document.querySelector('[data-tooltip="Reconnect to runtime"]');
+    if(b)b.click();
+  },45000);
+  console.log('[specdist] keep-alive on (45 s heartbeat)');
+})();
+"""))
+    except Exception:
+        pass  # not in a browser / no IPython — silently skip
+
+
 def check_gpu(warn_below_gb: float = 12.0) -> None:
     """Print GPU name + free VRAM; warn if below warn_below_gb."""
     import torch  # type: ignore
