@@ -248,7 +248,11 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
     base   = transformers.AutoModelForCausalLM.from_pretrained(
         draft_model_id, torch_dtype=torch.bfloat16)
     print(f"Loading LoRA: {adapter_path}")
-    model  = PeftModel.from_pretrained(base, adapter_path)
+    # local_files_only=True bypasses HuggingFace Hub validation entirely.
+    # Without it, PEFT calls hf_hub_download which validates the path as a
+    # repo ID — Windows paths with spaces exceed the 96-char limit and fail
+    # with HFValidationError before PEFT ever checks the local filesystem.
+    model  = PeftModel.from_pretrained(base, adapter_path, local_files_only=True)
     merged = model.merge_and_unload()
     out    = adapter_path + "_merged"
     merged.save_pretrained(out)
