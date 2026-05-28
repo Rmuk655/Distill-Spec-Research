@@ -442,13 +442,16 @@ _LOSS_STEP_PREFIXES: dict = {
     #   bv_tree       → bv_verify (block acceptance integral)
     #   gbv_tree      → gbv_verify (bv with q_skew substituted)
     #   traversal_tree → traversal_verify (leaf-weight product)
+    #   ebe_tree      → on-policy EBE ablation (isolates off-policy mismatch
+    #                   in flat EBE; same formula as ebe but on student tree)
     # OT-based verifiers (naive, nss, spectr, specinfer, khisti) are trained
     # with flat sequence losses (forward_kl, ebe) — their per-token OTLP
     # solvers are not improved by tree-structured distillation objectives.
-    "kl_tree":        ("train_kl_tree_",   "merge_kl_tree_",   "eval_kl_tree_"),
-    "bv_tree":        ("train_bv_tree_",   "merge_bv_tree_",   "eval_bv_tree_"),
-    "gbv_tree":       ("train_gbv_tree_",  "merge_gbv_tree_",  "eval_gbv_tree_"),
-    "traversal_tree": ("train_trav_tree_", "merge_trav_tree_", "eval_trav_tree_"),
+    "kl_tree":        ("train_kl_tree_",    "merge_kl_tree_",    "eval_kl_tree_"),
+    "bv_tree":        ("train_bv_tree_",    "merge_bv_tree_",    "eval_bv_tree_"),
+    "gbv_tree":       ("train_gbv_tree_",   "merge_gbv_tree_",   "eval_gbv_tree_"),
+    "traversal_tree": ("train_trav_tree_",  "merge_trav_tree_",  "eval_trav_tree_"),
+    "ebe_tree":       ("train_ebe_tree_",   "merge_ebe_tree_",   "eval_ebe_tree_"),
 }
 ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
@@ -639,6 +642,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "bv_tree":        "bv",
         "gbv_tree":       "gbv",
         "traversal_tree": "traversal",
+        # ebe_tree uses per-token acceptance (same formula as flat EBE but on-policy).
+        # Paired with bv in smoke for direct comparison with bv_tree; full uses all 3.
+        "ebe_tree":       "bv",
     }
 
     # ── Loss filter helper ─────────────────────────────────────────────────────
@@ -1084,6 +1090,31 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                     "--adapter", _ckpt("trav_tree-gsm8k"), "--draft", draft],
             "done_check": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
         },
+        {
+            "id": "train_ebe_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train ebe_tree (on-policy EBE ablation), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "ebe_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("ebe_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("ebe_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_ebe_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge ebe_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("ebe_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
+        },
 
         # -------------------------------------------------------------------
         # Phase 3 — GSM8K Eval
@@ -1208,6 +1239,16 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        modes=_TREE_PAIRED["traversal_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_ebe_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval ebe_tree-gsm8k on gsm8k [bv | bv+gbv+traversal]",
+            "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree", datasets="gsm8k",
+                       task_score=True,
+                       modes=_TREE_PAIRED["ebe_tree"] if smoke else _TREE_NON_OT),
+            "done_check": None,
+            "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------
@@ -1362,6 +1403,17 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_ebe_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval ebe_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------

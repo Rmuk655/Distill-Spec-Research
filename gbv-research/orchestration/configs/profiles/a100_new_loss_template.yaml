@@ -105,6 +105,9 @@ experiment:
   #   bv_tree        — targets bv_verify block-acceptance integral
   #   gbv_tree       — targets gbv_verify (bv with q_skew substituted)
   #   traversal_tree — targets traversal_verify leaf-weight product
+  #   ebe_tree       — on-policy EBE ablation: same token-level formula as flat
+  #                    EBE but trained on the student's own draft tree paths.
+  #                    Isolates the off-policy mismatch in flat EBE.
   #
   # For tree losses, also set tree_training.tree_K and tree_training.tree_L below.
   # NOTE: gbv_tree is numerically stable only for tree_K ≤ 4 (see compute_skew in

@@ -115,10 +115,13 @@ def parse_args() -> argparse.Namespace:
                        "forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single",
                        # Tree-structured losses — on-policy, verifier-specific objectives
                        "kl_tree", "bv_tree", "gbv_tree", "traversal_tree",
+                       # On-policy EBE: same formula as flat EBE but on student's own tree
+                       # (ablation that isolates the off-policy mismatch in flat EBE)
+                       "ebe_tree",
                    ],
                    help="Distillation loss objective.  "
-                        "kl_tree/bv_tree/gbv_tree/traversal_tree use the student's own "
-                        "draft tree as training data (on-policy) and compute verifier-specific "
+                        "kl_tree/bv_tree/gbv_tree/traversal_tree/ebe_tree use the student's "
+                        "own draft tree as training data (on-policy) and compute verifier-specific "
                         "E[τ] surrogates.  Requires --tree_K and --tree_L.")
     p.add_argument("--tree_K", type=int, default=4,
                    help="Number of i.i.d. draft paths for tree losses (default 4, "

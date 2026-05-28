@@ -506,6 +506,108 @@ def gbv_tree_loss(
 
 
 # ---------------------------------------------------------------------------
+# ebe_tree — on-policy EBE on the student's own draft tree
+# ---------------------------------------------------------------------------
+
+def ebe_tree_loss(
+    q_probs_dict: Dict[str, torch.Tensor],   # {prefix → [V]}, WITH grad
+    p_probs_dict: Dict[str, torch.Tensor],   # {prefix → [V]}, detached
+    q_paths: List[List[int]],                 # K draft paths, each length L+1
+    L: int,
+    K: int,
+    kl_weight: float = 0.1,
+) -> torch.Tensor:
+    """
+    On-policy Expected Block Efficiency — on-policy ablation of flat EBE.
+
+    Flat EBE (ebe.py) computes α = min(1, q_teacher[t]/p_draft[t]) for the
+    TEACHER's own generated tokens.  At inference the verifier evaluates the
+    STUDENT's actual draft tokens, creating an off-policy mismatch that kills
+    the gradient signal.
+
+    ebe_tree fixes this by computing the EBE formula on the student's own
+    K draft paths drawn from the student's own tree:
+
+        α_i = min(1, p_target[t_i] / q_draft[t_i])   where t_i ∈ student path
+        EBE  = −mean_k (1 + Σ_{k=1}^{L} Π_{i=1}^{k} α_i)
+
+    Optional KL regulariser (same as flat EBE): prevents gradient collapse
+    when α ≈ 1 everywhere, by providing a smooth gradient from the full
+    distribution at every tree node.
+
+    Ablation role in the paper table
+    ---------------------------------
+      flat EBE      → off-policy, token-level acceptance
+      ebe_tree      → on-policy, token-level acceptance    ← this function
+      bv_tree       → on-policy, full-vocab block integral (theoretically optimal)
+
+    If ebe_tree >> flat EBE  → the off-policy mismatch was the main culprit.
+    If bv_tree   >> ebe_tree → full-vocab integral also matters (use bv_tree).
+
+    Args:
+        q_probs_dict:  Student distributions WITH grad at non-leaf tree nodes.
+        p_probs_dict:  Teacher distributions, detached.
+        q_paths:       All K draft paths sampled from the student's tree.
+        L:             Draft block length.
+        K:             Number of paths.
+        kl_weight:     Weight λ for the KL regulariser (default 0.1).
+
+    Returns:
+        Scalar tensor = −E[τ_EBE] (minimise to maximise block efficiency).
+    """
+    device   = next(iter(q_probs_dict.values())).device
+    total_ebe = torch.zeros(1, device=device)
+    total_kl  = torch.zeros(1, device=device)
+    n_paths   = 0
+    n_nodes   = 0
+
+    for path in q_paths:
+        alpha_list: List[torch.Tensor] = []
+
+        for i in range(1, L + 1):
+            prefix = ",".join(str(x) for x in path[:i])
+            if i >= len(path):
+                break
+            token = path[i]
+
+            if prefix not in q_probs_dict or prefix not in p_probs_dict:
+                break
+
+            p = p_probs_dict[prefix].detach().to(q_probs_dict[prefix].dtype)   # [V] frozen
+            q = q_probs_dict[prefix]                                            # [V] WITH grad
+
+            # α = min(1, p[t] / q[t]) — clamp ≥ 1e-6 prevents NaN in cumprod backward
+            alpha = torch.clamp(
+                p[token] / q[token].clamp(min=1e-9), max=1.0
+            ).clamp(min=1e-6)
+            alpha_list.append(alpha)
+
+            if kl_weight > 0.0:
+                total_kl = total_kl + F.kl_div(
+                    q.log().clamp(min=-100.0), p, reduction="sum"
+                )
+                n_nodes += 1
+
+        if not alpha_list:
+            continue
+
+        # E[τ_EBE] = 1 + Σ_{k=1}^L Π_{i=1}^k α_i  (torch.cumprod gives the prefix products)
+        blk       = torch.stack(alpha_list)                     # [≤L], WITH grad
+        ebe_path  = -(1.0 + torch.cumprod(blk, dim=0).sum())   # scalar, minimise negative
+        total_ebe = total_ebe + ebe_path
+        n_paths  += 1
+
+    if n_paths == 0:
+        return torch.zeros(1, device=device, requires_grad=True)
+
+    loss = total_ebe / n_paths
+    if kl_weight > 0.0 and n_nodes > 0:
+        loss = loss + kl_weight * (total_kl / n_nodes)
+
+    return loss
+
+
+# ---------------------------------------------------------------------------
 # traversal_tree — leaf-weight surrogate for E[τ_traversal]
 # ---------------------------------------------------------------------------
 
@@ -567,7 +669,9 @@ def traversal_tree_loss(
 # Registry and dispatch
 # ---------------------------------------------------------------------------
 
-TREE_LOSS_NAMES = frozenset({"kl_tree", "bv_tree", "gbv_tree", "traversal_tree"})
+TREE_LOSS_NAMES = frozenset({
+    "kl_tree", "bv_tree", "gbv_tree", "traversal_tree", "ebe_tree",
+})
 
 
 def compute_tree_loss(
@@ -582,7 +686,7 @@ def compute_tree_loss(
     Dispatch to the named tree loss.
 
     Args:
-        name:          One of {"kl_tree", "bv_tree", "gbv_tree", "traversal_tree"}.
+        name:          One of TREE_LOSS_NAMES.
         q_probs_dict:  Student distributions WITH grad (from draft_tree_forward_with_grad).
         p_probs_dict:  Teacher distributions, detached (from target_tree_pass).
         q_paths:       K draft paths, each of length L+1.
@@ -600,6 +704,8 @@ def compute_tree_loss(
         return gbv_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
     elif name == "traversal_tree":
         return traversal_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
+    elif name == "ebe_tree":
+        return ebe_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
     else:
         raise ValueError(
             f"Unknown tree loss '{name}'. "
