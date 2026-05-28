@@ -10,7 +10,21 @@ train_runs   : training loss curves (step → loss)
 
 import sqlite3
 import os
+import subprocess
 from datetime import datetime, timezone
+
+
+def _git_sha() -> str | None:
+    """Return the short git SHA of HEAD, or None if git is unavailable."""
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return sha or None
+    except Exception:
+        return None
 
 # ---------------------------------------------------------------------------
 # DB path resolution — portable across machines and cloud environments.
@@ -72,11 +86,16 @@ CREATE TABLE IF NOT EXISTS runs (
                                         -- filter historical runs in the viz dashboard.
                                         -- Every run keeps its unique run_tag timestamp — this
                                         -- field is an additional human annotation layer.
-    hw_tier         TEXT    NOT NULL DEFAULT 'laptop'
-                                        -- hardware tier: 'laptop' | 'colab' | 'a100'
-                                        -- laptop = smoke/correctness (Qwen2.5-0.5B -> Qwen3-0.6B)
-                                        -- colab  = trend formation, 4-bit quantized target
-                                        -- a100   = paper-quality, bf16, no quantization
+    hw_tier         TEXT    NOT NULL DEFAULT 'laptop',
+                                        -- hardware tier: 'laptop' | 'colab_lite' | 'colab' | 'a100'
+                                        -- laptop     = smoke/correctness (Qwen3-0.6B teacher)
+                                        -- colab_lite = trend detection  (Qwen3-1.7B teacher)
+                                        -- colab      = publishable results (Qwen3-4B teacher)
+                                        -- a100       = paper-quality, bf16 (Qwen3-8B teacher)
+    seed            INTEGER,            -- random seed (42, 123, …) — NULL = not recorded
+    git_sha         TEXT,               -- git rev-parse --short HEAD at run time
+                                        -- lets you correlate results with exact code version
+    wandb_url       TEXT                -- W&B run URL for cross-referencing loss curves
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_label ON runs(draft_label, mode, dataset);
@@ -124,6 +143,9 @@ def _connect() -> sqlite3.Connection:
          "CREATE INDEX IF NOT EXISTS idx_runs_etag ON runs(experiment_tag)"),
         ("hw_tier",           "TEXT NOT NULL DEFAULT 'laptop'",
          "CREATE INDEX IF NOT EXISTS idx_runs_hw_tier ON runs(hw_tier)"),
+        ("seed",              "INTEGER", None),
+        ("git_sha",           "TEXT", None),
+        ("wandb_url",         "TEXT", None),
     ]:
         try:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {typedef}")
@@ -166,10 +188,13 @@ def insert_run(row: dict, hw_tier: str = "laptop") -> int:
         "throughput", "ms_per_tok", "peak_vram_mb",
         "task_score", "perplexity", "draft_latency_ms", "verify_latency_ms", "notes",
         "experiment_tag", "hw_tier",
+        "seed", "git_sha", "wandb_url",
     }
-    # Inject hw_tier if not already set by the caller
+    # Auto-inject fields that every row should have
     if "hw_tier" not in row:
         row = {**row, "hw_tier": hw_tier}
+    if "git_sha" not in row or not row.get("git_sha"):
+        row = {**row, "git_sha": _git_sha()}
     row = {k: v for k, v in row.items() if k in valid_cols}
     if "ts" not in row:
         row["ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

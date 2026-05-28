@@ -4,7 +4,7 @@ Every experiment run is recorded here. Rule: **if it wasn't logged, it didn't ha
 
 To generate a summary row after a run completes:
 ```bash
-python orchestration/run_summary.py --markdown --log_id 20260528-001
+python tools/run_summary.py --markdown --log_id 20260528-001
 ```
 
 ---
@@ -32,7 +32,7 @@ Increment NNN within a day (001, 002, …). Never reuse an ID.
 
 To generate a summary:
 ```bash
-python orchestration/run_summary.py --hw_tier laptop --markdown
+python tools/run_summary.py --hw_tier laptop --markdown
 ```
 
 | exp_id | date | smoke/full | steps | modes_ran | final_loss | errors | status | notes |
@@ -59,7 +59,7 @@ Before the first Level 2 run or after any code change:
 
 To generate a summary:
 ```bash
-python orchestration/run_summary.py --hw_tier colab_lite --markdown
+python tools/run_summary.py --hw_tier colab_lite --markdown
 ```
 
 | exp_id | date | loss | steps | seed | BE_specinfer_K3 | BE_gbv_K3 | Δ_naive | alpha | status | wandb | notes |
@@ -85,7 +85,7 @@ python orchestration/run_summary.py --hw_tier colab_lite --markdown
 
 To generate a summary:
 ```bash
-python orchestration/run_summary.py --hw_tier colab --markdown
+python tools/run_summary.py --hw_tier colab --markdown
 ```
 
 | exp_id | date | loss | steps | seed | BE_specinfer_K3 | BE_specinfer_K5 | BE_gbv_K3 | BE_gbv_K5 | Δ_best | alpha | status | wandb | notes |
@@ -112,7 +112,7 @@ python orchestration/run_summary.py --hw_tier colab --markdown
 
 To generate a summary:
 ```bash
-python orchestration/run_summary.py --hw_tier a100 --markdown
+python tools/run_summary.py --hw_tier a100 --markdown
 ```
 
 | exp_id | date | loss | steps | seed | BE_specinfer_K3 | BE_gbv_K3 | BE_traversal_K3 | alpha | task_score | status | wandb | notes |

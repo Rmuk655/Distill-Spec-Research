@@ -139,7 +139,7 @@ What the full laptop run exercises that smoke does NOT:
 
 **After 1b passes — summarize and log:**
 ```bash
-python orchestration/run_summary.py --hw_tier laptop --markdown --log_id 20260528-001
+python tools/run_summary.py --hw_tier laptop --markdown --log_id 20260528-001
 # paste output into deploy/RUN_LOG.md Level 1 section
 ```
 
@@ -166,7 +166,7 @@ in ~10 min before committing to the full 25 min run).
 
 **After the run — summarize and log:**
 ```bash
-python orchestration/run_summary.py --hw_tier colab_lite --markdown --log_id 20260528-002
+python tools/run_summary.py --hw_tier colab_lite --markdown --log_id 20260528-002
 # paste output into deploy/RUN_LOG.md Level 2 section
 # record W&B run URL immediately
 ```
@@ -198,7 +198,7 @@ Run with `CONFIG = "colab"` (default). 500 steps, ~2-4 h.
 
 **After the run — summarize and log:**
 ```bash
-python orchestration/run_summary.py --hw_tier colab --markdown --log_id 20260528-003
+python tools/run_summary.py --hw_tier colab --markdown --log_id 20260528-003
 # paste into deploy/RUN_LOG.md Level 3 section
 ```
 
@@ -231,7 +231,7 @@ Run with `CONFIG = "colab_a100"` (default). 2000 steps, ~2-3 h.
 
 **After the run — summarize and log:**
 ```bash
-python orchestration/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
+python tools/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
 # paste into deploy/RUN_LOG.md Level 4 section
 ```
 
