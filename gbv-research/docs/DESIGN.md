@@ -8,15 +8,15 @@
 
 | | OSD (github) | DistillSpec (paper) | Our implementation |
 |---|---|---|---|
-| Training mode | **Online** (during serving) | **Offline** (before deployment) | **Offline** |
+| Training mode | **Online** (during serving) | **Offline** (before deployment) | **Offline** (primary) + **Online** (ablation) |
 | Training trigger | Every N served requests | Fixed N steps on a dataset | Fixed N steps on a dataset |
 | Draft architecture | Full model weights | Full model | **LoRA adapters only**, base frozen |
-| Sample source | student / teacher / mix | **teacher only** (recommended) | **teacher only** |
-| Loss function | forward KL, reverse KL, JSD | forward KL + EBE | forward KL + EBE (+ reverse KL, JSD, L1 as ablations) |
+| Sample source | student / teacher / mix | **teacher only** (recommended) | **teacher only** (offline); student's own draft paths (online tree) |
+| Loss function | forward KL, reverse KL, JSD | forward KL + EBE | forward KL + EBE (+ rev\_KL, JSD, L1, 7 tree losses as ablations) |
 | Token masking | Only wrong positions (wrong_token_ids) | All generated positions | All generated positions |
 | Verifier at training time | SD runs inside training loop | None — separate eval | None — separate eval |
 | Eval framework | llamacpp-based | Separate pass | Separate `evaluate.py` → GBV subprocess |
-| Model family | LLaMA/Vicuna | Generic | **Qwen2.5-0.5B → Qwen3-0.6B** (laptop) / **Qwen3-0.6B → Qwen3-8B** (server) |
+| Model family | LLaMA/Vicuna | Generic | **Qwen2.5-0.5B → Qwen3-0.6B** (laptop) / **Qwen3-0.6B → Qwen3-8B** (server / A100) |
 | HF Trainer | Yes (DistillTrainer) | N/A | No — plain PyTorch loop |
 
 ---
@@ -133,10 +133,18 @@ Results go into `results.db` (SQLite). `dashboard/training_dashboard.py` reads f
 
 OSD's key contribution is *online* distillation: the draft model continues training while serving live traffic, using the actual query distribution. This achieves 0.1–0.65 higher α and 1.22×–3.06× latency reduction over a static draft.
 
-We omit online mode because:
-- DistillSpec asks: does offline distillation help at all? That's the baseline.
-- Online adds complexity (buffer management, concurrent serving+training, query routing).
-- It's a separate research contribution and not the paper we're implementing.
+**We implement online mode as an ablation** (H6: does on-policy online tree training close the off-policy gap?). Four online variants run in the pipeline:
+
+| Pipeline step | Loss | Architecture |
+|---|---|---|
+| `online_adapt_gsm8k` | `online_kl` | Flat KL — OSD-style replay buffer of `wrong_token_ids` |
+| `online_ebe_adapt_gsm8k` | `online_ebe` | Flat EBE — same buffer, EBE loss on rejected positions |
+| `online_kl_tree_adapt_gsm8k` | `online_kl_tree` | **Tree KL** — no buffer; fresh K-path tree from live prompt |
+| `online_ebe_tree_adapt_gsm8k` | `online_ebe_tree` | **Tree EBE** — no buffer; fresh K-path tree from live prompt |
+
+The flat online variants replicate OSD's buffer architecture (collect rollouts, replay-train on `wrong_token_ids`). The tree online variants discard the buffer entirely — see §7.5. The off-policy problem (§7.1) applies to the flat online variants just as it does to flat offline training; tree online eliminates it.
+
+The **primary research questions** (H1–H5) are answered by offline distillation. Online mode is included to test H6 and to provide a fair comparison with OSD's key result. It is not the paper's main contribution.
 
 ### 3.2 wrong_token_ids masking
 
@@ -447,19 +455,32 @@ Two online tree variants are in the pipeline:
 
 ## 8. Pipeline Phases
 
-`experiment.py --config laptop --yes` runs 18 steps across 5 phases:
+The full pipeline (`experiment.py --config <cfg> --yes`) runs ~70 steps across 7 phases.
+Resume any time — completed steps are skipped automatically (training: `done_check` file;
+eval: `--skip_existing` against `results.db`).
+
+### Track A — Flat Distillation Losses (Phases 1–5)
 
 | Phase | Steps | What it does |
 |---|---|---|
-| **0 — Merge** | 3 | Merge pre-existing LoRA adapters (kl200, ebe200, ebe_lr*) into full-weight models. **Auto-skipped** if `*_merged/config.json` already exists on disk. |
-| **1 — Quick Eval** | 6 | Eval baseline + all pre-existing checkpoints on gsm8k (alpha + block-efficiency). Establishes the LR-sweep baseline before heavy training. |
-| **2 — Training** | 4 | Train KL-1000 on gsm8k_train (1000 steps, ~5 h), merge it; then EBE-1000 similarly. These are the primary paper models. |
-| **3 — Full Eval** | 2 | Eval the newly trained kl1000 + ebe1000 on gsm8k. Produces the core 3×3 interaction matrix for the paper. |
-| **4 — Multi-Dataset** | 3 | Eval baseline + kl1000 + ebe1000 on humaneval, math500, mtbench, alpaca. Validates generalization beyond the training distribution. |
+| **1 — Baseline** | 1 | `eval_baseline_gsm8k` — eval untrained draft with all verifiers on GSM8K. Pins the "no training" floor for every comparison. |
+| **2 — Flat Training** | 14 | Train + merge 7 flat losses on GSM8K train split: `kl`, `ebe`, `rev_kl`, `jsd`, `l1`, `online_kl`, `online_ebe`. Each loss: `train_<loss>_gsm8k` → `merge_<loss>_gsm8k`. |
+| **3 — GSM8K Eval** | 7 | Eval each flat-loss model on GSM8K with all verifiers (`specinfer`, `bv`, `gbv`, `traversal`, `alpha`). Produces the core Loss×Mode interaction matrix. |
+| **4 — Multi-Dataset Eval** | 8 | Eval `baseline` + all 7 flat-loss models on `humaneval`, `math500`, `mtbench`, `alpaca`. Validates generalisation outside the training distribution. |
+| **5 — EAGLE Benchmark** | 3 | `eagle_gen` → `eagle_train` → `eagle_eval`. External EAGLE baseline for block-efficiency comparison in the paper table. |
 
-Resume at any time with `python experiment.py --config laptop --yes`. Steps with
-a `done_check` file (training steps) are skipped if the output artifact exists.
-Eval steps are skipped if the result is already in `results.db` (`--skip_existing`).
+### Track B — Tree-Structured Losses (Phases 6–7)
+
+| Phase | Steps | What it does |
+|---|---|---|
+| **6 — Tree Training + GSM8K** | 27 | Train + merge 9 tree losses: `kl_tree`, `rev_kl_tree`, `jsd_tree`, `bv_tree`, `gbv_tree`, `traversal_tree`, `ebe_tree`, `online_kl_tree`, `online_ebe_tree`. Then eval each on GSM8K with **non-OT verifiers only** (`bv`, `gbv`, `traversal`). |
+| **7 — Tree Multi-Dataset** | 9 | Eval all 9 tree-loss models on `humaneval`, `math500`, `mtbench`, `alpaca` (same non-OT verifier subset). |
+
+### Key design points
+
+- **Tree losses use non-OT verifiers only.** `experiment.py` hardcodes `_TREE_NON_OT = "bv,gbv,traversal"` for all tree eval steps. OT verifiers (`specinfer`, `naive`) are out-of-distribution for tree-trained models.
+- **Crash-safe state machine.** Every step writes `status: done` to `pipeline_state_<config>.json` before the next step starts. Kill the process at any point — re-run to resume exactly where it left off.
+- **Profile-driven configuration.** Run a subset of steps via `--config profiles/a100_tree_losses --losses kl_tree,bv_tree`. See `orchestration/configs/profiles/README.md` for the full profile catalogue.
 
 ---
 
