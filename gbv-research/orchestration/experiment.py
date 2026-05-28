@@ -895,6 +895,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval kl-gsm8k on gsm8k",
             "cmd": _ec(_merged("kl-gsm8k"), "kl", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("kl-gsm8k"), "config.json"),
         },
         {
             "id": "eval_ebe_gsm8k",
@@ -902,6 +903,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval ebe-gsm8k on gsm8k",
             "cmd": _ec(_merged("ebe-gsm8k"), "ebe", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
         {
             "id": "eval_rev_kl_gsm8k",
@@ -909,6 +911,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval rev_kl-gsm8k on gsm8k",
             "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
         },
         {
             "id": "eval_jsd_gsm8k",
@@ -916,6 +919,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval jsd-gsm8k on gsm8k",
             "cmd": _ec(_merged("jsd-gsm8k"), "jsd", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("jsd-gsm8k"), "config.json"),
         },
         {
             "id": "eval_l1_gsm8k",
@@ -923,6 +927,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval l1-gsm8k on gsm8k",
             "cmd": _ec(_merged("l1-gsm8k"), "l1", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("l1-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_gsm8k",
@@ -930,6 +935,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval online-gsm8k on gsm8k",
             "cmd": _ec(_merged("online-gsm8k"), "online", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("online-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_ebe_gsm8k",
@@ -937,6 +943,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval online-ebe-gsm8k on gsm8k",
             "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
         },
         {
             "id": "eval_ebe_single_gsm8k",
@@ -944,6 +951,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval ebe_single-gsm8k on gsm8k",
             "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_ebe_single_gsm8k",
@@ -951,6 +959,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval online-ebe-single-gsm8k on gsm8k",
             "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", datasets="gsm8k", task_score=True),
             "done_check": None,
+            "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------
@@ -976,6 +985,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("kl-gsm8k"), "config.json"),
         },
         {
             "id": "eval_ebe_all",
@@ -985,6 +995,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
         {
             "id": "eval_rev_kl_all",
@@ -994,6 +1005,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
         },
         {
             "id": "eval_jsd_all",
@@ -1003,6 +1015,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("jsd-gsm8k"), "config.json"),
         },
         {
             "id": "eval_l1_all",
@@ -1012,6 +1025,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("l1-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_all",
@@ -1021,6 +1035,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("online-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_ebe_all",
@@ -1030,6 +1045,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
         },
         {
             "id": "eval_ebe_single_all",
@@ -1039,6 +1055,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_ebe_single_all",
@@ -1048,6 +1065,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
             "smoke_skip": smoke,
+            "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------
@@ -1946,6 +1964,20 @@ def main():
         if skip_path and not os.path.exists(skip_path):
             print(f"  [skip] [{sid}] prerequisite missing ({os.path.basename(skip_path)}) — auto-skipped")
             mark_step(state, sid, "done", f"auto-skipped: {os.path.basename(skip_path)} not found")
+            continue
+
+        # Hard prereq guard: eval steps cannot run until their train+merge steps finish.
+        # Unlike skip_if_missing (silent auto-skip), this is a loud failure — the user
+        # must explicitly run the corresponding train step before eval can proceed.
+        requires = step.get("requires")
+        if requires and not os.path.exists(requires):
+            _req_model = os.path.basename(os.path.dirname(requires))
+            _train_id  = "merge_" + _req_model.replace("-", "_")
+            print(f"\n  {CROSS} [{sid}] BLOCKED — merged model not found.")
+            print(f"         Expected : {requires}")
+            print(f"         Fix      : run the train + merge steps for '{_req_model}' first.")
+            print(f"         Hint     : re-run with --from {_train_id}")
+            mark_step(state, sid, "failed", f"blocked: merged model missing: {_req_model}")
             continue
 
         # Prompt before each step (unless --yes)
