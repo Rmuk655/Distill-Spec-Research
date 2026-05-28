@@ -69,10 +69,13 @@ def install_deps(gbv_dir: str = GBV_DIR) -> None:
          "-r", req, "bitsandbytes", "accelerate", "flash-attn"],
         check=False,
     )
-    # Core deps must succeed
+    # Core deps must succeed.
+    # torchao>=0.16.0: Colab ships 0.10.0 but PEFT 0.14+ raises ImportError when
+    # torchao is present at an incompatible version (instead of silently skipping it).
+    # Upgrading torchao here prevents the LoRA init crash in trainer.py.
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "-q",
-         "-r", req, "bitsandbytes", "accelerate"],
+         "-r", req, "bitsandbytes", "accelerate", "torchao>=0.16.0"],
         check=True,
     )
     print("[3/5] Dependencies installed")
