@@ -844,6 +844,118 @@ def update_step(
 
 
 # ---------------------------------------------------------------------------
+# On-policy tree distillation update (online-tree mode)
+# ---------------------------------------------------------------------------
+#
+# WHY THIS IS BETTER THAN FLAT ONLINE TRAINING
+# ---------------------------------------------
+# Flat online training (update_step above) trains on the replay buffer of
+# accepted+residual sequences.  For KL: only rejected positions get gradient.
+# For EBE: zero gradient everywhere (see the BUG comment above).
+#
+# Tree training builds the student's own K-path draft tree from the CURRENT
+# prompt, scores it with the target, and back-propagates through the student's
+# distributions at every tree node — no dead gradient positions.
+#
+# This gives:
+#   1. On-policy data: student trains on its own actual proposals, not the
+#      teacher's residual-resampled tokens.
+#   2. Prompt-distribution-matched: each update uses the real served prompt,
+#      not a fixed offline training set.
+#   3. Richer gradient: K paths × L nodes per update vs N_rejected ≪ K*L
+#      positions from the flat buffer.
+#
+# VRAM: building K=2 paths costs ~2× a single forward pass for the draft,
+# ~2× for the target (tree attention pass), then one more WITH-grad draft pass.
+# Total: ~3 draft forwards + 2 target forwards per update (vs 1+1 flat).
+# Use tree_K=2 on T4/Colab, tree_K=4 on A100.
+#
+# PAIRING WITH VERIFIERS
+# ----------------------
+# kl_tree and ebe_tree pair most naturally with online serving because the
+# standard speculative decoding verifier uses per-token acceptance
+# α = min(1, p[t]/q[t]) — the same quantity these losses optimize.
+# bv_tree/gbv_tree also work (they also use on-policy tree data) but are
+# designed for their specific non-OT verifiers.
+# ---------------------------------------------------------------------------
+
+def _tree_online_update(
+    draft_model,
+    target_model,
+    prompt_ids: torch.Tensor,     # [1, T] tokenised prompt
+    optimizer,
+    loss_name: str,               # any name in TREE_LOSS_NAMES
+    tree_K: int,
+    tree_L: int,
+    temperature: float,
+) -> float:
+    """
+    One on-policy tree distillation step for the online training loop.
+
+    Mirrors _tree_training_step from trainer.py but adapted for the online
+    context: takes a single prompt tensor rather than a DataLoader batch,
+    and does NOT use the replay buffer (builds a fresh tree from scratch).
+
+    Steps:
+      1. Draft builds a K-path tree from the current prompt (no grad).
+      2. Target scores every tree node (no grad).
+      3. Draft re-runs over the fixed tree WITH grad.
+      4. Compute tree loss → backward → optimizer step.
+
+    Returns the float loss value for logging.
+    """
+    # Lazy imports: only paid when tree mode is actually active.
+    from distillspec_gbv.losses.tree_losses import compute_tree_loss
+    from distillspec_gbv.tree_training import draft_tree_forward_with_grad
+    from distillspec_gbv.verifiers.draft_generator import iid_draft, target_tree_pass
+
+    device = prompt_ids.device
+
+    draft_model.eval()
+    with torch.no_grad():
+        # ── 1. Student builds draft tree ─────────────────────────────────────
+        q_init  = draft_model(prompt_ids, use_cache=True, return_dict=True)
+        q_cache = q_init.past_key_values
+        pending = torch.multinomial(
+            F.softmax(q_init.logits[0, -1] / temperature, dim=-1), 1
+        ).unsqueeze(0)                              # [1, 1]
+        q_paths, _, _ = iid_draft(
+            draft_model, q_cache, pending,
+            K=tree_K, L=tree_L, q_temp=temperature,
+        )
+
+        # ── 2. Target scores the draft tree ──────────────────────────────────
+        p_init  = target_model(prompt_ids, use_cache=True, return_dict=True)
+        p_cache = p_init.past_key_values
+        _, _, _, p_probs_dict = target_tree_pass(
+            target_model, p_cache, q_paths,
+            K=tree_K, L=tree_L, p_temp=temperature,
+        )
+        # p_probs_dict: {prefix → [V]}, all detached
+
+    # ── 3. Student re-runs on fixed tree WITH grad ────────────────────────────
+    q_probs_grad = draft_tree_forward_with_grad(
+        draft_model, prompt_ids, q_paths,
+        L=tree_L, K=tree_K, q_temp=temperature,
+    )
+
+    # ── 4. Tree loss + backward ───────────────────────────────────────────────
+    loss = compute_tree_loss(
+        loss_name, q_probs_grad, p_probs_dict, q_paths,
+        L=tree_L, K=tree_K,
+    )
+    optimizer.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(draft_model.parameters(), max_norm=1.0)
+    optimizer.step()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return loss.item()
+
+
+# ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
 
@@ -882,11 +994,42 @@ def main():
         default="forward_kl",
         choices=["forward_kl", "reverse_kl", "jsd", "ebe", "ebe_single"],
         help=(
-            "Training objective. "
+            "Flat training objective (replay-buffer mode).  Ignored when --tree_loss is set. "
             "'forward_kl'/'reverse_kl'/'jsd': KL variant at rejected positions (OSD original). "
             "'ebe': block-level EBE over full sequences + KL reg at rejected positions. "
             "'ebe_single': single-token EBE = −mean(α) at rejected positions (ablation vs ebe)."
         ),
+    )
+    parser.add_argument(
+        "--tree_loss",
+        default=None,
+        choices=[
+            "kl_tree",      # forward KL at each tree node (on-policy baseline)
+            "rev_kl_tree",  # reverse KL at each tree node (mode-seeking)
+            "jsd_tree",     # JSD at each tree node (symmetric, bounded)
+            "ebe_tree",     # on-policy EBE — natural pair for online serving
+            "bv_tree",      # BV block acceptance integral (on-policy)
+            "gbv_tree",     # GBV with q_skew (on-policy)
+            "traversal_tree",
+        ],
+        help=(
+            "On-policy tree distillation loss.  When set, replaces the flat replay-buffer "
+            "update_step with _tree_online_update: builds a K-path draft tree from the current "
+            "prompt, scores with target, and back-propagates through all tree nodes.  "
+            "Most natural pairings for online (standard SD) verifier: kl_tree, ebe_tree.  "
+            "Use --tree_K to control the path count (default 2 for VRAM budget on T4/Colab; "
+            "use 4 on A100)."
+        ),
+    )
+    parser.add_argument(
+        "--tree_K", type=int, default=2,
+        help="Number of i.i.d. draft paths per tree training step.  "
+             "Default 2 (safe on T4/Colab 15 GB).  Use 4 on A100.",
+    )
+    parser.add_argument(
+        "--tree_L", type=int, default=8,
+        help="Draft block depth for tree training.  Should match --K (tokens per step).  "
+             "Default 8.",
     )
     parser.add_argument(
         "--ebe_kl_weight", type=float, default=0.1,
@@ -1068,25 +1211,44 @@ def main():
                 eos_token_id=tokenizer.eos_token_id,
             )
 
-        # 3. Record into buffer
+        # 3. Record into buffer (alpha tracking; tree mode doesn't use the buffer
+        #    for training but still tracks alpha for logging/eval).
         buffer.add(full_ids, wrong_positions)
         alpha_window.append(alpha)
 
         # 4. Periodic update
-        if (step + 1) % args.update_every == 0 and len(buffer) > 0:
-            last_loss = update_step(
-                draft_model,
-                target_model,
-                buffer,
-                optimizer,
-                kl_method=args.kl_method,
-                temperature=args.temperature,
-                device=device,
-                ebe_kl_weight=args.ebe_kl_weight,
-                ebe_block_len=args.ebe_block_len,
-            )
-            buffer.clear()
-            update_count += 1
+        if (step + 1) % args.update_every == 0:
+            if args.tree_loss:
+                # On-policy tree distillation: build a fresh K-path tree from the
+                # current prompt and back-propagate through all tree nodes.
+                # Does NOT use the replay buffer — on-policy data is built here.
+                if len(input_ids[0]) > 1:   # skip if prompt is too short for a tree
+                    last_loss = _tree_online_update(
+                        draft_model,
+                        target_model,
+                        input_ids,
+                        optimizer,
+                        loss_name=args.tree_loss,
+                        tree_K=args.tree_K,
+                        tree_L=args.tree_L,
+                        temperature=args.temperature,
+                    )
+                    update_count += 1
+            elif len(buffer) > 0:
+                # Flat replay-buffer update (original OSD behaviour).
+                last_loss = update_step(
+                    draft_model,
+                    target_model,
+                    buffer,
+                    optimizer,
+                    kl_method=args.kl_method,
+                    temperature=args.temperature,
+                    device=device,
+                    ebe_kl_weight=args.ebe_kl_weight,
+                    ebe_block_len=args.ebe_block_len,
+                )
+                buffer.clear()
+                update_count += 1
 
         # 5. Logging
         if (step + 1) % args.log_every == 0:

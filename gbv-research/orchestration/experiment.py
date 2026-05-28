@@ -435,23 +435,30 @@ _LOSS_STEP_PREFIXES: dict = {
     "online":           ("online_adapt_",            "merge_online_gsm8k",      "eval_online_gsm8k", "eval_online_all"),
     "online_ebe":       ("online_ebe_adapt_",        "merge_online_ebe_",       "eval_online_ebe_"),
     "online_ebe_single":("online_ebe_single_adapt_", "merge_online_ebe_single_","eval_online_ebe_single_"),
-    # ── Tree-structured losses (non-OT verifiers only) ──────────────────────
-    # These train the draft model to match the verifier's actual optimization
-    # target — not just the per-token KL.  Paired verifiers:
-    #   kl_tree       → universal on-policy KL baseline (any verifier)
+    # ── Tree-structured losses (offline, non-OT verifiers) ──────────────────
+    # Divergence variants at each tree node (universal — work with any verifier):
+    #   kl_tree       → forward KL(p ∥ q) — mode-covering
+    #   rev_kl_tree   → reverse KL(q ∥ p) — mode-seeking
+    #   jsd_tree      → symmetric JSD — bounded, stable
+    # Verifier-specific surrogates (full-vocab integrals):
     #   bv_tree       → bv_verify (block acceptance integral)
     #   gbv_tree      → gbv_verify (bv with q_skew substituted)
     #   traversal_tree → traversal_verify (leaf-weight product)
-    #   ebe_tree      → on-policy EBE ablation (isolates off-policy mismatch
-    #                   in flat EBE; same formula as ebe but on student tree)
-    # OT-based verifiers (naive, nss, spectr, specinfer, khisti) are trained
-    # with flat sequence losses (forward_kl, ebe) — their per-token OTLP
-    # solvers are not improved by tree-structured distillation objectives.
+    # On-policy EBE ablation (token-level, not full-vocab):
+    #   ebe_tree      → isolates off-policy mismatch in flat EBE
     "kl_tree":        ("train_kl_tree_",    "merge_kl_tree_",    "eval_kl_tree_"),
+    "rev_kl_tree":    ("train_rev_kl_tree_","merge_rev_kl_tree_","eval_rev_kl_tree_"),
+    "jsd_tree":       ("train_jsd_tree_",   "merge_jsd_tree_",   "eval_jsd_tree_"),
     "bv_tree":        ("train_bv_tree_",    "merge_bv_tree_",    "eval_bv_tree_"),
     "gbv_tree":       ("train_gbv_tree_",   "merge_gbv_tree_",   "eval_gbv_tree_"),
     "traversal_tree": ("train_trav_tree_",  "merge_trav_tree_",  "eval_trav_tree_"),
     "ebe_tree":       ("train_ebe_tree_",   "merge_ebe_tree_",   "eval_ebe_tree_"),
+    # ── Online tree distillation (online serving + on-policy tree training) ──
+    # Builds a K-path draft tree at each update step on the served prompt.
+    # No replay buffer. On-policy + prompt-distribution-matched.
+    # Pairs naturally with standard speculative decoding (alpha/online) verifier.
+    "online_kl_tree":  ("online_kl_tree_adapt_",  "merge_online_kl_tree_",  "eval_online_kl_tree_"),
+    "online_ebe_tree": ("online_ebe_tree_adapt_",  "merge_online_ebe_tree_", "eval_online_ebe_tree_"),
 }
 ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
@@ -636,14 +643,17 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     #
     # kl_tree is the universal on-policy baseline: always runs all 3 non-OT modes.
     # ─────────────────────────────────────────────────────────────────────────
-    _TREE_NON_OT = "bv,gbv,traversal"   # full-run modes for all tree losses
+    _TREE_NON_OT = "bv,gbv,traversal"   # full-run modes for all offline tree losses
     _TREE_PAIRED = {                     # smoke: just the naturally paired verifier
-        "kl_tree":        _TREE_NON_OT, # universal baseline — test all 3 even in smoke
+        # Divergence variants — universal baselines, test all 3 even in smoke
+        "kl_tree":        _TREE_NON_OT,
+        "rev_kl_tree":    _TREE_NON_OT,
+        "jsd_tree":       _TREE_NON_OT,
+        # Verifier-specific surrogates — paired with their target verifier in smoke
         "bv_tree":        "bv",
         "gbv_tree":       "gbv",
         "traversal_tree": "traversal",
-        # ebe_tree uses per-token acceptance (same formula as flat EBE but on-policy).
-        # Paired with bv in smoke for direct comparison with bv_tree; full uses all 3.
+        # On-policy EBE ablation — paired with bv in smoke (closest structural match)
         "ebe_tree":       "bv",
     }
 
@@ -1116,6 +1126,128 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "done_check": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
         },
 
+        # rev_kl_tree and jsd_tree — on-policy divergence variant ablations.
+        # Same tree data as kl_tree; only the per-node divergence changes.
+        # rev_kl_tree: mode-seeking (draft concentrates on target's peaks)
+        # jsd_tree:    symmetric, bounded — more stable than forward/reverse KL
+        {
+            "id": "train_rev_kl_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train rev_kl_tree (on-policy reverse KL), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "rev_kl_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("rev_kl_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("rev_kl_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_rev_kl_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge rev_kl_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("rev_kl_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_jsd_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train jsd_tree (on-policy JSD), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "jsd_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("jsd_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("jsd_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_jsd_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge jsd_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("jsd_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
+        },
+
+        # -------------------------------------------------------------------
+        # Online tree distillation — on-policy tree updates during online serving.
+        # Replaces the flat replay-buffer update with a K-path draft tree step on
+        # each served prompt.  No rejected-position bias; no zero-gradient EBE bug.
+        # Most natural for standard speculative decoding (alpha/online) verifier.
+        # -------------------------------------------------------------------
+        {
+            "id": "online_kl_tree_adapt_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Online tree adapt: kl_tree, tree_K={_h.get('tree_K', 4)}, {_online_steps} steps, gsm8k",
+            "cmd": [
+                sys.executable, _ONLINE_SCRIPT,
+                "--prompts", _data("gsm8k_train.jsonl"),
+                "--draft", draft, "--target", target,
+                "--output", _ckpt("online-kl-tree-gsm8k"),
+                "--steps", str(_online_steps),
+                "--update_every", "4",
+                "--K", "4",
+                "--tree_loss", "kl_tree",
+                "--tree_K", str(min(_h.get("tree_K", 4), 4)),  # max K=4 for safety
+                "--tree_L", str(_h.get("tree_L", 8)),
+                "--lr", str(_h.get("online_lr", 3e-4)),
+                "--max_new_tokens", str(_online_max_tok),
+                *_online_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("online-kl-tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_online_kl_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge online-kl-tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("online-kl-tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "online_ebe_tree_adapt_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Online tree adapt: ebe_tree, tree_K={_h.get('tree_K', 4)}, {_online_steps} steps, gsm8k",
+            "cmd": [
+                sys.executable, _ONLINE_SCRIPT,
+                "--prompts", _data("gsm8k_train.jsonl"),
+                "--draft", draft, "--target", target,
+                "--output", _ckpt("online-ebe-tree-gsm8k"),
+                "--steps", str(_online_steps),
+                "--update_every", "4",
+                "--K", "4",
+                "--tree_loss", "ebe_tree",
+                "--tree_K", str(min(_h.get("tree_K", 4), 4)),
+                "--tree_L", str(_h.get("tree_L", 8)),
+                "--lr", str(_h.get("online_lr", 3e-4)),
+                "--max_new_tokens", str(_online_max_tok),
+                *_online_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("online-ebe-tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_online_ebe_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge online-ebe-tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("online-ebe-tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
+        },
+
         # -------------------------------------------------------------------
         # Phase 3 — GSM8K Eval
         # All 6 verifier modes (alpha · bv · gbv · traversal · specinfer · naive)
@@ -1249,6 +1381,44 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        modes=_TREE_PAIRED["ebe_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_rev_kl_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval rev_kl_tree-gsm8k on gsm8k [bv+gbv+traversal]",
+            "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree", datasets="gsm8k",
+                       task_score=True, modes=_TREE_NON_OT),
+            "done_check": None,
+            "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_jsd_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval jsd_tree-gsm8k on gsm8k [bv+gbv+traversal]",
+            "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree", datasets="gsm8k",
+                       task_score=True, modes=_TREE_NON_OT),
+            "done_check": None,
+            "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
+        },
+        # Online tree models are evaluated against all 6 verifier modes — they are
+        # general draft models that benefit from the full eval table.
+        {
+            "id": "eval_online_kl_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval online-kl-tree-gsm8k on gsm8k [all 6 verifiers]",
+            "cmd": _ec(_merged("online-kl-tree-gsm8k"), "online_kl_tree",
+                       datasets="gsm8k", task_score=True),
+            "done_check": None,
+            "requires": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_online_ebe_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval online-ebe-tree-gsm8k on gsm8k [all 6 verifiers]",
+            "cmd": _ec(_merged("online-ebe-tree-gsm8k"), "online_ebe_tree",
+                       datasets="gsm8k", task_score=True),
+            "done_check": None,
+            "requires": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------
@@ -1414,6 +1584,48 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_rev_kl_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval rev_kl_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_jsd_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval jsd_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_online_kl_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval online-kl-tree on humaneval,math500,mtbench,alpaca [all 6 verifiers]",
+            "cmd": _ec(_merged("online-kl-tree-gsm8k"), "online_kl_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_online_ebe_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval online-ebe-tree on humaneval,math500,mtbench,alpaca [all 6 verifiers]",
+            "cmd": _ec(_merged("online-ebe-tree-gsm8k"), "online_ebe_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
         },
 
         # -------------------------------------------------------------------

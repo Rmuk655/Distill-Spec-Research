@@ -114,15 +114,18 @@ def parse_args() -> argparse.Namespace:
                    choices=[
                        "forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single",
                        # Tree-structured losses — on-policy, verifier-specific objectives
-                       "kl_tree", "bv_tree", "gbv_tree", "traversal_tree",
-                       # On-policy EBE: same formula as flat EBE but on student's own tree
-                       # (ablation that isolates the off-policy mismatch in flat EBE)
+                       # Node-level divergence variants (same tree data, different divergence):
+                       "kl_tree",      # forward KL(p ∥ q) at each node — mode-covering
+                       "rev_kl_tree",  # reverse KL(q ∥ p) at each node — mode-seeking
+                       "jsd_tree",     # symmetric JSD at each node — bounded, stable
+                       # Verifier-specific surrogates (full-vocab integrals):
+                       "bv_tree", "gbv_tree", "traversal_tree",
+                       # On-policy EBE (token-level, ablation of flat EBE off-policy issue):
                        "ebe_tree",
                    ],
-                   help="Distillation loss objective.  "
-                        "kl_tree/bv_tree/gbv_tree/traversal_tree/ebe_tree use the student's "
-                        "own draft tree as training data (on-policy) and compute verifier-specific "
-                        "E[τ] surrogates.  Requires --tree_K and --tree_L.")
+                   help="Distillation loss objective.  Tree losses (*_tree) use the "
+                        "student's own draft tree as training data (on-policy).  "
+                        "Requires --tree_K and --tree_L.")
     p.add_argument("--tree_K", type=int, default=4,
                    help="Number of i.i.d. draft paths for tree losses (default 4, "
                         "should match inference K).")

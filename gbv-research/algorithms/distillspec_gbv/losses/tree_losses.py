@@ -104,6 +104,111 @@ def kl_tree_loss(
 
 
 # ---------------------------------------------------------------------------
+# rev_kl_tree — on-policy reverse KL at every tree node
+# ---------------------------------------------------------------------------
+
+def rev_kl_tree_loss(
+    q_probs_dict: Dict[str, torch.Tensor],   # {prefix → [V]}, WITH grad
+    p_probs_dict: Dict[str, torch.Tensor],   # {prefix → [V]}, detached
+) -> torch.Tensor:
+    """
+    Reverse KL(q_student ∥ p_teacher) at every non-leaf node in the draft tree.
+
+    KL(q ∥ p) = Σ_v q[v] * (log_q[v] − log_p[v])
+
+    Mode-seeking behaviour: the student concentrates probability mass on the
+    teacher's peak tokens.  Contrast with kl_tree (forward KL, mode-covering).
+
+    For speculative decoding: mode-seeking means the draft puts high mass where
+    the target puts high mass, which directly raises min(1, p[t]/q[t]) for
+    the most likely tokens.  However it allows the draft to ignore tail tokens,
+    which can hurt when the target samples an unlikely token.
+
+    Numerical note: log_p is clamped to −100 (same as reverse_kl.py) to avoid
+    q[v] * −inf = NaN when the teacher has forbidden-token logit biases (Qwen3).
+
+    Args:
+        q_probs_dict:  Student distributions WITH grad at non-leaf tree nodes.
+        p_probs_dict:  Teacher distributions, detached.
+
+    Returns:
+        Scalar tensor — mean reverse KL over tree nodes.
+    """
+    device = next(iter(q_probs_dict.values())).device
+    total  = torch.zeros(1, device=device)
+    n      = 0
+
+    for pfx, q in q_probs_dict.items():
+        if pfx not in p_probs_dict:
+            continue
+        p     = p_probs_dict[pfx].detach().to(q.dtype)
+        log_q = q.log().clamp(min=-100.0)           # [V], WITH grad
+        log_p = p.log().clamp(min=-100.0)           # [V], no grad (p detached)
+        total = total + (q * (log_q - log_p)).sum()  # KL(q ∥ p) at this node
+        n    += 1
+
+    if n == 0:
+        return torch.zeros(1, device=device, requires_grad=True)
+    return total / n
+
+
+# ---------------------------------------------------------------------------
+# jsd_tree — on-policy Jensen–Shannon divergence at every tree node
+# ---------------------------------------------------------------------------
+
+def jsd_tree_loss(
+    q_probs_dict: Dict[str, torch.Tensor],   # {prefix → [V]}, WITH grad
+    p_probs_dict: Dict[str, torch.Tensor],   # {prefix → [V]}, detached
+    alpha: float = 0.5,
+) -> torch.Tensor:
+    """
+    Jensen–Shannon divergence at every non-leaf node in the draft tree.
+
+    JSD(p ∥ q; α) = α * KL(q ∥ m)  +  (1−α) * KL(p ∥ m)
+    where m = α*q + (1−α)*p  (the mixture distribution).
+
+    With α=0.5 (default) this is symmetric and bounded ∈ [0, log 2].
+    Slightly softer than forward KL: penalises the student for diverging
+    from the mixture m rather than from the teacher directly, which can
+    improve training stability on tree nodes where p and q disagree sharply.
+
+    Relationship to other tree divergences:
+      kl_tree     → forward KL(p ∥ q) — mode-covering, standard
+      rev_kl_tree → reverse KL(q ∥ p) — mode-seeking
+      jsd_tree    → symmetric JSD     — intermediate, bounded gradient
+
+    Args:
+        q_probs_dict:  Student distributions WITH grad at non-leaf tree nodes.
+        p_probs_dict:  Teacher distributions, detached.
+        alpha:         Student mixture weight (default 0.5 → symmetric JSD).
+
+    Returns:
+        Scalar tensor — mean JSD over tree nodes.
+    """
+    device = next(iter(q_probs_dict.values())).device
+    total  = torch.zeros(1, device=device)
+    n      = 0
+
+    for pfx, q in q_probs_dict.items():
+        if pfx not in p_probs_dict:
+            continue
+        p   = p_probs_dict[pfx].detach().to(q.dtype)
+        m   = alpha * q + (1.0 - alpha) * p                    # [V], WITH grad through q
+        log_m = m.log().clamp(min=-100.0)                       # [V], WITH grad
+        log_q = q.log().clamp(min=-100.0)                       # [V], WITH grad
+        log_p = p.log().clamp(min=-100.0)                       # [V], no grad
+
+        kl_q  = (q * (log_q - log_m)).sum()                    # KL(q ∥ m), WITH grad
+        kl_p  = (p * (log_p - log_m)).sum()                    # KL(p ∥ m), grad via m
+        total = total + alpha * kl_q + (1.0 - alpha) * kl_p
+        n    += 1
+
+    if n == 0:
+        return torch.zeros(1, device=device, requires_grad=True)
+    return total / n
+
+
+# ---------------------------------------------------------------------------
 # bv_tree — differentiable surrogate for E[τ_BV]
 # ---------------------------------------------------------------------------
 
@@ -670,7 +775,9 @@ def traversal_tree_loss(
 # ---------------------------------------------------------------------------
 
 TREE_LOSS_NAMES = frozenset({
-    "kl_tree", "bv_tree", "gbv_tree", "traversal_tree", "ebe_tree",
+    "kl_tree", "rev_kl_tree", "jsd_tree",
+    "bv_tree", "gbv_tree", "traversal_tree",
+    "ebe_tree",
 })
 
 
@@ -698,6 +805,10 @@ def compute_tree_loss(
     """
     if name == "kl_tree":
         return kl_tree_loss(q_probs_dict, p_probs_dict)
+    elif name == "rev_kl_tree":
+        return rev_kl_tree_loss(q_probs_dict, p_probs_dict)
+    elif name == "jsd_tree":
+        return jsd_tree_loss(q_probs_dict, p_probs_dict)
     elif name == "bv_tree":
         return bv_tree_loss_all_paths(q_probs_dict, p_probs_dict, q_paths, L)
     elif name == "gbv_tree":
