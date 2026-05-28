@@ -260,12 +260,8 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
     config_path = os.path.join(adapter_path, "adapter_config.json")
     with open(config_path, encoding="utf-8") as _f:
         _cfg = json.load(_f)
-    # Strip metadata-only keys that LoraConfig.__init__ does not accept.
-    for _k in (
-        "peft_type", "base_model_name_or_path", "revision",
-        "auto_mapping", "pipeline_tag", "transformers_version",
-    ):
-        _cfg.pop(_k, None)
+    # In PEFT 0.19.1 every key in adapter_config.json is a valid LoraConfig
+    # constructor param — no stripping needed; just forward the whole dict.
     lora_config = LoraConfig(**_cfg)
 
     model  = PeftModel.from_pretrained(base, adapter_path, config=lora_config)
