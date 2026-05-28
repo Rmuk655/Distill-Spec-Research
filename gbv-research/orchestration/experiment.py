@@ -1316,6 +1316,54 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
 
+        # Tree-loss multi-dataset eval — always uses all 3 non-OT verifiers so the
+        # paper table shows bv/gbv/traversal cross-matrix for each tree loss.
+        # kl_tree is the universal on-policy baseline in all columns.
+        {
+            "id": "eval_kl_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval kl_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_bv_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval bv_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_gbv_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval gbv_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_trav_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval trav_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_TREE_NON_OT),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
+        },
+
         # -------------------------------------------------------------------
         # Phase 5 (optional): EAGLE Benchmark — only included when --eagle
         #
