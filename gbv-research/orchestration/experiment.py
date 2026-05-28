@@ -415,7 +415,12 @@ _LOSS_STEP_PREFIXES: dict = {
     "rev_kl":           ("train_rev_kl_",            "merge_rev_kl_",           "eval_rev_kl_"),
     "jsd":              ("train_jsd_",               "merge_jsd_",              "eval_jsd_"),
     "l1":               ("train_l1_",                "merge_l1_",               "eval_l1_"),
-    "online":           ("online_adapt_",            "merge_online_",           "eval_online_"),
+    # NOTE: online's merge/eval entries are exact step IDs (not short prefixes) to avoid
+    # matching online_ebe / online_ebe_single steps.
+    # "merge_online_"  would match "merge_online_ebe_gsm8k"  → ghost steps selected.
+    # "eval_online_"   would match "eval_online_ebe_gsm8k"   → ghost steps selected.
+    # online_adapt_ is safe: "online_ebe_adapt_" does NOT start with "online_adapt_".
+    "online":           ("online_adapt_",            "merge_online_gsm8k",      "eval_online_gsm8k", "eval_online_all"),
     "online_ebe":       ("online_ebe_adapt_",        "merge_online_ebe_",       "eval_online_ebe_"),
     "online_ebe_single":("online_ebe_single_adapt_", "merge_online_ebe_single_","eval_online_ebe_single_"),
 }

@@ -1,10 +1,15 @@
-# Profile: promote_kl_jsd_l1 — A100 paper runs for KL, JSD, L1 only
+# Profile: promote_kl_jsd_l1 — A100 paper runs for KL, JSD, L1 + online KL
 #
-# Purpose: Run the three promoted losses on A100 while EBE/GBV/BV are still
-#          being reworked. Everything else is identical to colab_a100.yaml.
+# Purpose: Run the three promoted offline losses plus online KL on A100 while
+#          EBE/GBV/BV are still being reworked.
+#          Everything else is identical to colab_a100.yaml.
 #
 # Usage:
 #   python orchestration/experiment.py --config profiles/promote_kl_jsd_l1 --yes \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+# Smoke test first (fast crash check, ~5 min):
+#   python orchestration/experiment.py --config profiles/promote_kl_jsd_l1 --smoke --yes \
 #     --storage_root /content/drive/MyDrive/specdist
 #
 # Second-seed run (confirm reproducibility):
@@ -12,11 +17,13 @@
 #   (copy this file, set experiment.seed_override: 123)
 #
 # What runs:
-#   Phase 1 — baseline eval (always)
-#   Phase 2 — train + merge for kl, jsd, l1 only
-#   Phase 3 — eval kl, jsd, l1 on gsm8k
-#   Phase 4 — eval kl, jsd, l1 on humaneval, math500, mtbench, alpaca
-#   Skipped — ebe, rev_kl, online, online_ebe, ebe_single, gbv, bv
+#   Phase 1 — baseline eval on gsm8k (always, even in smoke)
+#   Phase 2 — train + merge for kl, jsd, l1, online
+#              (online uses online_serve.py / OSD-style adaptation, not trainer.py)
+#   Phase 3 — eval kl, jsd, l1, online on gsm8k (smoke: n=5; full: n=50)
+#   Phase 4 — eval kl, jsd, l1, online on humaneval, math500, mtbench, alpaca
+#              (skipped in smoke; full run only)
+#   Skipped — ebe, rev_kl, online_ebe, ebe_single, gbv, bv
 
 hardware:
   device: cuda
@@ -69,6 +76,7 @@ evaluation:
 # ── Experiment scope ─────────────────────────────────────────────────────────
 # Edit this section without touching anything above.
 experiment:
-  losses: [kl, jsd, l1]    # Only these three. Others (ebe, gbv, bv, online) are skipped.
-                             # To add rev_kl: losses: [kl, jsd, l1, rev_kl]
-                             # To run everything: remove this section or set losses to null
+  losses: [kl, jsd, l1, online]   # Promoted losses + online KL baseline.
+                                    # Others (ebe, rev_kl, online_ebe, ebe_single, gbv, bv) skipped.
+                                    # To add rev_kl ablation: losses: [kl, jsd, l1, online, rev_kl]
+                                    # To run everything: remove this section or set losses to null
