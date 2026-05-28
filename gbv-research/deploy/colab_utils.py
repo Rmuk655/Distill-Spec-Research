@@ -50,7 +50,9 @@ def _auth_repo_url(base_url: str) -> str:
         print("  Add via: left sidebar → 🔑 Secrets → GITHUB_TOKEN")
         print("  Create a classic PAT (repo scope) at https://github.com/settings/tokens")
         return base_url
-    return base_url.replace("https://", f"https://{tok}@")
+    # Fine-grained PATs (github_pat_*) require "x-access-token:TOKEN" form.
+    # Classic PATs also work with this form, so it is the universal format.
+    return base_url.replace("https://", f"https://x-access-token:{tok}@")
 
 
 # ---------------------------------------------------------------------------
