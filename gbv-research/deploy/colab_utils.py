@@ -229,30 +229,15 @@ def run_pipeline(
 
     if background:
         # experiment.py manages its own log file (_PIPELINE_LOG → pipeline_output.log).
-        # Do NOT also redirect stdout to the same file — that causes every line to appear
-        # twice (once from the subprocess write, once from experiment.py's _log() call).
-        # We just discard the subprocess's stdout/stderr; the _tail() thread reads from
-        # the log file that experiment.py writes to.
+        # Discard subprocess stdout/stderr — experiment.py writes everything it needs to
+        # the log file itself.  Do NOT tail the log to sys.stdout here: a background
+        # thread writing to sys.stdout bleeds into whatever Colab cell runs next.
+        # Use monitor() or start_dashboard() to track progress.
         proc = subprocess.Popen(cmd, cwd=gbv_dir,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
-
-        def _tail():
-            # Wait briefly for experiment.py to open its log file before we start tailing.
-            time.sleep(1.5)
-            with open(log_file, "r", encoding="utf-8", errors="replace") as lf:
-                lf.seek(0, 2)
-                while proc.poll() is None:
-                    line = lf.readline()
-                    if line:
-                        sys.stdout.write(line); sys.stdout.flush()
-                    else:
-                        time.sleep(0.4)
-                for line in lf:
-                    sys.stdout.write(line); sys.stdout.flush()
-
-        threading.Thread(target=_tail, daemon=True).start()
-        print(f"\n  PID {proc.pid} — call monitor() to track progress")
+        print(f"\n  PID {proc.pid} — run Cell 6 (monitor) to track progress")
+        print(f"  Log → {log_file}")
         print(f"  Stop: import os, signal; os.kill({proc.pid}, signal.SIGTERM)")
         return proc
     else:

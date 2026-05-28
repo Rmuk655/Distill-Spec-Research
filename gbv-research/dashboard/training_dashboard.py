@@ -102,9 +102,13 @@ def api_train_curves():
 @app.route("/api/pipeline_status")
 def api_pipeline_status():
     """Read all pipeline_state_*.json files and return live progress."""
-    _orch_dir = os.path.join(_GBV_RESEARCH, "orchestration")
+    # experiment.py writes state files to SPECDIST_STORAGE_ROOT when set
+    # (Colab/cloud runs), otherwise they land in orchestration/.
+    # start_dashboard() already exports SPECDIST_STORAGE_ROOT to this subprocess.
+    _state_dir = (os.environ.get("SPECDIST_STORAGE_ROOT")
+                  or os.path.join(_GBV_RESEARCH, "orchestration"))
     state_files = sorted(
-        glob.glob(os.path.join(_orch_dir, "pipeline_state_*.json")),
+        glob.glob(os.path.join(_state_dir, "pipeline_state_*.json")),
         key=os.path.getmtime, reverse=True,
     )
     if not state_files:
