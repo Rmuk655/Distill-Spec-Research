@@ -152,3 +152,37 @@ Log failed runs here — they are evidence. Do not delete.
 | exp_id | date | hw_tier | what_failed | root_cause | fix_applied |
 |--------|------|---------|------------|-----------|------------|
 | *(template)* | YYYYMMDD | laptop | OOM at step 7 | 4-bit NF4 CPU RAM spike | switched to BF16 |
+
+---
+
+## Research Review Log
+
+Research direction decisions. One entry per review session. Most recent first.
+Rule: if it is not here, it was not decided — it is still open.
+
+---
+
+### Review — 2026-05-28 · Rahul (research lead), Krishnan R. (engineer)
+
+**Status going in:** Phase 3 Level 2 colab_lite runs complete for KL, JSD, L1, EBE, GBV, BV, online.
+
+#### Decisions
+
+| Loss / Component | Decision | Rationale |
+|---|---|---|
+| **KL, JSD, L1** | ✅ Promote to A100 (Level 4) | Training curves look good; block efficiency reasonable; ready for paper runs |
+| **EBE (offline)** | ⏸ Suspend — needs rework | Implementation uses single linear block, not the full tree acceptance loop. Needs to model GBV tree structure (K parallel paths × L depth). Do not run on A100 until rewritten. |
+| **GBV, BV** | ⏸ Suspend — needs tuning | Block efficiency poor. Root cause unknown. Needs hyperparameter sweep (LR, kl_weight, LoRA rank) before A100 promotion. |
+| **online_ebe** | ⏸ Suspend — bug confirmed | Replay buffer stores accepted+residual sequence. At rejected positions the stored residual token has q_teacher high and p_draft low → α=1 → EBE gradient zero everywhere. Incoherent KL corrupts model. Fix requires storing `draft_proposed_ids` separately in buffer. |
+| **online_ebe_single** | ⏸ Suspend | Same root cause as online_ebe. |
+| **online (KL)** | ✅ Can continue — unaffected | `forward_kl` online path is correct. `_kl_at_positions` operates on the right tokens (rejected positions, KL between student and teacher at those positions). |
+
+#### Parking Lot (deferred, not abandoned)
+
+| Idea | Owner | Reopen when |
+|---|---|---|
+| EBE full tree eval loop | Rahul | After KL/JSD/L1 A100 baseline established |
+| online_ebe buffer redesign | Krishnan R. | After A100 baseline runs; ~2 days effort |
+| GBV/BV hyperparameter sweep | Rahul | After KL A100 establishes comparison floor |
+| EAGLE baseline | — | After publishable numbers exist |
+| rev_kl assessment | — | Next research review |

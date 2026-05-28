@@ -1595,12 +1595,31 @@ def run_step(step, state, dry_run=False):
         _child_popen = proc
         _write_lock(child_pid=proc.pid)   # record child PID → killed on next startup if orphaned
 
-        # Stream line-by-line → terminal AND log file simultaneously (tee)
+        # Stream line-by-line → terminal AND log file simultaneously (tee).
+        # INLINE CRITICAL detection: check every line as it arrives.
+        # This fires immediately — no need to wait for step completion or pipeline end.
+        # Only CRITICAL patterns are flagged here (NaN, OOM, traceback, SIGKILL).
+        # WARNING/INFO patterns are caught in the post-step and end-of-pipeline sweeps.
+        _inline_alerted: set[str] = set()
         for _line in iter(proc.stdout.readline, ""):
             sys.stdout.write(_line)
             sys.stdout.flush()
             _log_fh.write(_line)
             _log_fh.flush()
+            # Check CRITICAL patterns on every line as it arrives
+            _lo = _line.lower().strip()
+            for _pat, _sev, _lbl in _ANOMALY_PATTERNS:
+                if _sev == "CRITICAL" and _lbl not in _inline_alerted:
+                    if _re_mod.search(_pat, _lo):
+                        _inline_alerted.add(_lbl)
+                        _alert = (f"\n  {'!'*60}\n"
+                                  f"  LIVE ANOMALY [{_lbl}]\n"
+                                  f"  {_line.rstrip()[:110]}\n"
+                                  f"  {'!'*60}\n\n")
+                        sys.stdout.write(_alert)
+                        sys.stdout.flush()
+                        _log_fh.write(_alert)
+                        _log_fh.flush()
 
         rc = proc.wait()
         _child_popen = None
