@@ -1,0 +1,80 @@
+# Profile: online_only_laptop — Laptop smoke + train + eval for online (KL) only
+#
+# Purpose: Mukund iterating on online training. Skips all 9 offline losses.
+#          Only online_adapt + merge_online + eval_online_* steps run.
+#          Everything else is identical to laptop.yaml.
+#
+# Usage (smoke — fast crash test, ~3-5 min):
+#   python orchestration/experiment.py --config profiles/online_only_laptop --smoke --yes
+#
+# Usage (full code-path exerciser, ~10-15 min):
+#   python orchestration/experiment.py --config profiles/online_only_laptop --yes
+#
+# What runs:
+#   Phase 1 — baseline eval (always)
+#   Phase 2 — online_adapt + merge_online only
+#   Phase 3 — eval_online_gsm8k only
+#   Phase 4 — eval_online_* on humaneval, math500, mtbench, alpaca
+#   Skipped — kl, jsd, l1, ebe, rev_kl, ebe_single, gbv, bv + their merge/eval steps
+#
+# To add KL alongside online for a quick comparison:
+#   --losses online,kl
+# or edit:
+#   experiment:
+#     losses: [online, kl]
+
+hardware:
+  device: cuda
+  load_in_4bit: false
+  compile: false               # torch.compile has limited support on Windows
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen2.5-0.5B
+  target: Qwen/Qwen3-0.6B
+
+training:
+  steps: 100
+  lr: 3.0e-5
+  lora_r: 4
+  lora_alpha: 8
+  max_new_tokens: 32
+  teacher_temperature: 0.8
+  online_lr: 3.0e-4
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 10
+  milestone_every: 50
+  max_checkpoints: 3
+  output_root: db/checkpoints
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: laptop-gsm8k
+  run_label: "0.6B-laptop-online"
+
+health:
+  val_every: 25
+  ppl_check_every: 50
+  ppl_threshold: 1.25
+  nan_action: stop
+  early_stop_patience: 3
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3]
+  L: 8
+  n_prompts: 5
+
+# ── Experiment scope ─────────────────────────────────────────────────────────
+# Edit this section without touching anything above.
+experiment:
+  losses: [online]    # Only online KL adaptation. All offline losses (kl, jsd, l1, ebe,
+                      # rev_kl, gbv, bv) and their train/merge/eval steps are skipped.
+                      # To add offline KL for comparison: losses: [online, kl]

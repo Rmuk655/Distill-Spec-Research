@@ -1,0 +1,74 @@
+# Profile: promote_kl_jsd_l1 — A100 paper runs for KL, JSD, L1 only
+#
+# Purpose: Run the three promoted losses on A100 while EBE/GBV/BV are still
+#          being reworked. Everything else is identical to colab_a100.yaml.
+#
+# Usage:
+#   python orchestration/experiment.py --config profiles/promote_kl_jsd_l1 --yes \
+#     --storage_root /content/drive/MyDrive/specdist
+#
+# Second-seed run (confirm reproducibility):
+#   python orchestration/experiment.py --config profiles/promote_kl_jsd_l1_seed123 --yes
+#   (copy this file, set experiment.seed_override: 123)
+#
+# What runs:
+#   Phase 1 — baseline eval (always)
+#   Phase 2 — train + merge for kl, jsd, l1 only
+#   Phase 3 — eval kl, jsd, l1 on gsm8k
+#   Phase 4 — eval kl, jsd, l1 on humaneval, math500, mtbench, alpaca
+#   Skipped — ebe, rev_kl, online, online_ebe, ebe_single, gbv, bv
+
+hardware:
+  device: cuda
+  load_in_4bit: false
+  compile: true
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B
+
+training:
+  steps: 2000
+  lr: 3.0e-5
+  lora_r: 16
+  lora_alpha: 32
+  max_new_tokens: 128
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 100
+  milestone_every: 500
+  max_checkpoints: 8
+  storage_root: /content/drive/MyDrive/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-a100
+  run_label: "8B-A100"
+
+health:
+  val_every: 100
+  ppl_check_every: 500
+  ppl_threshold: 1.25
+  nan_action: stop
+  early_stop_patience: 5
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [1, 3, 5, 8]
+  L: 8
+  n_prompts: 50
+
+# ── Experiment scope ─────────────────────────────────────────────────────────
+# Edit this section without touching anything above.
+experiment:
+  losses: [kl, jsd, l1]    # Only these three. Others (ebe, gbv, bv, online) are skipped.
+                             # To add rev_kl: losses: [kl, jsd, l1, rev_kl]
+                             # To run everything: remove this section or set losses to null

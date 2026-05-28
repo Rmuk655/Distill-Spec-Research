@@ -254,6 +254,7 @@ def _load_config_yaml(config_name: str) -> dict:
         hardware      = data.get("hardware", {})
         logging_cfg   = data.get("logging", {})
         models_cfg    = data.get("models", {})
+        experiment_cfg = data.get("experiment", {})
         out = {
             "lr":                   training.get("lr", 3e-5),
             "lora_r":               training.get("lora_r", 8),
@@ -300,6 +301,16 @@ def _load_config_yaml(config_name: str) -> dict:
         # training.online_ebe_lr → LR for EBE online adapt (lower than online_lr).
         if "online_ebe_lr" in training:
             out["online_ebe_lr"] = training["online_ebe_lr"]
+        # experiment.losses → which loss variants to train/eval.
+        # If set, only those losses run; all others are silently skipped.
+        # Overridden by --losses CLI flag (CLI always wins).
+        # Example: losses: [kl, jsd, l1]   (Rahul's A100 promote run)
+        #          losses: [online]          (Mukund's online-only debug run)
+        if "losses" in experiment_cfg:
+            out["losses"] = experiment_cfg["losses"]   # list or null
+        # experiment.seed_override → run a specific seed without editing training.seed
+        if "seed_override" in experiment_cfg:
+            out["seed"] = experiment_cfg["seed_override"]
         # models.target → teacher_tag: short human-readable size label extracted from
         # the model name (e.g. "Qwen/Qwen3-4B" → "4B").  Used in run names if
         # run_label is not explicitly set.
@@ -1892,16 +1903,21 @@ def main():
     }
 
     # Parse --losses filter into a list; None = run all losses.
-    _losses_to_run = (
+    # Loss filter: --losses CLI wins; fall back to experiment.losses in YAML; then all.
+    _yaml_losses = cfg.get("losses")   # list or None (from experiment: losses: [...])
+    _cli_losses  = (
         [l.strip() for l in args.losses.split(",") if l.strip()]
         if args.losses else None
     )
+    _losses_to_run = _cli_losses or (_yaml_losses if isinstance(_yaml_losses, list) else None)
     if _losses_to_run:
         _invalid = [l for l in _losses_to_run if l not in ALL_LOSSES]
         if _invalid:
             p.error(f"--losses: unknown loss name(s): {_invalid}. "
                     f"Valid: {ALL_LOSSES}")
-        print(f"  [pipeline] Loss filter: {_losses_to_run} (others skipped)")
+        _src = "CLI --losses" if _cli_losses else f"{args.config}.yaml experiment.losses"
+        print(f"  [pipeline] Loss filter ({_src}): {_losses_to_run}")
+        print(f"             Skipping: {[l for l in ALL_LOSSES if l not in _losses_to_run]}")
 
     # State file: config-scoped so laptop and server runs don't mix.
     # Smoke gets its OWN state file so smoke "done" marks never block the real run.
