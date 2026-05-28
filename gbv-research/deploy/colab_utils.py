@@ -228,11 +228,18 @@ def run_pipeline(
     print(f"  DB  → {drive_root}/results.db")
 
     if background:
-        log_fh = open(log_file, "a", buffering=1)
+        # experiment.py manages its own log file (_PIPELINE_LOG → pipeline_output.log).
+        # Do NOT also redirect stdout to the same file — that causes every line to appear
+        # twice (once from the subprocess write, once from experiment.py's _log() call).
+        # We just discard the subprocess's stdout/stderr; the _tail() thread reads from
+        # the log file that experiment.py writes to.
         proc = subprocess.Popen(cmd, cwd=gbv_dir,
-                                stdout=log_fh, stderr=subprocess.STDOUT)
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
 
         def _tail():
+            # Wait briefly for experiment.py to open its log file before we start tailing.
+            time.sleep(1.5)
             with open(log_file, "r", encoding="utf-8", errors="replace") as lf:
                 lf.seek(0, 2)
                 while proc.poll() is None:
@@ -365,13 +372,14 @@ def monitor(
                 s = info.get("status", "pending")
                 counts[s] = counts.get(s, 0) + 1
                 icon = {"done": "OK", "running": ">>",
-                        "error": "!!", "pending": ".."}.get(s, "..")
+                        "failed": "XX", "error": "!!", "pending": ".."}.get(s, "..")
                 ts = (info.get("finished_at") or
                       info.get("started_at") or "")[:16]
                 print(f"  [{icon}] {sid:45s}  {s:8s}  {ts}")
             print(f"\n  Done:{counts.get('done', 0)}  "
                   f"Running:{counts.get('running', 0)}  "
                   f"Pending:{counts.get('pending', 0)}  "
+                  f"Failed:{counts.get('failed', 0)}  "
                   f"Error:{counts.get('error', 0)}")
         else:
             print(f"  State file not found: {state_file}")
