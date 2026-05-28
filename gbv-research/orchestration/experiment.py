@@ -593,7 +593,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
 
-    def _ec(student_path, label, datasets="gsm8k", task_score=False):
+    def _ec(student_path, label, datasets="gsm8k", task_score=False, modes=None):
         """Shorthand: eval cmd with smoke-aware parameters.
 
         Automatically infers train_steps from label:
@@ -601,6 +601,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
           online / *         → _online_steps
           everything else    → _steps
         This keeps every DB row honest without touching each call site.
+
+        modes: verifier mode string passed to evaluate.py --modes.
+               Defaults to _modes (all 6 verifiers) when None.
+               Tree-loss eval steps pass their paired mode(s) explicitly.
         """
         if label == "baseline":
             ts = 0
@@ -608,12 +612,34 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             ts = _online_steps
         else:
             ts = _steps
+        _eval_modes = modes if modes is not None else _modes
         cmd = _eval_cmd(student_path, label, target,
-                        datasets=datasets, modes=_modes, Ks=_Ks, temps=_temps,
+                        datasets=datasets, modes=_eval_modes, Ks=_Ks, temps=_temps,
                         n=_n, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts)
         return cmd + _4bit  # append --load_in_4bit for colab config
+
+    # Tree-loss eval mode strategy
+    # ─────────────────────────────────────────────────────────────────────────
+    # Smoke: each tree-loss model is evaluated with ONLY its paired verifier.
+    #   • Verifies the full code path (train → merge → eval) in minimal time.
+    #   • One mode per model = fastest possible smoke check.
+    #
+    # Full: all three non-OT verifiers ("bv,gbv,traversal") for every tree model.
+    #   • Gives the cross-matrix table: does gbv_tree also help traversal? etc.
+    #   • OT-based verifiers (specinfer, naive, alpha) are deliberately excluded
+    #     — tree losses don't target their per-token OTLP acceptance criterion.
+    #
+    # kl_tree is the universal on-policy baseline: always runs all 3 non-OT modes.
+    # ─────────────────────────────────────────────────────────────────────────
+    _TREE_NON_OT = "bv,gbv,traversal"   # full-run modes for all tree losses
+    _TREE_PAIRED = {                     # smoke: just the naturally paired verifier
+        "kl_tree":        _TREE_NON_OT, # universal baseline — test all 3 even in smoke
+        "bv_tree":        "bv",
+        "gbv_tree":       "gbv",
+        "traversal_tree": "traversal",
+    }
 
     # ── Loss filter helper ─────────────────────────────────────────────────────
     def _is_loss_step(sid: str) -> bool:
@@ -1139,38 +1165,47 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
         # Tree losses — Phase 3 evals.
-        # Each is evaluated on all 6 verifier modes (same as flat losses) so the
-        # paper table can show cross-matrix results: e.g. does gbv_tree training
-        # improve gbv BE without hurting traversal or specinfer BE?
+        # Smoke: each model runs ONLY its paired verifier (fast code-path check).
+        # Full:  all three non-OT verifiers (bv, gbv, traversal) for cross-matrix.
+        # OT-based verifiers (specinfer, naive, alpha) are excluded — tree losses
+        # don't target their per-token OTLP acceptance criterion.
         {
             "id": "eval_kl_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval kl_tree-gsm8k on gsm8k",
-            "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree", datasets="gsm8k", task_score=True),
+            "desc": "Eval kl_tree-gsm8k on gsm8k [bv+gbv+traversal]",
+            "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree", datasets="gsm8k",
+                       task_score=True,
+                       modes=_TREE_PAIRED["kl_tree"]),   # bv,gbv,traversal (smoke+full)
             "done_check": None,
             "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_bv_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval bv_tree-gsm8k on gsm8k",
-            "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", datasets="gsm8k", task_score=True),
+            "desc": "Eval bv_tree-gsm8k on gsm8k [bv | bv+gbv+traversal]",
+            "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", datasets="gsm8k",
+                       task_score=True,
+                       modes=_TREE_PAIRED["bv_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_gbv_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval gbv_tree-gsm8k on gsm8k",
-            "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", datasets="gsm8k", task_score=True),
+            "desc": "Eval gbv_tree-gsm8k on gsm8k [gbv | bv+gbv+traversal]",
+            "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", datasets="gsm8k",
+                       task_score=True,
+                       modes=_TREE_PAIRED["gbv_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_trav_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval trav_tree-gsm8k on gsm8k",
-            "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", datasets="gsm8k", task_score=True),
+            "desc": "Eval trav_tree-gsm8k on gsm8k [traversal | bv+gbv+traversal]",
+            "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", datasets="gsm8k",
+                       task_score=True,
+                       modes=_TREE_PAIRED["traversal_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
         },
