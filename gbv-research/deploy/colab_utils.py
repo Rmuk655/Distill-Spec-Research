@@ -90,25 +90,43 @@ def fetch_training_data(gbv_dir: str = GBV_DIR) -> None:
     The file is gitignored (7,473 prompts, ~3 MB) so it must be fetched on
     every fresh Colab session.  The downloader falls back to 30 hardcoded
     GSM8K prompts if HuggingFace is unreachable.
+
+    Raises RuntimeError if the file is still missing after the download attempt
+    so the pipeline never starts without training data.
     """
-    raw_dir   = os.path.join(gbv_dir, "core", "datasets", "raw")
+    raw_dir    = os.path.join(gbv_dir, "core", "datasets", "raw")
     train_path = os.path.join(raw_dir, "gsm8k_train.jsonl")
     if os.path.exists(train_path):
         print(f"[data] gsm8k_train.jsonl already present — skipping download.")
         return
+    os.makedirs(raw_dir, exist_ok=True)
     print("[data] Downloading gsm8k_train.jsonl from HuggingFace…")
     downloader = os.path.join(gbv_dir, "core", "datasets", "downloader.py")
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, downloader, "--datasets", "gsm8k_train"],
         cwd=gbv_dir,
-        check=False,   # downloader has built-in fallback; never hard-fail setup
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    # Always show downloader output — makes failures immediately visible
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print("[data stderr]", result.stderr[:800].rstrip())
     if os.path.exists(train_path):
         import pathlib
         size_kb = pathlib.Path(train_path).stat().st_size // 1024
         print(f"[data] ✓ gsm8k_train.jsonl ready ({size_kb} KB)")
     else:
-        print("[data] ⚠ Download may have failed — training will use fallback prompts.")
+        raise RuntimeError(
+            f"[data] gsm8k_train.jsonl still missing after download attempt "
+            f"(downloader exit {result.returncode}).\n"
+            f"  Check the stderr output above for the root cause.\n"
+            f"  Manual retry:\n"
+            f"    import subprocess, sys\n"
+            f"    subprocess.run([sys.executable, '{downloader}', '--datasets', 'gsm8k_train'], check=True)"
+        )
 
 
 # ---------------------------------------------------------------------------
