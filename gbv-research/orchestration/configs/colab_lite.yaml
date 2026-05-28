@@ -57,6 +57,9 @@ logging:
   log_every: 10
   wandb_project: distillspec
   wandb_group: colab-lite
+  # run_label is prepended to every W&B run name so this tier is identifiable
+  # at a glance across groups: "1.7B-T4-lite-kl_qwen_300steps"
+  run_label: "1.7B-T4-lite"
 
 health:
   val_every: 50

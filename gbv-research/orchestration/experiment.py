@@ -248,10 +248,12 @@ def _load_config_yaml(config_name: str) -> dict:
         import yaml
         with open(yaml_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        training     = data.get("training", {})
-        health       = data.get("health", {})
+        training      = data.get("training", {})
+        health        = data.get("health", {})
         checkpointing = data.get("checkpointing", {})
-        hardware     = data.get("hardware", {})
+        hardware      = data.get("hardware", {})
+        logging_cfg   = data.get("logging", {})
+        models_cfg    = data.get("models", {})
         out = {
             "lr":                   training.get("lr", 3e-5),
             "lora_r":               training.get("lora_r", 8),
@@ -267,6 +269,16 @@ def _load_config_yaml(config_name: str) -> dict:
             "save_every":           checkpointing.get("save_every", 100),
             "milestone_every":      checkpointing.get("milestone_every", 200),
             "max_checkpoints":      checkpointing.get("max_checkpoints", 5),
+            # W&B wiring: project + group were parsed from YAML but never forwarded
+            # to trainer.py.  Now passed via --wandb_project / --wandb_group so every
+            # run lands in the right W&B project and group.
+            "wandb_project":        logging_cfg.get("wandb_project", "distillspec"),
+            "wandb_group":          logging_cfg.get("wandb_group", config_name),
+            # run_label: short tag embedded in every W&B run name so runs from
+            # different configs are distinguishable at a glance:
+            #   "1.7B-T4-lite-kl_qwen_300steps"  vs  "4B-T4-kl_qwen_500steps"  etc.
+            # Falls back to config_name if not set in YAML.
+            "run_label":            logging_cfg.get("run_label", config_name),
         }
         # training.steps → train_steps (server=5000, colab=500, laptop=1000).
         # No default — None lets build_steps() apply the smoke/full default.
@@ -288,6 +300,16 @@ def _load_config_yaml(config_name: str) -> dict:
         # training.online_ebe_lr → LR for EBE online adapt (lower than online_lr).
         if "online_ebe_lr" in training:
             out["online_ebe_lr"] = training["online_ebe_lr"]
+        # models.target → teacher_tag: short human-readable size label extracted from
+        # the model name (e.g. "Qwen/Qwen3-4B" → "4B").  Used in run names if
+        # run_label is not explicitly set.
+        target = models_cfg.get("target", "")
+        if target and "run_label" not in logging_cfg:
+            import re as _re
+            m = _re.search(r"(\d+\.?\d*[BbMm])", target)
+            if m:
+                size_tag = m.group(1).upper()
+                out["run_label"] = f"{size_tag}-{config_name}"
         return out
     except Exception as exc:
         print(f"  [config] Warning: could not load {yaml_path}: {exc}")
@@ -469,6 +491,13 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--save_every",      str(_h.get("save_every", 100)),
         "--milestone_every", str(_h.get("milestone_every", 200)),
         "--max_checkpoints", str(_h.get("max_checkpoints", 5)),
+        # W&B routing — project, group, and run-label so every run lands in
+        # the right W&B project/group and the run name encodes the teacher size.
+        # Without these every run uses trainer.py's hard-coded defaults and all
+        # configs produce identically-named, ungrouped W&B runs.
+        "--wandb_project",   str(_h.get("wandb_project", "distillspec")),
+        "--wandb_group",     str(_h.get("wandb_group", "")),
+        "--run_label",       str(_h.get("run_label", "")),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.

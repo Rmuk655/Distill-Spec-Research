@@ -58,6 +58,8 @@ logging:
   log_every: 10
   wandb_project: distillspec
   wandb_group: colab-t4
+  # run_label is prepended to every W&B run name: "4B-T4-kl_qwen_500steps"
+  run_label: "4B-T4"
 
 health:
   val_every: 50

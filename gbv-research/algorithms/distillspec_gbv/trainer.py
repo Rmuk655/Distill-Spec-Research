@@ -165,6 +165,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wandb_project", default="distillspec")
     p.add_argument("--wandb_entity",  default=None)
     p.add_argument("--wandb_group",   default=None)
+    p.add_argument("--run_label",     default="",
+                   help="short tag prepended to the W&B run name so runs from "
+                        "different configs/teacher sizes are distinguishable, e.g. "
+                        "'4B-T4' -> '4B-T4-kl_qwen_500steps'. "
+                        "Set via logging.run_label in the YAML config.")
     p.add_argument("--no_wandb",      action="store_true")
 
     # ── Health checks ────────────────────────────────────────────────────────
@@ -504,10 +509,16 @@ def main() -> None:
     if not args.no_wandb:
         try:
             import wandb as _w
+            # Run name encodes: teacher-size + config-tier + loss + family + steps
+            # e.g. "4B-T4-kl_qwen_500steps" or "1.7B-T4-lite-ebe_qwen_300steps"
+            # run_label comes from logging.run_label in the YAML (forwarded by
+            # experiment.py); if absent falls back to plain loss+family+steps.
+            _label_prefix = f"{args.run_label}-" if args.run_label else ""
+            _run_name = f"{_label_prefix}{args.loss}_{family.name}_{args.steps}steps"
             _wandb = _w.init(
                 project=args.wandb_project, entity=args.wandb_entity,
-                group=args.wandb_group,
-                name=f"{args.loss}_{family.name}_{args.steps}steps",
+                group=args.wandb_group or None,
+                name=_run_name,
                 config={**vars(args), "family": family.name,
                         "attn_impl": _ATTN_IMPL},
                 resume="allow",

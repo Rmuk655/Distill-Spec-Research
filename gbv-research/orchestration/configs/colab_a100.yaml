@@ -53,6 +53,8 @@ logging:
   log_every: 10
   wandb_project: distillspec
   wandb_group: colab-a100
+  # run_label is prepended to every W&B run name: "8B-A100-kl_qwen_2000steps"
+  run_label: "8B-A100"
 
 health:
   val_every: 100

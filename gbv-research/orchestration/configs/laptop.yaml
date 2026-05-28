@@ -37,6 +37,8 @@ logging:
   log_every: 10
   wandb_project: distillspec
   wandb_group: laptop-gsm8k
+  # run_label: laptop uses 0.6B as both draft and teacher (sanity/debug only)
+  run_label: "0.6B-laptop"
 
 health:
   val_every: 50
