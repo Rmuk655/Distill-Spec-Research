@@ -869,6 +869,14 @@ def main() -> None:
         val_no_improve_count=_val_no_improve_count,
         no_lora=args.no_lora,
     )
+    # Save final adapter to the output root so that:
+    #   1. experiment.py done_check (adapter_model.safetensors at root) passes
+    #   2. --merge_only --adapter <output_dir> finds adapter_config.json at root
+    # This mirrors the behaviour of earlier trainer versions that flat-loss
+    # checkpoints were originally created with.
+    if not args.no_lora:
+        draft_model.save_pretrained(args.output)
+
     print(f"\n[done] Training complete.  Checkpoint: {args.output}/ckpt_latest")
     print(f"       Best val loss: {_best_val_loss:.4f}  "
           f"→  {args.output}/ckpt_best")
