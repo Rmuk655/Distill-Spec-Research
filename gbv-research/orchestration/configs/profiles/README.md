@@ -72,13 +72,15 @@ The A100 work splits into two independent tracks that share the same baseline
 
 ## Available Profiles
 
-| Profile | Track | Tier | Purpose | Training? |
-|---------|-------|------|---------|-----------|
-| `profiles/a100_baseline_losses` | A | A-1 | Train KL/JSD/L1/online; establish baselines | Yes |
-| `profiles/a100_verifier_sweep` | A | A-2 | Eval-only; deep verifier comparison at n=200 | No |
-| `profiles/a100_new_loss_template` | A | A-3 | Template: train a new flat loss vs baselines | Yes (new loss only) |
-| `profiles/a100_tree_losses` | B | B-1 | Full tree loss family; non-OT verifiers only | Yes |
-| `profiles/online_only_laptop` | dev | — | Laptop online-KL debug without offline losses | Yes (online only) |
+| Profile | Track | Hardware | Purpose | Training? |
+|---------|-------|----------|---------|-----------|
+| `profiles/a100_baseline_losses` | A | A100 | Train KL/JSD/L1/online; establish baselines | Yes |
+| `profiles/a100_verifier_sweep` | A | A100 | Eval-only; deep verifier comparison at n=200 | No |
+| `profiles/a100_new_loss_template` | A | A100 | Template: train a new flat loss vs baselines | Yes (new loss only) |
+| `profiles/a100_tree_losses` | B | A100 | Full tree loss family; 8B teacher, 2000 steps | Yes |
+| `profiles/colab_tree_losses` | B | T4 | Full tree loss family; **4B teacher, 500 steps** | Yes |
+| `profiles/colab_lite_tree_losses` | B | T4 | Tree losses; **1.7B teacher, 300 steps** (quick ablation) | Yes |
+| `profiles/online_only_laptop` | dev | laptop | Laptop online-KL debug without offline losses | Yes (online only) |
 | `profiles/promote_kl_jsd_l1` | legacy | — | Superseded by a100_baseline_losses | Yes |
 
 ## Usage

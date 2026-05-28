@@ -1,0 +1,86 @@
+# Profile: colab_lite_tree_losses — Tree losses on Colab T4 with 1.7B teacher
+#
+# Use this for QUICK ABLATIONS before committing to a full colab_tree_losses run.
+#
+# Hardware: Google Colab free T4 (15 GB VRAM)
+# Teacher:  Qwen3-1.7B (plain BF16, ~3.4 GB) — very fast inference
+# Draft:    Qwen3-0.6B (LoRA, BF16, ~1.2 GB)
+# VRAM budget: 1.2 + 3.4 + ~1.0 + ~1.5 (tree overhead) = ~7 GB → T4 has 8 GB spare
+#
+# Steps: 300 per loss — ~10-15 min per loss; all 9 ≈ 1.5-2 h.
+# Results are directional, not paper-quality (teacher is too small).
+# Confirm the loss curve shape and that eval moves in the right direction,
+# then promote to colab_tree_losses (500 steps, 4B) or a100_tree_losses (2000, 8B).
+#
+# Usage:
+#   # Quick single-loss check:
+#   python orchestration/experiment.py --config profiles/colab_lite_tree_losses --yes \
+#     --losses kl_tree --storage_root /content/drive/MyDrive/specdist
+#
+#   # All 9 losses (~1.5 h):
+#   python orchestration/experiment.py --config profiles/colab_lite_tree_losses --yes \
+#     --storage_root /content/drive/MyDrive/specdist
+
+hardware:
+  device: cuda
+  load_in_4bit: false           # 1.7B fits easily in bfloat16
+  compile: false
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-1.7B      # BF16, ~3.4 GB; very fast on T4
+
+training:
+  steps: 300                   # ~10-15 min per loss on T4
+  lr: 3.0e-5
+  lora_r: 8
+  lora_alpha: 16
+  max_new_tokens: 128          # lots of VRAM headroom with 1.7B teacher
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+tree_training:
+  tree_K: 4                    # 4 paths — safe at this teacher size
+  tree_L: 8
+
+checkpointing:
+  save_every: 25
+  milestone_every: 100
+  max_checkpoints: 5
+  storage_root: /content/drive/MyDrive/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: colab-lite-tree
+  run_label: "1.7B-T4-tree"
+
+health:
+  val_every: 50
+  ppl_check_every: 100
+  ppl_threshold: 1.25
+  nan_action: skip
+  early_stop_patience: 5
+
+evaluation:
+  modes: [bv, gbv, traversal]  # non-OT verifiers only
+  K_values: [3, 5]
+  L: 8
+  n_prompts: 20
+
+experiment:
+  losses:
+    - kl_tree
+    - rev_kl_tree
+    - jsd_tree
+    - bv_tree
+    - gbv_tree
+    - traversal_tree
+    - ebe_tree
+    - online_kl_tree
+    - online_ebe_tree
