@@ -26,7 +26,18 @@ from .l1 import l1
 from .ebe import ebe
 from .ebe_single import ebe_single
 
-# ── Registry ──────────────────────────────────────────────────────────────────
+# Tree-structured losses (different interface — see tree_losses.py)
+from .tree_losses import (
+    kl_tree_loss,
+    bv_tree_loss,
+    bv_tree_loss_all_paths,
+    gbv_tree_loss,
+    traversal_tree_loss,
+    compute_tree_loss,
+    TREE_LOSS_NAMES,
+)
+
+# ── Flat-sequence registry (s_log [T,V], t_log [T,V] → LossOutput) ───────────
 LOSS_REGISTRY: dict[str, callable] = {
     "forward_kl":  forward_kl,
     "reverse_kl":  reverse_kl,
@@ -39,7 +50,10 @@ LOSS_REGISTRY: dict[str, callable] = {
 
 def get_loss(name: str, *args, **kwargs) -> LossOutput:
     """
-    Compute the named loss.  Convenience wrapper around compute_loss().
+    Compute the named flat-sequence loss.  Convenience wrapper around compute_loss().
+
+    For tree-structured losses (kl_tree, bv_tree, gbv_tree, traversal_tree),
+    use compute_tree_loss() instead — they take a different set of arguments.
 
     Args:
         name:     Loss identifier (key in LOSS_REGISTRY).
@@ -49,15 +63,25 @@ def get_loss(name: str, *args, **kwargs) -> LossOutput:
     Returns:
         LossOutput with .loss and optional .accept_weight.
     """
+    if name in TREE_LOSS_NAMES:
+        raise ValueError(
+            f"'{name}' is a tree-structured loss — call compute_tree_loss() instead of get_loss()."
+        )
     if name not in LOSS_REGISTRY:
         available = ", ".join(sorted(LOSS_REGISTRY))
         raise ValueError(
-            f"Unknown loss '{name}'. Available: {available}."
+            f"Unknown loss '{name}'. Available flat losses: {available}. "
+            f"Tree losses: {sorted(TREE_LOSS_NAMES)}."
         )
     return LOSS_REGISTRY[name](*args, **kwargs)
 
 
 __all__ = [
+    # Flat losses
     "LossOutput", "LOSS_REGISTRY", "compute_loss", "get_loss",
     "forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single",
+    # Tree losses
+    "kl_tree_loss", "bv_tree_loss", "bv_tree_loss_all_paths",
+    "gbv_tree_loss", "traversal_tree_loss",
+    "compute_tree_loss", "TREE_LOSS_NAMES",
 ]

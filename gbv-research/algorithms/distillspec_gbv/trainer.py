@@ -59,6 +59,10 @@ from peft import get_peft_model, LoraConfig, TaskType, PeftModel
 
 from core.model_families import get_family, ModelFamily
 from algorithms.distillspec_gbv.losses import get_loss, LossOutput
+from algorithms.distillspec_gbv.losses import compute_tree_loss, TREE_LOSS_NAMES
+from algorithms.distillspec_gbv.tree_training import (
+    draft_tree_forward_with_grad, verify_tree_forward_grad,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +111,21 @@ def parse_args() -> argparse.Namespace:
 
     # ── Training ─────────────────────────────────────────────────────────────
     p.add_argument("--loss", default="forward_kl",
-                   choices=["forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single"],
-                   help="Distillation loss objective.")
+                   choices=[
+                       "forward_kl", "reverse_kl", "jsd", "l1", "ebe", "ebe_single",
+                       # Tree-structured losses — on-policy, verifier-specific objectives
+                       "kl_tree", "bv_tree", "gbv_tree", "traversal_tree",
+                   ],
+                   help="Distillation loss objective.  "
+                        "kl_tree/bv_tree/gbv_tree/traversal_tree use the student's own "
+                        "draft tree as training data (on-policy) and compute verifier-specific "
+                        "E[τ] surrogates.  Requires --tree_K and --tree_L.")
+    p.add_argument("--tree_K", type=int, default=4,
+                   help="Number of i.i.d. draft paths for tree losses (default 4, "
+                        "should match inference K).")
+    p.add_argument("--tree_L", type=int, default=8,
+                   help="Draft block length for tree losses (default 8, "
+                        "should match inference L and EBE DEFAULT_BLOCK_LEN).")
     p.add_argument("--steps",  type=int, default=1000,
                    help="Total training steps.")
     p.add_argument("--lr",     type=float, default=3e-5)
@@ -380,6 +397,62 @@ def _compute_ppl(
 # Main
 # ---------------------------------------------------------------------------
 
+def _tree_training_step(
+    draft_model,
+    target_model,
+    prompt_ids: torch.Tensor,
+    loss_name: str,
+    K: int,
+    L: int,
+    temperature: float,
+) -> torch.Tensor:
+    """
+    One training step for tree-structured losses (kl_tree / bv_tree / gbv_tree / traversal_tree).
+
+    Steps:
+      1. Student builds a draft tree via iid_draft (no grad — sampling is discrete).
+      2. Target scores the same tree via target_tree_pass (no grad — teacher is frozen).
+      3. Student re-runs over the fixed tree tokens WITH grad (draft_tree_forward_with_grad).
+      4. Tree loss is computed using q_probs_dict_grad + p_probs_dict.
+
+    Returns scalar loss tensor with grad_fn attached.
+    """
+    from algorithms.distillspec_gbv.verifiers.draft_generator import iid_draft, target_tree_pass
+
+    device = prompt_ids.device
+
+    with torch.no_grad():
+        # ── 1. Student builds draft tree ───────────────────────────────────────
+        q_out_init   = draft_model(prompt_ids, use_cache=True, return_dict=True)
+        q_cache_init = q_out_init.past_key_values
+        pending      = torch.multinomial(
+            F.softmax(q_out_init.logits[0, -1] / temperature, dim=-1), 1
+        ).unsqueeze(0)                                      # [1, 1]
+        q_paths, _, _ = iid_draft(
+            draft_model, q_cache_init, pending,
+            K=K, L=L, q_temp=temperature,
+        )
+
+        # ── 2. Target scores the draft tree ───────────────────────────────────
+        p_out_init   = target_model(prompt_ids, use_cache=True, return_dict=True)
+        p_cache_init = p_out_init.past_key_values
+        _, _, _, p_probs_dict = target_tree_pass(
+            target_model, p_cache_init, q_paths,
+            K=K, L=L, p_temp=temperature,
+        )
+        # p_probs_dict: {prefix → [V]}, all detached (target is frozen)
+
+    # ── 3. Student re-runs on fixed tree WITH grad ─────────────────────────────
+    q_probs_dict_grad = draft_tree_forward_with_grad(
+        draft_model, prompt_ids, q_paths, L=L, K=K, q_temp=temperature,
+    )
+
+    # ── 4. Tree loss ───────────────────────────────────────────────────────────
+    return compute_tree_loss(
+        loss_name, q_probs_dict_grad, p_probs_dict, q_paths, L=L, K=K,
+    )
+
+
 def main() -> None:
     args = parse_args()
 
@@ -585,6 +658,34 @@ def main() -> None:
         print(f"  [health] Baseline PPL = {_baseline_ppl:.2f}  "
               f"(warn if > {_baseline_ppl * args.ppl_threshold:.2f})\n")
 
+    # ── Tree-loss smoke test (grad check) ────────────────────────────────────
+    # Runs once before the main loop to confirm that grad flows through the
+    # tree forward pass before we spend any steps on it.
+    if args.loss in TREE_LOSS_NAMES:
+        from algorithms.distillspec_gbv.verifiers.draft_generator import iid_draft
+        from algorithms.distillspec_gbv.verifiers.draft_generator import target_tree_pass
+        print("[tree] Running draft_tree_forward_with_grad smoke test (grad check)…")
+        _smoke_prompt = prompts[0]
+        _smoke_ids    = _tok_cache[_smoke_prompt].to(device)
+        with torch.no_grad():
+            _smoke_out   = draft_model(_smoke_ids, use_cache=True, return_dict=True)
+            _smoke_qcache = _smoke_out.past_key_values
+            _smoke_pending = torch.multinomial(
+                F.softmax(_smoke_out.logits[0, -1] / args.teacher_temp, dim=-1), 1
+            ).unsqueeze(0)
+            _smoke_paths, _, _ = iid_draft(
+                draft_model, _smoke_qcache, _smoke_pending,
+                K=args.tree_K, L=args.tree_L, q_temp=args.teacher_temp,
+            )
+        # verify_tree_forward_grad runs the forward WITH grad and asserts requires_grad=True
+        verify_tree_forward_grad(
+            draft_model, _smoke_ids, _smoke_paths,
+            L=args.tree_L, K=args.tree_K, q_temp=args.teacher_temp,
+        )
+        del _smoke_out, _smoke_qcache, _smoke_pending, _smoke_paths
+        torch.cuda.empty_cache()
+        print()
+
     # ── Training loop ─────────────────────────────────────────────────────────
     for step in range(start_step, args.steps):
         if _stop_training:
@@ -597,40 +698,51 @@ def main() -> None:
 
         prompt_ids = _tok_cache[prompt].to(device)
 
-        # Teacher: generate + capture logits
-        with torch.no_grad():
-            gen_out = target_model.generate(
-                prompt_ids,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=True,
-                temperature=args.teacher_temp,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                return_dict_in_generate=True,
-                output_scores=True,
-            )
-        if not gen_out.scores:
-            losses.append(float("nan"))
-            continue
+        # ── Flat-sequence teacher rollout (skipped for tree losses) ─────────────
+        # Tree losses build their own on-policy rollout inside _tree_training_step.
+        s_log = t_log = gen_ids = None
+        if args.loss not in TREE_LOSS_NAMES:
+            with torch.no_grad():
+                gen_out = target_model.generate(
+                    prompt_ids,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=True,
+                    temperature=args.teacher_temp,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                )
+            if not gen_out.scores:
+                losses.append(float("nan"))
+                continue
 
-        full_ids = gen_out.sequences.clone()
-        plen     = prompt_ids.shape[1]
+            full_ids = gen_out.sequences.clone()
+            plen     = prompt_ids.shape[1]
 
-        # Recover raw logits (undo family-specific temp pre-scaling)
-        raw_scores = torch.stack(gen_out.scores, dim=0).squeeze(1).float()
-        t_log = family.recover_raw_logits(raw_scores, args.teacher_temp)
+            # Recover raw logits (undo family-specific temp pre-scaling)
+            raw_scores = torch.stack(gen_out.scores, dim=0).squeeze(1).float()
+            t_log = family.recover_raw_logits(raw_scores, args.teacher_temp)
 
-        # Draft: forward pass with gradient
-        draft_model.train()
-        student_logits = draft_model(full_ids).logits[:, :-1, :].float()
-        s_log   = student_logits[:, plen - 1:, :].squeeze(0)  # [gen_len, V]
-        gen_ids = full_ids[0, plen:]                            # [gen_len]
+            # Draft: forward pass with gradient
+            draft_model.train()
+            student_logits = draft_model(full_ids).logits[:, :-1, :].float()
+            s_log   = student_logits[:, plen - 1:, :].squeeze(0)  # [gen_len, V]
+            gen_ids = full_ids[0, plen:]                            # [gen_len]
 
         try:
-            out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids,
-                          kl_weight=args.ebe_kl_weight, alpha=args.jsd_alpha)
-            loss = out.loss
-            aw   = out.accept_weight
+            if args.loss in TREE_LOSS_NAMES:
+                out  = None
+                aw   = None
+                loss = _tree_training_step(
+                    draft_model, target_model, prompt_ids,
+                    args.loss, args.tree_K, args.tree_L, args.teacher_temp,
+                )
+            else:
+                out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids,
+                              kl_weight=args.ebe_kl_weight, alpha=args.jsd_alpha)
+                loss = out.loss
+                aw   = out.accept_weight
         except Exception as exc:
             _nan_count += 1
             print(f"\n  [health] ⚠ Loss exception at step {step+1}: {exc}")
