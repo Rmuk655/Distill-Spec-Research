@@ -89,15 +89,15 @@ In the Kaggle notebook editor:
 4. Repeat for the **8b** variation
 
 Both mount read-only at:
-- `/kaggle/input/qwen-3/transformers/0.6b/1` — Qwen3-0.6B draft
-- `/kaggle/input/qwen-3/transformers/8b/1` — Qwen3-8B teacher
+- `/kaggle/input/models/qwen-lm/qwen-3/transformers/0.6b/1` — Qwen3-0.6B draft
+- `/kaggle/input/models/qwen-lm/qwen-3/transformers/8b/1` — Qwen3-8B teacher
 
 ### Step 2 — Cell 0 is already configured
 
 `kaggle.ipynb` Cell 0 already has:
 ```python
-KAGGLE_DRAFT_MODEL  = "/kaggle/input/qwen-3/transformers/0.6b/1"
-KAGGLE_TARGET_MODEL = "/kaggle/input/qwen-3/transformers/8b/1"
+KAGGLE_DRAFT_MODEL  = "/kaggle/input/models/qwen-lm/qwen-3/transformers/0.6b/1"
+KAGGLE_TARGET_MODEL = "/kaggle/input/models/qwen-lm/qwen-3/transformers/8b/1"
 ```
 
 If those paths exist at runtime, the pipeline passes them directly to `--draft` and `--target`, bypassing HuggingFace Hub entirely. If you skip this step, it falls back to downloading automatically.
