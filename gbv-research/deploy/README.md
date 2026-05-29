@@ -16,19 +16,20 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 
 ## Which provider should I use?
 
-| Provider | GPU | VRAM | Session | Cost | Best for |
-|---|---|---|---|---|---|
-| **Free Colab** | T4 | 15 GB | ~90 min | free | Quick smoke tests, first runs |
-| **Free Colab Pro** | A100 | 40 GB | 12 h | ~$10/mo | Overnight runs |
-| **Kaggle** | T4/P100 | 15 GB | **12 h** | free (30 h/wk) | **Longer free sessions** |
-| **Modal A100** | A100-40GB | 40 GB | unlimited | ~$1.10/h | Paper-quality overnight runs |
-| **Modal A10G** | A10G | 24 GB | unlimited | ~$0.76/h | Budget paid runs |
-| **RunPod** | RTX 3090+ | 24 GB | unlimited | ~$0.44/h | Cheapest paid option |
-| **HF Spaces** | T4/A10G | 15–24 GB | unlimited | ~$0.60/h | HF-integrated experiments |
+| Provider | GPU | VRAM | System RAM | Session | Cost | Best for |
+|---|---|---|---|---|---|---|
+| **Free Colab** | T4 | 16 GB | ~12 GB | ~90 min idle | free | Quick smoke tests, first runs |
+| **Kaggle** | T4 (×1 or ×2) | 16 GB | **29 GB** | **9 h (60 min idle)** | free (30 h/wk) | **Best free option** |
+| **Colab Pro** | A100 | 40 GB | ~50 GB | 12 h | ~$10/mo | Overnight paper runs |
+| **Modal A100** | A100-40GB | 40 GB | ample | unlimited | ~$1.10/h | Paper-quality overnight runs |
+| **Modal A10G** | A10G | 24 GB | ample | unlimited | ~$0.76/h | Budget paid runs |
+| **RunPod** | RTX 3090+ | 24 GB | ample | unlimited | ~$0.44/h | Cheapest paid option |
+| **HF Spaces** | T4/A10G | 15–24 GB | ample | unlimited | ~$0.60/h | HF-integrated experiments |
 
 **Rule of thumb:**
-- **Free T4 (Colab / Kaggle)** → use `--config colab` (8B teacher in 4-bit NF4)
-- **Paid A100 (Modal / RunPod)** → use `--config server` (8B teacher in bfloat16, faster)
+- **Kaggle T4** → use `--config kaggle` (8B teacher in 4-bit NF4; 29 GB RAM makes NF4 loading work)
+- **Free Colab T4** → use `--config colab` (4B teacher in plain BF16; Colab's 12 GB RAM can't load 8B NF4)
+- **Paid A100 (Modal / RunPod)** → use `--config colab_a100` or `server` (8B teacher in bfloat16, no quantization)
 - **Local laptop** → use `--config laptop` (smoke tests only)
 
 ---
@@ -73,36 +74,31 @@ python orchestration/experiment.py --config laptop  --smoke --yes
 
 ---
 
-## Which teacher size for T4? (Option A vs B vs C)
+## Which teacher size for T4?
 
-**TL;DR: Always use Option A (QLoRA 8B). The `colab` config does this automatically.**
+| Option | Config | Teacher | VRAM | Quality | Platform |
+|---|---|---|---|---|---|
+| **8B NF4 (best)** | `kaggle` | Qwen3-8B (4-bit NF4) | ~7.8 GB | ⭐⭐⭐ Best | **Kaggle only** (29 GB RAM) |
+| **4B BF16 (safe)** | `colab` | Qwen3-4B (BF16) | ~10.7 GB | ⭐⭐ Good | Colab or Kaggle |
+| **1.7B BF16 (fast)** | `colab_lite` | Qwen3-1.7B (BF16) | ~5.6 GB | ⭐ Weak | Colab or Kaggle |
 
-| Option | Teacher | VRAM | Quality | Verdict |
-|---|---|---|---|---|
-| **A: QLoRA 8B** | Qwen3-8B (4-bit NF4) | ~9 GB | ⭐⭐⭐ Best | **Use this** |
-| B: Kaggle extra time | same as A | same | same | Same option A, just more hours |
-| C: 1.7B teacher | Qwen3-1.7B (bf16) | ~4 GB | ⭐ Weak | Ablation only |
+**Why `colab` uses 4B instead of 8B:**
 
-**Why A wins on T4:**
+4-bit NF4 quantization loads each weight tensor as BF16 into CPU RAM first (~16 GB
+intermediates for 8B model). Colab has ~12 GB system RAM → OOM kill (SIGKILL, no
+Python exception). `colab.yaml` uses the 4B teacher in plain BF16 to avoid this.
 
-- `colab.yaml` already loads the 8B teacher in **4-bit NF4** via `bitsandbytes`.
-  Total VRAM: ~5 GB teacher + ~1.2 GB draft + ~2.5 GB LoRA/activations = **~9 GB**.
-  T4 has 15 GB → **6 GB headroom**.
+Kaggle has **29 GB system RAM** → 16 GB intermediates fit → 8B NF4 works.
 
-- The 4-bit teacher's logits are nearly identical to bfloat16 (NF4 is designed for
-  frozen inference — quantisation error averages out over 1000s of training steps).
-
-- A 1.7B teacher (Option C) produces weaker distillation targets. Your GBV vs
-  baselines comparison needs a strong teacher to show meaningful block-efficiency
-  differences. Use 1.7B only as a fast ablation: "does teacher size matter?"
-
-**To run with the recommended setup:**
+**Recommendation:**
+- **Kaggle:** use `CONFIG = "kaggle"` (8B NF4, same teacher quality as A100)
+- **Free Colab:** use `CONFIG = "colab"` (4B BF16, no quantization risk)
+- Use 1.7B (`colab_lite`) only for quick ~25-min trend checks
 
 ```bash
-# Colab — just open deploy/colab_quickstart.ipynb and run all cells.
-# The colab config already uses 8B 4-bit NF4 teacher — no extra flags needed.
+# Kaggle — open deploy/kaggle.ipynb and set CONFIG = "kaggle" (default)
 
-# Kaggle — open deploy/kaggle.ipynb and set CONFIG = "colab"
+# Colab — open deploy/colab_quickstart.ipynb and set CONFIG = "colab" (default)
 
 # Local smoke test to verify the code path:
 python orchestration/experiment.py --config laptop --smoke --yes

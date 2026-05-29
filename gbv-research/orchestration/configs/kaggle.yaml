@@ -1,0 +1,96 @@
+# Kaggle T4 configuration — single GPU, Qwen3-8B teacher in 4-bit NF4
+#
+# Why this config exists separately from colab.yaml (T4 / 4B BF16):
+# -------------------------------------------------------------------
+# Kaggle and Colab both have the same T4 GPU (16 GB VRAM), but their system RAM
+# differs hugely:
+#
+#   Colab free tier:  ~12 GB system RAM
+#   Kaggle free tier: ~29 GB system RAM
+#
+# 4-bit NF4 quantization (bitsandbytes) loads each weight tensor as BF16 into
+# CPU RAM first, then converts to NF4.  For Qwen3-8B: ~16 GB RAM intermediates.
+#
+#   Colab:  12 GB RAM < 16 GB needed → Linux OOM kills the process (SIGKILL).
+#           No exception raised — Python cannot catch it.  This is why colab.yaml
+#           uses the 4B teacher in plain BF16 instead.
+#
+#   Kaggle: 29 GB RAM > 16 GB needed → NF4 loading succeeds.
+#           Use the 8B teacher, same signal quality as the A100 config.
+#
+# VRAM budget (single T4, 16 GB):
+#   Teacher Qwen3-8B in 4-bit NF4: ~4.5 GB (device_map="auto")
+#   Draft   Qwen3-0.6B in BF16:     1.2 GB
+#   LoRA adapters + optimizer:       0.1 GB
+#   Activations / KV cache (seq 96): 2.0 GB
+#   Total:                          ~7.8 GB  — 8+ GB headroom
+#
+# Dual GPU note (Kaggle T4 x2):
+#   With Accelerator = GPU T4 x2, device_map="auto" automatically splits the
+#   8B NF4 teacher across both GPUs, freeing even more VRAM on the training GPU.
+#   No code changes needed — set Accelerator to T4 x2 in notebook settings and
+#   the trainer handles it automatically.
+#
+# Steps / time on T4:
+#   500 steps  ≈ 2-4 h (colab config level, same teacher quality as A100)
+#   1000 steps ≈ 4-8 h (Kaggle 9-hour sessions can do this comfortably)
+#
+# Use with:
+#   python orchestration/experiment.py \
+#     --config kaggle --storage_root /kaggle/working/specdist --yes
+
+hardware:
+  device: cuda
+  load_in_4bit: true            # 8B NF4 — works on Kaggle (29 GB RAM), not on Colab (12 GB RAM)
+  compile: false                # torch.compile not reliable in Kaggle/Colab kernel environments
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B         # 4-bit NF4 ~4.5 GB VRAM — same teacher as A100 config
+
+training:
+  steps: 1000                   # 9-hour Kaggle sessions can comfortably run 1000 steps
+  lr: 3.0e-5
+  lora_r: 8                     # same as colab.yaml — conservative for T4 VRAM
+  lora_alpha: 16
+  max_new_tokens: 96
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  # Paths are for reference only — pipeline hardcodes core/datasets/raw/ via _data().
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+checkpointing:
+  save_every: 25                # save every 25 steps (~1-2 min on T4)
+  milestone_every: 100
+  max_checkpoints: 5
+  # /kaggle/working/ is ephemeral — pipeline writes to STORAGE_ROOT passed on CLI.
+  # On Kaggle: --storage_root /kaggle/working/specdist
+  storage_root: /kaggle/working/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: kaggle-t4
+  # "8B-kaggle" prefix distinguishes these runs from colab (4B) and A100 (8B BF16)
+  run_label: "8B-kaggle"
+
+health:
+  val_every: 50
+  ppl_check_every: 100
+  ppl_threshold: 1.25
+  nan_action: skip              # skip NaN batches (Kaggle sessions are precious)
+  early_stop_patience: 5
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3, 5]
+  L: 8
+  n_prompts: 20                 # same as colab.yaml — T4 eval is slow
+
+tree_training:
+  tree_K: 4
+  tree_L: 8
