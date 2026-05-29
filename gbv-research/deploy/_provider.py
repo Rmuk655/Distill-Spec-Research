@@ -174,6 +174,26 @@ PROVIDERS: dict[str, ProviderConfig] = {
         env_signal       = ("SPACE_ID",),
     ),
 
+    # ── Adobe internal ──────────────────────────────────────────────────────
+    "aip": ProviderConfig(
+        name             = "aip",
+        pipeline_config  = "colab_a100",  # default: A100 BF16; switch to "kaggle" for T4/V100 16 GB
+        storage_root     = "",            # set dynamically in aip.ipynb: /sensei-fs-3/users/$USER/specdist
+        hf_home          = "",            # set to /sensei-fs-3/users/$USER/specdist/hf_cache in notebook
+        gpu_vram_gb      = 40.0,          # A100 40 GB; override if allocated a smaller GPU
+        session_max_h    = 4.0,           # AIP interactive: 4-hour guaranteed runtime
+        cost_per_hour    = 0.0,           # internal Adobe resource
+        notes            = (
+            "Adobe AI Platform interactive session. "
+            "Sensei FS at /sensei-fs-3/users/$USER/ persists across sessions (like Lightning AI). "
+            "Models download once, checkpoints never lost. "
+            "4-hour session limit — always use BACKGROUND=True and Cell 1 to resume. "
+            "Secrets: export VAR=value in VS Code terminal (no platform secret API). "
+            "Up to 3 GPUs/user; device_map=auto shards teacher across all GPUs."
+        ),
+        env_signal       = ("AIP_POD_NAME", "ADOBE_AIP_ENV"),  # Adobe AIP K8s env vars (if set)
+    ),
+
     # ── Local ───────────────────────────────────────────────────────────────
     "local_laptop": ProviderConfig(
         name             = "local_laptop",

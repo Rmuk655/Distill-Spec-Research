@@ -21,6 +21,7 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 | **Free Colab** | T4 | 16 GB | ~12 GB | ~90 min idle | free | Quick smoke tests, first runs |
 | **Kaggle** | T4 (×1 or ×2) | 16 GB | **29 GB** | **9 h (60 min idle)** | free (30 h/wk) | **Best free option (no persistent storage)** |
 | **Lightning AI** | T4-equiv | 16 GB | ~32 GB | unlimited | free (15 credits/mo ≈ 22-30 h) | **Best free option with persistent storage** |
+| **Adobe AIP** | A100 / varies | ≥ 16 GB | ample | **4 h guaranteed** | free (internal) | **Best option if you have AIP access** |
 | **Colab Pro** | A100 | 40 GB | ~50 GB | 12 h | ~$10/mo | Overnight paper runs |
 | **Modal A100** | A100-40GB | 40 GB | ample | unlimited | ~$1.10/h | Paper-quality overnight runs |
 | **Modal A10G** | A10G | 24 GB | ample | unlimited | ~$0.76/h | Budget paid runs |
@@ -32,6 +33,8 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 - **Kaggle T4** → use `--config kaggle` (8B teacher in 4-bit NF4; 29 GB RAM makes NF4 loading work)
 - **Lightning AI free T4** → use `--config kaggle` (same RAM headroom as Kaggle; storage persists — models download once)
 - **Free Colab T4** → use `--config colab` (4B teacher in plain BF16; Colab's 12 GB RAM can't load 8B NF4)
+- **Adobe AIP A100** → use `--config colab_a100` (8B BF16, full run in ~2-3 h — fits one 4-hour session; see `deploy/aip.ipynb`)
+- **Adobe AIP T4/V100 16 GB** → use `--config kaggle` (8B NF4; 4-hour sessions mean ~1 loss/session)
 - **Paid A100 / L40S (Modal / RunPod / Lightning AI)** → use `--config colab_a100` or `server` (8B teacher in bfloat16, no quantization)
 - **Local laptop** → use `--config laptop` (smoke tests only)
 
@@ -44,6 +47,7 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 | `colab_quickstart.ipynb` | Google Colab | Open in Colab, run top to bottom |
 | `kaggle.ipynb` | Kaggle Kernels | Upload to Kaggle, run top to bottom |
 | `lightning.ipynb` | Lightning AI Studios | Open in Studio Jupyter, run top to bottom |
+| `aip.ipynb` | Adobe AI Platform | Open in AIP VS Code Jupyter, run top to bottom |
 | `modal_app.py` | Modal.com | `modal run deploy/modal_app.py::run_pipeline` |
 | `runpod.sh` | RunPod | `bash runpod.sh` in pod terminal |
 | `_provider.py` | All (shared) | Config registry + helper functions |
