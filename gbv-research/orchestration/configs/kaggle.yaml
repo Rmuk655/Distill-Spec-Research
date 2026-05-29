@@ -86,11 +86,26 @@ health:
   early_stop_patience: 5
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [3, 5]
+  # Reduced for free-tier trend-line runs.  Full paper sweep on A100 only.
+  # Dropped: alpha (OOM with 4-bit — both models in VRAM simultaneously > system RAM).
+  #          specinfer, naive — consistently weakest verifiers on laptop; not needed for trend.
+  # K=3 only: K=3 vs K=5 spread < 0.06 BE on all well-sampled losses (laptop data);
+  #           direction is inconsistent — not meaningful pre-paper.
+  # temperatures=[0.8]: match training teacher_temperature; halves eval time.
+  #                     A100 sweeps [0.6, 1.0] for paper robustness.
+  modes: [bv, gbv, traversal]
+  K_values: [3]
+  temperatures: [0.8]
   L: 8
-  n_prompts: 20                 # same as colab.yaml — T4 eval is slow
+  n_prompts: 20                 # T4 eval is slow; increase to 30 once modes are reduced
 
 tree_training:
   tree_K: 4
   tree_L: 8
+
+experiment:
+  # ebe: broken — BE delta -0.202 vs baseline; loss optimising wrong objective (laptop runs).
+  # online: diverged — perplexity 15.46 vs baseline 7.47; likely LR or reward-scale issue.
+  # All their variants (ebe_single, online_ebe, ebe_tree, online_kl_tree, etc.) also disabled.
+  # Re-enable after fix; see docs/ISSUES.md.
+  losses: [kl, rev_kl, jsd, l1, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]

@@ -316,6 +316,20 @@ def _load_config_yaml(config_name: str) -> dict:
         #          losses: [online]          (Mukund's online-only debug run)
         if "losses" in experiment_cfg:
             out["losses"] = experiment_cfg["losses"]   # list or null
+        # evaluation section — K_values, temperatures, modes, n_prompts.
+        # Previously these were hardcoded in build_steps(); parsing them here lets each
+        # platform YAML control its own eval cost without editing experiment.py.
+        # Free-tier configs (kaggle, colab, colab_lite) run fewer modes and a single K/T
+        # for faster trend-line results.  A100 keeps the full sweep for paper quality.
+        eval_cfg = data.get("evaluation", {})
+        if eval_cfg.get("K_values"):
+            out["eval_K_values"] = eval_cfg["K_values"]    # list[int], e.g. [3] or [1,3,5,8]
+        if eval_cfg.get("temperatures"):
+            out["eval_temps"] = eval_cfg["temperatures"]   # list[float], e.g. [0.8] or [0.6,1.0]
+        if eval_cfg.get("modes"):
+            out["eval_modes"] = eval_cfg["modes"]          # list[str], e.g. ["bv","gbv","traversal"]
+        if eval_cfg.get("n_prompts"):
+            out["eval_n_prompts"] = eval_cfg["n_prompts"]  # int
         # experiment.seed_override → run a specific seed without editing training.seed
         if "seed_override" in experiment_cfg:
             out["seed"] = experiment_cfg["seed_override"]
@@ -553,6 +567,25 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     if load_in_4bit:
         _modes = "bv,gbv,traversal,specinfer,naive"
 
+    # ── YAML eval overrides (non-smoke only) ─────────────────────────────────────
+    # evaluation: section values from YAML override the hardcoded full-run defaults.
+    # Smoke defaults are intentionally NOT overridable — smoke must always exercise
+    # every mode so crashes surface before an overnight paid run starts.
+    _h = train_hparams or {}
+    if not smoke:
+        if _h.get("eval_K_values"):
+            _Ks = ",".join(str(k) for k in _h["eval_K_values"])
+        if _h.get("eval_temps"):
+            _temps = ",".join(str(t) for t in _h["eval_temps"])
+        if _h.get("eval_modes"):
+            # Still enforce the load_in_4bit alpha exclusion even if YAML requests it.
+            yaml_modes = [m for m in _h["eval_modes"]
+                          if not (load_in_4bit and m == "alpha")]
+            if yaml_modes:
+                _modes = ",".join(yaml_modes)
+        if _h.get("eval_n_prompts"):
+            _n = _h["eval_n_prompts"]
+
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
     _4bit = ["--load_in_4bit"] if load_in_4bit else []
@@ -561,7 +594,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Resolved from train_hparams dict (built in main() from YAML + CLI overrides).
     # Passed to every trainer.py invocation so the YAML / CLI fully controls
     # all hyperparameters without editing this file.
-    _h = train_hparams or {}
+    # Note: _h was already assigned above in the YAML eval overrides block.
     # Online adapt: max_new_tokens controls KV-cache size during speculative decode.
     # Smoke keeps this small (30).  Full run reads from YAML (laptop=80, server=128,
     # colab=64).  The KL computation is now memory-efficient (rejects-only selection

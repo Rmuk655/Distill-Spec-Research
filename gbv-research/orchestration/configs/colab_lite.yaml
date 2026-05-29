@@ -69,7 +69,17 @@ health:
   early_stop_patience: 5
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]  # all modes -- plenty of VRAM
-  K_values: [3, 5]
+  # Minimal eval — this config is a quick trend check, not a paper result.
+  # bv + gbv only: the two verifiers central to the paper claim.
+  # K=3, T=0.8, n=10: fastest possible reliable indication of loss ranking.
+  modes: [bv, gbv]
+  K_values: [3]
+  temperatures: [0.8]
   L: 8
-  n_prompts: 20
+  n_prompts: 10
+
+experiment:
+  # colab_lite is for checking loss ranking direction only.
+  # Run kl (baseline) + rev_kl (best-performing on laptop) for the fastest signal.
+  # All other losses run on kaggle or colab where training quality is higher anyway.
+  losses: [kl, rev_kl]

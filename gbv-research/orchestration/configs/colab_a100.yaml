@@ -65,6 +65,14 @@ health:
 
 evaluation:
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [1, 3, 5, 8]       # more K values than T4 -- A100 handles the eval load
+  K_values: [1, 3, 5, 8]       # full K sweep for paper -- A100 handles the eval load
+  temperatures: [0.6, 1.0]     # robustness sweep for paper -- matches DEFAULT_TEMPS in evaluate.py
   L: 8
   n_prompts: 50                 # more prompts for reliable numbers (A100 eval is fast)
+
+experiment:
+  # ebe: broken — BE delta -0.202 vs baseline (laptop runs); loss optimising wrong objective.
+  # online: diverged — perplexity 15.46 vs baseline 7.47; likely LR or reward-scale issue.
+  # Re-enable after fix; see docs/ISSUES.md.
+  # NOTE: rev_kl is best-performing loss on laptop (+0.141 BE delta) — included here.
+  losses: [kl, rev_kl, jsd, l1, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]
