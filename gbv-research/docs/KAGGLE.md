@@ -104,6 +104,30 @@ If those paths exist at runtime, the pipeline passes them directly to `--draft` 
 
 ---
 
+## Attaching the GSM8K training dataset (zero-download for train data)
+
+The GSM8K training set (7,473 problems) is normally downloaded from HuggingFace during bootstrap (~3 MB, ~30 s). Kaggle already hosts it — attach it once and every session starts with it instantly.
+
+### Step 1 — Attach the dataset in the notebook editor
+
+**Add Data** (right sidebar) → search `grade-school-math-8k` → select  
+**thedevastator / grade-school-math-8k-q-a** → **Add**
+
+Mounts at `/kaggle/input/datasets/thedevastator/grade-school-math-8k-q-a/`
+
+### Step 2 — Cell 0 is already configured
+
+`kaggle.ipynb` Cell 0 already has:
+```python
+KAGGLE_GSM8K_DATASET = "/kaggle/input/datasets/thedevastator/grade-school-math-8k-q-a"
+```
+
+At startup, `bootstrap()` converts `main_train.csv` → `gsm8k_train.jsonl` (7,473 rows, matching our standard format) and skips the HuggingFace download entirely.
+
+**Which CSV file is used:** only `main_train.csv`. The `socratic_train.csv` (Socratic prompting format) and `main_test.csv` are ignored — we use the small committed JSONL files for eval, not this CSV.
+
+---
+
 ## Pre-uploading eval datasets (optional)
 
 The eval JSONL files (~10 MB total) are committed to the repo and auto-downloaded on first run — no pre-upload needed for most users. If you want truly zero-network sessions:

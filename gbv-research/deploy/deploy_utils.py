@@ -242,6 +242,42 @@ def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
             print("  Trainer will attempt download at run time.")
 
 
+def _from_kaggle_gsm8k_csv(csv_path: str, out_jsonl: str) -> bool:
+    """Convert main_train.csv from thedevastator/grade-school-math-8k-q-a to gsm8k_train.jsonl.
+
+    The CSV has 'question' and 'answer' columns matching our standard JSONL format.
+    Returns True on success (file written), False if conversion failed.
+    """
+    import csv
+    try:
+        q_col = a_col = None
+        with open(csv_path, encoding="utf-8", newline="") as f:
+            cols = next(csv.reader(f))
+        for c in cols:
+            cl = c.lower().strip()
+            if cl == "question":
+                q_col = c
+            elif cl == "answer":
+                a_col = c
+        if not q_col or not a_col:
+            print(f"[data] ⚠ CSV columns {cols} — expected 'question' and 'answer'. Skipping.")
+            return False
+        count = 0
+        with open(csv_path, encoding="utf-8", newline="") as f, \
+             open(out_jsonl, "w", encoding="utf-8") as out:
+            for row in csv.DictReader(f):
+                q = row.get(q_col, "").strip()
+                a = row.get(a_col, "").strip()
+                if q and a:
+                    out.write(json.dumps({"question": q, "answer": a}) + "\n")
+                    count += 1
+        print(f"[data] gsm8k_train.jsonl ← {os.path.basename(csv_path)} ({count} rows)")
+        return count > 0
+    except Exception as exc:
+        print(f"[data] CSV conversion failed: {exc}")
+        return False
+
+
 def fetch_training_data(gbv_dir: str = GBV_DIR) -> None:
     """Download gsm8k_train.jsonl to core/datasets/raw/ if not already present.
 
@@ -378,6 +414,7 @@ def bootstrap(
     drive_mount_path: str = "/content/drive",
     kaggle_hf_dataset: str = None,
     kaggle_data_dataset: str = None,
+    kaggle_gsm8k_dataset: str = None,
     restore_checkpoints: bool = False,
     checkpoint_dataset_names: tuple = (
         "specdist-checkpoints", "specdist_checkpoints",
@@ -409,6 +446,9 @@ def bootstrap(
                       JSONL files. When set, .jsonl files are copied into
                       core/datasets/raw/ before fetch_training_data() runs so that
                       step skips the HuggingFace download entirely.
+    kaggle_gsm8k_dataset Path to thedevastator/grade-school-math-8k-q-a Kaggle dataset.
+                      When set, main_train.csv is converted to gsm8k_train.jsonl and
+                      placed in core/datasets/raw/, skipping the HF download.
     restore_checkpoints  Search /kaggle/input/<name>/ for a saved checkpoint
                       dataset and restore it into storage_root/checkpoints/.
                       Use this in Resume cells on Kaggle.
@@ -482,6 +522,22 @@ def bootstrap(
             print(f"[data] {_copied} dataset file(s) <- {kaggle_data_dataset}")
         else:
             print(f"[data] Datasets already present — skipping copy from {kaggle_data_dataset}")
+
+    # 8b. Convert GSM8K CSV from Kaggle dataset → gsm8k_train.jsonl (if provided).
+    #     Runs before fetch_training_data() so the HF download is skipped when the
+    #     file is already present (fetch_training_data checks existence first).
+    if kaggle_gsm8k_dataset and os.path.isdir(kaggle_gsm8k_dataset):
+        _raw_dir    = os.path.join(gbv_dir, "core", "datasets", "raw")
+        _train_path = os.path.join(_raw_dir, "gsm8k_train.jsonl")
+        if os.path.exists(_train_path):
+            print("[data] gsm8k_train.jsonl already present — skipping CSV conversion")
+        else:
+            os.makedirs(_raw_dir, exist_ok=True)
+            _csv = os.path.join(kaggle_gsm8k_dataset, "main_train.csv")
+            if os.path.isfile(_csv):
+                _from_kaggle_gsm8k_csv(_csv, _train_path)
+            else:
+                print(f"[data] main_train.csv not found in {kaggle_gsm8k_dataset}")
 
     # 8. Training data (downloads gsm8k_train.jsonl if missing; ~3 MB, idempotent).
     fetch_training_data(gbv_dir)
