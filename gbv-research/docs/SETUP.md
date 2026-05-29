@@ -35,11 +35,23 @@ pip install bitsandbytes
 
 ```bash
 # Run from gbv-research/
-python core/datasets/downloader.py --datasets gsm8k
+python core/datasets/downloader.py
 ```
 
-This writes `gsm8k_train.jsonl` (7,473 prompts) and `gsm8k_30.jsonl` (30-prompt
-eval set) to `gbv-research/core/datasets/raw/`.
+This downloads `gsm8k_train.jsonl` (7,473 training prompts) to `core/datasets/raw/`.
+
+**Small eval sets are already committed to the repo** — no download needed:
+
+| File | Size | Used for |
+|---|---|---|
+| `gsm8k_5/10/30.jsonl` | 3–8 KB | T4 Phase 3 GSM8K eval |
+| `alpaca_30.jsonl` | 2 KB | T4/A100 Phase 4 generalization |
+| `math500_30.jsonl` | 3 KB | T4/A100 Phase 4 generalization |
+| `humaneval.jsonl` | 3 KB | T4/A100 Phase 4 generalization |
+| `mtbench_80.jsonl` | 7 KB | T4/A100 Phase 4 generalization |
+| `diverse50.jsonl` | 4 KB | Laptop smoke tests |
+
+**Large A100 eval sets** (`gsm8k_1319.jsonl`, `alpaca_100.jsonl`, `math500_100.jsonl`) are not committed. They are downloaded automatically by `evaluate.py` on the first A100 eval run — no manual step needed.
 
 ---
 

@@ -60,57 +60,60 @@ python experiment.py --config laptop --yes --smoke
 
 ---
 
-### Stage 1 — Colab L4/T4 (trend formation, quantized)
+### Stage 1 — Colab/Kaggle T4 (trend formation)
 
-**Hardware**: Google Colab T4 (15 GB) or L4.  
-**Models**: Qwen3-0.6B draft → Qwen3-8B target **with `--load_in_4bit`** (4-bit NF4 on target).  
-**Dataset**: gsm8k_30 (30 prompts) for eval.  
-**hw_tier tag in results.db**: `colab`
+**Hardware**: Colab free T4 (15 GB) or Kaggle T4 (16 GB, 29 GB RAM).  
+**Models**: Qwen3-0.6B draft → Qwen3-4B target (Colab BF16) or Qwen3-8B target (Kaggle 4-bit NF4).  
+**Eval sets**: `gsm8k_30` (Phase 3 primary) + `alpaca_30`, `math500_30`, `humaneval`, `mtbench_80` (Phase 4 generalization) — all committed to repo, no download needed.  
+**hw_tier tag in results.db**: `colab` / `kaggle`
 
-**Purpose**: Directional signal — does EBE beat forward KL? Do the trends hold? Alpha and block_eff are **directionally meaningful** but timing/throughput are NOT reliable (quantized target changes latency).
+**Purpose**: Directional signal — does EBE beat forward KL? Do the trends hold across domains? Alpha and block_eff are **directionally meaningful** at n=30. Timing/throughput are not reliable (quantized target on Kaggle changes latency).
 
-| Parameter | Value |
-|---|---|
-| Train steps | 500 |
-| Eval prompts | n=10 |
-| Losses | Main: forward_kl, ebe |
-| Verifiers | traversal, specinfer, gbv |
-| K | 3, 5 |
-| Temperature | 0.6, 1.0 |
+| Parameter | Colab | Kaggle |
+|---|---|---|
+| Train steps | 500 | 1000 |
+| Eval prompts | **n=30** per dataset | **n=30** per dataset |
+| Primary eval | gsm8k_30 | gsm8k_30 |
+| Generalization eval | alpaca_30, math500_30, humaneval | alpaca_30, math500_30, humaneval |
+| Losses | all enabled in experiment.losses | all enabled |
+| K | 3 | 3 |
+| Temperature | 0.8 | 0.8 |
 
 ```bash
-python experiment.py --config colab --yes
+python orchestration/experiment.py --config colab --yes    # Colab
+python orchestration/experiment.py --config kaggle --yes   # Kaggle
 ```
 
-**NOTE**: `--load_in_4bit` is colab-only. The pipeline adds it automatically for `--config colab` and never adds it for `--config server` or `--config a100`.
-
-**Decision gate**: if EBE shows higher alpha/BE than forward_kl at n=10, proceed to Stage 2. If not, investigate before committing to A100 GPU hours.
+**Decision gate**: if EBE shows higher alpha/BE than forward_kl consistently across gsm8k and ≥1 secondary domain at n=30, proceed to Stage 2.
 
 ---
 
 ### Stage 2 — A100 (paper quality, bf16)
 
-**Hardware**: A100 (40/80 GB) or H100. Full bf16 — **no quantization**.  
+**Hardware**: A100 (40/80 GB) — AIP, Colab Pro, Lightning AI, Modal, RunPod. Full bf16, no quantization.  
 **Models**: Qwen3-0.6B draft → Qwen3-8B target, full bf16.  
-**Datasets**: gsm8k_train for training, gsm8k_30 + math500_30 for eval.  
+**Eval sets**: Phase 3 uses **full GSM8K test set (1,319 prompts)** — auto-downloaded on first eval run. Phase 4 uses n=100 each for alpaca, math500, humaneval, mtbench.  
 **hw_tier tag in results.db**: `a100`
 
 **Purpose**: Paper-quality numbers. These are the numbers that go in the paper.
 
 | Parameter | Value |
 |---|---|
-| Train steps | 1000 |
-| Eval prompts | n=30 |
-| Losses | forward_kl, ebe (+ rev_kl, jsd for §12) |
-| Verifiers | ALL 4: traversal, specinfer, gbv, bv |
-| K | 3, 5 |
+| Train steps | 2000 |
+| Phase 3 eval (GSM8K) | **n=1319** (full test set — auto-downloaded) |
+| Phase 4 eval (secondary) | **n=100** per domain (alpaca, math500, humaneval, mtbench) |
+| Losses | all enabled in experiment.losses |
+| Verifiers | ALL 6: alpha, bv, gbv, traversal, specinfer, naive |
+| K | 1, 3, 5, 8 |
 | Temperature | 0.6, 1.0 |
 
 ```bash
-python experiment.py --config server --yes
+python orchestration/experiment.py --config a100 --yes
 ```
 
-**IMPORTANT**: `evaluate.py --hw_tier a100` includes a guard that errors if the target model appears quantized. This prevents accidentally tagging quantized (Colab) results as a100 tier.
+**IMPORTANT**: `evaluate.py --hw_tier a100` includes a guard that errors if the target model appears quantized. This prevents accidentally tagging quantized results as a100 tier.
+
+**Note on large eval files**: `gsm8k_1319.jsonl`, `alpaca_100.jsonl`, `math500_100.jsonl` are not committed to git (too large). `evaluate.py` downloads them automatically via `get_dataset_path()` on the first eval run — no manual step needed.
 
 **Decision gate**: after A100 runs, use `analyze_results.py` to generate the paper table.
 
@@ -355,18 +358,18 @@ All results tagged `hw_tier=colab` in results.db. Alpha and BE are directionally
 
 ---
 
-### A100 tier (--config server)
+### A100 tier (--config a100)
 
 ```bash
-python experiment.py --config server --yes
+python orchestration/experiment.py --config a100 --yes
 ```
 
-Same phases as colab, but:
+Same phases as T4, but:
 - Target loads in **full bf16** — NO `--load_in_4bit`.
 - All results tagged `hw_tier=a100`.
-- n=30 prompts for paper-quality statistics.
-- Both datasets: gsm8k_30 and math500_30 for eval.
-- ALL 4 verifiers: traversal, specinfer, gbv, bv.
+- Phase 3 GSM8K: **n=1319** (full 1,319-problem test set — auto-downloaded on first run).
+- Phase 4 secondary: **n=100** each for alpaca, math500, humaneval, mtbench.
+- ALL 6 verifiers: alpha, bv, gbv, traversal, specinfer, naive.
 
 The `evaluate.py --hw_tier a100` guard will error if it detects a quantized target, preventing accidental contamination of paper-quality data.
 
@@ -1040,10 +1043,10 @@ modal volume get specdist-vol /checkpoints ./local_checkpoints
 python scripts/setup_download.py --config laptop
 
 # Server / Colab / Kaggle (0.6B draft + 8B target)
-python scripts/setup_download.py --config server
+python core/datasets/downloader.py
 
 # Check what will be downloaded without downloading
-python scripts/setup_download.py --config server --dry_run
+python core/datasets/downloader.py --datasets gsm8k --n 30
 ```
 
 ---
@@ -1105,10 +1108,10 @@ The EAGLE head trains on the **target** model's hidden states. The paper's targe
 
 ```bash
 # Run full pipeline + EAGLE baseline — use --config server or colab (never laptop)
-python orchestration/experiment.py --config server --yes --eagle
+python orchestration/experiment.py --config a100 --yes --eagle
 
 # Run EAGLE phases only (Phases 0–4 already done)
-python orchestration/experiment.py --config server --yes --eagle --from eagle_gen
+python orchestration/experiment.py --config a100 --yes --eagle --from eagle_gen
 ```
 
 ---
@@ -1225,7 +1228,7 @@ wandb agent <entity>/distillspec/<sweep_id>
 | Alpha high but throughput low | Verification overhead (traversal) dominates | Expected for large K on slow hardware; compare at K=3 |
 | BE flat across K values | Draft too misaligned | EBE may not have converged; check LR and training steps |
 | Colab BE > A100 BE | Quantization artifact or different n prompts | Use HW TIER filter; only compare within same tier |
-| BE varies wildly across runs | Too few prompts (n=10 on colab) | Use n=30 on A100 for stable paper numbers |
+| BE varies wildly across runs | Too few prompts (T4 uses n=30) | Use A100 config: n=1319 for GSM8K, n=100 for secondary datasets |
 
 ---
 
@@ -1245,7 +1248,7 @@ DistillSpec (Zhou et al. 2023) Section 3.1 explicitly uses **forward KL** — KL
 **How to run all variants:**
 The pipeline runs all three KL variants as Phase 2b steps:
 ```bash
-python experiment.py --config server --yes --from train_rev_kl_gsm8k
+python orchestration/experiment.py --config a100 --yes --from train_rev_kl_gsm8k
 ```
 
 Results appear in the dashboard's Training Curves and Key Results tabs, color-coded:
