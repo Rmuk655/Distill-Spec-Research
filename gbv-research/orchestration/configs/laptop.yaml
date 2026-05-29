@@ -84,13 +84,17 @@ evaluation:
 
 tree_training:
   # Hyperparameters for tree-structured distillation losses.
-  # Used when experiment.losses includes any of:
-  #   kl_tree | bv_tree | gbv_tree | traversal_tree
-  #
+  # Used when experiment.losses includes any of the *_tree losses.
   # tree_K: number of i.i.d. draft paths sampled per training step.
-  #   Higher K → richer gradient signal; more VRAM per step.
-  #   Recommended: 4 (laptop/colab) to 8 (A100).
   # tree_L: draft block depth (tokens per path).
-  #   Should match the L used in evaluation (eval_pipeline --L).
   tree_K: 4
   tree_L: 8
+
+experiment:
+  # Laptop runs every loss for ~100 steps just to confirm no crash.
+  # Numbers are meaningless (0.6B teacher) — only check that each branch runs.
+  # Verifier-aligned tree losses added 2026-05; see tree_losses.py for math.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+           kl_tree, rev_kl_tree, jsd_tree,
+           bv_tree, gbv_tree, traversal_tree,
+           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]

@@ -65,16 +65,42 @@ health:
   early_stop_patience: 5
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  # Full 8-verifier cross-pair for the loss-verifier alignment matrix (paper main result):
+  #   naive, nss, specinfer, spectr, khisti — OT-based (have matching *_tree losses)
+  #   bv, gbv, traversal               — non-OT (have matching *_tree losses)
+  #   alpha                             — on-policy block efficiency baseline (untrained-style)
+  modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
   K_values: [1, 3, 5, 8]       # full K sweep for paper -- A100 handles the eval load
   temperatures: [0.6, 1.0]     # robustness sweep for paper -- matches DEFAULT_TEMPS in evaluate.py
   L: 8
   n_prompts: 100                # secondary datasets (alpaca/math500/humaneval/mtbench)
   n_prompts_gsm8k: 1319          # full GSM8K test set (1319 problems) for paper numbers
+  # Paper datasets (in order — Phase 3 runs all on the full 8×8 (loss,verifier) matrix):
+  #   gsm8k    — primary benchmark, 1319 prompts (full test set)
+  #   alpaca   — instruction-following, 100 prompts
+  #   math500  — competition math, 100 prompts
+  #   humaneval — code generation, all 164 prompts (filtered to ≤100 for budget)
+  #   mtbench  — multi-turn chat, 80 prompts (the entire MT-Bench)
+  eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
 
 experiment:
-  # ebe + ebe_single: re-enabled after fixing kl_weight (was 0.1, now 1.0).
-  # online + online_ebe: still disabled — greedy sampling bug fixed but needs verification
-  #   before committing expensive A100 time.  Run online smoke test on Kaggle first.
-  # rev_kl: best-performing loss on laptop (+0.141 BE delta) — included.
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]
+  # Loss family — covers the full 8×8 cross-pair matrix in Phase 3:
+  #
+  # Flat (token-level, off-policy):
+  #   kl rev_kl jsd l1 ebe ebe_single
+  #
+  # Tree (on-policy, generic divergences):
+  #   kl_tree rev_kl_tree jsd_tree
+  #
+  # Tree (verifier-aligned — non-OT):
+  #   bv_tree gbv_tree traversal_tree
+  #
+  # Tree (verifier-aligned — OT-based, NEW 2026-05, see tree_losses.py docstring):
+  #   naive_tree nss_tree specinfer_tree spectr_tree khisti_tree
+  #
+  # ebe_tree intentionally excluded — superseded by ebe-aligned variants above.
+  # online / online_ebe still disabled pending Kaggle smoke verification.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+           kl_tree, rev_kl_tree, jsd_tree,
+           bv_tree, gbv_tree, traversal_tree,
+           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]

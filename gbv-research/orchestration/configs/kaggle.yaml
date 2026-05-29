@@ -98,7 +98,7 @@ evaluation:
   K_values: [3]
   temperatures: [0.8]
   L: 8
-  n_prompts: 30                 # 30 prompts per dataset � reliable trend direction on T4
+  n_prompts: 30                 # 30 prompts per dataset � reliable trend direction on T4
 
 tree_training:
   tree_K: 4
@@ -112,4 +112,10 @@ experiment:
   #   fixed (now uses temperature sampling), but need a clean run to verify.
   #   The online EBE buffer also needs redesign (see online_serve.py L197-228).
   #   Re-enable online/online_ebe after a smoke run confirms no divergence.
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]
+  # Full 17-loss family — same as A100 — for Kaggle's 9-hour session budget.
+  # New verifier-aligned tree losses (naive/nss/specinfer/spectr/khisti) added
+  # 2026-05; see tree_losses.py for the math and α formulas.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+           kl_tree, rev_kl_tree, jsd_tree,
+           bv_tree, gbv_tree, traversal_tree,
+           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]

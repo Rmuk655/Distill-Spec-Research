@@ -74,11 +74,13 @@ evaluation:
   # alpha kept: BF16 Colab has no 4-bit OOM risk; both models fit in VRAM simultaneously.
   # K=3 only: saves half the eval time; K sweep happens on A100 before paper submission.
   # temperatures=[0.8]: matches training teacher_temperature; halves eval time vs [0.6,1.0].
+  # T4 compute budget: train all 17 losses but eval against 6 verifiers only.
+  # (A100 expands to all 8 — see a100.yaml — for the full alignment matrix.)
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
   temperatures: [0.8]
   L: 8
-  n_prompts: 30                 # 30 prompts per dataset � reliable trend direction on T4
+  n_prompts: 30                 # 30 prompts per dataset � reliable trend direction on T4
 
 tree_training:
   # K=4 on T4 — safe VRAM budget; each path adds ~L forward steps to the tree pass.
@@ -87,6 +89,10 @@ tree_training:
   tree_L: 8
 
 experiment:
-  # ebe + ebe_single: re-enabled after fixing kl_weight (was 0.1 → now 1.0).
-  # online + online_ebe: still disabled — greedy sampling bug fixed but needs smoke verification.
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]
+  # T4 trains the full 17-loss family — same as A100 — so paper-quality results
+  # can be reproduced on Kaggle/Colab T4 with degraded compute (smaller teacher,
+  # fewer steps, fewer eval prompts).  The 8×8 verifier cross-pair runs on A100.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+           kl_tree, rev_kl_tree, jsd_tree,
+           bv_tree, gbv_tree, traversal_tree,
+           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
