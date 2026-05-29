@@ -81,6 +81,64 @@ def install_deps(gbv_dir: str = GBV_DIR) -> None:
     print("[3/5] Dependencies installed")
 
 
+def setup_hf_cache(drive_root: str = DRIVE_ROOT) -> str:
+    """Point HuggingFace cache at Drive so models survive session restarts.
+
+    Without this, every new Colab session re-downloads all model weights from
+    HuggingFace (~1.2 GB draft + ~3.4 GB teacher = ~4.6 GB per session).
+    Pointing the cache at Drive means the first session downloads once; all
+    subsequent sessions load from Drive in ~30 s instead of ~10 min.
+
+    Returns the cache directory path.
+    """
+    hf_cache = os.path.join(drive_root, "hf_cache")
+    os.makedirs(hf_cache, exist_ok=True)
+    os.environ["HF_HOME"]             = hf_cache
+    os.environ["TRANSFORMERS_CACHE"]  = hf_cache
+    os.environ["HF_DATASETS_CACHE"]   = os.path.join(hf_cache, "datasets")
+    # Always allow online lookups — never inherit a stale OFFLINE flag
+    os.environ.pop("TRANSFORMERS_OFFLINE",   None)
+    os.environ.pop("HF_DATASETS_OFFLINE",    None)
+    os.environ.pop("HF_HUB_OFFLINE",         None)
+    print(f"[cache] HF model cache → {hf_cache}")
+    return hf_cache
+
+
+def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
+                    drive_root: str = DRIVE_ROOT) -> None:
+    """Download draft + teacher model weights into the Drive HF cache.
+
+    Reads the YAML profile to find model names, then calls
+    snapshot_download() for both.  Safe to re-run — skips files already
+    present in cache.  Call this after setup_hf_cache() and auth_hf().
+    """
+    import yaml  # type: ignore
+    from huggingface_hub import snapshot_download  # type: ignore
+
+    yaml_path = os.path.join(
+        gbv_dir, "orchestration", "configs",
+        config.replace("/", os.sep) + ".yaml",
+    )
+    if not os.path.exists(yaml_path):
+        print(f"[prefetch] YAML not found: {yaml_path} — skipping model prefetch")
+        return
+
+    with open(yaml_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    models_cfg = cfg.get("models", {})
+    draft_id   = models_cfg.get("draft",  "Qwen/Qwen3-0.6B")
+    target_id  = models_cfg.get("target", "Qwen/Qwen3-1.7B")
+
+    for model_id in dict.fromkeys([draft_id, target_id]):   # dedupe, keep order
+        print(f"[prefetch] {model_id} …", flush=True)
+        try:
+            path = snapshot_download(model_id, ignore_patterns=["*.gguf", "*.bin"])
+            print(f"[prefetch] ✓  {model_id}  → {path}")
+        except Exception as exc:
+            print(f"[prefetch] ✗  {model_id}: {exc}")
+            print("  Pipeline will try to download at train time — may fail if offline.")
+
+
 def fetch_training_data(gbv_dir: str = GBV_DIR) -> None:
     """Download gsm8k_train.jsonl to core/datasets/raw/ if not already present.
 
@@ -229,6 +287,9 @@ def run_pipeline(
         "SPECDIST_DB_PATH":      os.path.join(drive_root, "results.db"),
         "SPECDIST_LOGS_ROOT":    os.path.join(drive_root, "logs"),
     })
+    # Ensure child process can reach HuggingFace — never inherit a stale offline flag
+    for _flag in ("TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE", "HF_HUB_OFFLINE"):
+        os.environ.pop(_flag, None)
     log_file = os.path.join(drive_root, "logs", "pipeline_output.log")
 
     cmd = [sys.executable, "orchestration/experiment.py",
