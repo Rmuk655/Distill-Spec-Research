@@ -641,6 +641,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Smoke defaults are intentionally NOT overridable — smoke must always exercise
     # every mode so crashes surface before an overnight paid run starts.
     _h = train_hparams or {}
+    # _n_gsm8k always defaults to _n.  Non-smoke runs may override via YAML key
+    # eval_n_prompts_gsm8k (e.g. A100 uses 1319 for full GSM8K test set).
+    _n_gsm8k = _n
     if not smoke:
         if _h.get("eval_K_values"):
             _Ks = ",".join(str(k) for k in _h["eval_K_values"])
@@ -654,9 +657,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 _modes = ",".join(yaml_modes)
         if _h.get("eval_n_prompts"):
             _n = _h["eval_n_prompts"]
-        # _n_gsm8k: n for Phase 3 GSM8K eval. Defaults to _n (same as secondary datasets)
-        # unless the config provides a separate override (e.g. 1319 for full test on A100).
-        _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n)
+            _n_gsm8k = _n   # stays in sync unless overridden below
+        _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n_gsm8k)
 
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
