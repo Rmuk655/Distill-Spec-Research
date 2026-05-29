@@ -504,6 +504,15 @@ _LOSS_STEP_PREFIXES: dict = {
     "gbv_tree":       ("train_gbv_tree_",   "merge_gbv_tree_",   "eval_gbv_tree_"),
     "traversal_tree": ("train_trav_tree_",  "merge_trav_tree_",  "eval_trav_tree_"),
     "ebe_tree":       ("train_ebe_tree_",   "merge_ebe_tree_",   "eval_ebe_tree_"),
+    # ── Verifier-aligned tree losses (OT-based — added 2026-05) ────────────
+    # Each targets the closed-form acceptance probability α_V from node.py
+    # via the unified scaffold L_V = -Σ_i Π_{j≤i} α_V(p_j, q_j, K).
+    # See algorithms/distillspec_gbv/losses/tree_losses.py for derivations.
+    "naive_tree":     ("train_naive_tree_", "merge_naive_tree_", "eval_naive_tree_"),
+    "nss_tree":       ("train_nss_tree_",   "merge_nss_tree_",   "eval_nss_tree_"),
+    "specinfer_tree": ("train_si_tree_",    "merge_si_tree_",    "eval_si_tree_"),
+    "spectr_tree":    ("train_st_tree_",    "merge_st_tree_",    "eval_st_tree_"),
+    "khisti_tree":    ("train_khisti_tree_","merge_khisti_tree_","eval_khisti_tree_"),
     # ── Online tree distillation (online serving + on-policy tree training) ──
     # Builds a K-path draft tree at each update step on the served prompt.
     # No replay buffer. On-policy + prompt-distribution-matched.
@@ -714,27 +723,44 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # ─────────────────────────────────────────────────────────────────────────
     # Smoke: each tree-loss model is evaluated with ONLY its paired verifier.
     #   • Verifies the full code path (train → merge → eval) in minimal time.
-    #   • One mode per model = fastest possible smoke check.
     #
-    # Full: all three non-OT verifiers ("bv,gbv,traversal") for every tree model.
-    #   • Gives the cross-matrix table: does gbv_tree also help traversal? etc.
-    #   • OT-based verifiers (specinfer, naive, alpha) are deliberately excluded
-    #     — tree losses don't target their per-token OTLP acceptance criterion.
+    # Full (T4): non-OT verifiers ("bv,gbv,traversal") for every tree model.
+    #   • Compute-budget-constrained subset of the full matrix.
     #
-    # kl_tree is the universal on-policy baseline: always runs all 3 non-OT modes.
+    # Full (A100): ALL 8 verifiers — full loss-verifier alignment matrix
+    #   ("naive,nss,specinfer,spectr,khisti,bv,gbv,traversal") for every tree
+    #   model.  This is the headline result in the paper: diagonal-vs-off-diagonal
+    #   acceptance gap shows whether loss-verifier alignment matters.
+    #
+    # kl_tree, rev_kl_tree, jsd_tree are universal baselines — they run all
+    # configured modes regardless of "paired" semantics.
     # ─────────────────────────────────────────────────────────────────────────
-    _TREE_NON_OT = "bv,gbv,traversal"   # full-run modes for all offline tree losses
+    _TREE_NON_OT      = "bv,gbv,traversal"
+    _TREE_FULL_MATRIX = "naive,nss,specinfer,spectr,khisti,bv,gbv,traversal"
+
+    # A100 evals against the full 8-verifier matrix; T4 stays at 3-verifier subset.
+    _tree_full_modes = _TREE_FULL_MATRIX if _hw_tier_from_config(args.config) == "a100" else _TREE_NON_OT
+
     _TREE_PAIRED = {                     # smoke: just the naturally paired verifier
-        # Divergence variants — universal baselines, test all 3 even in smoke
-        "kl_tree":        _TREE_NON_OT,
-        "rev_kl_tree":    _TREE_NON_OT,
-        "jsd_tree":       _TREE_NON_OT,
-        # Verifier-specific surrogates — paired with their target verifier in smoke
+        # Divergence variants — universal baselines, test all configured modes even in smoke
+        "kl_tree":        _tree_full_modes,
+        "rev_kl_tree":    _tree_full_modes,
+        "jsd_tree":       _tree_full_modes,
+        # Verifier-specific surrogates (non-OT) — paired with their target verifier in smoke
         "bv_tree":        "bv",
         "gbv_tree":       "gbv",
         "traversal_tree": "traversal",
         # On-policy EBE ablation — paired with bv in smoke (closest structural match)
         "ebe_tree":       "bv",
+        # Verifier-aligned tree losses (OT-based, NEW 2026-05).
+        # Smoke: evaluate against the aligned verifier only.
+        # Full: evaluate against the full 8-verifier matrix (A100) or the
+        #       non-OT subset (T4); same as the divergence-variant baselines.
+        "naive_tree":     "naive",
+        "nss_tree":       "nss",
+        "specinfer_tree": "specinfer",
+        "spectr_tree":    "spectr",
+        "khisti_tree":    "khisti",
     }
 
     # ── Loss filter helper ─────────────────────────────────────────────────────
@@ -1262,6 +1288,143 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         },
 
         # -------------------------------------------------------------------
+        # Verifier-aligned OT-based tree losses (added 2026-05).
+        # Each targets a specific OT verifier's closed-form per-node
+        # acceptance probability α_V from node.py:
+        #   naive_tree     → naive_otlp_accept       (Chen/Leviathan)
+        #   nss_tree       → nss_otlp_accept         (Naive Spec Sampling)
+        #   specinfer_tree → specinfer_otlp_accept   (Miao 2024, K-iter reject)
+        #   spectr_tree    → spectr_otlp_accept      (Sun 2023, K-SEQ; ρ detached)
+        #   khisti_tree    → khisti_otlp_accept_LB   (Khisti 2025, LP-free surrogate)
+        # See algorithms/distillspec_gbv/losses/tree_losses.py for derivations.
+        # -------------------------------------------------------------------
+        {
+            "id": "train_naive_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train naive_tree (Chen/Leviathan α), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "naive_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("naive_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("naive_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_naive_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge naive_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("naive_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("naive_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_nss_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train nss_tree (NSS α), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "nss_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("nss_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("nss_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_nss_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge nss_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("nss_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("nss_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_si_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train specinfer_tree (SpecInfer K-iter α), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "specinfer_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("si_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("si_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_si_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge specinfer_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("si_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("si_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_st_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train spectr_tree (K-SEQ α, ρ detached), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "spectr_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("st_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("st_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_st_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge spectr_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("st_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("st_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "train_khisti_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": f"Train khisti_tree (canonical decomp LB surrogate), {_steps} steps, gsm8k_train",
+            "cmd": [
+                sys.executable, _TRAIN_SCRIPT,
+                "--loss", "khisti_tree",
+                "--steps", str(_steps),
+                "--nan_action", "skip", "--early_stop_patience", "3",
+                "--draft", draft, "--target", target,
+                "--dataset", _data("gsm8k_train.jsonl"),
+                "--output", _ckpt("khisti_tree-gsm8k"),
+                *_train_hargs, *_tree_hargs,
+            ] + _4bit + _compile_flag,
+            "done_check": os.path.join(_ckpt("khisti_tree-gsm8k"), "adapter_model.safetensors"),
+            "retryable": True,
+        },
+        {
+            "id": "merge_khisti_tree_gsm8k",
+            "group": "Phase 2 — Training",
+            "desc": "Merge khisti_tree-gsm8k LoRA",
+            "cmd": [sys.executable, _TRAIN_SCRIPT, "--merge_only",
+                    "--adapter", _ckpt("khisti_tree-gsm8k"), "--draft", draft],
+            "done_check": os.path.join(_merged("khisti_tree-gsm8k"), "config.json"),
+        },
+
+        # -------------------------------------------------------------------
         # Online tree distillation — on-policy tree updates during online serving.
         # Replaces the flat replay-buffer update with a K-path draft tree step on
         # each served prompt.  No rejected-position bias; no zero-gradient EBE bug.
@@ -1425,60 +1588,116 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         {
             "id": "eval_bv_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval bv_tree-gsm8k on gsm8k [bv | bv+gbv+traversal]",
+            "desc": "Eval bv_tree-gsm8k on gsm8k [bv (smoke) | full alignment matrix]",
             "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", datasets="gsm8k",
                        task_score=True, n_override=_n_gsm8k,
-                       modes=_TREE_PAIRED["bv_tree"] if smoke else _TREE_NON_OT),
+                       modes=_TREE_PAIRED["bv_tree"] if smoke else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_gbv_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval gbv_tree-gsm8k on gsm8k [gbv | bv+gbv+traversal]",
+            "desc": "Eval gbv_tree-gsm8k on gsm8k [gbv (smoke) | full alignment matrix]",
             "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", datasets="gsm8k",
                        task_score=True, n_override=_n_gsm8k,
-                       modes=_TREE_PAIRED["gbv_tree"] if smoke else _TREE_NON_OT),
+                       modes=_TREE_PAIRED["gbv_tree"] if smoke else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_trav_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval trav_tree-gsm8k on gsm8k [traversal | bv+gbv+traversal]",
+            "desc": "Eval trav_tree-gsm8k on gsm8k [traversal (smoke) | full alignment matrix]",
             "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", datasets="gsm8k",
                        task_score=True, n_override=_n_gsm8k,
-                       modes=_TREE_PAIRED["traversal_tree"] if smoke else _TREE_NON_OT),
+                       modes=_TREE_PAIRED["traversal_tree"] if smoke else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_ebe_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval ebe_tree-gsm8k on gsm8k [bv | bv+gbv+traversal]",
+            "desc": "Eval ebe_tree-gsm8k on gsm8k [bv (smoke) | full alignment matrix]",
             "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree", datasets="gsm8k",
                        task_score=True, n_override=_n_gsm8k,
-                       modes=_TREE_PAIRED["ebe_tree"] if smoke else _TREE_NON_OT),
+                       modes=_TREE_PAIRED["ebe_tree"] if smoke else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_rev_kl_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval rev_kl_tree-gsm8k on gsm8k [bv+gbv+traversal]",
+            "desc": "Eval rev_kl_tree-gsm8k on gsm8k [full alignment matrix]",
             "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree", datasets="gsm8k",
-                       task_score=True, modes=_TREE_NON_OT, n_override=_n_gsm8k),
+                       task_score=True, modes=_tree_full_modes, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_jsd_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
-            "desc": "Eval jsd_tree-gsm8k on gsm8k [bv+gbv+traversal]",
+            "desc": "Eval jsd_tree-gsm8k on gsm8k [full alignment matrix]",
             "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree", datasets="gsm8k",
-                       task_score=True, modes=_TREE_NON_OT, n_override=_n_gsm8k),
+                       task_score=True, modes=_tree_full_modes, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
+        },
+        # -------------------------------------------------------------------
+        # Verifier-aligned tree-loss evals (OT-based, added 2026-05).
+        # Smoke: evaluate against the aligned verifier only.
+        # Full:  evaluate against the full 8-verifier matrix on A100, or the
+        #        3-verifier non-OT subset on T4 (see _tree_full_modes).
+        # -------------------------------------------------------------------
+        {
+            "id": "eval_naive_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval naive_tree-gsm8k on gsm8k [naive (smoke) | full alignment matrix]",
+            "cmd": _ec(_merged("naive_tree-gsm8k"), "naive_tree", datasets="gsm8k",
+                       task_score=True, n_override=_n_gsm8k,
+                       modes=_TREE_PAIRED["naive_tree"] if smoke else _tree_full_modes),
+            "done_check": None,
+            "requires": os.path.join(_merged("naive_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_nss_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval nss_tree-gsm8k on gsm8k [nss (smoke) | full alignment matrix]",
+            "cmd": _ec(_merged("nss_tree-gsm8k"), "nss_tree", datasets="gsm8k",
+                       task_score=True, n_override=_n_gsm8k,
+                       modes=_TREE_PAIRED["nss_tree"] if smoke else _tree_full_modes),
+            "done_check": None,
+            "requires": os.path.join(_merged("nss_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_si_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval specinfer_tree-gsm8k on gsm8k [specinfer (smoke) | full alignment matrix]",
+            "cmd": _ec(_merged("si_tree-gsm8k"), "specinfer_tree", datasets="gsm8k",
+                       task_score=True, n_override=_n_gsm8k,
+                       modes=_TREE_PAIRED["specinfer_tree"] if smoke else _tree_full_modes),
+            "done_check": None,
+            "requires": os.path.join(_merged("si_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_st_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval spectr_tree-gsm8k on gsm8k [spectr (smoke) | full alignment matrix]",
+            "cmd": _ec(_merged("st_tree-gsm8k"), "spectr_tree", datasets="gsm8k",
+                       task_score=True, n_override=_n_gsm8k,
+                       modes=_TREE_PAIRED["spectr_tree"] if smoke else _tree_full_modes),
+            "done_check": None,
+            "requires": os.path.join(_merged("st_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_khisti_tree_gsm8k",
+            "group": "Phase 3 — GSM8K Eval",
+            "desc": "Eval khisti_tree-gsm8k on gsm8k [khisti (smoke) | full alignment matrix]",
+            "cmd": _ec(_merged("khisti_tree-gsm8k"), "khisti_tree", datasets="gsm8k",
+                       task_score=True, n_override=_n_gsm8k,
+                       modes=_TREE_PAIRED["khisti_tree"] if smoke else _tree_full_modes),
+            "done_check": None,
+            "requires": os.path.join(_merged("khisti_tree-gsm8k"), "config.json"),
         },
         # Online tree models are evaluated against all 6 verifier modes — they are
         # general draft models that benefit from the full eval table.
@@ -1616,7 +1835,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval kl_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
@@ -1627,7 +1846,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval bv_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
@@ -1638,7 +1857,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval gbv_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
@@ -1649,7 +1868,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval trav_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
@@ -1660,7 +1879,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval ebe_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
@@ -1671,7 +1890,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": "Eval rev_kl_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
@@ -1679,13 +1898,71 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         {
             "id": "eval_jsd_tree_all",
             "group": "Phase 4 — Multi-Dataset",
-            "desc": "Eval jsd_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
+            "desc": "Eval jsd_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
-                       modes=_TREE_NON_OT),
+                       modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": smoke,
             "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
+        },
+        # -------------------------------------------------------------------
+        # Multi-dataset evals for verifier-aligned OT tree losses (added 2026-05).
+        # -------------------------------------------------------------------
+        {
+            "id": "eval_naive_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval naive_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
+            "cmd": _ec(_merged("naive_tree-gsm8k"), "naive_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_tree_full_modes),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("naive_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_nss_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval nss_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
+            "cmd": _ec(_merged("nss_tree-gsm8k"), "nss_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_tree_full_modes),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("nss_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_si_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval specinfer_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
+            "cmd": _ec(_merged("si_tree-gsm8k"), "specinfer_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_tree_full_modes),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("si_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_st_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval spectr_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
+            "cmd": _ec(_merged("st_tree-gsm8k"), "spectr_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_tree_full_modes),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("st_tree-gsm8k"), "config.json"),
+        },
+        {
+            "id": "eval_khisti_tree_all",
+            "group": "Phase 4 — Multi-Dataset",
+            "desc": "Eval khisti_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
+            "cmd": _ec(_merged("khisti_tree-gsm8k"), "khisti_tree",
+                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       modes=_tree_full_modes),
+            "done_check": None,
+            "smoke_skip": smoke,
+            "requires": os.path.join(_merged("khisti_tree-gsm8k"), "config.json"),
         },
         {
             "id": "eval_online_kl_tree_all",
