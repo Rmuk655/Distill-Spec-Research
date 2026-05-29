@@ -149,6 +149,9 @@ def parse_args() -> argparse.Namespace:
                    help="Disable dataset shuffling.")
     p.add_argument("--grad_clip", type=float, default=1.0,
                    help="Gradient norm clipping threshold (0 = disabled).")
+    p.add_argument("--grad_accum", type=int, default=4,
+                   help="Gradient accumulation steps (effective batch = grad_accum × 1 prompt). "
+                        "Default 4 smooths the noisy per-step KL loss without extra VRAM.")
 
     # ── Sweep-friendly hyperparameters ───────────────────────────────────────
     p.add_argument("--ebe_kl_weight", type=float, default=0.1,
@@ -728,6 +731,7 @@ def main() -> None:
         print()
 
     # ── Training loop ─────────────────────────────────────────────────────────
+    optimizer.zero_grad()   # start clean; re-zeroed inside loop after each accum window
     for step in range(start_step, args.steps):
         if _stop_training:
             break
@@ -810,12 +814,15 @@ def main() -> None:
                 continue
             # warn: fall through
 
-        optimizer.zero_grad()
-        loss.backward()
-        if args.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in draft_model.parameters() if p.requires_grad], args.grad_clip)
-        optimizer.step()
+        # Gradient accumulation: accumulate for grad_accum steps, then update.
+        # Dividing by grad_accum keeps loss magnitude consistent regardless of accum size.
+        (loss / args.grad_accum).backward()
+        if (step + 1) % args.grad_accum == 0 or (step + 1) == args.steps:
+            if args.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    [p for p in draft_model.parameters() if p.requires_grad], args.grad_clip)
+            optimizer.step()
+            optimizer.zero_grad()
 
         losses.append(loss_val)
         if aw is not None:

@@ -546,6 +546,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--lr",              str(_h.get("lr", 3e-5)),
         "--lora_r",          str(_h.get("lora_r", 8)),
         "--lora_alpha",      str(_h.get("lora_alpha", 16)),
+        "--grad_accum",      str(_h.get("grad_accum", 4)),
         "--teacher_temp",    str(_h.get("teacher_temp", 0.8)),
         "--max_new_tokens",  str(_h.get("max_new_tokens", 80)),
         # Checkpoint cadence — forwarded from YAML checkpointing: section.

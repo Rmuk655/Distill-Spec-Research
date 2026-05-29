@@ -36,6 +36,7 @@ training:
   lr: 3.0e-5
   lora_r: 8
   lora_alpha: 16
+  grad_accum: 4                # effective batch = 4 prompts; smooths noisy per-step KL
   max_new_tokens: 128          # lots of VRAM headroom with 1.7B teacher
   teacher_temperature: 0.8
   seed: 42
