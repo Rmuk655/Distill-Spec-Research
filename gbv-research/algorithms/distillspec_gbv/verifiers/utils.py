@@ -52,6 +52,28 @@ def _dtype_kwargs(torch_dtype) -> dict:
     return {"dtype": torch_dtype}
 
 
+def _bnb_cuda_ok() -> bool:
+    """Return True iff bitsandbytes CUDA quantization kernels are functional.
+
+    bitsandbytes >= 0.45 requires torch >= 2.11 for its CUDA kernels.
+    Kaggle ships torch 2.10.0 (as of 2026-05), so bitsandbytes >= 0.45 silently
+    skips its CUDA ops and NF4 loading falls back to plain BF16 (→ OOM on T4).
+    install_deps() pins bitsandbytes<0.45 to prevent this, but this guard provides
+    a clear runtime warning and graceful fallback if the environment has drifted.
+    """
+    try:
+        import importlib.metadata
+        bnb_ver = tuple(int(x) for x in
+                        importlib.metadata.version("bitsandbytes").split(".")[:2])
+        if bnb_ver >= (0, 45):
+            torch_ver = tuple(int(x) for x in
+                              torch.__version__.split("+")[0].split(".")[:2])
+            return torch_ver >= (2, 11)
+        return True   # bitsandbytes < 0.45 works with any torch version
+    except Exception:
+        return False
+
+
 def load_models(
     p_name: str,
     q_name: str,
@@ -83,28 +105,52 @@ def load_models(
         torch_dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
     if load_in_4bit:
-        try:
-            from transformers import BitsAndBytesConfig
-        except ImportError:
-            raise SystemExit(
-                "bitsandbytes is required for --load_in_4bit.\n"
-                "Install with:  pip install bitsandbytes"
+        _bnb_ok = _bnb_cuda_ok()
+        if not _bnb_ok:
+            _n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            print(
+                f"[WARN] bitsandbytes CUDA kernels unavailable "
+                f"(bitsandbytes>=0.45 requires torch>=2.11; found {torch.__version__}). "
+                f"Falling back to BF16 with device_map='auto' across {_n_gpus} GPU(s). "
+                f"Fix: pip install 'bitsandbytes>=0.41,<0.45'  "
+                f"OR switch to T4×2 so the 8B BF16 model (~16 GB) splits across GPUs."
             )
-        bnb_cfg = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
-        p_model = AutoModelForCausalLM.from_pretrained(
-            p_name,
-            trust_remote_code=True,
-            quantization_config=bnb_cfg,
-            device_map={"": "cuda:0"},  # bypass accelerate device-map pass; direct to GPU
-            low_cpu_mem_usage=True,     # load shard-by-shard; prevents ~16 GB RAM spike on Colab
-            use_safetensors=True,
-        )
-        print("[INFO] Target model loaded in 4-bit NF4 (QLoRA mode).")
+        if _bnb_ok:
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError:
+                raise SystemExit(
+                    "bitsandbytes is required for --load_in_4bit.\n"
+                    "Install with:  pip install 'bitsandbytes>=0.41,<0.45'"
+                )
+            bnb_cfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            p_model = AutoModelForCausalLM.from_pretrained(
+                p_name,
+                trust_remote_code=True,
+                quantization_config=bnb_cfg,
+                device_map="auto",      # recommended path for quantized models;
+                                        # also handles multi-GPU without code changes
+                low_cpu_mem_usage=True, # load shard-by-shard; prevents ~16 GB RAM spike
+                use_safetensors=True,
+            )
+            print("[INFO] Target model loaded in 4-bit NF4 (QLoRA mode).")
+        else:
+            # bitsandbytes CUDA kernels broken: load in BF16 split across all GPUs.
+            # Works on Kaggle T4×2 (8 GB per GPU); single T4 will OOM on 8B.
+            p_model = AutoModelForCausalLM.from_pretrained(
+                p_name,
+                trust_remote_code=True,
+                **_dtype_kwargs(torch_dtype),
+                device_map="auto",
+                low_cpu_mem_usage=True,
+                use_safetensors=True,
+            )
+            print(f"[INFO] Target model loaded in BF16 with device_map='auto'.")
     else:
         p_model = AutoModelForCausalLM.from_pretrained(
             p_name,

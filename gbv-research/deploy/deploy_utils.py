@@ -81,9 +81,13 @@ def install_deps(gbv_dir: str = GBV_DIR) -> None:
     # torchao>=0.16.0: Colab ships 0.10.0 but PEFT 0.14+ raises ImportError when
     # torchao is present at an incompatible version (instead of silently skipping it).
     # Upgrading torchao here prevents the LoRA init crash in trainer.py.
+    # bitsandbytes>=0.45 requires torch>=2.11; Kaggle ships torch 2.10.0 (as of 2026-05).
+    # Pin <0.45 so that NF4 4-bit quantization actually works.  NF4 was added in 0.40,
+    # so >=0.41,<0.45 ensures double-quant support while remaining torch 2.10 compatible.
+    # When Kaggle upgrades torch to >=2.11 this pin can be removed.
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "-q",
-         "-r", req, "bitsandbytes", "accelerate", "torchao>=0.16.0"],
+         "-r", req, "bitsandbytes>=0.41,<0.45", "accelerate", "torchao>=0.16.0"],
         check=True,
     )
     print("[3/5] Dependencies installed")
