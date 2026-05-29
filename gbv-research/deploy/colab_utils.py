@@ -31,10 +31,17 @@ DRIVE_ROOT = "/content/drive/MyDrive/specdist"
 # ---------------------------------------------------------------------------
 
 def get_secret(name: str) -> str:
-    """Read from Colab Secrets, then environment variables."""
+    """Read from Colab Secrets, then Kaggle Secrets, then environment variables."""
     try:
         from google.colab import userdata  # type: ignore
         v = userdata.get(name)
+        if v:
+            return v
+    except Exception:
+        pass
+    try:
+        from kaggle_secrets import UserSecretsClient  # type: ignore
+        v = UserSecretsClient().get_secret(name)
         if v:
             return v
     except Exception:
@@ -354,6 +361,140 @@ def check_gpu(warn_below_gb: float = 12.0) -> None:
             print(f"⚠ Only {gb:.1f} GB VRAM — colab config needs T4 (15 GB)")
     else:
         print("⚠ No GPU — Runtime → Change runtime type → T4 / A100 GPU")
+
+
+# ---------------------------------------------------------------------------
+# One-call bootstrap (replaces 60-80 lines of duplicated cell logic)
+# ---------------------------------------------------------------------------
+
+def bootstrap(
+    config: str,
+    storage_root: str,
+    repo_dir: str,
+    *,
+    gbv_dir: str = None,
+    mount_drive: bool = False,
+    drive_mount_path: str = "/content/drive",
+    kaggle_hf_dataset: str = None,
+    restore_checkpoints: bool = False,
+    checkpoint_dataset_names: tuple = (
+        "specdist-checkpoints", "specdist_checkpoints",
+        "specdist-output", "specdist",
+    ),
+    warn_vram_below_gb: float = 12.0,
+) -> None:
+    """One-call environment bootstrap for all SpecDist notebook platforms.
+
+    Call this after cloning the repo and inserting deploy/ into sys.path.
+    All subsequent setup (Drive mount, secrets, dirs, deps, HF cache, prefetch,
+    W&B auth, HF auth, training data, GPU check, optional checkpoint restore)
+    happens inside this function.
+
+    Parameters
+    ----------
+    config            YAML profile name (e.g. "kaggle", "colab", "colab_a100").
+    storage_root      Where checkpoints/logs/results.db live.
+                      Colab: DRIVE_ROOT.  Kaggle: /kaggle/working/specdist.
+    repo_dir          Root of the cloned repo (parent of gbv-research/).
+    gbv_dir           gbv-research/ subdir. Defaults to repo_dir/gbv-research.
+    mount_drive       Mount Google Drive at drive_mount_path before doing anything
+                      else (Colab only; no-op on Kaggle / local).
+    drive_mount_path  Mount point for Drive (default /content/drive).
+    kaggle_hf_dataset Path to a pre-attached Kaggle dataset containing HF weights.
+                      When set and the path exists, sets HF_HOME there and skips
+                      model download entirely.
+    restore_checkpoints  Search /kaggle/input/<name>/ for a saved checkpoint
+                      dataset and restore it into storage_root/checkpoints/.
+                      Use this in Resume cells on Kaggle.
+    checkpoint_dataset_names  Ordered list of Kaggle input dataset name variants
+                      to try when restore_checkpoints=True.
+    warn_vram_below_gb  Warn if total GPU VRAM is below this threshold.
+                      Use 12.0 for T4, 30.0 for A100.
+    """
+    import shutil
+
+    if gbv_dir is None:
+        gbv_dir = os.path.join(repo_dir, "gbv-research")
+
+    # 1. Keep-alive JS heartbeat (prevents idle timeout on Colab and Kaggle).
+    #    The Reconnect-button querySelector is a no-op on Kaggle — mousemove still fires.
+    keep_alive()
+
+    # 2. Mount Google Drive (Colab only — skipped on Kaggle / local).
+    if mount_drive:
+        try:
+            from google.colab import drive  # type: ignore
+            drive.mount(drive_mount_path)
+            print(f"[boot] Drive → {drive_mount_path}")
+        except Exception as exc:
+            print(f"⚠ Drive mount failed: {exc}")
+
+    # 3. Populate all platform secrets → environment.
+    #    get_secret() tries Colab userdata → Kaggle UserSecretsClient → env var.
+    for _k in ("WANDB_API_KEY", "HF_TOKEN", "GITHUB_TOKEN"):
+        _v = get_secret(_k)
+        if _v:
+            os.environ[_k] = _v
+
+    # 4. Storage directories.
+    os.makedirs(os.path.join(storage_root, "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(storage_root, "logs"), exist_ok=True)
+    os.chdir(gbv_dir)
+
+    # 5. Install pip dependencies (wiped on every session restart).
+    install_deps(gbv_dir)
+
+    # 6. HF model cache: use pre-attached Kaggle dataset (instant) or download.
+    if kaggle_hf_dataset and os.path.isdir(kaggle_hf_dataset):
+        os.environ["HF_HOME"]            = kaggle_hf_dataset
+        os.environ["TRANSFORMERS_CACHE"] = kaggle_hf_dataset
+        for _flag in ("TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE", "HF_HUB_OFFLINE"):
+            os.environ.pop(_flag, None)
+        print(f"[cache] Using attached dataset: {kaggle_hf_dataset}")
+    else:
+        setup_hf_cache(storage_root)
+        prefetch_models(config, gbv_dir, storage_root)
+
+    # 7. Authenticate W&B and HuggingFace.
+    auth_wandb()
+    auth_hf()
+
+    # 8. Training data (downloads gsm8k_train.jsonl if missing; ~3 MB, idempotent).
+    fetch_training_data(gbv_dir)
+
+    # 9. GPU check — warn if below the expected VRAM for this platform.
+    check_gpu(warn_below_gb=warn_vram_below_gb)
+
+    # 10. Restore checkpoints from a Kaggle input dataset (Resume cell only).
+    if restore_checkpoints:
+        _ckpt_dst = os.path.join(storage_root, "checkpoints")
+        _restored = False
+        for _ds_name in checkpoint_dataset_names:
+            _ds_path = f"/kaggle/input/{_ds_name}"
+            if os.path.isdir(_ds_path):
+                # Restore results.db if present in dataset and not yet on disk.
+                _db_src = os.path.join(_ds_path, "specdist", "results.db")
+                _db_dst = os.path.join(storage_root, "results.db")
+                if os.path.exists(_db_src) and not os.path.exists(_db_dst):
+                    shutil.copy2(_db_src, _db_dst)
+                    print(f"[restore] results.db ← {_db_src}")
+                # Restore any checkpoint dirs / files not already present.
+                for _item in os.listdir(_ds_path):
+                    _src = os.path.join(_ds_path, _item)
+                    _dst = os.path.join(_ckpt_dst, _item)
+                    if not os.path.exists(_dst):
+                        if os.path.isdir(_src):
+                            shutil.copytree(_src, _dst)
+                        else:
+                            shutil.copy2(_src, _dst)
+                print(f"[restore] Checkpoints ← {_ds_path}: {os.listdir(_ckpt_dst)}")
+                _restored = True
+                break
+        if not _restored:
+            print("[restore] No checkpoint dataset found — starting from scratch.")
+            print("  Attach via: Add Data → Your Datasets → 'specdist-checkpoints'")
+
+    print()
 
 
 # ---------------------------------------------------------------------------
