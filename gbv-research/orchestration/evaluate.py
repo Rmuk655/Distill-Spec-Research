@@ -927,7 +927,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         print(f"  alpha={res['alpha_mean']:.4f} ±{res['alpha_ci95']:.4f}  "
               f"{res['throughput']:.2f} tok/s"
               + (f"  task={row.get('task_score'):.3f}" if row.get("task_score") is not None else ""))
-        run_id = results_db.insert_run(row)
+        run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
         pp = res["per_prompt"]
         for r in pp:
             r["run_id"] = run_id
@@ -969,7 +969,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
             return {}
         row = {**base_row, "block_eff": res["block_eff"]}
         print(f"  block_eff={res['block_eff']:.4f}")
-        run_id = results_db.insert_run(row)
+        run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
 
         # ── W&B: log BE-mode eval metrics ─────────────────────────────────────
         try:
@@ -1132,6 +1132,12 @@ def main():
                         "bfloat16 is ~16 GB and OOMs; 4-bit reduces it to ~5 GB. "
                         "Requires: pip install bitsandbytes. "
                         "The student (draft) model is always loaded in bfloat16.")
+    p.add_argument("--hw_tier", default="laptop",
+                   choices=["laptop", "colab_lite", "colab", "a100"],
+                   help="Hardware tier tag stored in DB (default: laptop). "
+                        "Set automatically by experiment.py from the config name. "
+                        "Filters runs by teacher model scale in the dashboard: "
+                        "laptop=0.6B, colab_lite=1.7B, colab=8B, a100=8B.")
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable W&B logging for this eval run.")
     p.add_argument("--wandb_project", default="distillspec",
@@ -1286,7 +1292,7 @@ def main():
                     perplexity=ppl_res["perplexity"],
                     notes=f"perplexity={ppl_res['perplexity']:.4f}",
                 )
-                results_db.insert_run(ppl_row)
+                results_db.insert_run(ppl_row, hw_tier=args.hw_tier)
                 # Quality guard: warn if this model's PPL is much worse than any baseline on record
                 import math as _math
                 _baseline_ppls = [
@@ -1461,7 +1467,7 @@ def main():
                 block_eff=be_val,
                 experiment_tag=args.experiment_tag,
             )
-            run_id = results_db.insert_run(row)
+            run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
             row["id"] = run_id
             print(f" [{run_tag}] block_eff={be_val:.4f}")
             all_results.append(row)

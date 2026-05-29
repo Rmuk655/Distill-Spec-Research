@@ -74,8 +74,8 @@ def api_runs():
 
 @app.route("/api/dimensions")
 def api_dimensions():
-    cols = ["draft_label", "loss_name", "dataset", "mode", "K", "temperature",
-            "train_steps", "experiment_tag"]
+    cols = ["draft_label", "loss_name", "target_path", "dataset", "mode", "K",
+            "temperature", "train_steps", "experiment_tag"]
     dims = {c: results_db.distinct_values(c) for c in cols}
     # T=0.0 rows are perplexity-check placeholders (no real speculative-decoding run).
     # Strip them so they never appear in the Temperature filter or dropdowns.
@@ -628,15 +628,25 @@ _HTML = r"""<!DOCTYPE html>
   <div class="fw-bold mb-3" style="font-size:15px">SpecDist Filters</div>
 
   <div class="filter-section">
-    <label>HW Tier</label>
+    <label>HW Tier / Teacher Scale</label>
     <div id="f-hw_tier">
       <span class="chip hw-tier-chip active" data-tier="laptop"
-            style="border-color:#4299e1;border-width:2px" onclick="toggleTierChip(this)">laptop</span>
+            style="border-color:#a0aec0;border-width:2px" onclick="toggleTierChip(this)" title="laptop: 0.6B teacher — smoke tests">laptop</span>
+      <span class="chip hw-tier-chip active" data-tier="colab_lite"
+            style="border-color:#9f7aea;border-width:2px" onclick="toggleTierChip(this)" title="colab_lite: 1.7B teacher — trend detection">colab_lite</span>
       <span class="chip hw-tier-chip active" data-tier="colab"
-            style="border-color:#ed8936;border-width:2px" onclick="toggleTierChip(this)">colab</span>
+            style="border-color:#ed8936;border-width:2px" onclick="toggleTierChip(this)" title="colab: 8B teacher — publishable results">colab</span>
       <span class="chip hw-tier-chip active" data-tier="a100"
-            style="border-color:#48bb78;border-width:2px" onclick="toggleTierChip(this)">a100</span>
+            style="border-color:#48bb78;border-width:2px" onclick="toggleTierChip(this)" title="a100: 8B teacher BF16 — paper quality">a100</span>
     </div>
+    <div style="font-size:11px;color:#718096;margin-top:4px">
+      Tiers use different teacher models — do not mix in the same chart.
+    </div>
+  </div>
+
+  <div class="filter-section">
+    <label>Teacher Model</label>
+    <div id="f-target_path"></div>
   </div>
 
   <div class="filter-section">
@@ -1229,9 +1239,9 @@ let _countdown = 30;
 let _stepPanelOpen = false;
 let _logPanelOpen  = false;
 
-// HW_TIER_FILTER: Set of selected tiers. Default = all three selected.
+// HW_TIER_FILTER: Set of selected tiers. Default = all four selected.
 // laptop (blue #4299e1), colab (orange #ed8936), a100 (green #48bb78)
-let HW_TIER_FILTER = new Set(['laptop', 'colab', 'a100']);
+let HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
 
 // ---- Step descriptions (shown as tooltips and in panel) ----
 // MUST stay in sync with experiment.py build_steps() step IDs.
@@ -1465,7 +1475,8 @@ const _SCALAR_MODES = new Set(['alpha','perplexity']);
 function buildFilterChips() {
   // Standard columns (mode handled specially below)
   // loss_name is always identical to draft_label in this pipeline — omit from chips
-  const filterCols = ['draft_label','dataset','K','temperature','train_steps','experiment_tag'];
+  // target_path displayed as short model name (strip "Qwen/" prefix etc.)
+  const filterCols = ['draft_label','target_path','dataset','K','temperature','train_steps','experiment_tag'];
   filterCols.forEach(col => {
     const div = document.getElementById('f-' + col);
     if (!div) return;
@@ -1473,7 +1484,9 @@ function buildFilterChips() {
     vals.forEach(val => {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      chip.textContent = val;
+      // For target_path, show just the model name (strip org prefix "Qwen/" etc.)
+      chip.textContent = (col === 'target_path') ? val.split('/').pop() : val;
+      chip.title = val;   // full path on hover
       chip.dataset.col = col;
       chip.dataset.val = val;
       chip.onclick = () => toggleChip(chip);
@@ -1547,7 +1560,7 @@ function clearFilters() {
   if (s) s.value = '';
   document.querySelectorAll('#f-experiment_tag .chip').forEach(c => c.style.display = '');
   // Reset HW_TIER_FILTER to all tiers selected
-  HW_TIER_FILTER = new Set(['laptop', 'colab', 'a100']);
+  HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
   document.querySelectorAll('.hw-tier-chip').forEach(c => c.classList.add('active'));
   applyFilters();
 }

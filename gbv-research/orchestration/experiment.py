@@ -393,10 +393,29 @@ def _data(name): return os.path.join(_GBV_RESEARCH, "core", "datasets", "raw", n
 def _merged(name): return _ckpt(name + "_merged")
 
 
+def _hw_tier_from_config(config_slug: str) -> str:
+    """Derive the DB hw_tier tag from the config name.
+
+    Mapping (order matters — colab_lite must be checked before colab):
+      *colab_lite* → 'colab_lite'  (1.7B teacher)
+      *a100*       → 'a100'        (8B teacher, BF16)
+      *colab*      → 'colab'       (8B teacher, 4-bit)
+      anything else→ 'laptop'      (small teacher, smoke tests)
+    """
+    s = config_slug.lower()
+    if "colab_lite" in s:
+        return "colab_lite"
+    if "a100" in s:
+        return "a100"
+    if "colab" in s:
+        return "colab"
+    return "laptop"
+
+
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               modes="alpha,specinfer,gbv,traversal",
               Ks="3,5", temps="0.6,1.0", n=10, max_tokens=50, task_score=False,
-              experiment_tag=None, train_steps=0):
+              experiment_tag=None, train_steps=0, hw_tier="laptop"):
     """Eval command — always passes --skip_existing so restarts are safe.
 
     Defaults (laptop): n=10 prompts, max_tokens=50.  Run with n=30/max_tokens=100
@@ -406,6 +425,10 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
     records how many training steps produced this checkpoint.  0 = baseline
     (no training).  Omit / leave 0 for the baseline eval; pass _steps or
     _online_steps for trained models.
+
+    hw_tier is passed to evaluate.py so every DB row is tagged with the
+    hardware/teacher-scale tier.  Without this all rows default to 'laptop'
+    and colab_lite / colab runs can't be filtered in the dashboard.
     """
     cmd = [
         sys.executable, os.path.join(HERE, "evaluate.py"),
@@ -420,6 +443,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         "--max_tokens", str(max_tokens),
         "--skip_existing",
         "--skip_fetch",
+        "--hw_tier", hw_tier,
     ]
     if train_steps:
         cmd += ["--train_steps", str(train_steps)]
@@ -639,7 +663,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         datasets=datasets, modes=_eval_modes, Ks=_Ks, temps=_temps,
                         n=_n, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
-                        train_steps=ts)
+                        train_steps=ts,
+                        hw_tier=_hw_tier_from_config(args.config))
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy
