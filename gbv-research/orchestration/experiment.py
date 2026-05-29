@@ -716,7 +716,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         n=_n_this, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
-                        hw_tier=_hw_tier_from_config(args.config))
+                        hw_tier=hw_tier)   # passed in via build_steps signature
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy
