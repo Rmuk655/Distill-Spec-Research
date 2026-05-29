@@ -1,10 +1,11 @@
 """
-colab_utils.py — shared helpers for SpecDist Colab notebooks.
+deploy_utils.py — shared helpers for all SpecDist notebook environments.
 
+Works on Google Colab (T4 / A100), Kaggle Kernels, and any Jupyter session.
 Loaded after git clone, so it is NOT available during the initial clone step.
-The bootstrap cell inlines a minimal _secret() + clone block, then does:
+The bootstrap cell inlines a minimal _prereq_token() + clone block, then does:
     sys.path.insert(0, f"{GBV_DIR}/deploy")
-    from colab_utils import install_deps, auth_wandb, auth_hf, check_gpu, run_pipeline
+    from deploy_utils import bootstrap, run_pipeline
 and delegates everything else here.
 """
 
