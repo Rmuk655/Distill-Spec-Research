@@ -260,13 +260,37 @@ def load_prompts(path: str | None) -> list[str]:
 # Merge utility
 # ---------------------------------------------------------------------------
 
+def _resolve_adapter_dir(output_dir: str) -> str:
+    """Return a subdirectory of *output_dir* that holds a complete LoRA adapter.
+
+    Training saves rolling checkpoints to ckpt_latest/ and (optionally) the
+    best val-loss snapshot to ckpt_best/.  The final root-level save can be
+    skipped when a resumed run detects training is already complete, leaving
+    adapter weights only under ckpt_latest/.  Merge steps pass the output root,
+    so we probe root → ckpt_best → ckpt_latest before failing.
+    """
+    for sub in ("", "ckpt_best", "ckpt_latest"):
+        d = output_dir if not sub else os.path.join(output_dir, sub)
+        if os.path.isfile(os.path.join(d, "adapter_config.json")):
+            if sub:
+                print(f"[merge] adapter not at output root; using {d}")
+            return d
+    raise FileNotFoundError(
+        f"No adapter_config.json under {output_dir} "
+        f"(checked root, ckpt_best/, ckpt_latest/). "
+        f"Re-run the training step for this loss."
+    )
+
+
 def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
     """Merge a LoRA adapter into the base model and save to <adapter_path>_merged/."""
+    adapter_dir = _resolve_adapter_dir(adapter_path)
+
     print(f"Loading base: {draft_model_id}")
     base = transformers.AutoModelForCausalLM.from_pretrained(
         draft_model_id, torch_dtype=torch.bfloat16)
 
-    print(f"Loading LoRA: {adapter_path}")
+    print(f"Loading LoRA: {adapter_dir}")
     # On Windows + OneDrive, PEFT's _get_peft_type calls os.path.isfile on
     # the adapter_config.json path.  OneDrive virtualises files so
     # os.path.isfile returns False even when the file is present, causing
@@ -275,14 +299,14 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
     # HFValidationError.  Workaround: read adapter_config.json ourselves and
     # pass the constructed LoraConfig via `config=` so _get_peft_type is
     # never called.
-    config_path = os.path.join(adapter_path, "adapter_config.json")
+    config_path = os.path.join(adapter_dir, "adapter_config.json")
     with open(config_path, encoding="utf-8") as _f:
         _cfg = json.load(_f)
     # In PEFT 0.19.1 every key in adapter_config.json is a valid LoraConfig
     # constructor param — no stripping needed; just forward the whole dict.
     lora_config = LoraConfig(**_cfg)
 
-    model  = PeftModel.from_pretrained(base, adapter_path, config=lora_config)
+    model  = PeftModel.from_pretrained(base, adapter_dir, config=lora_config)
     merged = model.merge_and_unload()
     out    = adapter_path + "_merged"
     merged.save_pretrained(out)
@@ -622,6 +646,12 @@ def main() -> None:
 
     if start_step >= args.steps:
         print(f"[RESUME] Training already complete ({start_step}/{args.steps}).")
+        # Final root-level adapter save may have been skipped on a prior crash or
+        # an older trainer version — ensure merge can find adapter_config.json.
+        if not args.no_lora and not os.path.isfile(
+                os.path.join(args.output, "adapter_config.json")):
+            print(f"[RESUME] Finalizing adapter at {args.output}")
+            draft_model.save_pretrained(args.output)
         return
 
     # ── W&B (optional) ────────────────────────────────────────────────────────
@@ -939,7 +969,7 @@ def main() -> None:
         no_lora=args.no_lora,
     )
     # Save final adapter to the output root so that:
-    #   1. experiment.py done_check (adapter_model.safetensors at root) passes
+    #   1. experiment.py done_check (adapter_config.json at root) passes
     #   2. --merge_only --adapter <output_dir> finds adapter_config.json at root
     # This mirrors the behaviour of earlier trainer versions that flat-loss
     # checkpoints were originally created with.
