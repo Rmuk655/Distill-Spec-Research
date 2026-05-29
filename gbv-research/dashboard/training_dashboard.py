@@ -628,25 +628,26 @@ _HTML = r"""<!DOCTYPE html>
   <div class="fw-bold mb-3" style="font-size:15px">SpecDist Filters</div>
 
   <div class="filter-section">
-    <label>HW Tier / Teacher Scale</label>
-    <div id="f-hw_tier">
-      <span class="chip hw-tier-chip active" data-tier="laptop"
-            style="border-color:#a0aec0;border-width:2px" onclick="toggleTierChip(this)" title="laptop: 0.6B teacher — smoke tests">laptop</span>
-      <span class="chip hw-tier-chip active" data-tier="colab_lite"
-            style="border-color:#9f7aea;border-width:2px" onclick="toggleTierChip(this)" title="colab_lite: 1.7B teacher — trend detection">colab_lite</span>
-      <span class="chip hw-tier-chip active" data-tier="colab"
-            style="border-color:#ed8936;border-width:2px" onclick="toggleTierChip(this)" title="colab: 8B teacher — publishable results">colab</span>
-      <span class="chip hw-tier-chip active" data-tier="a100"
-            style="border-color:#48bb78;border-width:2px" onclick="toggleTierChip(this)" title="a100: 8B teacher BF16 — paper quality">a100</span>
-    </div>
-    <div style="font-size:11px;color:#718096;margin-top:4px">
-      Tiers use different teacher models — do not mix in the same chart.
+    <label>Teacher Model</label>
+    <div id="f-target_path"></div>
+    <div style="font-size:11px;color:#ed8936;margin-top:4px;font-weight:600">
+      Never mix results across teacher models — different scale = incomparable numbers.
     </div>
   </div>
 
+  <!-- HW tier kept as a secondary annotation filter (collapsed by default) -->
   <div class="filter-section">
-    <label>Teacher Model</label>
-    <div id="f-target_path"></div>
+    <label style="color:#718096">HW Tier <small>(annotation only)</small></label>
+    <div id="f-hw_tier">
+      <span class="chip hw-tier-chip active" data-tier="laptop"
+            style="border-color:#a0aec0" onclick="toggleTierChip(this)" title="smoke tests / laptop dev">laptop</span>
+      <span class="chip hw-tier-chip active" data-tier="colab_lite"
+            style="border-color:#9f7aea" onclick="toggleTierChip(this)" title="trend detection, free T4">colab_lite</span>
+      <span class="chip hw-tier-chip active" data-tier="colab"
+            style="border-color:#ed8936" onclick="toggleTierChip(this)" title="publishable results, T4">colab</span>
+      <span class="chip hw-tier-chip active" data-tier="a100"
+            style="border-color:#48bb78" onclick="toggleTierChip(this)" title="paper quality, A100">a100</span>
+    </div>
   </div>
 
   <div class="filter-section">

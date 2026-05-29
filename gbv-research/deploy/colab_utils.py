@@ -81,36 +81,72 @@ def install_deps(gbv_dir: str = GBV_DIR) -> None:
     print("[3/5] Dependencies installed")
 
 
+def _free_gb(path: str) -> float:
+    """Return free space in GB at the filesystem containing path."""
+    import shutil
+    try:
+        return shutil.disk_usage(path).free / 1024 ** 3
+    except Exception:
+        return 0.0
+
+
+# Models larger than this threshold (GB) won't be pre-cached on Drive —
+# they'll be downloaded to the Colab runtime disk instead (~100 GB free).
+_DRIVE_MAX_MODEL_GB = 5.0
+
+# Known approximate sizes in GB (safetensors, no quantisation).
+# Used to decide where to cache before downloading.
+_MODEL_SIZE_GB = {
+    "Qwen/Qwen3-0.6B": 1.3,
+    "Qwen/Qwen3-1.7B": 3.5,
+    "Qwen/Qwen3-4B":   8.0,
+    "Qwen/Qwen3-8B":  16.0,
+    "Qwen/Qwen3-14B": 28.0,
+    "Qwen/Qwen3-32B": 64.0,
+}
+
+
 def setup_hf_cache(drive_root: str = DRIVE_ROOT) -> str:
-    """Point HuggingFace cache at Drive so models survive session restarts.
+    """Point HuggingFace cache at Drive so small models survive session restarts.
 
-    Without this, every new Colab session re-downloads all model weights from
-    HuggingFace (~1.2 GB draft + ~3.4 GB teacher = ~4.6 GB per session).
-    Pointing the cache at Drive means the first session downloads once; all
-    subsequent sessions load from Drive in ~30 s instead of ~10 min.
+    Models ≤ _DRIVE_MAX_MODEL_GB (≈ 5 GB) are cached on Drive — download once,
+    reuse across sessions.  Larger models (e.g. Qwen3-8B at ~16 GB) will NOT
+    fit on a free Drive account (15 GB total) and are left to download to the
+    Colab runtime disk (~100 GB free) at train/eval time.
 
-    Returns the cache directory path.
+    Always clears the three OFFLINE env flags so subprocesses can reach HF.
+
+    Returns the Drive cache path.
     """
     hf_cache = os.path.join(drive_root, "hf_cache")
     os.makedirs(hf_cache, exist_ok=True)
-    os.environ["HF_HOME"]             = hf_cache
-    os.environ["TRANSFORMERS_CACHE"]  = hf_cache
-    os.environ["HF_DATASETS_CACHE"]   = os.path.join(hf_cache, "datasets")
+    os.environ["HF_HOME"]            = hf_cache
+    os.environ["TRANSFORMERS_CACHE"] = hf_cache
+    os.environ["HF_DATASETS_CACHE"]  = os.path.join(hf_cache, "datasets")
     # Always allow online lookups — never inherit a stale OFFLINE flag
-    os.environ.pop("TRANSFORMERS_OFFLINE",   None)
-    os.environ.pop("HF_DATASETS_OFFLINE",    None)
-    os.environ.pop("HF_HUB_OFFLINE",         None)
-    print(f"[cache] HF model cache → {hf_cache}")
+    os.environ.pop("TRANSFORMERS_OFFLINE",  None)
+    os.environ.pop("HF_DATASETS_OFFLINE",   None)
+    os.environ.pop("HF_HUB_OFFLINE",        None)
+    free = _free_gb(hf_cache)
+    print(f"[cache] HF model cache → {hf_cache}  ({free:.1f} GB free on Drive)")
     return hf_cache
 
 
 def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
                     drive_root: str = DRIVE_ROOT) -> None:
-    """Download draft + teacher model weights into the Drive HF cache.
+    """Pre-download draft + teacher model weights before the pipeline starts.
 
-    Reads the YAML profile to find model names, then calls
-    snapshot_download() for both.  Safe to re-run — skips files already
-    present in cache.  Call this after setup_hf_cache() and auth_hf().
+    Strategy:
+    - Small models (≤ 5 GB, e.g. Qwen3-0.6B / 1.7B): cached on Drive so they
+      survive session restarts.  Download once, reuse forever.
+    - Large models (> 5 GB, e.g. Qwen3-8B): Drive free space on a free Google
+      account is 15 GB total — the 8B model alone is ~16 GB and will not fit.
+      These are NOT prefetched; the trainer downloads them to the Colab runtime
+      disk (/content, ~100 GB free) at run time.  That takes ~5-10 min on the
+      first session but keeps Drive uncluttered.
+
+    Safe to re-run — snapshot_download() skips files already in cache.
+    Call this after setup_hf_cache() and auth_hf().
     """
     import yaml  # type: ignore
     from huggingface_hub import snapshot_download  # type: ignore
@@ -120,7 +156,7 @@ def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
         config.replace("/", os.sep) + ".yaml",
     )
     if not os.path.exists(yaml_path):
-        print(f"[prefetch] YAML not found: {yaml_path} — skipping model prefetch")
+        print(f"[prefetch] YAML not found: {yaml_path} — skipping")
         return
 
     with open(yaml_path, encoding="utf-8") as f:
@@ -129,14 +165,31 @@ def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
     draft_id   = models_cfg.get("draft",  "Qwen/Qwen3-0.6B")
     target_id  = models_cfg.get("target", "Qwen/Qwen3-1.7B")
 
+    drive_cache = os.path.join(drive_root, "hf_cache")
+    drive_free  = _free_gb(drive_cache)
+
     for model_id in dict.fromkeys([draft_id, target_id]):   # dedupe, keep order
-        print(f"[prefetch] {model_id} …", flush=True)
+        est_gb = _MODEL_SIZE_GB.get(model_id, 99.0)         # unknown = assume large
+
+        if est_gb > _DRIVE_MAX_MODEL_GB:
+            print(f"[prefetch] {model_id} (~{est_gb:.0f} GB) — too large for Drive "
+                  f"(free: {drive_free:.1f} GB). Trainer will download to runtime "
+                  f"disk (~100 GB free) at run time. ~5-10 min on first session.")
+            continue
+
+        if est_gb > drive_free - 0.5:   # keep 0.5 GB headroom
+            print(f"[prefetch] {model_id} (~{est_gb:.0f} GB) — not enough Drive space "
+                  f"({drive_free:.1f} GB free). Skipping Drive cache.")
+            continue
+
+        print(f"[prefetch] {model_id} (~{est_gb:.1f} GB) → Drive cache …", flush=True)
         try:
             path = snapshot_download(model_id, ignore_patterns=["*.gguf", "*.bin"])
+            drive_free -= est_gb        # update estimate for next iteration
             print(f"[prefetch] ✓  {model_id}  → {path}")
         except Exception as exc:
             print(f"[prefetch] ✗  {model_id}: {exc}")
-            print("  Pipeline will try to download at train time — may fail if offline.")
+            print("  Trainer will attempt download at run time.")
 
 
 def fetch_training_data(gbv_dir: str = GBV_DIR) -> None:
