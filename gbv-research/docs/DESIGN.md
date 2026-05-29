@@ -408,19 +408,67 @@ where α_j = min(1, p[t_j] / q[t_j].clamp(min=1e-9))
 but `t_j` is the **student's own token** at position j (from Phase A sampling).  This
 isolates the off-policy mismatch: same formula as flat EBE, completely on-policy data.
 
+### 7.3.1 Verifier-aligned OT tree losses (added 2026-05)
+
+**`naive_tree`, `nss_tree`, `specinfer_tree`, `spectr_tree`, `khisti_tree`** — five new
+tree losses, one per OT-based verifier.  Each uses the verifier's own closed-form
+per-node acceptance probability α_V from `verifiers/tree.py` (the `*_otlp_accept`
+methods) as the training target.
+
+The unified scaffold is:
+
+```
+L_V  =  −E[τ_V]  =  −Σᵢ Πⱼ₌₁ⁱ α_V(pⱼ, qⱼ, K)
+```
+
+i.e. negative expected length of accepted prefix under verifier V along a path of L
+nodes.  This is the same telescoping identity used by `bv_tree` (with BV block
+acceptance) and `traversal_tree` (with leaf weight) — generalised to any verifier with
+a differentiable α formula.
+
+Per-verifier α (full math in `losses/tree_losses.py`):
+
+| Loss | α formula (per node) | Source |
+|---|---|---|
+| `naive_tree` | Σ_v min(p[v], q[v]) + Σ_v relu(p−q)·(1−(1−q)^{K−1}) | Chen 2023; Leviathan 2023 |
+| `nss_tree` | Σ_v p[v]·(1 − (1−q[v])^K) | Miao et al. 2024 |
+| `specinfer_tree` | iterative K-iter rejection — see code | Miao 2024 (Alg. 2) |
+| `spectr_tree` | p_acc + (1−p_acc)·Σ p_res·(1−(1−r)^K) | Sun 2023 (Thm. 1) |
+| `khisti_tree` | LP-free surrogate: Σ min(p, q·softmax(K·log p/q)) | Khisti 2025 |
+
+**Engineering assumptions, documented in code**:
+
+- **SpecTr ρ-detach**: ρ is found by binary search; we detach it for the gradient pass
+  and let q flow through `min(p/ρ, q)` only.  Sound first-order surrogate; ρ varies
+  slowly with q across training steps.  Future: implicit function theorem.
+- **Khisti LP-free**: replace the K−1 LP iterations with a softmax-based importance
+  reweighting (matches K=1 exactly; monotone in K).  Future: differentiable LP.
+
+**Loss-verifier alignment hypothesis** (the headline result Phase 3 tests on A100):
+
+  *A draft trained with L_V outperforms a draft trained with L_{V'} when both are
+  evaluated under verifier V*
+
+is empirically verified by the **8×8 cross-pair matrix** in Phase 3 (see
+`_tree_full_modes` in `experiment.py`).  Diagonal cells should beat off-diagonal
+cells.
+
 ### 7.4 Verifier Compatibility
 
-OT-based verifiers (`specinfer`, `naive`) do not have a differentiable acceptance
-integral.  All tree losses are evaluated exclusively on non-OT verifiers:
+After 2026-05, every verifier has a paired tree loss:
 
 ```
-bv         — BV batch verification
-gbv        — GBV with q-skew
-traversal  — traversal leaf-weight product
+non-OT:   bv, gbv, traversal
+  ↑       paired with: bv_tree, gbv_tree, traversal_tree
+  
+OT-based: naive, nss, specinfer, spectr, khisti
+  ↑       paired with: naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree
 ```
 
-This is enforced in `experiment.py` via `_TREE_NON_OT = "bv,gbv,traversal"` and the
-`_TREE_PAIRED` dict which maps each tree loss to its primary verifier(s).
+On A100, `_tree_full_modes = "naive,nss,specinfer,spectr,khisti,bv,gbv,traversal"`
+(the full 8-verifier matrix).  On T4 it falls back to `"bv,gbv,traversal"` for
+compute-budget reasons.  Generic divergence tree losses (`kl_tree`, `rev_kl_tree`,
+`jsd_tree`) eval against all configured verifiers.
 
 ### 7.5 Online Tree Distillation
 

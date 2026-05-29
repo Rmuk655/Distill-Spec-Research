@@ -622,23 +622,56 @@ Evaluated against: **bv** (smoke), **bv, gbv, traversal** (full runs).
 
 #### Summary table
 
-| Loss | Family | CLI name | Verifiers |
+| Loss | Family | CLI name | Aligned verifier |
 |---|---|---|---|
-| Forward KL | flat | `forward_kl` | all |
-| Reverse KL | flat | `reverse_kl` | all |
-| JSD | flat | `jsd` | all |
-| L1 | flat | `l1` | all |
-| EBE | flat | `ebe` | all |
-| EBE single | flat | `ebe_single` | all |
-| On-policy KL | tree | `kl_tree` | bv, gbv, traversal |
-| On-policy Reverse KL | tree | `rev_kl_tree` | bv, gbv, traversal |
-| On-policy JSD | tree | `jsd_tree` | bv, gbv, traversal |
-| BV integral | tree | `bv_tree` | bv (+ gbv/traversal in full) |
-| GBV integral | tree | `gbv_tree` | gbv (K ≤ 4 only) |
-| Traversal leaf-weight | tree | `traversal_tree` | traversal |
-| On-policy EBE | tree | `ebe_tree` | bv (+ gbv/traversal in full) |
-| Online KL (tree mode) | online+tree | `online_kl_tree` | bv, gbv, traversal, + OT modes |
-| Online EBE (tree mode) | online+tree | `online_ebe_tree` | bv, gbv, traversal, + OT modes |
+| Forward KL | flat | `forward_kl` | (generic) |
+| Reverse KL | flat | `reverse_kl` | (generic) |
+| JSD | flat | `jsd` | (generic) |
+| L1 | flat | `l1` | (generic) |
+| EBE | flat | `ebe` | (generic) |
+| EBE single | flat | `ebe_single` | (generic) |
+| On-policy KL | tree | `kl_tree` | (generic — all 8) |
+| On-policy Reverse KL | tree | `rev_kl_tree` | (generic — all 8) |
+| On-policy JSD | tree | `jsd_tree` | (generic — all 8) |
+| BV integral | tree | `bv_tree` | **bv** |
+| GBV integral | tree | `gbv_tree` | **gbv** (K ≤ 4 only) |
+| Traversal leaf-weight | tree | `traversal_tree` | **traversal** |
+| Naive (Chen/Leviathan) α | tree | `naive_tree` | **naive** |
+| NSS α | tree | `nss_tree` | **nss** |
+| SpecInfer α (K-iter) | tree | `specinfer_tree` | **specinfer** |
+| SpecTr K-SEQ α (ρ detached) | tree | `spectr_tree` | **spectr** |
+| Khisti canonical decomp α | tree | `khisti_tree` | **khisti** |
+| On-policy EBE | tree | `ebe_tree` | (ablation — paired with bv) |
+| Online KL (tree mode) | online+tree | `online_kl_tree` | (generic) |
+| Online EBE (tree mode) | online+tree | `online_ebe_tree` | (generic) |
+
+#### Verifier-aligned tree losses (added 2026-05)
+
+The 5 OT-based tree losses (`naive_tree`, `nss_tree`, `specinfer_tree`,
+`spectr_tree`, `khisti_tree`) are derived from each verifier's own
+closed-form per-node acceptance probability α_V (defined in
+`verifiers/tree.py` as `*_otlp_accept`).  The training objective is
+
+  **L_V  =  −E[τ_V]  =  −Σᵢ Πⱼ₌₁ⁱ α_V(pⱼ, qⱼ, K)**
+
+i.e. negative expected length of accepted prefix.  This is the same
+scaffold as `bv_tree` (with BV block acceptance) and `traversal_tree`
+(with leaf-weight product), but using the OT verifier's own per-node α.
+
+**Loss-verifier alignment hypothesis** (paper main result, Phase 3 on
+A100): a draft trained with L_V outperforms a draft trained with L_{V'}
+when both are evaluated under V.  The 8×8 cross-pair table is the
+empirical check — diagonal should beat off-diagonal cells.
+
+**Assumptions documented in `tree_losses.py`**:
+
+- `spectr_tree`: ρ (binary-search root) is detached.  Gradient flows
+  through `min(p/ρ, q)`, not through ρ itself.  Future work: implement
+  via implicit function theorem if results show spectr_tree under-
+  performs other aligned losses.
+- `khisti_tree`: LP solver is replaced by a smooth softmax-based
+  importance reweighting (q_imp = q · softmax(K·log(p/q))).  Matches
+  K=1 special case exactly; LP-based exact LB is future work.
 
 ---
 
