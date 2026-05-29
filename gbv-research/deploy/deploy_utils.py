@@ -415,6 +415,7 @@ def bootstrap(
     kaggle_hf_dataset: str = None,
     kaggle_data_dataset: str = None,
     kaggle_gsm8k_dataset: str = None,
+    skip_model_prefetch: bool = False,
     restore_checkpoints: bool = False,
     checkpoint_dataset_names: tuple = (
         "specdist-checkpoints", "specdist_checkpoints",
@@ -449,6 +450,11 @@ def bootstrap(
     kaggle_gsm8k_dataset Path to thedevastator/grade-school-math-8k-q-a Kaggle dataset.
                       When set, main_train.csv is converted to gsm8k_train.jsonl and
                       placed in core/datasets/raw/, skipping the HF download.
+    skip_model_prefetch When True, skips prefetch_models() (the HF model weight download).
+                      Set this whenever Kaggle Models are attached via Add Model — the
+                      pipeline receives model paths via --draft/--target instead.
+                      Without this flag, prefetch would waste 5-10 min downloading
+                      17+ GB of weights that are already mounted read-only.
     restore_checkpoints  Search /kaggle/input/<name>/ for a saved checkpoint
                       dataset and restore it into storage_root/checkpoints/.
                       Use this in Resume cells on Kaggle.
@@ -492,14 +498,21 @@ def bootstrap(
 
     # 6. HF model cache: use pre-attached Kaggle dataset (instant) or download.
     if kaggle_hf_dataset and os.path.isdir(kaggle_hf_dataset):
+        # Legacy: pre-uploaded HF cache as a Kaggle dataset.
         os.environ["HF_HOME"]            = kaggle_hf_dataset
         os.environ["TRANSFORMERS_CACHE"] = kaggle_hf_dataset
         for _flag in ("TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE", "HF_HUB_OFFLINE"):
             os.environ.pop(_flag, None)
-        print(f"[cache] Using attached dataset: {kaggle_hf_dataset}")
+        print(f"[cache] Using attached HF cache dataset: {kaggle_hf_dataset}")
     else:
+        # Set up the cache directory (fast, always needed for tokenizer artefacts).
         setup_hf_cache(storage_root)
-        prefetch_models(config, gbv_dir, storage_root)
+        if skip_model_prefetch:
+            # Kaggle Models are attached — model weights arrive via --draft/--target.
+            # Skipping prefetch_models() saves 5-10 min and ~17 GB of downloads.
+            print("[prefetch] Kaggle Models attached — skipping HF weight download.")
+        else:
+            prefetch_models(config, gbv_dir, storage_root)
 
     # 7. Authenticate W&B and HuggingFace.
     auth_wandb()
