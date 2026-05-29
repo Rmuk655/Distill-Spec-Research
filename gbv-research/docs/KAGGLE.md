@@ -72,102 +72,61 @@ Upload `deploy/kaggle.ipynb` → set `CONFIG = "kaggle"` → Shift+F5 (Run All).
 
 ## Pre-uploading datasets (zero-download sessions)
 
-Upload once locally — every future Kaggle session starts with **zero downloads**.
-
-### How it works
+Upload once — every future Kaggle session starts with **zero downloads**.
 
 | Without pre-upload | With pre-upload |
 |---|---|
-| Session start: ~10 min downloading 8B model from HuggingFace | Instant — weights already in attached dataset |
-| Session start: ~5 s downloading GSM8K/eval JSONL from HF Datasets | Instant — JSONL files already in `core/datasets/raw/` |
+| ~10 min downloading 8B model at session start | Instant — weights already attached |
+| ~5 s downloading eval JSONL files | Instant — files already in `core/datasets/raw/` |
 
-`deploy_utils.py` handles both automatically when the variables are set in Cell 0:
-
-- **`KAGGLE_HF_DATASET`** → `HF_HOME` is pointed at the dataset path. `snapshot_download()` (called by the trainer at load time) finds all weight files already cached and skips the download entirely.
-- **`KAGGLE_DATA_DATASET`** → `bootstrap()` copies every `.jsonl` file from the dataset into `core/datasets/raw/` **before** `fetch_training_data()` runs. `fetch_training_data()` already skips files that exist — so the HuggingFace download never fires.
-
-Code is always fetched via `git clone` / `git pull` (never pre-uploaded — must be latest).
+When `KAGGLE_HF_DATASET` and `KAGGLE_DATA_DATASET` are set in Cell 0, `bootstrap()` handles the rest automatically. Code is always `git clone`'d fresh — never pre-uploaded.
 
 ---
 
-### Step 1 — Set up Kaggle API credentials (one-time)
-
-1. Go to https://www.kaggle.com/settings/account → **API** → **Create New Token**
-2. This downloads `kaggle.json`. Place it at `~/.kaggle/kaggle.json`:
-   ```bash
-   mkdir -p ~/.kaggle
-   mv ~/Downloads/kaggle.json ~/.kaggle/kaggle.json
-   chmod 600 ~/.kaggle/kaggle.json
-   ```
-3. Set your username:
-   ```bash
-   export KAGGLE_USERNAME=your-kaggle-username   # add to ~/.bashrc to persist
-   ```
-
-### Step 2 — Download assets locally (one-time, ~17 GB total)
+### Step 1 — Download files locally (one-time)
 
 ```bash
-pip install kagglehub huggingface_hub
+pip install huggingface_hub
 
-# Model weights — safetensors only (no .gguf/.bin quantised files)
+# Model weights (~16 GB, safetensors only)
 huggingface-cli download Qwen/Qwen3-0.6B --ignore-patterns '*.gguf' '*.bin'
 huggingface-cli download Qwen/Qwen3-8B   --ignore-patterns '*.gguf' '*.bin'
-# Both land in ~/.cache/huggingface/hub/
+# Land in ~/.cache/huggingface/hub/
 
-# Eval + training datasets (~10 MB total)
-# Run from gbv-research/ directory:
+# Eval datasets (~10 MB — run from gbv-research/)
 python core/datasets/downloader.py
-# Files land in core/datasets/raw/
+# Land in core/datasets/raw/
 ```
 
-### Step 3 — Upload to Kaggle
+### Step 2 — Upload to Kaggle (one-time)
 
-```bash
-# Run from gbv-research/ directory:
-python deploy/upload_to_kaggle.py
-```
+Go to https://www.kaggle.com/datasets → **+ New Dataset**:
 
-This calls `kagglehub.dataset_upload()` for each dataset:
-- **First run**: creates the private dataset on Kaggle
-- **Subsequent runs**: creates a new version (previous versions remain accessible)
+1. Name: `qwen3-hf-cache` → upload the contents of `~/.cache/huggingface/hub/` → **Create**
+2. Name: `specdist-datasets` → upload the `.jsonl` files from `core/datasets/raw/` → **Create**
 
-Two private datasets are created:
+Both datasets are private by default.
 
-| Dataset slug | Contents | Size | Cell 0 variable |
-|---|---|---|---|
-| `qwen3-hf-cache` | Qwen3-0.6B + 8B safetensors + configs | ~16 GB | `KAGGLE_HF_DATASET` |
-| `specdist-datasets` | GSM8K, HumanEval, math500, alpaca, mtbench JSONL | ~10 MB | `KAGGLE_DATA_DATASET` |
-
-Upload only one type if needed:
-```bash
-python deploy/upload_to_kaggle.py --only weights   # model weights only
-python deploy/upload_to_kaggle.py --only data      # eval datasets only
-```
-
-### Step 4 — Attach datasets to the notebook
+### Step 3 — Attach to the notebook
 
 In the Kaggle notebook editor:
 **Add Data** (right sidebar) → **Your Datasets** → select `qwen3-hf-cache` → **Add**
 Repeat for `specdist-datasets`.
 
-Both datasets mount read-only under `/kaggle/input/`.
+Both mount read-only under `/kaggle/input/`.
 
-### Step 5 — Set variables in `kaggle.ipynb` Cell 0
+### Step 4 — Set variables in `kaggle.ipynb` Cell 0
 
 ```python
 KAGGLE_HF_DATASET   = "/kaggle/input/qwen3-hf-cache"
 KAGGLE_DATA_DATASET = "/kaggle/input/specdist-datasets"
 ```
 
-Run Cell 0. Models and data are available **instantly** — `bootstrap()` handles the rest.
+Run Cell 0 — models and data are available **instantly**.
 
 ### Updating datasets
 
-When you add new eval datasets or download a new model variant, re-run:
-```bash
-python deploy/upload_to_kaggle.py
-```
-`kagglehub.dataset_upload()` creates a new dataset version automatically. You don't need to detach and re-attach in the notebook — Kaggle always mounts the latest version.
+To add new eval datasets or model variants: open the dataset on kaggle.com → **+ New Version** → upload the new files.
 
 ---
 
