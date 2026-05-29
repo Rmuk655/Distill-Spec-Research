@@ -69,14 +69,14 @@ def _auth_repo_url(base_url: str) -> str:
 # ---------------------------------------------------------------------------
 
 def install_deps(gbv_dir: str = GBV_DIR) -> None:
-    """pip-install requirements.txt + bitsandbytes + accelerate."""
+    """pip-install requirements.txt + bitsandbytes + accelerate + torchao.
+
+    flash-attn is intentionally excluded: it compiles CUDA kernels from source
+    (~1-2 hours on Kaggle/Colab) and is not required for correctness — standard
+    PyTorch attention is used as fallback.  Add it manually after training if
+    you specifically need it for inference throughput benchmarking.
+    """
     req = os.path.join(gbv_dir, "requirements.txt")
-    # flash-attn is optional — may fail on older drivers
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q",
-         "-r", req, "bitsandbytes", "accelerate", "flash-attn"],
-        check=False,
-    )
     # Core deps must succeed.
     # torchao>=0.16.0: Colab ships 0.10.0 but PEFT 0.14+ raises ImportError when
     # torchao is present at an incompatible version (instead of silently skipping it).
