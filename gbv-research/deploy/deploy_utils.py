@@ -377,6 +377,7 @@ def bootstrap(
     mount_drive: bool = False,
     drive_mount_path: str = "/content/drive",
     kaggle_hf_dataset: str = None,
+    kaggle_data_dataset: str = None,
     restore_checkpoints: bool = False,
     checkpoint_dataset_names: tuple = (
         "specdist-checkpoints", "specdist_checkpoints",
@@ -404,6 +405,10 @@ def bootstrap(
     kaggle_hf_dataset Path to a pre-attached Kaggle dataset containing HF weights.
                       When set and the path exists, sets HF_HOME there and skips
                       model download entirely.
+    kaggle_data_dataset Path to a pre-attached Kaggle dataset containing eval/training
+                      JSONL files. When set, .jsonl files are copied into
+                      core/datasets/raw/ before fetch_training_data() runs so that
+                      step skips the HuggingFace download entirely.
     restore_checkpoints  Search /kaggle/input/<name>/ for a saved checkpoint
                       dataset and restore it into storage_root/checkpoints/.
                       Use this in Resume cells on Kaggle.
@@ -459,6 +464,24 @@ def bootstrap(
     # 7. Authenticate W&B and HuggingFace.
     auth_wandb()
     auth_hf()
+
+    # 8a. Pre-populate training + eval data from Kaggle dataset (if attached).
+    #     fetch_training_data() (step 8) checks for file existence and skips if present.
+    #     Copy .jsonl files from the dataset into core/datasets/raw/ before it runs.
+    if kaggle_data_dataset and os.path.isdir(kaggle_data_dataset):
+        _raw_dir = os.path.join(gbv_dir, "core", "datasets", "raw")
+        os.makedirs(_raw_dir, exist_ok=True)
+        _copied = 0
+        for _fn in os.listdir(kaggle_data_dataset):
+            _src = os.path.join(kaggle_data_dataset, _fn)
+            _dst = os.path.join(_raw_dir, _fn)
+            if os.path.isfile(_src) and _fn.endswith(".jsonl") and not os.path.exists(_dst):
+                shutil.copy2(_src, _dst)
+                _copied += 1
+        if _copied:
+            print(f"[data] {_copied} dataset file(s) <- {kaggle_data_dataset}")
+        else:
+            print(f"[data] Datasets already present — skipping copy from {kaggle_data_dataset}")
 
     # 8. Training data (downloads gsm8k_train.jsonl if missing; ~3 MB, idempotent).
     fetch_training_data(gbv_dir)

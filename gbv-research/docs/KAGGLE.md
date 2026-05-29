@@ -70,60 +70,47 @@ Upload `deploy/kaggle.ipynb` → set `CONFIG = "kaggle"` → Shift+F5 (Run All).
 
 ---
 
-## Pre-uploading model weights (zero download time every session)
+## Pre-uploading datasets (zero-download sessions)
 
-By default, models download fresh at the start of each session (~5-10 min).
-The smarter approach: upload weights once as a Kaggle dataset, attach forever.
-
-### Step 1 — Download model weights locally (one time)
+Upload once locally → attach to every notebook → no downloads ever.
 
 ```bash
-# On any machine with enough disk space (~6 GB for both models)
-pip install huggingface_hub
-python -c "
-from huggingface_hub import snapshot_download
-snapshot_download('Qwen/Qwen3-0.6B', ignore_patterns=['*.gguf','*.bin'])
-snapshot_download('Qwen/Qwen3-8B',   ignore_patterns=['*.gguf','*.bin'])
-"
+pip install kagglehub huggingface_hub
+export KAGGLE_USERNAME=your-kaggle-username
+
+# Download model weights locally first (one-time, ~17 GB total)
+huggingface-cli download Qwen/Qwen3-0.6B --ignore-patterns '*.gguf' '*.bin'
+huggingface-cli download Qwen/Qwen3-8B   --ignore-patterns '*.gguf' '*.bin'
+
+# Download eval datasets (one-time, ~10 MB total)
+python core/datasets/downloader.py
+
+# Upload both to Kaggle (creates / updates versioned datasets)
+python deploy/upload_to_kaggle.py
 ```
 
-This downloads to `~/.cache/huggingface/` (default HF cache location).
+This creates two private Kaggle datasets:
 
-### Step 2 — Create a private Kaggle dataset
+| Dataset slug | Contents | Size | Attach as |
+|---|---|---|---|
+| `qwen3-hf-cache` | Qwen3-0.6B + 8B safetensors | ~16 GB | `KAGGLE_HF_DATASET` |
+| `specdist-datasets` | GSM8K, HumanEval, math500, alpaca, mtbench JSONL | ~10 MB | `KAGGLE_DATA_DATASET` |
 
-1. Go to https://www.kaggle.com/datasets → **+ New Dataset**
-2. Name it: `qwen3-hf-cache`
-3. Visibility: **Private**
-4. Upload the contents of `~/.cache/huggingface/` as a zip or use the Kaggle API:
+### Attaching to the notebook
 
-```bash
-pip install kaggle
-# Place your kaggle.json API key at ~/.kaggle/kaggle.json
-kaggle datasets create -p ~/.cache/huggingface -u your-username -t qwen3-hf-cache \
-  --title "Qwen3 HF Cache" --license "other"
-```
-
-**Quota note:** Kaggle gives 100 GB total dataset storage, up to 20 GB per dataset.
-- Qwen3-0.6B: ~1.2 GB
-- Qwen3-8B (safetensors, no .gguf/.bin): ~15.2 GB
-
-Both fit in one dataset within the 20 GB limit.
-
-### Step 3 — Attach the dataset to your notebook
-
-In the notebook editor: **Add Data** (right sidebar) → Your Datasets → select `qwen3-hf-cache`.
-
-The dataset mounts at `/kaggle/input/qwen3-hf-cache/`.
-
-### Step 4 — Set KAGGLE_HF_DATASET in the notebook
+In the notebook editor: **Add Data** (right sidebar) → Your Datasets → select each dataset.
 
 In `kaggle.ipynb` Cell 0:
-
 ```python
-KAGGLE_HF_DATASET = "/kaggle/input/qwen3-hf-cache"
+KAGGLE_HF_DATASET   = "/kaggle/input/qwen3-hf-cache"
+KAGGLE_DATA_DATASET = "/kaggle/input/specdist-datasets"
 ```
 
-The notebook sets `HF_HOME` to this path. Models are available **instantly** at session start — zero download time, forever.
+Models and data are available **instantly** at every session start — zero download time.
+
+### Updating datasets
+
+Re-run `python deploy/upload_to_kaggle.py` after adding new eval datasets or model variants. `kagglehub.dataset_upload()` creates a new version automatically; old versions remain accessible.
 
 ---
 
