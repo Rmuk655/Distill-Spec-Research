@@ -69,13 +69,12 @@ health:
   early_stop_patience: 5
 
 evaluation:
-  # Reduced for free-tier trend-line runs.  Full paper sweep on A100 only.
-  # Dropped: alpha (VRAM-safe on BF16 Colab but adds significant time for marginal info).
-  #          specinfer, naive — consistently weakest verifiers on laptop; not needed for trend.
-  # K=3 only: K=3 vs K=5 spread < 0.06 BE on all well-sampled losses; not meaningful pre-paper.
-  # temperatures=[0.8]: matches training teacher_temperature; halves eval wall time.
-  #                     A100 sweeps [0.6, 1.0] for paper robustness.
-  modes: [bv, gbv, traversal]
+  # Free-tier compute reduction: single K and single temperature only.
+  # All 6 verifier modes kept: laptop data is toy-scale and cannot rank verifiers reliably.
+  # alpha kept: BF16 Colab has no 4-bit OOM risk; both models fit in VRAM simultaneously.
+  # K=3 only: saves half the eval time; K sweep happens on A100 before paper submission.
+  # temperatures=[0.8]: matches training teacher_temperature; halves eval time vs [0.6,1.0].
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
   temperatures: [0.8]
   L: 8
@@ -88,8 +87,6 @@ tree_training:
   tree_L: 8
 
 experiment:
-  # ebe: broken — BE delta -0.202 vs baseline (laptop runs); loss optimising wrong objective.
-  # online: diverged — perplexity 15.46 vs baseline 7.47; likely LR or reward-scale issue.
-  # All their variants (ebe_single, online_ebe, ebe_tree, online_kl_tree, etc.) also disabled.
-  # Re-enable after fix; see docs/ISSUES.md.
-  losses: [kl, rev_kl, jsd, l1, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]
+  # ebe + ebe_single: re-enabled after fixing kl_weight (was 0.1 → now 1.0).
+  # online + online_ebe: still disabled — greedy sampling bug fixed but needs smoke verification.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]

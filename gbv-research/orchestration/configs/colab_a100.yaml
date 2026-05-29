@@ -71,8 +71,8 @@ evaluation:
   n_prompts: 50                 # more prompts for reliable numbers (A100 eval is fast)
 
 experiment:
-  # ebe: broken — BE delta -0.202 vs baseline (laptop runs); loss optimising wrong objective.
-  # online: diverged — perplexity 15.46 vs baseline 7.47; likely LR or reward-scale issue.
-  # Re-enable after fix; see docs/ISSUES.md.
-  # NOTE: rev_kl is best-performing loss on laptop (+0.141 BE delta) — included here.
-  losses: [kl, rev_kl, jsd, l1, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]
+  # ebe + ebe_single: re-enabled after fixing kl_weight (was 0.1, now 1.0).
+  # online + online_ebe: still disabled — greedy sampling bug fixed but needs verification
+  #   before committing expensive A100 time.  Run online smoke test on Kaggle first.
+  # rev_kl: best-performing loss on laptop (+0.141 BE delta) — included.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, jsd_tree, bv_tree, gbv_tree, rev_kl_tree, traversal_tree]

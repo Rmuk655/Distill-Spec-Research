@@ -357,19 +357,39 @@ def _draft_propose(
     draft_model,
     input_ids: torch.Tensor,
     K: int,
+    temperature: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Autoregressively generate K draft tokens.
+    """Autoregressively generate K draft tokens by sampling at temperature T.
+
+    BUG FIX (2026-05-29): The previous implementation used greedy argmax
+    (temperature = 0) while speculative_step computed the acceptance ratio
+    using temperature-scaled softmax probabilities.  This violated the
+    fundamental spec-dec assumption: the acceptance ratio min(1, p_tgt/p_dft)
+    is only valid when the token was actually sampled from q_draft(·|T).
+
+    With argmax sampling:
+      - The chosen token has the highest temperature-scaled softmax probability
+      - p_dft = q_draft_T(argmax) is very large → p_tgt/p_dft << 1 → most
+        tokens rejected even when draft and teacher agree on the top choice
+      - Inflated rejection count → KL updates push model toward teacher at
+        spurious positions → divergence (ppl 15.46 vs baseline 7.47 observed)
+
+    Fix: sample from the temperature-scaled draft distribution so the token's
+    proposal probability exactly matches the p_dft used in the acceptance ratio.
+    This aligns with OSD (Liu et al. 2023) which requires t ~ q_draft(·|T).
 
     Args:
         draft_model: the (LoRA-wrapped) draft model.
         input_ids:   (1, L) prompt token ids.
         K:           number of tokens to propose.
+        temperature: sampling temperature; must match the temperature passed to
+                     speculative_step so the acceptance ratio is consistent.
 
     Returns:
         draft_tokens:  (K,) proposed token ids (int64).
-        draft_logprob: (K,) log-prob of each proposed token under the draft.
-                       Computed via a single extra forward pass over the
-                       extended sequence for efficiency.
+        draft_logprob: (K,) temperature-scaled log-prob of each proposed token
+                       under the draft.  Used by callers that need the log-prob
+                       for importance-weighting or logging.
     """
     device = input_ids.device
     extended = input_ids.clone()  # (1, L)
@@ -377,23 +397,27 @@ def _draft_propose(
     for _ in range(K):
         out = draft_model(extended)
         next_logits = out.logits[:, -1, :]  # (1, V)
-        next_tok = next_logits.argmax(dim=-1, keepdim=True)  # greedy
+        if temperature <= 0.0:
+            # temperature = 0 is deterministic argmax (used for smoke tests / debugging)
+            next_tok = next_logits.argmax(dim=-1, keepdim=True)
+        else:
+            probs = F.softmax(next_logits.float() / temperature, dim=-1)
+            next_tok = torch.multinomial(probs, num_samples=1)  # (1, 1)
         extended = torch.cat([extended, next_tok], dim=1)
 
     # extended is now (1, L+K); draft tokens are the last K positions
     draft_tokens = extended[0, -K:]  # (K,)
 
     # Re-run the full candidate sequence in ONE forward pass to get
-    # per-position log-probs for the K draft positions.
+    # per-position temperature-scaled log-probs for the K draft positions.
     # Position i in extended predicts token i+1, so draft position j
     # (0-indexed from L) is predicted at logit index L-1+j.
-    with torch.no_grad():
-        logits_full = draft_model(extended).logits  # (1, L+K, V)
+    logits_full = draft_model(extended).logits  # (1, L+K, V)
 
     L = input_ids.shape[1]
     # logits at positions L-1 .. L+K-2  predict tokens at positions L .. L+K-1
     draft_logits = logits_full[0, L - 1 : L + K - 1, :]  # (K, V)
-    draft_logprob = F.log_softmax(draft_logits.float(), dim=-1)
+    draft_logprob = F.log_softmax(draft_logits.float() / temperature, dim=-1)
     # gather the log-prob of each actually-chosen draft token
     chosen_logprob = draft_logprob[
         torch.arange(K, device=device), draft_tokens
@@ -448,9 +472,12 @@ def speculative_step(
         if k == 0:
             break
 
-        # --- Draft proposes k tokens ---
-        draft_tokens, draft_lp = _draft_propose(draft_model, seq, k)
-        # draft_tokens: (k,), draft_lp: (k,) log-probs
+        # --- Draft proposes k tokens (sampled at temperature T, not greedy) ---
+        # temperature must be passed here so the proposal distribution matches
+        # the distribution used in the acceptance ratio (p_tgt/p_dft) below.
+        draft_tokens, draft_lp = _draft_propose(draft_model, seq, k,
+                                                 temperature=temperature)
+        # draft_tokens: (k,), draft_lp: (k,) temperature-scaled log-probs
 
         # --- Target verifies all k tokens in ONE forward pass ---
         candidate = torch.cat(

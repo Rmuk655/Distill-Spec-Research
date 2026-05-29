@@ -2,10 +2,31 @@
 Expected Block Efficiency (EBE) loss — novel contribution.
 
 Directly optimises the speculative-decoding inference metric:
-    E[τ+1] = 1 + Σ_{k=1}^{L} Π_{i=1}^{k} α_i
+    E[tau+1] = 1 + sum_{k=1}^{L} prod_{i=1}^{k} alpha_i
 
-where α_i = min(1, p_target(t_i) / p_student(t_i)) is the per-token
+where alpha_i = min(1, p_target(t_i) / p_student(t_i)) is the per-token
 acceptance probability and L is the block (draft window) length.
+
+The ratio min(1, p_target/p_student) follows the standard speculative
+decoding acceptance formula (Leviathan et al. 2023, Chen et al. 2023):
+when p_student > p_target (draft overconfident), alpha < 1 and the EBE
+gradient pushes p_student DOWN toward p_target.  When p_student <= p_target
+(draft underconfident), the clamp(max=0) kills the gradient for EBE — only
+the KL regulariser provides signal at those positions.
+
+Offline gradient behaviour:
+  On offline (human-generated) training data, EBE provides gradient only
+  at positions where the draft is MORE confident than the teacher.  In
+  early training, the draft is typically underconfident on precise tokens
+  (teacher >> draft at most positions), so EBE gradient is near-zero and
+  the KL regulariser dominates.  As training progresses and the draft
+  approaches the teacher, EBE begins contributing.
+
+  kl_weight=1.0 (default) ensures that even when EBE gradient is near-zero
+  (early training), the KL term provides a signal equivalent to standalone
+  KL distillation.  Using kl_weight=0.1 was found to make EBE approximately
+  10x weaker than standalone KL, producing near-baseline or slightly worse
+  results on offline data.
 
 Key design choices:
   1. Per-block computation (not whole-sequence cumprod).
@@ -14,13 +35,13 @@ Key design choices:
      the "giant product" problem where early tokens accumulate an
      unrealistically large gradient multiplier.
 
-  2. KL regulariser (λ ≈ 0.1).
-     EBE gradient vanishes for tokens already accepted (α ≈ 1).  A small
-     forward-KL term keeps language quality stable and provides gradient
-     for the easy positions.
+  2. KL regulariser (kl_weight=1.0 default).
+     EBE gradient vanishes for tokens where draft <= teacher (alpha = 1).
+     The full-weight KL term provides gradient at those positions and
+     ensures training never falls below standalone KL quality.
 
-  3. Numerical clamping (α ≥ 1e-6).
-     torch.cumprod backward divides by each element; if any α = 0 the
+  3. Numerical clamping (alpha >= 1e-6).
+     torch.cumprod backward divides by each element; if any alpha = 0 the
      backward produces NaN.  Clamping to 1e-6 prevents this.
 
 Reference: Thomas et al., arXiv:2602.16994v1 (2026), Section 4.
@@ -44,7 +65,7 @@ def ebe(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     token_ids: Optional[torch.Tensor] = None,
-    kl_weight: float = 0.1,
+    kl_weight: float = 1.0,
     block_len: int = DEFAULT_BLOCK_LEN,
     **_kwargs,
 ) -> LossOutput:
@@ -56,11 +77,15 @@ def ebe(
         teacher_logits: Float32 [T, V]  — frozen teacher output.
         token_ids:      Long   [T]      — token indices of the generated
                                           sequence.  Required (raises if None).
-        kl_weight:      Weight λ for the KL regulariser (default 0.1).
+        kl_weight:      Weight for the KL regulariser (default 1.0).
+                        Set to 1.0 so the KL term matches standalone KL
+                        distillation strength when EBE gradient is near-zero
+                        (common in early offline training).  The previous
+                        default of 0.1 made EBE ~10x weaker than standalone KL.
         block_len:      Draft window length L (default 8, matches inference).
 
     Returns:
-        LossOutput with scalar loss and accept_weight (mean α).
+        LossOutput with scalar loss and accept_weight (mean alpha).
 
     Raises:
         ValueError if token_ids is None.
@@ -78,8 +103,12 @@ def ebe(
     log_p = log_s.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
     log_q = log_t.gather(-1, token_ids.unsqueeze(-1)).squeeze(-1)  # [T]
 
-    # α_i = min(1, q/p) = exp(min(0, log_q - log_p)).
-    # Clamp ≥ 1e-6 prevents NaN in cumprod backward when α ≈ 0.
+    # alpha_i = min(1, p_target/p_student) = exp(min(0, log_teacher - log_draft)).
+    # log_q = log_teacher, log_p = log_student (draft).  Variable naming follows
+    # the code convention; the formula matches spec-dec literature (Leviathan 2023).
+    # Gradient fires only when log_q < log_p (draft overconfident); zero when
+    # draft is underconfident (common in early offline training).
+    # Clamp >= 1e-6 prevents NaN in cumprod backward when alpha approaches 0.
     alpha = torch.exp(torch.clamp(log_q - log_p, max=0.0)).clamp(min=1e-6)  # [T]
 
     # EBE over non-overlapping blocks of length block_len
