@@ -252,6 +252,36 @@ def distinct_values(col: str) -> list:
     return [r[0] for r in rows if r[0] is not None]
 
 
+def distinct_model_pairs() -> list:
+    """Return distinct (draft_path, target_path) pairs sorted by target then draft.
+
+    Each element is a dict:
+        {"draft": "Qwen/Qwen3-0.6B", "target": "Qwen/Qwen3-8B",
+         "label": "0.6B → 8B"}
+    The label strips the org prefix and keeps only the size token for display.
+    """
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT DISTINCT draft_path, target_path FROM runs "
+        "ORDER BY target_path, draft_path"
+    ).fetchall()
+    conn.close()
+
+    def _short(path: str) -> str:
+        """'Qwen/Qwen3-0.6B' → '0.6B', '/path/to/Qwen3-8B' → '8B'"""
+        name = path.split("/")[-1]          # strip org or dir prefix
+        # keep everything after the last dash that looks like a size (e.g. 0.6B, 8B)
+        import re
+        m = re.search(r"(\d[\d.]*[BbMm])", name)
+        return m.group(1).upper() if m else name
+
+    return [
+        {"draft": r[0], "target": r[1],
+         "label": f"{_short(r[0])} draft → {_short(r[1])} teacher"}
+        for r in rows if r[0] is not None and r[1] is not None
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Training curves
 # ---------------------------------------------------------------------------

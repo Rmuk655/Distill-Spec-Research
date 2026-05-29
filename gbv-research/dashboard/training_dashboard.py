@@ -74,7 +74,7 @@ def api_runs():
 
 @app.route("/api/dimensions")
 def api_dimensions():
-    cols = ["draft_label", "loss_name", "target_path", "dataset", "mode", "K",
+    cols = ["draft_label", "loss_name", "dataset", "mode", "K",
             "temperature", "train_steps", "experiment_tag"]
     dims = {c: results_db.distinct_values(c) for c in cols}
     # T=0.0 rows are perplexity-check placeholders (no real speculative-decoding run).
@@ -83,6 +83,8 @@ def api_dimensions():
     # K=0 rows are perplexity-check runs (mode=perplexity, no speculative decoding).
     # Strip K=0 — users cannot meaningfully filter on it.
     dims["K"] = [k for k in dims.get("K", []) if k != 0]
+    # Model family pairs — the primary "don't mix" grouping dimension
+    dims["model_pairs"] = results_db.distinct_model_pairs()
     return jsonify(dims)
 
 
@@ -628,21 +630,21 @@ _HTML = r"""<!DOCTYPE html>
   <div class="fw-bold mb-3" style="font-size:15px">SpecDist Filters</div>
 
   <div class="filter-section">
-    <label>Teacher Model</label>
-    <div id="f-target_path"></div>
+    <label>Model Family</label>
+    <div id="f-model_pairs"></div>
     <div style="font-size:11px;color:#ed8936;margin-top:4px;font-weight:600">
-      Never mix results across teacher models — different scale = incomparable numbers.
+      Results are only comparable within the same model family.
     </div>
   </div>
 
-  <!-- HW tier kept as a secondary annotation filter (collapsed by default) -->
+  <!-- HW tier: secondary annotation only -->
   <div class="filter-section">
     <label style="color:#718096">HW Tier <small>(annotation only)</small></label>
     <div id="f-hw_tier">
       <span class="chip hw-tier-chip active" data-tier="laptop"
-            style="border-color:#a0aec0" onclick="toggleTierChip(this)" title="smoke tests / laptop dev">laptop</span>
+            style="border-color:#a0aec0" onclick="toggleTierChip(this)" title="smoke tests">laptop</span>
       <span class="chip hw-tier-chip active" data-tier="colab_lite"
-            style="border-color:#9f7aea" onclick="toggleTierChip(this)" title="trend detection, free T4">colab_lite</span>
+            style="border-color:#9f7aea" onclick="toggleTierChip(this)" title="trend detection, T4">colab_lite</span>
       <span class="chip hw-tier-chip active" data-tier="colab"
             style="border-color:#ed8936" onclick="toggleTierChip(this)" title="publishable results, T4">colab</span>
       <span class="chip hw-tier-chip active" data-tier="a100"
@@ -1241,8 +1243,12 @@ let _stepPanelOpen = false;
 let _logPanelOpen  = false;
 
 // HW_TIER_FILTER: Set of selected tiers. Default = all four selected.
-// laptop (blue #4299e1), colab (orange #ed8936), a100 (green #48bb78)
 let HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
+
+// MODEL_PAIR_FILTER: Set of "draft||target" composite keys.
+// null = all pairs shown; a non-null Set restricts to selected pairs only.
+// Key format: draft_path + "||" + target_path
+let MODEL_PAIR_FILTER = null;
 
 // ---- Step descriptions (shown as tooltips and in panel) ----
 // MUST stay in sync with experiment.py build_steps() step IDs.
@@ -1474,10 +1480,33 @@ const _TREE_MODES   = new Set(['gbv','traversal','specinfer','bv','naive']);
 const _SCALAR_MODES = new Set(['alpha','perplexity']);
 
 function buildFilterChips() {
+  // Model family combo chips — one chip per (draft, target) pair
+  const pairsDiv = document.getElementById('f-model_pairs');
+  if (pairsDiv) {
+    const pairs = DIMS['model_pairs'] || [];
+    pairsDiv.innerHTML = '';
+    const sec = pairsDiv.closest('.filter-section');
+    if (pairs.length <= 1) {
+      if (sec) sec.style.display = 'none';  // only one family, no need to filter
+    } else {
+      if (sec) sec.style.display = '';
+      pairs.forEach(p => {
+        const chip = document.createElement('span');
+        chip.className = 'chip model-pair-chip active';
+        chip.textContent = p.label;
+        chip.title = p.draft + '  ->  ' + p.target;
+        chip.dataset.draft  = p.draft;
+        chip.dataset.target = p.target;
+        chip.onclick = () => toggleModelPairChip(chip);
+        pairsDiv.appendChild(chip);
+      });
+      MODEL_PAIR_FILTER = null;  // all selected = no restriction
+    }
+  }
+
   // Standard columns (mode handled specially below)
-  // loss_name is always identical to draft_label in this pipeline — omit from chips
-  // target_path displayed as short model name (strip "Qwen/" prefix etc.)
-  const filterCols = ['draft_label','target_path','dataset','K','temperature','train_steps','experiment_tag'];
+  // loss_name always identical to draft_label — omit from chips
+  const filterCols = ['draft_label','dataset','K','temperature','train_steps','experiment_tag'];
   filterCols.forEach(col => {
     const div = document.getElementById('f-' + col);
     if (!div) return;
@@ -1485,9 +1514,7 @@ function buildFilterChips() {
     vals.forEach(val => {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      // For target_path, show just the model name (strip org prefix "Qwen/" etc.)
-      chip.textContent = (col === 'target_path') ? val.split('/').pop() : val;
-      chip.title = val;   // full path on hover
+      chip.textContent = val;
       chip.dataset.col = col;
       chip.dataset.val = val;
       chip.onclick = () => toggleChip(chip);
@@ -1530,7 +1557,6 @@ function toggleChip(chip) {
 function toggleTierChip(chip) {
   const tier = chip.dataset.tier;
   if (HW_TIER_FILTER.has(tier)) {
-    // Only deselect if at least one other tier remains selected
     if (HW_TIER_FILTER.size > 1) {
       HW_TIER_FILTER.delete(tier);
       chip.classList.remove('active');
@@ -1542,11 +1568,32 @@ function toggleTierChip(chip) {
   applyFilters();
 }
 
+function toggleModelPairChip(chip) {
+  const key = chip.dataset.draft + '||' + chip.dataset.target;
+  const allChips = document.querySelectorAll('.model-pair-chip');
+  const activeKeys = new Set(
+    [...allChips].filter(c => c.classList.contains('active'))
+                 .map(c => c.dataset.draft + '||' + c.dataset.target)
+  );
+  if (activeKeys.has(key)) {
+    if (activeKeys.size > 1) {   // keep at least one selected
+      chip.classList.remove('active');
+      activeKeys.delete(key);
+      MODEL_PAIR_FILTER = activeKeys;
+    }
+  } else {
+    chip.classList.add('active');
+    activeKeys.add(key);
+    // null = all pairs shown (no restriction needed when all are selected)
+    MODEL_PAIR_FILTER = (activeKeys.size === allChips.length) ? null : activeKeys;
+  }
+  applyFilters();
+}
+
 function getActiveChips() {
   const filters = {};
-  // Use :not(.hw-tier-chip) to exclude hw-tier chips — they have data-tier (not
-  // data-col/data-val) and are handled separately by HW_TIER_FILTER, not here.
-  document.querySelectorAll('.chip.active:not(.hw-tier-chip)').forEach(c => {
+  // Exclude hw-tier-chip and model-pair-chip — both handled by their own filter state.
+  document.querySelectorAll('.chip.active:not(.hw-tier-chip):not(.model-pair-chip)').forEach(c => {
     const col = c.dataset.col, val = c.dataset.val;
     if (!col) return;   // guard: skip chips that lack data-col (shouldn't happen now)
     if (!filters[col]) filters[col] = [];
@@ -1560,6 +1607,9 @@ function clearFilters() {
   const s = document.getElementById('etag-search');
   if (s) s.value = '';
   document.querySelectorAll('#f-experiment_tag .chip').forEach(c => c.style.display = '');
+  // Reset model pair filter to all selected
+  MODEL_PAIR_FILTER = null;
+  document.querySelectorAll('.model-pair-chip').forEach(c => c.classList.add('active'));
   // Reset HW_TIER_FILTER to all tiers selected
   HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
   document.querySelectorAll('.hw-tier-chip').forEach(c => c.classList.add('active'));
@@ -1623,7 +1673,15 @@ async function loadData() {
   const resp = await fetch('/api/runs');
   let runs = await resp.json();
 
-  // Client-side filter for hw_tier (always applied, uses HW_TIER_FILTER set)
+  // Client-side filter: model family (draft+target pair)
+  if (MODEL_PAIR_FILTER !== null && MODEL_PAIR_FILTER.size > 0) {
+    runs = runs.filter(r => {
+      const key = (r.draft_path || '') + '||' + (r.target_path || '');
+      return MODEL_PAIR_FILTER.has(key);
+    });
+  }
+
+  // Client-side filter for hw_tier (annotation, uses HW_TIER_FILTER set)
   if (HW_TIER_FILTER.size > 0) {
     runs = runs.filter(r => HW_TIER_FILTER.has(r.hw_tier || 'laptop'));
   }
