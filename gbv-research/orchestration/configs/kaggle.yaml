@@ -98,7 +98,7 @@ evaluation:
   K_values: [3]
   temperatures: [0.8]
   L: 8
-  n_prompts: 20                 # T4 eval is slow; increase to 30 once modes are reduced
+  n_prompts: 30                 # 30 prompts per dataset — reliable trend direction on T4
 
 tree_training:
   tree_K: 4

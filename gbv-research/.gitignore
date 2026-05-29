@@ -26,13 +26,19 @@ core/datasets/raw/*.jsonl
 core/datasets/raw/.cache/
 
 # … then un-ignore the small curated eval/seed sets that ARE tracked
+# GSM8K slices (test split — no overlap with gsm8k_train.jsonl which is gitignored)
 !core/datasets/raw/gsm8k_5.jsonl
 !core/datasets/raw/gsm8k_10.jsonl
 !core/datasets/raw/gsm8k_30.jsonl
+# Diverse prompts (hardcoded — no download needed)
 !core/datasets/raw/diverse50.jsonl
+# Secondary eval sets for generalization checks (Phase 4 Multi-DS eval)
+!core/datasets/raw/alpaca_30.jsonl
 !core/datasets/raw/math500_30.jsonl
 !core/datasets/raw/mtbench_80.jsonl
 !core/datasets/raw/humaneval.jsonl
+# Large A100 paper-quality eval sets are NOT committed (auto-downloaded by evaluate.py
+# on first run via get_dataset_path): gsm8k_1319.jsonl, alpaca_100.jsonl, math500_100.jsonl
 
 # ── Python runtime ─────────────────────────────────────────────────────────────
 __pycache__/

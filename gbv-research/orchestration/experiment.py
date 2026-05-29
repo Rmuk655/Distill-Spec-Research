@@ -329,7 +329,9 @@ def _load_config_yaml(config_name: str) -> dict:
         if eval_cfg.get("modes"):
             out["eval_modes"] = eval_cfg["modes"]          # list[str], e.g. ["bv","gbv","traversal"]
         if eval_cfg.get("n_prompts"):
-            out["eval_n_prompts"] = eval_cfg["n_prompts"]  # int
+            out["eval_n_prompts"] = eval_cfg["n_prompts"]        # int — secondary datasets
+        if eval_cfg.get("n_prompts_gsm8k"):
+            out["eval_n_prompts_gsm8k"] = eval_cfg["n_prompts_gsm8k"]  # int — GSM8K primary eval
         # experiment.seed_override → run a specific seed without editing training.seed
         if "seed_override" in experiment_cfg:
             out["seed"] = experiment_cfg["seed_override"]
@@ -585,6 +587,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 _modes = ",".join(yaml_modes)
         if _h.get("eval_n_prompts"):
             _n = _h["eval_n_prompts"]
+        # _n_gsm8k: n for Phase 3 GSM8K eval. Defaults to _n (same as secondary datasets)
+        # unless the config provides a separate override (e.g. 1319 for full test on A100).
+        _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n)
 
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
@@ -672,7 +677,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
 
-    def _ec(student_path, label, datasets="gsm8k", task_score=False, modes=None):
+    def _ec(student_path, label, datasets="gsm8k", task_score=False, modes=None,
+            n_override=None):
         """Shorthand: eval cmd with smoke-aware parameters.
 
         Automatically infers train_steps from label:
@@ -684,6 +690,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         modes: verifier mode string passed to evaluate.py --modes.
                Defaults to _modes (all 6 verifiers) when None.
                Tree-loss eval steps pass their paired mode(s) explicitly.
+        n_override: if set, overrides _n for this call only.
+               Pass _n_gsm8k for Phase 3 GSM8K evals (full test on A100, 30 on T4).
+               Pass _n for Phase 4 multi-DS evals (secondary domain sample size).
         """
         if label == "baseline":
             ts = 0
@@ -692,9 +701,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         else:
             ts = _steps
         _eval_modes = modes if modes is not None else _modes
+        _n_this = n_override if n_override is not None else _n
         cmd = _eval_cmd(student_path, label, target,
                         datasets=datasets, modes=_eval_modes, Ks=_Ks, temps=_temps,
-                        n=_n, max_tokens=_max_tok,
+                        n=_n_this, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
                         hw_tier=_hw_tier_from_config(args.config))
@@ -757,7 +767,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_baseline_gsm8k",
             "group": "Phase 1 — Baseline",
             "desc": "Eval unmodified draft on gsm8k (all 6 verifier modes)",
-            "cmd": _ec(draft, "baseline", datasets="gsm8k", task_score=True),
+            "cmd": _ec(draft, "baseline", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
         },
 
@@ -1329,7 +1339,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_kl_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval kl-gsm8k on gsm8k",
-            "cmd": _ec(_merged("kl-gsm8k"), "kl", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("kl-gsm8k"), "kl", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("kl-gsm8k"), "config.json"),
         },
@@ -1337,7 +1347,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_ebe_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval ebe-gsm8k on gsm8k",
-            "cmd": _ec(_merged("ebe-gsm8k"), "ebe", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("ebe-gsm8k"), "ebe", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
@@ -1345,7 +1355,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_rev_kl_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval rev_kl-gsm8k on gsm8k",
-            "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
         },
@@ -1353,7 +1363,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_jsd_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval jsd-gsm8k on gsm8k",
-            "cmd": _ec(_merged("jsd-gsm8k"), "jsd", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("jsd-gsm8k"), "jsd", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("jsd-gsm8k"), "config.json"),
         },
@@ -1361,7 +1371,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_l1_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval l1-gsm8k on gsm8k",
-            "cmd": _ec(_merged("l1-gsm8k"), "l1", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("l1-gsm8k"), "l1", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("l1-gsm8k"), "config.json"),
         },
@@ -1369,7 +1379,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_online_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-gsm8k"), "online", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("online-gsm8k"), "online", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-gsm8k"), "config.json"),
         },
@@ -1377,7 +1387,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_online_ebe_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
         },
@@ -1385,7 +1395,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_ebe_single_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval ebe_single-gsm8k on gsm8k",
-            "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
         },
@@ -1393,7 +1403,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_online_ebe_single_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-single-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", datasets="gsm8k", task_score=True),
+            "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
@@ -1407,7 +1417,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval kl_tree-gsm8k on gsm8k [bv+gbv+traversal]",
             "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree", datasets="gsm8k",
-                       task_score=True,
+                       task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["kl_tree"]),   # bv,gbv,traversal (smoke+full)
             "done_check": None,
             "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
@@ -1417,7 +1427,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval bv_tree-gsm8k on gsm8k [bv | bv+gbv+traversal]",
             "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", datasets="gsm8k",
-                       task_score=True,
+                       task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["bv_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
@@ -1427,7 +1437,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval gbv_tree-gsm8k on gsm8k [gbv | bv+gbv+traversal]",
             "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", datasets="gsm8k",
-                       task_score=True,
+                       task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["gbv_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
@@ -1437,7 +1447,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval trav_tree-gsm8k on gsm8k [traversal | bv+gbv+traversal]",
             "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", datasets="gsm8k",
-                       task_score=True,
+                       task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["traversal_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
@@ -1447,7 +1457,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval ebe_tree-gsm8k on gsm8k [bv | bv+gbv+traversal]",
             "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree", datasets="gsm8k",
-                       task_score=True,
+                       task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["ebe_tree"] if smoke else _TREE_NON_OT),
             "done_check": None,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
@@ -1457,7 +1467,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval rev_kl_tree-gsm8k on gsm8k [bv+gbv+traversal]",
             "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree", datasets="gsm8k",
-                       task_score=True, modes=_TREE_NON_OT),
+                       task_score=True, modes=_TREE_NON_OT, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
         },
@@ -1466,7 +1476,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval jsd_tree-gsm8k on gsm8k [bv+gbv+traversal]",
             "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree", datasets="gsm8k",
-                       task_score=True, modes=_TREE_NON_OT),
+                       task_score=True, modes=_TREE_NON_OT, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
         },
@@ -1477,7 +1487,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-kl-tree-gsm8k on gsm8k [all 6 verifiers]",
             "cmd": _ec(_merged("online-kl-tree-gsm8k"), "online_kl_tree",
-                       datasets="gsm8k", task_score=True),
+                       datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
         },
@@ -1486,7 +1496,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-tree-gsm8k on gsm8k [all 6 verifiers]",
             "cmd": _ec(_merged("online-ebe-tree-gsm8k"), "online_ebe_tree",
-                       datasets="gsm8k", task_score=True),
+                       datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
         },

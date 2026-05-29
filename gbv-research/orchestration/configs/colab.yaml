@@ -78,7 +78,7 @@ evaluation:
   K_values: [3]
   temperatures: [0.8]
   L: 8
-  n_prompts: 20                 # T4 eval is slow; 20 is reliable for trend direction
+  n_prompts: 30                 # 30 prompts per dataset — reliable trend direction on T4
 
 tree_training:
   # K=4 on T4 â€” safe VRAM budget; each path adds ~L forward steps to the tree pass.
