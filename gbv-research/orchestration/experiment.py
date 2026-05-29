@@ -409,6 +409,64 @@ def _data(name): return os.path.join(_GBV_RESEARCH, "core", "datasets", "raw", n
 def _merged(name): return _ckpt(name + "_merged")
 
 
+def _models_ready_for_offline(draft: str, target: str) -> tuple:
+    """Decide whether HF offline mode is safe for this run.
+
+    Returns:
+        (ok: bool, reason: str)
+
+    Logic
+    -----
+    1. If both draft and target are absolute filesystem paths that exist
+       (e.g. Kaggle Models attached at /kaggle/input/...), offline is safe —
+       from_pretrained() with a local path doesn't ping HF at all.
+    2. Otherwise, each non-path argument is treated as an HF model ID.  We
+       use huggingface_hub.try_to_load_from_cache to check whether a key
+       config file (config.json) is already in the local cache.  If BOTH
+       models have a cache hit, offline is safe.
+    3. Anything else → keep online so the trainer can download.
+
+    The function is intentionally conservative: when in doubt, return False
+    and let the trainer try the network.
+    """
+    def _is_local_path(x: str) -> bool:
+        return bool(x) and (os.path.isabs(x) or x.startswith(".")) and os.path.exists(x)
+
+    if _is_local_path(draft) and _is_local_path(target):
+        return True, f"draft + target are local paths"
+
+    ids_to_check = []
+    for tag, val in (("draft", draft), ("target", target)):
+        if _is_local_path(val):
+            continue
+        if not val:
+            return False, f"no {tag} model specified"
+        ids_to_check.append(val)
+
+    if not ids_to_check:
+        # Both were local (covered above) — defensive fallback.
+        return True, "all models are local paths"
+
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return False, "huggingface_hub unavailable — cannot verify cache"
+
+    cache_dir = os.environ.get("HF_HOME") or os.environ.get("TRANSFORMERS_CACHE")
+    missing = []
+    for mid in ids_to_check:
+        try:
+            cached = try_to_load_from_cache(repo_id=mid, filename="config.json", cache_dir=cache_dir)
+        except Exception:
+            cached = None
+        if not cached:
+            missing.append(mid)
+
+    if missing:
+        return False, f"models not yet cached: {missing}"
+    return True, f"models cached locally ({', '.join(ids_to_check)})"
+
+
 def _hw_tier_from_config(config_slug: str) -> str:
     """Derive the DB hw_tier tag from the config name.
 
@@ -2758,6 +2816,32 @@ def main():
         }
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
+
+    # ── HuggingFace offline mode (auto) ─────────────────────────────────────
+    # Once we've confirmed both models are available locally (either as a
+    # filesystem path or as a populated HF cache entry), set the OFFLINE env
+    # vars so every subsequent train/eval subprocess skips the etag-validation
+    # HEAD request to huggingface.co.
+    #
+    # Without this: every model load (train, merge, eval × N losses × M
+    # verifiers) does a HEAD round-trip per file (config.json,
+    # generation_config.json, tokenizer.json, ...) — adds ~0.5-2 s per
+    # subprocess on a fast connection, much more on a slow one, and is just
+    # network noise once we know the cache is good.
+    #
+    # If the user wants to force online (e.g., to pick up an upstream model
+    # update), set SPECDIST_FORCE_ONLINE=1.
+    if os.environ.get("SPECDIST_FORCE_ONLINE", "").strip() not in ("", "0", "false"):
+        print("[hf] SPECDIST_FORCE_ONLINE set — leaving HF online checks enabled.")
+    else:
+        _ok, _why = _models_ready_for_offline(draft, target)
+        if _ok:
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_HUB_OFFLINE"]       = "1"
+            print(f"[hf] {_why} — subprocess HF etag pings disabled "
+                  f"(set SPECDIST_FORCE_ONLINE=1 to override).")
+        else:
+            print(f"[hf] {_why} — leaving HF online (initial downloads may be needed).")
 
     # ── Storage root — single source of truth for all persistent paths ────────
     # --storage_root moves checkpoints, DB, logs, and state file to one directory
