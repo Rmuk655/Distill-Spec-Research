@@ -67,6 +67,12 @@ Add-ons → Secrets → + Add Secret:
 | `GITHUB_TOKEN` | PAT with `repo` scope | Only if the repo is private |
 | `HF_TOKEN` | From https://huggingface.co/settings/tokens | **Not needed** — all data comes from Kaggle |
 
+> **Important — enable each secret for the notebook.**  
+> Secrets exist in your Kaggle account but must be explicitly granted per notebook.  
+> In the Secrets panel, **tick the checkbox** next to each secret you want accessible.  
+> If the checkbox is unchecked, `UserSecretsClient().get_secret()` returns empty and  
+> git clone will fail with _"could not read Username"_.
+
 ### Step 5 — Attach 2 models and 1 dataset
 
 All three are on Kaggle. Attach them once; they persist across every session automatically.
@@ -114,6 +120,31 @@ With all three attachments above, bootstrap startup time drops to ~2 min (pip in
 The pipeline passes model paths directly to `--draft` and `--target` in `experiment.py`,
 so the HF Hub is never contacted for model weights. Tokenizer files load from the same
 mounted paths (they're included in the Kaggle Model variant).
+
+---
+
+## Monitoring a running pipeline (Cell 2)
+
+Cell 2 is a **print-to-cell log viewer** — it does not start a web server or open a URL.
+Output appears directly below the cell in the notebook.
+
+```
+Run Cell 2 → output appears below ↓
+```
+
+| Setting | Effect |
+|---|---|
+| `AUTO_REFRESH = False` | Print once and stop |
+| `AUTO_REFRESH = True` | Clear and reprint every `REFRESH_SECS` seconds — interrupt the cell (■) to stop |
+
+**What it shows:**
+- Every pipeline step with status: `OK` done · `>>` running · `..` pending · `XX` failed
+- Last 60 lines of `pipeline_output.log`
+- Any per-step error logs
+
+> The Flask web dashboard (`start_dashboard()`) works on Colab only — it uses  
+> `google.colab.output.eval_js` which does not exist on Kaggle.  
+> Cell 2 with `AUTO_REFRESH = True` is your monitoring view on Kaggle.
 
 ---
 
@@ -190,6 +221,18 @@ The Kaggle Model was not attached, or the variation was wrong.
 - Check the path: it must be **Transformers framework**, not GGUF or AWQ
 - Variation must be exactly `0.6b` and `8b` (plain, not `0.6b-base`, `8b-fp8`, etc.)
 - If paths don't exist, the notebook falls back to HF Hub download automatically (~10 min)
+
+### `git clone` fails — _"could not read Username"_ or exit code 128
+
+Two separate causes:
+
+**Cause 1: secret not enabled for this notebook.**  
+The secret exists in your account but the checkbox next to it in the Secrets panel is unchecked.  
+Fix: Add-ons → Secrets → tick the checkbox next to `GITHUB_TOKEN` → re-run Cell 0.
+
+**Cause 2: secret doesn't exist yet.**  
+Fix: Add-ons → Secrets → + Add Secret → Name: `GITHUB_TOKEN` → Value: your PAT → Save → tick checkbox → re-run Cell 0.  
+Create a classic PAT at github.com → Settings → Developer settings → Personal access tokens → tick `repo` scope.
 
 ### `UserSecretsClient` raises `BackendError`
 
