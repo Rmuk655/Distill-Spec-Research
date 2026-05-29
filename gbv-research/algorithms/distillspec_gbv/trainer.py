@@ -125,8 +125,16 @@ def parse_args() -> argparse.Namespace:
                        "kl_tree",      # forward KL(p ∥ q) at each node — mode-covering
                        "rev_kl_tree",  # reverse KL(q ∥ p) at each node — mode-seeking
                        "jsd_tree",     # symmetric JSD at each node — bounded, stable
-                       # Verifier-specific surrogates (full-vocab integrals):
+                       # Verifier-aligned tree losses (non-OT):
                        "bv_tree", "gbv_tree", "traversal_tree",
+                       # Verifier-aligned tree losses (OT-based): use each verifier's
+                       # own closed-form per-node acceptance probability α_V from
+                       # node.py to optimise E[τ_V] = Σ_i Π_{j≤i} α_V(p_j,q_j,K).
+                       "naive_tree",     # Chen/Leviathan single-path verifier
+                       "nss_tree",       # Naive Speculative Sampling
+                       "specinfer_tree", # SpecInfer K-iter rejection
+                       "spectr_tree",    # SpecTr K-SEQ (ρ detached — see _alpha_spectr)
+                       "khisti_tree",    # Khisti canonical decomp (LP-free surrogate)
                        # On-policy EBE (token-level, ablation of flat EBE off-policy issue):
                        "ebe_tree",
                    ],

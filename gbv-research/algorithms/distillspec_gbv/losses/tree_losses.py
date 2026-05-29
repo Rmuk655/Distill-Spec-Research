@@ -770,13 +770,365 @@ def traversal_tree_loss(
     return -(total / K)   # minimise negative mean leaf weight
 
 
+# ===========================================================================
+# Verifier-aligned tree losses for the 5 OT-based verifiers
+# ===========================================================================
+#
+# Mathematical principle
+# ----------------------
+# Each OT-based verifier V has a closed-form per-node acceptance probability
+# α_V(p, q, K) — already implemented in verifiers/tree.py as `*_otlp_accept`.
+#
+# Along an L-step path, the expected block efficiency (BE) under V is
+#
+#     E[τ_V] = Σ_{i=1}^{L} Π_{j=1}^{i} α_V(p_j, q_j, K)
+#
+# This is the telescoping identity for "expected length of accepted prefix"
+# assuming per-position acceptance events are conditionally independent
+# given the tree.  We use −E[τ_V] as the training objective so the draft is
+# directly optimised for the verifier's own acceptance behaviour.
+#
+# The helpers `_α_naive`, `_α_nss`, `_α_specinfer`, `_α_spectr`,
+# `_α_khisti` below are PyTorch translations of the corresponding
+# `*_otlp_accept` formulas, with q carrying gradient so loss.backward()
+# reaches the draft model's LoRA parameters.
+#
+# Loss-verifier alignment hypothesis (Thomas et al., 2026)
+# --------------------------------------------------------
+# A draft trained with L_V should outperform a draft trained with L_{V'}
+# when evaluated under verifier V.  The 8×8 cross-pair eval matrix in
+# Phase 3 directly tests this hypothesis.
+
+
+def _alpha_naive(p: torch.Tensor, q: torch.Tensor, K: int) -> torch.Tensor:
+    """
+    Differentiable α for the naive (Chen/Leviathan) verifier.
+
+        α_naive = Σ_v min(p[v], q[v])
+                  + Σ_v relu(p[v] - q[v]) · (1 - (1 - q[v])^{K-1})       [K ≥ 2]
+
+    Exact reproduction of node.naive_otlp_accept (verifiers/tree.py:107).
+    Gradient flows through `min` (subgradient) and the residual term.
+
+    Args:
+        p:  Target distribution [V], detached.
+        q:  Draft distribution [V], WITH grad.
+        K:  Number of draft paths at this node.
+
+    Returns:
+        Scalar tensor, WITH grad.
+    """
+    accept = torch.minimum(p, q).sum()
+    if K > 1:
+        p_res = F.relu(p - q)
+        accept = accept + (p_res * (1.0 - (1.0 - q) ** (K - 1))).sum()
+    return accept
+
+
+def _alpha_nss(p: torch.Tensor, q: torch.Tensor, K: int) -> torch.Tensor:
+    """
+    Differentiable α for the NSS (Naive Speculative Sampling) verifier.
+
+        α_NSS = Σ_v p[v] · (1 - (1 - q[v])^K)
+
+    Exact reproduction of node.nss_otlp_accept.  Smooth in q for all K.
+
+    Args:
+        p:  Target distribution [V], detached.
+        q:  Draft distribution [V], WITH grad.
+        K:  Number of draft paths at this node.
+
+    Returns:
+        Scalar tensor, WITH grad.
+    """
+    return (p * (1.0 - (1.0 - q) ** K)).sum()
+
+
+def _alpha_specinfer(p: torch.Tensor, q: torch.Tensor, K: int) -> torch.Tensor:
+    """
+    Differentiable α for the SpecInfer verifier.
+
+    Closed-form iterative formula matching node.specinfer_otlp_accept:
+
+        for k in 1..K:
+            r_k    = 1 - Σ min(p, q).sum()              # reject prob at this step
+            reject ← reject · r_k
+            miss   ← miss · (1 - relu(q-p)/r_k)
+            p      ← normalize(relu(p - q))             # residual for next iter
+
+        α = (1 - reject) + reject · Σ p_K · (1 - miss_K)
+
+    All ops are differentiable in q.  We use a per-iteration clone of p so
+    the outer-scope tensor is not mutated.
+
+    Args:
+        p:  Target distribution [V], detached.
+        q:  Draft distribution [V], WITH grad.
+        K:  Number of draft paths at this node.
+
+    Returns:
+        Scalar tensor, WITH grad.
+    """
+    eps    = 1e-6
+    reject = torch.ones(1, device=p.device, dtype=p.dtype)
+    miss   = torch.ones_like(p)
+    p_cur  = p
+
+    for _ in range(K):
+        # Per-step rejection probability
+        r = 1.0 - torch.minimum(p_cur, q).sum()
+        r = r.clamp(min=eps)
+        reject = reject * r
+        miss   = miss * (1.0 - F.relu(q - p_cur) / r)
+
+        # Residual update for next iteration
+        p_next = F.relu(p_cur - q)
+        s      = p_next.sum()
+        # If residual collapses to zero, keep the previous distribution to
+        # avoid NaN gradients (matches the +1e-4 safety in node.py).
+        if s.item() <= 0:
+            p_next = p_next + 1e-4
+            s      = p_next.sum()
+        p_cur = p_next / s.clamp(min=eps)
+
+    accept = (1.0 - reject) + reject * (p_cur * (1.0 - miss)).sum()
+    return accept.squeeze() if accept.dim() > 0 else accept
+
+
+def _alpha_spectr(p: torch.Tensor, q: torch.Tensor, K: int) -> torch.Tensor:
+    """
+    Differentiable α for the SpecTr (K-SEQ) verifier.
+
+        β     = Σ_v min(p[v]/ρ, q[v])
+        p_acc = 1 - (1 - β)^K
+        r     = relu(q - p/ρ) / (1 - β)
+        α     = p_acc + (1 - p_acc) · Σ p_res · (1 - (1-r)^K)
+
+    Reproduces node.spectr_otlp_accept (verifiers/tree.py:206).
+
+    Implementation note — ρ-DETACH ASSUMPTION
+    ------------------------------------------
+    ρ is found by binary search over the fixed-point equation
+        1 - (1-β(ρ))^K  =  ρ · β(ρ)
+    so ρ depends implicitly on q.  Differentiating through the binary
+    search is possible via the implicit function theorem
+        dρ/dq = -(∂F/∂q) / (∂F/∂ρ)   where F = 1 - (1-β)^K - ρβ
+    but adds ~30% to per-step training time.  We DETACH ρ here as a sound
+    first-order surrogate — the gradient still flows through q via min(p/ρ, q),
+    just not through ρ itself.
+
+    Empirically this should be tight: ρ varies slowly with q across training
+    steps (it's bounded in [1, K]), so the "true" gradient and the
+    detached-ρ surrogate point in the same direction with similar magnitude.
+
+    FUTURE: implement implicit function theorem for ρ if results show
+    spectr_tree underperforming the other aligned losses by a wide margin.
+    See `_alpha_spectr_ift` (not yet implemented).
+
+    Args:
+        p:  Target distribution [V], detached.
+        q:  Draft distribution [V], WITH grad.
+        K:  Number of draft paths at this node.
+
+    Returns:
+        Scalar tensor, WITH grad.
+    """
+    if K <= 1:
+        # SpecTr reduces to naive when K=1
+        return _alpha_naive(p, q, K)
+
+    # Binary search for ρ using detached q (no grad path through search itself)
+    rho_low, rho_high = 1.0, float(K)
+    with torch.no_grad():
+        q_det = q.detach()
+        for _ in range(20):  # 20 iters ⇒ tol ≈ K · 2^-20 < 1e-5
+            rho = 0.5 * (rho_low + rho_high)
+            beta_v = float(torch.minimum(p / rho, q_det).sum())
+            p_acc_v = 1.0 - (1.0 - beta_v) ** K
+            if p_acc_v >= rho * beta_v:
+                rho_low = rho
+            else:
+                rho_high = rho
+        rho_det = rho_high
+
+    # Now compute α with grad flowing through q (ρ frozen)
+    eps   = 1e-6
+    beta  = torch.minimum(p / rho_det, q).sum()
+    if beta.item() >= 1.0:
+        return torch.ones(1, device=p.device, dtype=p.dtype)
+
+    p_acc = 1.0 - (1.0 - beta) ** K
+
+    # Residual distribution
+    one_minus_beta = (1.0 - beta).clamp(min=eps)
+    p_acc_over_beta = p_acc / beta.clamp(min=eps)
+    p_res_raw = F.relu(p - torch.minimum(p / rho_det, q) * p_acc_over_beta)
+    s = p_res_raw.sum()
+    p_res = p_res_raw / s.clamp(min=eps)
+
+    # Conditional draft-resample rate
+    r = F.relu(q - p / rho_det) / one_minus_beta
+
+    accept = p_acc + (1.0 - p_acc) * (p_res * (1.0 - (1.0 - r) ** K)).sum()
+    return accept
+
+
+def _alpha_khisti(p: torch.Tensor, q: torch.Tensor, K: int) -> torch.Tensor:
+    """
+    Differentiable α for the Khisti (canonical decomposition) verifier.
+
+    Exact LB requires K-1 iterations of khisti_lp_solver — an LP-based
+    rank-tournament reweighting that is non-trivial to differentiate.
+
+    Implementation note — LP-FREE SURROGATE
+    ----------------------------------------
+    We approximate Khisti's importance-sampling reweighting with a
+    differentiable surrogate that captures the same qualitative behaviour
+    (concentrating draft mass on high p/q-ratio tokens as K grows):
+
+        q_imp(K) = q * softmax(K · log(p/q + ε))   [renormalised]
+        α_khisti ≈ Σ_v min(p[v], q_imp(K)[v])
+
+    Why this is a reasonable proxy:
+      • When K=1, the softmax weights are uniform, so q_imp ≈ q  ⇒  α reduces
+        to the naive acceptance Σ min(p, q).  This matches Khisti's K=1
+        special-case which falls through to naive_otlp_solver.
+      • As K grows, softmax(K·log(p/q)) up-weights tokens where p > q, exactly
+        the directional pressure Khisti's LP applies.
+      • The min(p, q_imp).sum() recovers the same LB form as the exact
+        khisti_otlp_accept_lower_bound (verifiers/tree.py:425).
+
+    Known limitation: the exact softmax peakiness vs LP-tournament steepness
+    may differ.  This surrogate is monotone-aligned with the true LB but is
+    NOT the true LB.
+
+    FUTURE: implement the exact LB via a differentiable rank-LP solver
+    (Sinkhorn or convex relaxation of khisti_lp_solver) if results show
+    khisti_tree systematically under-performing the other aligned losses.
+
+    Args:
+        p:  Target distribution [V], detached.
+        q:  Draft distribution [V], WITH grad.
+        K:  Number of draft paths at this node.
+
+    Returns:
+        Scalar tensor, WITH grad.
+    """
+    if K <= 1:
+        return _alpha_naive(p, q, K)
+
+    eps = 1e-9
+    # Smooth proxy for the K-step LP-based importance reweighting
+    log_ratio = torch.log((p + eps) / q.clamp(min=eps))
+    weights = F.softmax((K - 1) * log_ratio, dim=-1)
+    q_imp_raw = q * weights * float(p.numel())  # rescale so q_imp_raw averages to ~q
+    q_imp = q_imp_raw / q_imp_raw.sum().clamp(min=eps)
+
+    return torch.minimum(p, q_imp).sum()
+
+
+# ---------------------------------------------------------------------------
+# Unified path-product scaffold:  L_V = -E[τ_V] = -Σ_i Π_{j≤i} α_V(p_j, q_j, K)
+# ---------------------------------------------------------------------------
+
+def _verifier_aligned_tree_loss(
+    alpha_fn,
+    q_probs_dict: Dict[str, torch.Tensor],
+    p_probs_dict: Dict[str, torch.Tensor],
+    q_paths: List[List[int]],
+    L: int,
+    K: int,
+) -> torch.Tensor:
+    """
+    Unified scaffold for verifier-aligned tree losses.
+
+    For each of the K paths, walks node-by-node and accumulates the
+    telescoping E[τ] surrogate:
+
+        E[τ] = Σ_{i=1}^{L}  Π_{j=1}^{i}  α(p_j, q_j, K)
+
+    Survival (the Π) is detached at each step so the gradient enters only
+    through the most recent α — same trick bv_tree_loss uses (line 286-289).
+
+    Args:
+        alpha_fn:  Callable (p, q, K) → scalar acceptance probability.
+        q_probs_dict, p_probs_dict, q_paths, L, K:  as in compute_tree_loss.
+
+    Returns:
+        Scalar tensor = -E[τ] averaged over K paths.
+    """
+    device = next(iter(q_probs_dict.values())).device
+    total  = torch.zeros(1, device=device)
+    n_paths = 0
+
+    for path in q_paths:
+        e_tau    = torch.zeros(1, device=device)
+        survival = torch.ones(1, device=device)
+        any_step = False
+
+        for i in range(1, L + 1):
+            prefix = ",".join(str(x) for x in path[:i])
+            if prefix not in q_probs_dict or prefix not in p_probs_dict:
+                break
+            q = q_probs_dict[prefix]                          # [V], WITH grad
+            p = p_probs_dict[prefix].detach().to(q.dtype)    # [V], frozen
+
+            alpha = alpha_fn(p, q, K)
+            e_tau    = e_tau + survival * alpha
+            survival = survival * alpha.detach()
+            any_step = True
+
+        if any_step:
+            total = total + e_tau
+            n_paths += 1
+
+    if n_paths == 0:
+        return torch.zeros(1, device=device, requires_grad=True)
+    return -(total / n_paths)
+
+
+def naive_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K):
+    """E[τ] for the naive (Chen/Leviathan) verifier — see _alpha_naive."""
+    return _verifier_aligned_tree_loss(_alpha_naive,
+                                       q_probs_dict, p_probs_dict, q_paths, L, K)
+
+
+def nss_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K):
+    """E[τ] for the NSS verifier — see _alpha_nss."""
+    return _verifier_aligned_tree_loss(_alpha_nss,
+                                       q_probs_dict, p_probs_dict, q_paths, L, K)
+
+
+def specinfer_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K):
+    """E[τ] for the SpecInfer verifier — see _alpha_specinfer."""
+    return _verifier_aligned_tree_loss(_alpha_specinfer,
+                                       q_probs_dict, p_probs_dict, q_paths, L, K)
+
+
+def spectr_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K):
+    """E[τ] for the SpecTr verifier — see _alpha_spectr (ρ detached)."""
+    return _verifier_aligned_tree_loss(_alpha_spectr,
+                                       q_probs_dict, p_probs_dict, q_paths, L, K)
+
+
+def khisti_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K):
+    """E[τ] for the Khisti verifier — see _alpha_khisti (LP-free surrogate)."""
+    return _verifier_aligned_tree_loss(_alpha_khisti,
+                                       q_probs_dict, p_probs_dict, q_paths, L, K)
+
+
 # ---------------------------------------------------------------------------
 # Registry and dispatch
 # ---------------------------------------------------------------------------
 
 TREE_LOSS_NAMES = frozenset({
+    # Generic information-theoretic
     "kl_tree", "rev_kl_tree", "jsd_tree",
+    # Verifier-aligned (non-OT)
     "bv_tree", "gbv_tree", "traversal_tree",
+    # Verifier-aligned (OT-based)
+    "naive_tree", "nss_tree", "specinfer_tree", "spectr_tree", "khisti_tree",
+    # Off-policy ablation
     "ebe_tree",
 })
 
@@ -817,6 +1169,17 @@ def compute_tree_loss(
         return traversal_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
     elif name == "ebe_tree":
         return ebe_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
+    # Verifier-aligned OT-based losses (added 2026-05)
+    elif name == "naive_tree":
+        return naive_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
+    elif name == "nss_tree":
+        return nss_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
+    elif name == "specinfer_tree":
+        return specinfer_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
+    elif name == "spectr_tree":
+        return spectr_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
+    elif name == "khisti_tree":
+        return khisti_tree_loss(q_probs_dict, p_probs_dict, q_paths, L, K)
     else:
         raise ValueError(
             f"Unknown tree loss '{name}'. "
