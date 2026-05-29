@@ -19,17 +19,20 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 | Provider | GPU | VRAM | System RAM | Session | Cost | Best for |
 |---|---|---|---|---|---|---|
 | **Free Colab** | T4 | 16 GB | ~12 GB | ~90 min idle | free | Quick smoke tests, first runs |
-| **Kaggle** | T4 (×1 or ×2) | 16 GB | **29 GB** | **9 h (60 min idle)** | free (30 h/wk) | **Best free option** |
+| **Kaggle** | T4 (×1 or ×2) | 16 GB | **29 GB** | **9 h (60 min idle)** | free (30 h/wk) | **Best free option (no persistent storage)** |
+| **Lightning AI** | T4-equiv | 16 GB | ~32 GB | unlimited | free (15 credits/mo ≈ 22-30 h) | **Best free option with persistent storage** |
 | **Colab Pro** | A100 | 40 GB | ~50 GB | 12 h | ~$10/mo | Overnight paper runs |
 | **Modal A100** | A100-40GB | 40 GB | ample | unlimited | ~$1.10/h | Paper-quality overnight runs |
 | **Modal A10G** | A10G | 24 GB | ample | unlimited | ~$0.76/h | Budget paid runs |
 | **RunPod** | RTX 3090+ | 24 GB | ample | unlimited | ~$0.44/h | Cheapest paid option |
+| **Lightning AI** | L40S | 48 GB | ample | unlimited | ~$1.10-1.50/h | Paid: VS Code + A100-class GPU |
 | **HF Spaces** | T4/A10G | 15–24 GB | ample | unlimited | ~$0.60/h | HF-integrated experiments |
 
 **Rule of thumb:**
 - **Kaggle T4** → use `--config kaggle` (8B teacher in 4-bit NF4; 29 GB RAM makes NF4 loading work)
+- **Lightning AI free T4** → use `--config kaggle` (same RAM headroom as Kaggle; storage persists — models download once)
 - **Free Colab T4** → use `--config colab` (4B teacher in plain BF16; Colab's 12 GB RAM can't load 8B NF4)
-- **Paid A100 (Modal / RunPod)** → use `--config colab_a100` or `server` (8B teacher in bfloat16, no quantization)
+- **Paid A100 / L40S (Modal / RunPod / Lightning AI)** → use `--config colab_a100` or `server` (8B teacher in bfloat16, no quantization)
 - **Local laptop** → use `--config laptop` (smoke tests only)
 
 ---
@@ -40,6 +43,7 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 |---|---|---|
 | `colab_quickstart.ipynb` | Google Colab | Open in Colab, run top to bottom |
 | `kaggle.ipynb` | Kaggle Kernels | Upload to Kaggle, run top to bottom |
+| `lightning.ipynb` | Lightning AI Studios | Open in Studio Jupyter, run top to bottom |
 | `modal_app.py` | Modal.com | `modal run deploy/modal_app.py::run_pipeline` |
 | `runpod.sh` | RunPod | `bash runpod.sh` in pod terminal |
 | `_provider.py` | All (shared) | Config registry + helper functions |
