@@ -259,6 +259,7 @@ def _load_config_yaml(config_name: str) -> dict:
             "lr":                   training.get("lr", 3e-5),
             "lora_r":               training.get("lora_r", 8),
             "lora_alpha":           training.get("lora_alpha", 16),
+            "grad_accum":           training.get("grad_accum", 4),
             "teacher_temp":         training.get("teacher_temperature", 0.8),
             "max_new_tokens":       training.get("max_new_tokens", 80),
             "seed":                 training.get("seed", 42),
