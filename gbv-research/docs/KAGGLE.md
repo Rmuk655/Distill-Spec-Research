@@ -70,35 +70,48 @@ Upload `deploy/kaggle.ipynb` → set `CONFIG = "kaggle"` → Shift+F5 (Run All).
 
 ---
 
-## Pre-uploading datasets (zero-download sessions)
+## Using Kaggle Models (zero-download for model weights)
 
-Upload once — every future Kaggle session starts with **zero downloads**.
+Kaggle hosts the Qwen3 model family at **[kaggle.com/models/qwen-lm/qwen-3](https://www.kaggle.com/models/qwen-lm/qwen-3)**.
+No upload needed — just attach the models to your notebook and they appear instantly.
 
-| Without pre-upload | With pre-upload |
+| Without Kaggle Models | With Kaggle Models |
 |---|---|
-| ~10 min downloading 8B model at session start | Instant — weights already attached |
-| ~5 s downloading eval JSONL files | Instant — files already in `core/datasets/raw/` |
+| ~5–10 min downloading 8B model at every session start | Instant — weights already attached |
+| Counts against Kaggle internet quota | No download, no quota |
 
-When `KAGGLE_HF_DATASET` and `KAGGLE_DATA_DATASET` are set in Cell 0, `bootstrap()` handles the rest automatically. Code is always `git clone`'d fresh — never pre-uploaded.
+### Step 1 — Attach models in the notebook editor
+
+In the Kaggle notebook editor:
+1. Click **Add-ons** (top menu) → **Add Model**
+2. Search for `qwen-3` → select **qwen-lm/qwen-3**
+3. Choose framework: **Transformers** → variation: **0.6b** → **Add**
+4. Repeat for the **8b** variation
+
+Both mount read-only at:
+- `/kaggle/input/qwen-3/transformers/0.6b/1` — Qwen3-0.6B draft
+- `/kaggle/input/qwen-3/transformers/8b/1` — Qwen3-8B teacher
+
+### Step 2 — Cell 0 is already configured
+
+`kaggle.ipynb` Cell 0 already has:
+```python
+KAGGLE_DRAFT_MODEL  = "/kaggle/input/qwen-3/transformers/0.6b/1"
+KAGGLE_TARGET_MODEL = "/kaggle/input/qwen-3/transformers/8b/1"
+```
+
+If those paths exist at runtime, the pipeline passes them directly to `--draft` and `--target`, bypassing HuggingFace Hub entirely. If you skip this step, it falls back to downloading automatically.
 
 ---
 
-### Step 1 — Download files locally (one-time)
+## Pre-uploading eval datasets (optional)
+
+The eval JSONL files (~10 MB total) are committed to the repo and auto-downloaded on first run — no pre-upload needed for most users. If you want truly zero-network sessions:
+
+### Step 1 — Generate datasets locally
 
 ```bash
-pip install huggingface_hub
-```
-
-```python
-# Run in Python (works on all huggingface_hub versions)
-from huggingface_hub import snapshot_download
-snapshot_download("Qwen/Qwen3-0.6B", ignore_patterns=["*.gguf", "*.bin"])
-snapshot_download("Qwen/Qwen3-8B",   ignore_patterns=["*.gguf", "*.bin"])
-# Files land in ~/.cache/huggingface/hub/
-```
-
-```bash
-# Eval datasets (~10 MB — run from gbv-research/)
+# Run from gbv-research/
 python core/datasets/downloader.py
 # Files land in core/datasets/raw/
 ```
@@ -107,31 +120,27 @@ python core/datasets/downloader.py
 
 Go to https://www.kaggle.com/datasets → **+ New Dataset**:
 
-1. Name: `qwen3-hf-cache` → upload the contents of `~/.cache/huggingface/hub/` → **Create**
-2. Name: `specdist-datasets` → upload the `.jsonl` files from `core/datasets/raw/` → **Create**
+1. Name: `specdist-datasets` → upload the `.jsonl` files from `core/datasets/raw/` → **Create**
 
-Both datasets are private by default.
+Dataset is private by default.
 
 ### Step 3 — Attach to the notebook
 
-In the Kaggle notebook editor:
-**Add Data** (right sidebar) → **Your Datasets** → select `qwen3-hf-cache` → **Add**
-Repeat for `specdist-datasets`.
+**Add Data** (right sidebar) → **Your Datasets** → select `specdist-datasets` → **Add**
 
-Both mount read-only under `/kaggle/input/`.
+Mounts read-only under `/kaggle/input/specdist-datasets/`.
 
-### Step 4 — Set variables in `kaggle.ipynb` Cell 0
+### Step 4 — Set variable in `kaggle.ipynb` Cell 0
 
 ```python
-KAGGLE_HF_DATASET   = "/kaggle/input/qwen3-hf-cache"
 KAGGLE_DATA_DATASET = "/kaggle/input/specdist-datasets"
 ```
 
-Run Cell 0 — models and data are available **instantly**.
+Run Cell 0 — eval data is available **instantly**.
 
 ### Updating datasets
 
-To add new eval datasets or model variants: open the dataset on kaggle.com → **+ New Version** → upload the new files.
+To add new eval datasets: open the dataset on kaggle.com → **+ New Version** → upload the new files.
 
 ---
 
