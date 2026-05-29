@@ -468,7 +468,8 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
 def run_alpha(student_path: str, teacher_path: str, student_label: str,
               prompts: list, temperature: float,
               max_propose: int = 5, max_tokens: int = 30,
-              preloaded: tuple = None) -> dict:
+              preloaded: tuple = None,
+              load_in_4bit: bool = False) -> dict:
     """
     preloaded: optional (device, dtype, tokenizer, student_model, teacher_model, same)
     tuple supplied by main() when models are kept resident across multiple alpha cells
@@ -491,7 +492,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
             tokenizer.pad_token = tokenizer.eos_token
 
         student_model = teacher_model = None
-        _load_4bit = getattr(args, "load_in_4bit", False)
+        _load_4bit = load_in_4bit
         for attempt in range(2):
             try:
                 student_model = AutoModelForCausalLM.from_pretrained(
@@ -895,7 +896,8 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
     if mode == "alpha":
         res = run_alpha(student_path, teacher_path, student_label,
                         prompts, temperature, max_tokens=max_tokens,
-                        preloaded=preloaded)
+                        preloaded=preloaded,
+                        load_in_4bit=getattr(args, "load_in_4bit", False))
         row = {**base_row,
                "alpha_mean": res["alpha_mean"], "alpha_std": res["alpha_std"],
                "alpha_ci95": res["alpha_ci95"], "throughput": res["throughput"],
