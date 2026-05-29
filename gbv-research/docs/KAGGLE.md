@@ -180,48 +180,6 @@ This requires a small change to `algorithms/distillspec_gbv/trainer.py` (add a
 `--teacher_device` argument and pass it to `from_pretrained`). Not yet implemented.
 Use 4-bit NF4 + T4 × 2 in the meantime — quantization noise averages out over 1000 training steps.
 
----
-
-## Batch size and gradient accumulation
-
-**Short answer: batch_size=1 per sequence, gradient_accumulation_steps=4 is the right setup.**
-
-### Why batch_size=1?
-
-Each training sample is one full sequence (~96 tokens). At batch_size=1:
-- 8B NF4 teacher forward: ~2 GB activations
-- 0.6B draft forward + backward: ~1 GB activations
-- Total VRAM with batch_size=1: ~7.8 GB (fits T4)
-
-At batch_size=2, activation VRAM roughly doubles to ~12-14 GB — tight on T4 and likely
-causes OOM when combined with the optimizer state.
-
-### What about gradient accumulation?
-
-`gradient_accumulation_steps=4` means you run 4 individual sequence forward passes,
-accumulating gradients, before taking one optimizer step. This simulates batch_size=4
-without the VRAM cost. Training quality is nearly identical.
-
-The `kaggle.yaml` config uses this approach (the trainer accumulates gradients by default).
-
-### Is this the same as the "tree" in GBV?
-
-No — these are completely different dimensions:
-
-| Concept | What it means | Controlled by |
-|---|---|---|
-| **Training batch size** | How many sequences are processed before one optimizer step | `gradient_accumulation_steps` in training |
-| **K in speculative decoding** | How many draft token candidates are generated at each decode step | `K_values` in evaluation / `tree_K` in tree training |
-
-The GBV tree is a **decoding-time structure**: during inference/eval, the draft model generates K candidate tokens at each step, forming a tree of possible continuations. The target model then verifies them in parallel. This happens during `evaluate.py`, not during training.
-
-During training you are doing standard sequence-level distillation: process one full
-sequence → compute divergence between draft and teacher logits → backprop. Tree width K
-is irrelevant at training time. You can have `per_device_train_batch_size=1,
-gradient_accumulation_steps=4` while evaluating with K=3 or K=8 — completely independent.
-
----
-
 ## Persisting checkpoints across sessions
 
 Kaggle's `/kaggle/working/` is **wiped on session restart**. To persist checkpoints:
