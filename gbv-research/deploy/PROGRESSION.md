@@ -17,7 +17,7 @@ results on production hardware, finalize on the largest scale.**
 | 1b | full | `laptop` | 0.6B | 100 | ~15-20 min | `laptop-gsm8k` | Code exercise: does every path work? |
 | 2 | full | `colab_lite` | 1.7B BF16 | 300 | ~25 min | `colab-lite` | Trend: does the loss function help? |
 | 3 | full | `colab` | 4B BF16 | 500 | ~2-4 h | `colab-t4` | Results: publishable block-efficiency numbers |
-| 4 | full | `colab_a100` | 8B BF16 | 2000 | ~2-3 h | `colab-a100` | Paper: best quality, full eval, ablations |
+| 4 | full | `a100` | 8B BF16 | 2000 | ~2-3 h | `colab-a100` | Paper: best quality, full eval, ablations |
 
 > **Why can't Level 1 produce trends?**
 > The laptop teacher (Qwen3-0.6B) is the *same size class* as the draft (Qwen2.5-0.5B).
@@ -33,7 +33,7 @@ results on production hardware, finalize on the largest scale.**
 | 1 (laptop) | 1.2 GB | 1.2 GB | ~0.5 GB | ~3 GB | CPU/MPS headroom varies |
 | 2 (colab_lite) | 1.2 GB | 3.4 GB | ~1.0 GB | **~5.6 GB** | 9.4 GB free on T4 |
 | 3 (colab) | 1.2 GB | 8.0 GB | ~1.5 GB | **~10.7 GB** | 4.3 GB free on T4 |
-| 4 (colab_a100) | 1.2 GB | 16.0 GB | ~2.5 GB | **~19.7 GB** | 20 GB free on A100 |
+| 4 (a100) | 1.2 GB | 16.0 GB | ~2.5 GB | **~19.7 GB** | 20 GB free on A100 |
 
 **Why no 4-bit quantization?**
 4-bit NF4 loading (bitsandbytes) reads each weight tensor as BF16 into CPU RAM
@@ -77,7 +77,7 @@ automatically forwarded from the YAML through `experiment.py` to `trainer.py`.
 |----------|--------|---------|-------------|
 | `colab_lite_quickstart.ipynb` | `colab_lite` | 1.7B BF16 | Level 2: first T4 run, ~25 min, trend check |
 | `colab_quickstart.ipynb` | `colab` | 4B BF16 | Level 3: production T4 run, ~2-4 h |
-| `colab_a100_quickstart.ipynb` | `colab_a100` | 8B BF16 | Level 4: paper runs on A100 (Pro/Pro+ only) |
+| `a100_quickstart.ipynb` | `a100` | 8B BF16 | Level 4: paper runs on A100 (Pro/Pro+ only) |
 
 All three notebooks share the same cell structure (Cell 0 one-shot bootstrap,
 Cell 5 monitor, etc.). The only differences are the `CONFIG` default and the
@@ -219,9 +219,9 @@ larger than run-to-run variance (compare two seeds).
 
 ### Step 4 — A100 paper runs (Level 4)
 
-Open `deploy/colab_a100_quickstart.ipynb` on a **Colab Pro/Pro+ A100 runtime**.
+Open `deploy/a100_quickstart.ipynb` on a **Colab Pro/Pro+ A100 runtime**.
 
-A100 runs use the **3-tier profile system** — do not call `--config colab_a100` directly.
+A100 runs use the **3-tier profile system** — do not call `--config a100` directly.
 Full workflow: `orchestration/configs/profiles/README.md`.
 
 **Tier 1 — train baseline losses** (~2-3 h, run first):
@@ -284,7 +284,7 @@ python tools/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
 - Crash-safe checkpoint resume
 
 ### Varies by level:
-| Parameter | laptop (1a/1b) | colab_lite (2) | colab (3) | colab_a100 (4) |
+| Parameter | laptop (1a/1b) | colab_lite (2) | colab (3) | a100 (4) |
 |-----------|---------------|----------------|-----------|----------------|
 | `target` (teacher) | Qwen3-0.6B | Qwen3-1.7B | Qwen3-4B | Qwen3-8B |
 | `steps` | 10 (smoke) / 100 | 300 | 500 | 2000 |

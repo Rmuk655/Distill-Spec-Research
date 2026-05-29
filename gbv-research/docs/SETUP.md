@@ -327,7 +327,7 @@ for the full workflow. The three tiers in order:
 
 To run a specific subset of losses without a profile file:
 ```bash
-python orchestration/experiment.py --config colab_a100 --losses kl,jsd --yes \
+python orchestration/experiment.py --config a100 --losses kl,jsd --yes \
   --storage_root /content/drive/MyDrive/specdist
 ```
 

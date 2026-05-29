@@ -6,7 +6,7 @@
 
 **Evidence**: Perplexity looks fine (7.96 vs 7.47 baseline) — model isn't diverging, it's simply not learning the right objective. The language modeling signal is intact but the EBE signal isn't propagating usefully.
 
-**Disabled in**: `ebe`, `ebe_single`, `ebe_tree` (all free-tier configs: `kaggle.yaml`, `colab.yaml`, `colab_a100.yaml`).
+**Disabled in**: `ebe`, `ebe_single`, `ebe_tree` (all free-tier configs: `kaggle.yaml`, `colab.yaml`, `a100.yaml`).
 
 **Investigation pointer**: Check loss gradient computation in [`algorithms/distillspec_gbv/trainer.py`](../algorithms/distillspec_gbv/trainer.py) — verify that EBE gradients are non-zero and correctly scaled relative to the LM loss.
 

@@ -177,7 +177,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
     # ── Adobe internal ──────────────────────────────────────────────────────
     "aip": ProviderConfig(
         name             = "aip",
-        pipeline_config  = "colab_a100",  # default: A100 BF16; switch to "kaggle" for T4/V100 16 GB
+        pipeline_config  = "a100",  # default: A100 BF16; switch to "kaggle" for T4/V100 16 GB
         storage_root     = "",            # set dynamically in aip.ipynb: /sensei-fs-3/users/$USER/specdist
         hf_home          = "",            # set to /sensei-fs-3/users/$USER/specdist/hf_cache in notebook
         gpu_vram_gb      = 40.0,          # A100 40 GB; override if allocated a smaller GPU

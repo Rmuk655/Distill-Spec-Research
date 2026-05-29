@@ -33,9 +33,9 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 - **Kaggle T4** → use `--config kaggle` (8B teacher in 4-bit NF4; 29 GB RAM makes NF4 loading work)
 - **Lightning AI free T4** → use `--config kaggle` (same RAM headroom as Kaggle; storage persists — models download once)
 - **Free Colab T4** → use `--config colab` (4B teacher in plain BF16; Colab's 12 GB RAM can't load 8B NF4)
-- **Adobe AIP A100** → use `--config colab_a100` (8B BF16, full run in ~2-3 h — fits one 4-hour session; see `deploy/aip.ipynb`)
+- **Adobe AIP A100** → use `--config a100` (8B BF16, full run in ~2-3 h — fits one 4-hour session; see `deploy/aip.ipynb`)
 - **Adobe AIP T4/V100 16 GB** → use `--config kaggle` (8B NF4; 4-hour sessions mean ~1 loss/session)
-- **Paid A100 / L40S (Modal / RunPod / Lightning AI)** → use `--config colab_a100` or `server` (8B teacher in bfloat16, no quantization)
+- **Paid A100 / L40S (Modal / RunPod / Lightning AI)** → use `--config a100` or `server` (8B teacher in bfloat16, no quantization)
 - **Local laptop** → use `--config laptop` (smoke tests only)
 
 ---

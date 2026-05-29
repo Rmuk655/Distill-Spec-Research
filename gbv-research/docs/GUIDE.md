@@ -831,7 +831,7 @@ python orchestration/experiment.py --config profiles/online_only_laptop --yes
 
 ### A100 paper runs — 3-tier profile system
 
-A100 runs use profiles, not raw `--config colab_a100`. Run in order:
+A100 runs use profiles, not raw `--config a100`. Run in order:
 
 **Tier 1 — baseline losses** (train KL/JSD/L1/online, ~2-3 h):
 ```bash

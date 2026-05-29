@@ -2,7 +2,7 @@
 #
 # Purpose: Run the three promoted offline losses plus online KL on A100 while
 #          EBE/GBV/BV are still being reworked.
-#          Everything else is identical to colab_a100.yaml.
+#          Everything else is identical to a100.yaml.
 #
 # Usage:
 #   python orchestration/experiment.py --config profiles/promote_kl_jsd_l1 --yes \
@@ -57,7 +57,7 @@ checkpointing:
 logging:
   log_every: 10
   wandb_project: distillspec
-  wandb_group: colab-a100
+  wandb_group: a100
   run_label: "8B-A100"
 
 health:

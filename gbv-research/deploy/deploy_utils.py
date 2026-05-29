@@ -393,7 +393,7 @@ def bootstrap(
 
     Parameters
     ----------
-    config            YAML profile name (e.g. "kaggle", "colab", "colab_a100").
+    config            YAML profile name (e.g. "kaggle", "colab", "a100").
     storage_root      Where checkpoints/logs/results.db live.
                       Colab: DRIVE_ROOT.  Kaggle: /kaggle/working/specdist.
     repo_dir          Root of the cloned repo (parent of gbv-research/).

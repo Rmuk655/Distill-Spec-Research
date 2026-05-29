@@ -1,4 +1,5 @@
-# Colab Pro / Pro+ configuration -- A100 GPU (40 GB VRAM)
+# A100-class configuration — any platform with ≥ 19 GB free VRAM
+# (Google Colab Pro A100 40 GB, Lightning AI L40S 48 GB, Adobe AIP, RunPod A100, etc.)
 # Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-8B (bf16, ~16 GB)
 #
 # Why this config exists separately from colab.yaml (T4):
@@ -17,7 +18,7 @@
 # Requires Colab Pro or Pro+ with A100 runtime:
 #   Runtime -> Change runtime type -> A100 GPU
 #
-# Use with: python orchestration/experiment.py --config colab_a100 --storage_root /content/drive/MyDrive/specdist
+# Use with: python orchestration/experiment.py --config a100 --storage_root /content/drive/MyDrive/specdist
 
 hardware:
   device: cuda
@@ -52,7 +53,7 @@ checkpointing:
 logging:
   log_every: 10
   wandb_project: distillspec
-  wandb_group: colab-a100
+  wandb_group: a100
   # run_label is prepended to every W&B run name: "8B-A100-kl_qwen_2000steps"
   run_label: "8B-A100"
 

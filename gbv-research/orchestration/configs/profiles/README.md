@@ -115,8 +115,8 @@ python orchestration/experiment.py --config profiles/a100_tree_losses --yes \
   --storage_root /content/drive/MyDrive/specdist
 
 # ── Override losses on the fly (no config file needed) ───────────────────────
-python orchestration/experiment.py --config colab_a100 --losses kl,jsd --yes
-python orchestration/experiment.py --config colab_a100 --eval_only --yes
+python orchestration/experiment.py --config a100 --losses kl,jsd --yes
+python orchestration/experiment.py --config a100 --eval_only --yes
 ```
 
 ## `experiment:` Section Reference

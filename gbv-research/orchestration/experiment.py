@@ -2371,7 +2371,7 @@ def main():
     p.add_argument("--config", default="laptop",
                    help="Hardware config preset (laptop/server/colab) or a YAML profile name "
                         "relative to orchestration/configs/ "
-                        "(e.g. profiles/colab_tree_losses, colab_lite, colab_a100).")
+                        "(e.g. profiles/colab_tree_losses, colab_lite, a100).")
     p.add_argument("--draft",  default=None,
                    help="Override draft model HF ID (overrides --config)")
     p.add_argument("--target", default=None,
@@ -2461,7 +2461,7 @@ def main():
         if "load_in_4bit" in _yaml_cfg:
             cfg["load_in_4bit"] = _yaml_cfg["load_in_4bit"]
     else:
-        # YAML-based profile (e.g. colab_lite, colab_a100, profiles/colab_tree_losses).
+        # YAML-based profile (e.g. colab_lite, a100, profiles/colab_tree_losses).
         # _load_config_yaml now exposes draft/target/load_in_4bit from the YAML.
         cfg = {
             "draft":        _yaml_cfg.get("draft",  "Qwen/Qwen3-0.6B"),

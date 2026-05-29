@@ -38,7 +38,7 @@ logging:
   log_every: 10
   wandb_project: distillspec
   wandb_group: server-8b
-  # run_label: server uses 8B teacher (same as colab_a100 but longer runs)
+  # run_label: server uses 8B teacher (same as a100 but longer runs)
   run_label: "8B-server"
 
 health:

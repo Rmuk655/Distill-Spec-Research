@@ -16,7 +16,7 @@
 #            check loss curve shape, confirm eval modes run without error.
 #   Level 2: colab       (4B teacher, 500 steps)   -- real training run,
 #            publishable block-efficiency numbers.
-#   Level 3: colab_a100  (8B teacher, 2000 steps)  -- best quality, needs Pro+.
+#   Level 3: a100  (8B teacher, 2000 steps)  -- best quality, needs Pro+.
 #
 # Note: 1.7B teacher gives a weaker distillation signal than 4B (smaller gap
 # in teacher capacity means less information transfer). Block-efficiency gains
