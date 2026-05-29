@@ -525,7 +525,7 @@ ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
 def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 load_in_4bit=False, ckpt_root=None,
-                train_hparams=None, losses_to_run=None):
+                train_hparams=None, losses_to_run=None, hw_tier="laptop"):
     """Build the STEPS list for a given draft/target model pair.
 
     Pipeline structure (same for both smoke and full — only numbers differ):
@@ -739,7 +739,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _TREE_FULL_MATRIX = "naive,nss,specinfer,spectr,khisti,bv,gbv,traversal"
 
     # A100 evals against the full 8-verifier matrix; T4 stays at 3-verifier subset.
-    _tree_full_modes = _TREE_FULL_MATRIX if _hw_tier_from_config(args.config) == "a100" else _TREE_NON_OT
+    _tree_full_modes = _TREE_FULL_MATRIX if hw_tier == "a100" else _TREE_NON_OT
 
     _TREE_PAIRED = {                     # smoke: just the naturally paired verifier
         # Divergence variants — universal baselines, test all configured modes even in smoke
@@ -2904,7 +2904,8 @@ def main():
                         load_in_4bit=_load_4bit,
                         ckpt_root=_effective_ckpt_root,  # was args.ckpt_root — ignored --storage_root
                         train_hparams=train_hparams,
-                        losses_to_run=_losses_to_run)
+                        losses_to_run=_losses_to_run,
+                        hw_tier=_hw_tier_from_config(args.config))
 
     if _eval_only:
         _n_before = len(STEPS)
