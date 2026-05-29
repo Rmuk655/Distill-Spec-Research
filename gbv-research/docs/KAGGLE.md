@@ -87,15 +87,20 @@ When `KAGGLE_HF_DATASET` and `KAGGLE_DATA_DATASET` are set in Cell 0, `bootstrap
 
 ```bash
 pip install huggingface_hub
+```
 
-# Model weights (~16 GB, safetensors only)
-huggingface-cli download Qwen/Qwen3-0.6B --ignore-patterns '*.gguf' '*.bin'
-huggingface-cli download Qwen/Qwen3-8B   --ignore-patterns '*.gguf' '*.bin'
-# Land in ~/.cache/huggingface/hub/
+```python
+# Run in Python (works on all huggingface_hub versions)
+from huggingface_hub import snapshot_download
+snapshot_download("Qwen/Qwen3-0.6B", ignore_patterns=["*.gguf", "*.bin"])
+snapshot_download("Qwen/Qwen3-8B",   ignore_patterns=["*.gguf", "*.bin"])
+# Files land in ~/.cache/huggingface/hub/
+```
 
+```bash
 # Eval datasets (~10 MB — run from gbv-research/)
 python core/datasets/downloader.py
-# Land in core/datasets/raw/
+# Files land in core/datasets/raw/
 ```
 
 ### Step 2 — Upload to Kaggle (one-time)
