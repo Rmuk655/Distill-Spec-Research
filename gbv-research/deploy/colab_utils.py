@@ -90,8 +90,13 @@ def _free_gb(path: str) -> float:
         return 0.0
 
 
-# Models larger than this threshold (GB) won't be pre-cached on Drive —
-# they'll be downloaded to the Colab runtime disk instead (~100 GB free).
+# Minimum Drive free space (GB) below which we fall back to the runtime disk.
+# Free Drive accounts ship with 15 GB total; after repo + DB + other files,
+# <2 GB is "essentially full" — even a Qwen3-0.6B download (1.3 GB) could fail.
+_DRIVE_MIN_FREE_GB  = 2.0
+
+# Models larger than this threshold (GB) won't be pre-cached on Drive even when
+# Drive has plenty of space — they go to the runtime disk (~100 GB free).
 _DRIVE_MAX_MODEL_GB = 5.0
 
 # Known approximate sizes in GB (safetensors, no quantisation).
@@ -107,46 +112,72 @@ _MODEL_SIZE_GB = {
 
 
 def setup_hf_cache(drive_root: str = DRIVE_ROOT) -> str:
-    """Point HuggingFace cache at Drive so small models survive session restarts.
+    """Point HuggingFace cache at Drive (if space allows) or runtime disk.
 
-    Models ≤ _DRIVE_MAX_MODEL_GB (≈ 5 GB) are cached on Drive — download once,
-    reuse across sessions.  Larger models (e.g. Qwen3-8B at ~16 GB) will NOT
-    fit on a free Drive account (15 GB total) and are left to download to the
-    Colab runtime disk (~100 GB free) at train/eval time.
+    Decision logic
+    --------------
+    Drive free ≥ _DRIVE_MIN_FREE_GB (2 GB):
+        HF_HOME → Drive/hf_cache  — small models survive session restarts.
+        Models > _DRIVE_MAX_MODEL_GB (5 GB) are still skipped by prefetch_models
+        and will be downloaded to runtime disk at train/eval time.
+    Drive free < _DRIVE_MIN_FREE_GB:
+        HF_HOME → ~/.cache/huggingface  — runtime disk (~100 GB free, ephemeral).
+        All models re-download on each session, but nothing crashes.
+        A warning is printed so the user knows to clear Drive.
 
     Always clears the three OFFLINE env flags so subprocesses can reach HF.
 
-    Returns the Drive cache path.
+    Returns the cache path that was actually set (may be Drive or local).
     """
     hf_cache = os.path.join(drive_root, "hf_cache")
     os.makedirs(hf_cache, exist_ok=True)
-    os.environ["HF_HOME"]            = hf_cache
-    os.environ["TRANSFORMERS_CACHE"] = hf_cache
-    os.environ["HF_DATASETS_CACHE"]  = os.path.join(hf_cache, "datasets")
+    drive_free = _free_gb(hf_cache)
+
+    if drive_free < _DRIVE_MIN_FREE_GB:
+        # Drive too full — fall back to ephemeral runtime disk
+        local_cache = os.path.expanduser("~/.cache/huggingface")
+        os.makedirs(local_cache, exist_ok=True)
+        cache = local_cache
+        print(f"[cache] ⚠  Drive low: {drive_free:.1f} GB free "
+              f"(need ≥ {_DRIVE_MIN_FREE_GB:.1f} GB)")
+        print(f"[cache] HF model cache → {cache}  "
+              f"(runtime disk, ~100 GB free, ephemeral)")
+        print(f"[cache]    Models re-download each session until you free up Drive.")
+    else:
+        cache = hf_cache
+        print(f"[cache] HF model cache → {cache}  ({drive_free:.1f} GB free on Drive)")
+
+    os.environ["HF_HOME"]            = cache
+    os.environ["TRANSFORMERS_CACHE"] = cache
+    os.environ["HF_DATASETS_CACHE"]  = os.path.join(cache, "datasets")
     # Always allow online lookups — never inherit a stale OFFLINE flag
     os.environ.pop("TRANSFORMERS_OFFLINE",  None)
     os.environ.pop("HF_DATASETS_OFFLINE",   None)
     os.environ.pop("HF_HUB_OFFLINE",        None)
-    free = _free_gb(hf_cache)
-    print(f"[cache] HF model cache → {hf_cache}  ({free:.1f} GB free on Drive)")
-    return hf_cache
+    return cache
 
 
 def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
                     drive_root: str = DRIVE_ROOT) -> None:
     """Pre-download draft + teacher model weights before the pipeline starts.
 
-    Strategy:
-    - Small models (≤ 5 GB, e.g. Qwen3-0.6B / 1.7B): cached on Drive so they
-      survive session restarts.  Download once, reuse forever.
-    - Large models (> 5 GB, e.g. Qwen3-8B): Drive free space on a free Google
-      account is 15 GB total — the 8B model alone is ~16 GB and will not fit.
-      These are NOT prefetched; the trainer downloads them to the Colab runtime
-      disk (/content, ~100 GB free) at run time.  That takes ~5-10 min on the
-      first session but keeps Drive uncluttered.
+    Must be called AFTER setup_hf_cache() — it reads HF_HOME from the environment
+    to decide where to write, so it automatically works whether setup_hf_cache()
+    chose Drive or the runtime disk.
 
-    Safe to re-run — snapshot_download() skips files already in cache.
-    Call this after setup_hf_cache() and auth_hf().
+    Strategy when HF_HOME → Drive (Drive has ≥ 2 GB free):
+    - Models ≤ 5 GB (Qwen3-0.6B, Qwen3-1.7B): cached on Drive — download once,
+      reuse across sessions.
+    - Models > 5 GB (Qwen3-4B, Qwen3-8B, …): Drive free space on a free Google
+      account is 15 GB total; these won't fit.  Skipped here; the trainer
+      downloads them to the runtime disk at run time (~5-10 min first session).
+
+    Strategy when HF_HOME → runtime disk (Drive had < 2 GB free):
+    - All models download to ~/.cache/huggingface/ (~100 GB free, ephemeral).
+      No "too large for Drive" skip — everything fits locally.
+      Models re-download on every fresh session, but the pipeline never crashes.
+
+    Safe to re-run — snapshot_download() skips files already cached.
     """
     import yaml  # type: ignore
     from huggingface_hub import snapshot_download  # type: ignore
@@ -165,27 +196,38 @@ def prefetch_models(config: str, gbv_dir: str = GBV_DIR,
     draft_id   = models_cfg.get("draft",  "Qwen/Qwen3-0.6B")
     target_id  = models_cfg.get("target", "Qwen/Qwen3-1.7B")
 
-    drive_cache = os.path.join(drive_root, "hf_cache")
-    drive_free  = _free_gb(drive_cache)
+    # Use whatever cache location setup_hf_cache() chose — may be Drive or
+    # the local runtime disk if Drive was too full.
+    cache_dir  = os.environ.get("HF_HOME",
+                                os.path.join(drive_root, "hf_cache"))
+    cache_free = _free_gb(cache_dir)
+    on_drive   = os.path.abspath(drive_root) in os.path.abspath(cache_dir)
 
     for model_id in dict.fromkeys([draft_id, target_id]):   # dedupe, keep order
         est_gb = _MODEL_SIZE_GB.get(model_id, 99.0)         # unknown = assume large
 
-        if est_gb > _DRIVE_MAX_MODEL_GB:
+        # Large models stay off Drive even when Drive has free space — they won't
+        # fit on a free Google account (15 GB total).  If we've already fallen
+        # back to runtime disk (on_drive=False), this check is skipped and the
+        # model downloads locally instead (~100 GB free).
+        if on_drive and est_gb > _DRIVE_MAX_MODEL_GB:
             print(f"[prefetch] {model_id} (~{est_gb:.0f} GB) — too large for Drive "
-                  f"(free: {drive_free:.1f} GB). Trainer will download to runtime "
-                  f"disk (~100 GB free) at run time. ~5-10 min on first session.")
+                  f"(limit {_DRIVE_MAX_MODEL_GB:.0f} GB). "
+                  f"Trainer downloads to runtime disk at run time "
+                  f"(~5-10 min first session).")
             continue
 
-        if est_gb > drive_free - 0.5:   # keep 0.5 GB headroom
-            print(f"[prefetch] {model_id} (~{est_gb:.0f} GB) — not enough Drive space "
-                  f"({drive_free:.1f} GB free). Skipping Drive cache.")
+        if est_gb > cache_free - 0.5:   # keep 0.5 GB headroom
+            dest = "Drive" if on_drive else "runtime disk"
+            print(f"[prefetch] {model_id} (~{est_gb:.0f} GB) — not enough space on "
+                  f"{dest} ({cache_free:.1f} GB free). Trainer downloads at run time.")
             continue
 
-        print(f"[prefetch] {model_id} (~{est_gb:.1f} GB) → Drive cache …", flush=True)
+        dest_label = "Drive cache" if on_drive else "runtime disk"
+        print(f"[prefetch] {model_id} (~{est_gb:.1f} GB) → {dest_label} …", flush=True)
         try:
             path = snapshot_download(model_id, ignore_patterns=["*.gguf", "*.bin"])
-            drive_free -= est_gb        # update estimate for next iteration
+            cache_free -= est_gb        # update estimate for next iteration
             print(f"[prefetch] ✓  {model_id}  → {path}")
         except Exception as exc:
             print(f"[prefetch] ✗  {model_id}: {exc}")
