@@ -258,77 +258,10 @@ This section shows the exact commands for each platform.
 
 ### 9a. Free Colab T4 — one-click notebook
 
-**➡  Open [`deploy/colab_quickstart.ipynb`](../deploy/colab_quickstart.ipynb) and
-run the cells top-to-bottom.  That's it.**
+> **Full setup guide (secrets, Drive paths, resume, VRAM breakdown):**
+> [`deploy/colab_quickstart.ipynb`](../deploy/colab_quickstart.ipynb)
 
-The notebook handles everything in 4 cells:
-1. Mount Drive · clone repo to `/content/` · install deps
-2. Authenticate W&B + HuggingFace via Colab Secrets
-3. Run pipeline (`--config colab`)
-4. Resume after session death (idempotent — re-run any time)
-
-**One-time Colab Secrets setup (left sidebar → 🔑 icon):**
-| Secret name | Where to get it |
-|---|---|
-| `WANDB_API_KEY` | https://wandb.ai/authorize |
-| `HF_TOKEN` | https://huggingface.co/settings/tokens |
-
-**Important path notes:**
-- The repo clones to **`/content/Distill-Spec-Research/`** (ephemeral local disk, fast).
-  Working directory is `/content/Distill-Spec-Research/gbv-research`.
-  **Do not** `%cd` to a Drive path — the code lives on local disk.
-- **Checkpoints land on Drive** (`/content/drive/MyDrive/specdist/checkpoints`).
-  This is the only part that persists across session restarts.
-- On restart: re-run the whole notebook (Cells 1–4 are idempotent).
-  Cell 4 ("Resume") re-clones, re-installs, and re-runs the pipeline
-  automatically from the last Drive checkpoint.
-
-**Manual CLI equivalent** (if you prefer cells over the notebook):
-
-```python
-# ── Cell 1 ───────────────────────────────────────────────────────────────────
-from google.colab import drive
-drive.mount('/content/drive')
-import os, subprocess, sys
-
-DRIVE_CKPT = "/content/drive/MyDrive/specdist/checkpoints"
-os.makedirs(DRIVE_CKPT, exist_ok=True)
-
-subprocess.run(["git", "clone", "--depth", "1",
-                "https://github.com/Rmuk655/Distill-Spec-Research.git",
-                "/content/Distill-Spec-Research"], check=True)
-
-os.chdir("/content/Distill-Spec-Research/gbv-research")   # ← always run from here
-
-subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                "-r", "requirements.txt", "bitsandbytes>=0.46.1", "accelerate"], check=True)
-
-# ── Cell 2 ───────────────────────────────────────────────────────────────────
-from google.colab import userdata
-os.environ["WANDB_API_KEY"] = userdata.get("WANDB_API_KEY")
-import wandb; wandb.login()
-
-# ── Cell 3 ───────────────────────────────────────────────────────────────────
-# --config colab → 8B teacher loaded in 4-bit NF4 (fits T4's 15 GB)
-# --smoke        → quick sanity check (~45 min) before overnight run
-subprocess.run([sys.executable, "orchestration/experiment.py",
-                "--config", "colab", "--ckpt_root", DRIVE_CKPT, "--yes"])
-```
-
-**VRAM breakdown on T4 (15 GB):**
-- Qwen3-8B teacher in 4-bit NF4: ~5 GB
-- Qwen3-0.6B draft in bfloat16: ~1.2 GB
-- LoRA + optimizer + activations: ~2.5 GB
-- **Total: ~8–9 GB** → 6 GB headroom on T4
-
-**Tips:**
-- Run with `--smoke` first (~45 min) to verify no crashes before the overnight run.
-- Colab disconnects after ~90 min idle — keep the browser tab active or use
-  Colab Pro (persistent sessions up to 12 hours).
-- Drive writes are slow (~50 MB/s).  Milestone checkpoints (`--milestone_every`)
-  are what matter for resume — `ckpt_latest/` is overwritten each time.
-- Offline mode is **auto-disabled** in Colab (code detects `COLAB_BACKEND_VERSION`).
-  First-time model downloads happen automatically — no manual env-var override needed.
+Open the notebook and **Runtime → Run all** (Ctrl+F9). That's it.
 
 ---
 
