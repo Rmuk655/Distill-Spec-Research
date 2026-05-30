@@ -30,6 +30,22 @@ Equivalent manual commands
 --------------------------
     python -m pytest tests/unit/ -q
     python orchestration/experiment.py --config laptop --smoke --yes
+
+Pre-commit hook
+---------------
+The hook runs the unit suite automatically on every `git commit`.
+The hook script is committed at hooks/pre-commit.
+To install on a fresh clone (run once from the repo root):
+    # Linux / macOS / Git Bash:
+    cp gbv-research/hooks/pre-commit .git/hooks/pre-commit
+    chmod +x .git/hooks/pre-commit
+    # Windows (Git for Windows runs Python hooks natively — no chmod needed):
+    copy gbv-research\\hooks\\pre-commit .git\\hooks\\pre-commit
+
+Adding a new unit test
+----------------------
+Drop a test_*.py file in tests/unit/ — it is picked up automatically by both
+the pre-commit hook and `python tests/run_unit_tests.py`. No registration needed.
 """
 
 from __future__ import annotations
