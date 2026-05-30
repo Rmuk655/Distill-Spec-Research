@@ -755,16 +755,16 @@ PAGE = r"""
       ▤ Compare All — final block efficiency after training</h2>
     <span id="cmpstatus" class="muted"></span>
   </div>
-  <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:12px">
+  <div style="display:grid; grid-template-columns:1.6fr 1fr; gap:12px">
     <div class="card">
-      <h2>Final BE per verifier × loss  <span class="muted" style="font-weight:400;font-size:10px">(tree verifiers, matched K)</span></h2>
+      <h2>Final BE per verifier × loss  <span class="muted" style="font-weight:400;font-size:10px">(ghost = before training)</span></h2>
       <svg id="cmp_be_chart" viewBox="0 0 700 220"></svg>
       <div class="vlegend" id="cmp_legend"></div>
     </div>
     <div class="card">
-      <h2>Loss curves — all trained losses</h2>
-      <svg id="cmp_loss_chart" viewBox="0 0 360 160"></svg>
-      <div class="vlegend" id="cmp_loss_legend"></div>
+      <h2>BE improvement (Δ after − before)  <span class="muted" style="font-weight:400;font-size:10px">higher = better</span></h2>
+      <svg id="cmp_delta_chart" viewBox="0 0 360 200"></svg>
+      <div class="vlegend" id="cmp_delta_legend"></div>
     </div>
   </div>
   <div id="cmp_load_row" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:12px"></div>
@@ -1058,33 +1058,83 @@ function compareBEChart(svgId, store){
   legBox.appendChild(ghost);
 }
 
-/** Overlay loss curves for all trained losses. */
-function compareLossChart(svgId, store){
+/** Bar chart: x=loss function, y=mean ΔBE across verifiers, with per-verifier breakdown lines. */
+function compareDeltaChart(svgId, store){
   const svg=$(svgId); svg.innerHTML='';
-  const lossNames = Object.keys(store).filter(k=>!store[k].error && (store[k].loss||[]).length);
+  const lossNames = Object.keys(store).filter(k=>!store[k].error);
   if(!lossNames.length) return;
-  const W=360, H=160, padL=28, padB=20, padT=12;
-  let lo=Infinity, hi=-Infinity;
-  lossNames.forEach(ln=>{ store[ln].loss.forEach(v=>{ if(v<lo)lo=v; if(v>hi)hi=v; }); });
-  if(hi-lo<1e-9) hi=lo+1;
-  const nSteps = store[lossNames[0]].loss.length;
-  const sx = i => padL + i*(W-padL-6)/Math.max(nSteps-1,1);
-  const sy = v => H-padB - (v-lo)*(H-padB-padT)/(hi-lo);
 
-  svg.appendChild(el('line',{x1:padL,y1:H-padB,x2:W-6,y2:H-padB,stroke:'#33406a'}));
+  const first = store[lossNames[0]];
+  const verifiers = (first.verifiers || []).slice(0, 6); // cap for readability
+  const W=360, H=200, padL=28, padB=40, padT=16;
+
+  // compute mean ΔBE per loss and per-verifier ΔBE
+  const deltas = {};   // loss → mean delta
+  const byVer  = {};   // loss → {verifier → delta}
   lossNames.forEach(ln=>{
-    const ys = store[ln].loss;
-    let d=''; ys.forEach((v,i)=>{ d+=(i?'L':'M')+sx(i)+' '+sy(v)+' '; });
-    svg.appendChild(el('path',{d,fill:'none',stroke:lossCol(ln),'stroke-width':1.8}));
+    const d = store[ln];
+    const vDeltas = {};
+    verifiers.forEach(v=>{
+      const before = (d.tree_before||{})[v] || 0;
+      const after  = (d.tree_after ||{})[v] || 0;
+      vDeltas[v] = after - before;
+    });
+    byVer[ln] = vDeltas;
+    const vals = Object.values(vDeltas);
+    deltas[ln] = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0;
   });
-  svg.appendChild(Object.assign(el('text',{x:W/2,y:H-3,fill:'#6f7ea8','font-size':8,'text-anchor':'middle'}),{textContent:'training step →'}));
-  svg.appendChild(Object.assign(el('text',{x:padL,y:padT,fill:'#6f7ea8','font-size':8}),{textContent:'↑ loss (lower is better)'}));
 
-  // legend
-  const legBox=$('cmp_loss_legend'); legBox.innerHTML='';
-  lossNames.forEach(ln=>{
+  const maxD = Math.max(...Object.values(deltas), 0.01);
+  const minD = Math.min(...Object.values(deltas), 0);
+  const range = Math.max(maxD - minD, 0.01);
+  const bw = (W - padL - 10) / lossNames.length;
+  const sy = v => H - padB - ((v - minD) / range) * (H - padB - padT);
+
+  // zero line
+  const zy = sy(0);
+  svg.appendChild(el('line',{x1:padL,y1:zy,x2:W-10,y2:zy,stroke:'#5a6890','stroke-dasharray':'3 3'}));
+  svg.appendChild(el('line',{x1:padL,y1:H-padB,x2:W-10,y2:H-padB,stroke:'#33406a'}));
+
+  lossNames.forEach((ln, i)=>{
+    const x = padL + i * bw;
+    const d = deltas[ln];
+    const barTop = sy(d), barBot = zy;
+    const barH = Math.abs(barTop - barBot);
+    // main bar
+    svg.appendChild(el('rect',{x:x+bw*0.1, y:Math.min(barTop,barBot),
+                                width:bw*0.8, height:Math.max(barH,1),
+                                fill:lossCol(ln), opacity:0.85}));
+    // per-verifier tick marks (small horizontal lines showing spread)
+    verifiers.forEach(v=>{
+      const vd = (byVer[ln]||{})[v] || 0;
+      const vy = sy(vd);
+      svg.appendChild(el('line',{x1:x+bw*0.2,y1:vy,x2:x+bw*0.8,y2:vy,
+                                  stroke:VCOL[v]||'#888','stroke-width':1.5}));
+    });
+    // value label
+    svg.appendChild(Object.assign(el('text',{x:x+bw*0.5,
+      y:d>=0?barTop-3:barBot+10,
+      fill:'#ddd','font-size':8,'text-anchor':'middle'}),
+      {textContent:(d>=0?'+':'')+d.toFixed(2)}));
+    // loss name label (rotated)
+    const t=el('text',{x:x+bw*0.5,y:H-padB+14,fill:'#9aa7c7','font-size':8,
+                        'text-anchor':'middle','transform':`rotate(-30,${x+bw*0.5},${H-padB+14})`});
+    t.textContent=ln.replace('_tree','★').replace('_',' ');
+    svg.appendChild(t);
+  });
+
+  // y-axis labels
+  [minD, 0, maxD].forEach(v=>{
+    svg.appendChild(Object.assign(el('text',{x:padL-2,y:sy(v)+3,fill:'#7a89b3','font-size':8,'text-anchor':'end'}),{textContent:v.toFixed(2)}));
+  });
+  svg.appendChild(Object.assign(el('text',{x:W/2,y:H-2,fill:'#6f7ea8','font-size':8,'text-anchor':'middle'}),{textContent:'loss function (★ = tree variant)'}));
+  svg.appendChild(Object.assign(el('text',{x:padL,y:padT,fill:'#6f7ea8','font-size':8}),{textContent:'↑ Δ BE (mean across verifiers)'}));
+
+  // verifier colour legend
+  const legBox=$('cmp_delta_legend'); legBox.innerHTML='<span class="muted" style="font-size:10px">tick colour = verifier: </span>';
+  verifiers.forEach(v=>{
     const sp=document.createElement('span');
-    sp.innerHTML=`<i style="background:${lossCol(ln)}"></i>${ln}`;
+    sp.innerHTML=`<i style="background:${VCOL[v]||'#888'}"></i>${v}`;
     legBox.appendChild(sp);
   });
 }
@@ -1135,7 +1185,7 @@ function pollCompare(){
     fetch('/api/compare').then(r=>r.json()).then(cmp=>{
       $('cmpstatus').textContent=`Done — ${Object.keys(cmp.store).length} losses trained`;
       compareBEChart('cmp_be_chart', cmp.store);
-      compareLossChart('cmp_loss_chart', cmp.store);
+      compareDeltaChart('cmp_delta_chart', cmp.store);
       renderLoadRow(cmp.store);
       $('trainall').disabled=false;
     });
