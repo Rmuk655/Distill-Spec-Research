@@ -110,46 +110,6 @@ def init_db(python: str):
     _run([python, script])
 
 
-def patch_osd_inits():
-    """Create missing __init__.py files in OSD submodule package directories.
-
-    The upstream OSD repo omits ``__init__.py`` from several directories
-    (e.g. distill/specInfer/).  A bare ``git submodule update --init`` leaves
-    those directories without the marker files, causing ``ModuleNotFoundError``
-    at runtime.  This function walks the OSD tree and creates the missing
-    files.  It is idempotent — safe to call on every setup.
-    """
-    print("\nPatching OSD submodule __init__.py files ...")
-    repo_dir = os.path.normpath(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-    )
-    osd_dir = os.path.join(repo_dir, "OSD")
-    if not os.path.isdir(osd_dir):
-        print("  [SKIP] OSD/ not found — run: git submodule update --init")
-        return
-
-    patched = []
-    for dirpath, dirnames, filenames in os.walk(osd_dir):
-        dirnames[:] = [
-            d for d in dirnames
-            if not d.startswith(".") and not d.startswith("__")
-        ]
-        if "__init__.py" in filenames:
-            continue
-        if any(f.endswith(".py") for f in filenames):
-            init_path = os.path.join(dirpath, "__init__.py")
-            with open(init_path, "w") as fh:
-                fh.write("")
-            patched.append(os.path.relpath(init_path, repo_dir))
-
-    if patched:
-        print(f"  Created {len(patched)} missing __init__.py file(s):")
-        for p in patched:
-            print(f"    + {p}")
-    else:
-        print("  All OSD package directories already have __init__.py.")
-
-
 def fetch_datasets(python: str):
     print("\nFetching evaluation datasets (skip if already present) ...")
     _osd = os.path.normpath(os.path.join(
@@ -273,11 +233,6 @@ def main():
         install_requirements(pip, req_path)
     else:
         print(f"\n[WARN] requirements.txt not found at {req_path}")
-
-    # Patch OSD submodule: create missing __init__.py files so that
-    # `from specInfer.generator import ...` and similar imports work for
-    # every user after a plain `git submodule update --init`.
-    patch_osd_inits()
 
     # Initialise DB
     init_db(python)
