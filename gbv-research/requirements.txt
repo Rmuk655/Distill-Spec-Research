@@ -13,7 +13,7 @@ sentencepiece>=0.1.99
 protobuf>=3.20.0
 
 # Training utilities
-bitsandbytes>=0.43.0
+bitsandbytes>=0.46.1
 scipy>=1.12.0
 
 # Numerics
