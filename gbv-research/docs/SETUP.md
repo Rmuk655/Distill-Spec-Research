@@ -21,13 +21,18 @@ GPU requirements:
 | `colab`  | Qwen3-0.6B → Qwen3-8B (4-bit) | 9 GB | Free Colab T4 (15 GB) — teacher in 4-bit NF4 |
 | `server` | Qwen3-0.6B → Qwen3-8B (bf16) | 24 GB | A10G / A100 / 3090 — full precision |
 
-**Colab free T4 note**: Qwen3-8B in bfloat16 = ~16 GB → OOM on T4 (15 GB).
-The `colab` config automatically loads the frozen teacher in **4-bit NF4** via
-`bitsandbytes` (~5 GB), bringing total VRAM to ~9 GB. Install the extra dep:
+**Colab / Kaggle T4 note**: Qwen3-8B in bfloat16 = ~16 GB → OOM on T4 (15 GB).
+The `colab` and `kaggle` configs automatically load the frozen teacher in
+**4-bit NF4** via `bitsandbytes` (~4.5 GB), bringing total VRAM to ~7–9 GB.
+`transformers` hard-requires `bitsandbytes>=0.46.1` for 4-bit loading:
 
 ```bash
-pip install bitsandbytes
+pip install "bitsandbytes>=0.46.1"
 ```
+
+`deploy_utils.install_deps()` (Colab/Kaggle notebooks) handles this automatically
+with `pip install -U bitsandbytes>=0.46.1` so the base-image version is always
+upgraded regardless of what the platform pre-installs.
 
 ---
 
@@ -152,16 +157,30 @@ python -m pytest tests/unit/ -q     # full suite (~60 s on CPU, no GPU needed)
 ```
 
 The suite exercises every loss function, every verifier, all cache operations,
-pipeline step generation, and data loading — all on CPU with no model downloads.
-138 tests, expected output: `138 passed`.
+pipeline step generation, data loading, and trainer correctness — all on CPU
+with no model downloads.  **163 tests**, expected output: `163 passed`.
 
-**Pre-commit hook** — lives at `.git/hooks/pre-commit`.
-Every `git commit` automatically runs `pytest tests/unit/` first.
+**Pre-commit hook** — the hook script is committed at `hooks/pre-commit` and
+must be installed once per machine:
+
+```bash
+# Linux / macOS / Git Bash (from repo root):
+cp gbv-research/hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+
+# Windows (Git for Windows runs Python hooks natively — no chmod):
+copy gbv-research\hooks\pre-commit .git\hooks\pre-commit
+```
+
+Every `git commit` then automatically runs `pytest tests/unit/` first.
 The commit is **blocked** if any test fails.
 
 ⚠️ **The hook silently skips if pytest is not installed** — always verify
 `python -m pytest --version` works before making commits on a new machine.
 Bypass only in genuine emergencies: `git commit --no-verify`.
+
+**Adding a new test**: drop `test_*.py` in `tests/unit/` — picked up automatically
+by the hook, `run_unit_tests.py`, and `smoke.py --unit-only`. No registration needed.
 
 Test coverage:
 
@@ -173,6 +192,7 @@ Test coverage:
 | KV-cache ops | `test_cache_ops.py` | slice_cache, expand_cache — shapes, content, round-trips |
 | Pipeline steps | `test_pipeline_steps.py` | step IDs, --steps counts, --load_in_4bit propagation, verifier modes |
 | Data loading | `test_data_loading.py` | JSONL parsing, missing keys, fallback keys, empty files |
+| Trainer logit path | `test_trainer_logit_equivalence.py` | causal forward-pass == autoregressive scores, temperature recovery, slice indexing, zero-gen guard, gradient identity |
 
 ---
 
@@ -281,7 +301,7 @@ subprocess.run(["git", "clone", "--depth", "1",
 os.chdir("/content/Distill-Spec-Research/gbv-research")   # ← always run from here
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                "-r", "requirements.txt", "bitsandbytes", "accelerate"], check=True)
+                "-r", "requirements.txt", "bitsandbytes>=0.46.1", "accelerate"], check=True)
 
 # ── Cell 2 ───────────────────────────────────────────────────────────────────
 from google.colab import userdata
@@ -312,7 +332,20 @@ subprocess.run([sys.executable, "orchestration/experiment.py",
 
 ---
 
-### 9b. Colab Pro / Kaggle / any A100 (24 GB+)
+### 9b. Kaggle (free T4, recommended)
+
+> **Full Kaggle setup guide:** `docs/KAGGLE.md`  
+> Use `deploy/kaggle.ipynb` — it handles git sync, deps, model attachment,
+> checkpoint auto-backup, and resume automatically.
+
+Key difference from Colab: Kaggle has **29 GB RAM** (vs Colab's ~12 GB), which
+is what allows the 8B teacher to load in 4-bit NF4 without an OOM kill.
+Use `CONFIG = "kaggle"` in the notebook (Qwen3-8B NF4, 1000 steps, ~7.8 GB VRAM).
+
+For checkpoint persistence across sessions see `docs/KAGGLE.md →
+"Persisting checkpoints"`.
+
+### 9b2. Colab Pro / any A100 (24 GB+)
 
 No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB.
 
@@ -348,18 +381,6 @@ To re-evaluate existing checkpoints without retraining:
 python orchestration/experiment.py --config profiles/a100_baseline_losses \
   --eval_only --yes --storage_root /content/drive/MyDrive/specdist
 ```
-
-```bash
-# Kaggle: attach this repo as a dataset, point ckpt_root to /kaggle/working
-!python orchestration/experiment.py \
-    --config server \
-    --ckpt_root /kaggle/working/specdist/checkpoints \
-    --yes
-```
-
-Kaggle sessions persist for the duration of the run (up to 12 hours) but
-checkpoints are NOT saved between sessions — download the output manually
-from the Kaggle session output panel when done.
 
 ---
 
