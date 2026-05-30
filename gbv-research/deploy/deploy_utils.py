@@ -578,7 +578,11 @@ def bootstrap(
                     shutil.copy2(_db_src, _db_dst)
                     print(f"[restore] results.db ← {_db_src}")
                 # Restore any checkpoint dirs / files not already present.
+                # Skip the "specdist" helper dir (holds results.db, handled above)
+                # so it doesn't get copied into checkpoints/ as a stray entry.
                 for _item in os.listdir(_ds_path):
+                    if _item == "specdist":
+                        continue
                     _src = os.path.join(_ds_path, _item)
                     _dst = os.path.join(_ckpt_dst, _item)
                     if not os.path.exists(_dst):
@@ -662,6 +666,153 @@ def run_pipeline(
             print(f"\n✗ Exit {result.returncode} — re-run to resume from last checkpoint.")
             print(f"  Full log: {log_file}")
         return result
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint backup → Kaggle Dataset (protects against session resets)
+# ---------------------------------------------------------------------------
+
+def _kaggle_creds() -> tuple:
+    """Resolve (username, key) from Kaggle Secrets or env vars. (None, None) if absent."""
+    user = os.environ.get("KAGGLE_USERNAME")
+    key  = os.environ.get("KAGGLE_KEY")
+    if user and key:
+        return user, key
+    try:
+        from kaggle_secrets import UserSecretsClient
+        usc = UserSecretsClient()
+        user = user or usc.get_secret("KAGGLE_USERNAME")
+        key  = key  or usc.get_secret("KAGGLE_KEY")
+    except Exception:
+        pass
+    return user, key
+
+
+def backup_checkpoints(
+    storage_root: str,
+    dataset_slug: str = None,
+    *,
+    quiet: bool = True,
+) -> bool:
+    """Snapshot storage_root/checkpoints (+ results.db) to a Kaggle Dataset.
+
+    Creates the dataset on the first call, versions it on every later call.
+    The upload layout matches what bootstrap(restore_checkpoints=True) expects:
+        <dataset>/specdist/results.db
+        <dataset>/<each checkpoint dir>
+
+    Requires Kaggle API creds: add KAGGLE_USERNAME and KAGGLE_KEY as Kaggle
+    Secrets (Add-ons → Secrets), or set them as env vars. Returns True on success.
+    """
+    import shutil, subprocess, json, time
+
+    ckpt_dir = os.path.join(storage_root, "checkpoints")
+    if not os.path.isdir(ckpt_dir) or not os.listdir(ckpt_dir):
+        if not quiet:
+            print("[backup] checkpoints/ empty — nothing to back up yet.")
+        return False
+
+    user, key = _kaggle_creds()
+    if not (user and key):
+        print("[backup] No Kaggle API creds. Add KAGGLE_USERNAME + KAGGLE_KEY as "
+              "Secrets (Add-ons → Secrets) to enable auto-backup. Skipping.")
+        return False
+    os.environ["KAGGLE_USERNAME"] = user
+    os.environ["KAGGLE_KEY"]      = key
+
+    slug = dataset_slug or f"{user}/specdist-checkpoints"
+    name = slug.split("/")[-1]
+
+    # Stage a clean upload tree in the layout the restore step expects.
+    stage = os.path.join(storage_root, "_ckpt_backup_stage")
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage, exist_ok=True)
+    db_src = os.path.join(storage_root, "results.db")
+    if os.path.exists(db_src):
+        os.makedirs(os.path.join(stage, "specdist"), exist_ok=True)
+        shutil.copy2(db_src, os.path.join(stage, "specdist", "results.db"))
+    for _item in os.listdir(ckpt_dir):
+        _src = os.path.join(ckpt_dir, _item)
+        if os.path.isdir(_src):
+            shutil.copytree(_src, os.path.join(stage, _item))
+        else:
+            shutil.copy2(_src, os.path.join(stage, _item))
+
+    with open(os.path.join(stage, "dataset-metadata.json"), "w") as f:
+        json.dump({
+            "title": name,
+            "id": slug,
+            "licenses": [{"name": "CC0-1.0"}],
+        }, f)
+
+    # Dataset exists?  `kaggle datasets files` exits 0 if it does, nonzero if not.
+    exists = subprocess.run(
+        ["kaggle", "datasets", "files", slug],
+        capture_output=True, text=True).returncode == 0
+
+    msg = time.strftime("auto-backup %Y-%m-%d %H:%M:%S")
+    if exists:
+        cmd = ["kaggle", "datasets", "version", "-p", stage,
+               "-m", msg, "--dir-mode", "zip"]
+    else:
+        cmd = ["kaggle", "datasets", "create", "-p", stage, "--dir-mode", "zip"]
+
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    shutil.rmtree(stage, ignore_errors=True)
+    if r.returncode == 0:
+        print(f"[backup] {'versioned' if exists else 'created'} {slug} "
+              f"({len(os.listdir(ckpt_dir))} checkpoint dir(s)) — {msg}")
+        return True
+    print(f"[backup] FAILED ({'version' if exists else 'create'}): "
+          f"{(r.stderr or r.stdout).strip()[:300]}")
+    return False
+
+
+def backup_loop(
+    storage_root: str,
+    dataset_slug: str = None,
+    *,
+    interval_min: int = 30,
+    pid: int = None,
+    max_hours: float = 9.0,
+) -> None:
+    """Back up checkpoints every interval_min until the pipeline ends or the cell
+    is interrupted. Also acts as a keep-alive so the session does not idle out.
+
+    pid:       optional experiment.py PID; the loop does a final backup and exits
+               once that process is gone.
+    max_hours: hard ceiling so the loop can't run past a Kaggle session limit.
+    """
+    import time
+
+    def _alive(p):
+        if p is None:
+            return True
+        try:
+            os.kill(p, 0)
+            return True
+        except OSError:
+            return False
+
+    print(f"[backup] loop started — every {interval_min} min → "
+          f"{dataset_slug or 'username/specdist-checkpoints'}  (interrupt cell to stop)")
+    start = time.time()
+    try:
+        while True:
+            for _ in range(int(interval_min * 60)):
+                time.sleep(1)
+                if not _alive(pid):
+                    break
+            backup_checkpoints(storage_root, dataset_slug, quiet=True)
+            if not _alive(pid):
+                print("[backup] pipeline process ended — final backup done, stopping loop.")
+                break
+            if (time.time() - start) / 3600.0 >= max_hours:
+                print("[backup] max_hours reached — stopping loop.")
+                break
+    except KeyboardInterrupt:
+        print("[backup] interrupted — running one final backup…")
+        backup_checkpoints(storage_root, dataset_slug, quiet=False)
 
 
 # ---------------------------------------------------------------------------
