@@ -52,6 +52,9 @@ models:
 training:
   steps: 1000                   # 9-hour Kaggle sessions can comfortably run 1000 steps
   lr: 3.0e-5
+  warmup_steps: 100             # linear warmup 100 steps → linear decay to 0 by step 1000
+                                # (DistillSpec/EAGLE convention — prevents val-loss bounce after step 150)
+  grad_accum: 16                # effective batch 16 (matches DistillSpec paper); zero VRAM cost vs 4
   lora_r: 8                     # same as colab.yaml — conservative for T4 VRAM
   lora_alpha: 16
   max_new_tokens: 96

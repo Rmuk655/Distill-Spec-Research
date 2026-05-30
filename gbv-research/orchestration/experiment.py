@@ -260,6 +260,7 @@ def _load_config_yaml(config_name: str) -> dict:
             "lora_r":               training.get("lora_r", 8),
             "lora_alpha":           training.get("lora_alpha", 16),
             "grad_accum":           training.get("grad_accum", 4),
+            "warmup_steps":         training.get("warmup_steps", None),  # None = trainer default (10%)
             "teacher_temp":         training.get("teacher_temperature", 0.8),
             "max_new_tokens":       training.get("max_new_tokens", 80),
             "seed":                 training.get("seed", 42),
@@ -680,6 +681,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--lora_alpha",      str(_h.get("lora_alpha", 16)),
         "--grad_accum",      str(_h.get("grad_accum", 4)),
         "--teacher_temp",    str(_h.get("teacher_temp", 0.8)),
+        *( ["--warmup_steps", str(_h["warmup_steps"])] if _h.get("warmup_steps") is not None else [] ),
         "--max_new_tokens",  str(_h.get("max_new_tokens", 80)),
         # Checkpoint cadence — forwarded from YAML checkpointing: section.
         # Determines how much training is lost on Colab timeout / crash.
