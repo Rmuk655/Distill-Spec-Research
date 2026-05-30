@@ -67,7 +67,8 @@ Add-ons → Secrets → + Add Secret:
 | `GITHUB_TOKEN` | PAT with `repo` scope | Only if the repo is private |
 | `HF_TOKEN` | From https://huggingface.co/settings/tokens | **Not needed** — all data comes from Kaggle |
 | `KAGGLE_USERNAME` | Your Kaggle username | Only for **auto-backup** (Cell 2b) |
-| `KAGGLE_KEY` | Token from kaggle.com → Settings → API → Create New Token | Only for **auto-backup** (Cell 2b) |
+| `KAGGLE_KEY` | The `key` field from kaggle.com → Settings → API → Create New Token | Only for **auto-backup** (Cell 2b) |
+| `KAGGLE_API_TOKEN` | Alternative to the two rows above: paste the full downloaded `kaggle.json` payload | Only for **auto-backup** (Cell 2b) |
 
 > **Important — enable each secret for the notebook.**  
 > Secrets exist in your Kaggle account but must be explicitly granted per notebook.  
@@ -201,9 +202,10 @@ Cell 2b snapshots `checkpoints/` (+ `results.db`) to a Kaggle Dataset every
 the **in-progress** loss — all finished losses are restored automatically next
 session.
 
-1. One-time: add `KAGGLE_USERNAME` and `KAGGLE_KEY` as Secrets (see Step 4) and
-   tick their checkboxes. Get the key from kaggle.com → Settings → API →
-   **Create New Token** (the `key` field of the downloaded `kaggle.json`).
+1. One-time: add either `KAGGLE_API_TOKEN` (paste the full downloaded
+   `kaggle.json` payload), or add the CLI-compatible pair `KAGGLE_USERNAME` +
+   `KAGGLE_KEY` (the `username` and `key` fields from `kaggle.json`). Tick the
+   checkboxes for whichever secrets you use.
 2. Each session: run **Cell 1** (Resume), then run **Cell 2b** (Auto-backup) in
    its own cell and leave it running. The first run **creates** the
    `specdist-checkpoints` dataset; later runs push new **versions**. It also

@@ -673,9 +673,15 @@ def run_pipeline(
 # ---------------------------------------------------------------------------
 
 def _kaggle_creds() -> tuple:
-    """Resolve (username, key) from Kaggle Secrets or env vars. (None, None) if absent."""
+    """Resolve (username, key) from Kaggle Secrets or env vars. (None, None) if absent.
+
+    The Kaggle CLI consumes KAGGLE_USERNAME + KAGGLE_KEY.  Kaggle's UI/docs may
+    refer to the downloaded credential as KAGGLE_API_TOKEN; support that too when
+    it is either the raw key or the full kaggle.json payload.
+    """
     user = os.environ.get("KAGGLE_USERNAME")
     key  = os.environ.get("KAGGLE_KEY")
+    api_token = os.environ.get("KAGGLE_API_TOKEN")
     if user and key:
         return user, key
     try:
@@ -683,8 +689,16 @@ def _kaggle_creds() -> tuple:
         usc = UserSecretsClient()
         user = user or usc.get_secret("KAGGLE_USERNAME")
         key  = key  or usc.get_secret("KAGGLE_KEY")
+        api_token = api_token or usc.get_secret("KAGGLE_API_TOKEN")
     except Exception:
         pass
+    if api_token:
+        try:
+            payload = json.loads(api_token)
+            user = user or payload.get("username")
+            key  = key  or payload.get("key")
+        except Exception:
+            key = key or api_token
     return user, key
 
 
@@ -701,8 +715,9 @@ def backup_checkpoints(
         <dataset>/specdist/results.db
         <dataset>/<each checkpoint dir>
 
-    Requires Kaggle API creds: add KAGGLE_USERNAME and KAGGLE_KEY as Kaggle
-    Secrets (Add-ons → Secrets), or set them as env vars. Returns True on success.
+    Requires Kaggle API creds: add KAGGLE_USERNAME + KAGGLE_KEY, or add
+    KAGGLE_API_TOKEN containing the downloaded kaggle.json payload. Returns True
+    on success.
     """
     import shutil, subprocess, json, time
 
@@ -714,8 +729,9 @@ def backup_checkpoints(
 
     user, key = _kaggle_creds()
     if not (user and key):
-        print("[backup] No Kaggle API creds. Add KAGGLE_USERNAME + KAGGLE_KEY as "
-              "Secrets (Add-ons → Secrets) to enable auto-backup. Skipping.")
+        print("[backup] No Kaggle API creds. Add KAGGLE_USERNAME + KAGGLE_KEY "
+              "or KAGGLE_API_TOKEN (kaggle.json payload) as Secrets "
+              "(Add-ons → Secrets) to enable auto-backup. Skipping.")
         return False
     os.environ["KAGGLE_USERNAME"] = user
     os.environ["KAGGLE_KEY"]      = key
