@@ -1433,7 +1433,7 @@ const PHASE_GROUPS = [
       'eval_online_all','eval_online_ebe_all','eval_online_ebe_single_all',
   ]},
   { label: 'Ph 5 — EAGLE',     steps: ['eagle_gen','eagle_train','eagle_eval'] },
-  { label: 'Ph 6 — Tree Train + GSM8K', steps: [
+  { label: 'Ph 6 — Tree Train', steps: [
       'train_kl_tree_gsm8k','merge_kl_tree_gsm8k',
       'train_bv_tree_gsm8k','merge_bv_tree_gsm8k',
       'train_gbv_tree_gsm8k','merge_gbv_tree_gsm8k',
@@ -1441,7 +1441,6 @@ const PHASE_GROUPS = [
       'train_ebe_tree_gsm8k','merge_ebe_tree_gsm8k',
       'train_rev_kl_tree_gsm8k','merge_rev_kl_tree_gsm8k',
       'train_jsd_tree_gsm8k','merge_jsd_tree_gsm8k',
-      // Verifier-aligned OT tree losses (added 2026-05)
       'train_naive_tree_gsm8k','merge_naive_tree_gsm8k',
       'train_nss_tree_gsm8k','merge_nss_tree_gsm8k',
       'train_si_tree_gsm8k','merge_si_tree_gsm8k',
@@ -1449,6 +1448,8 @@ const PHASE_GROUPS = [
       'train_khisti_tree_gsm8k','merge_khisti_tree_gsm8k',
       'online_kl_tree_adapt_gsm8k','merge_online_kl_tree_gsm8k',
       'online_ebe_tree_adapt_gsm8k','merge_online_ebe_tree_gsm8k',
+  ]},
+  { label: 'Ph 6 — Tree GSM8K Eval', steps: [
       'eval_kl_tree_gsm8k','eval_bv_tree_gsm8k','eval_gbv_tree_gsm8k',
       'eval_trav_tree_gsm8k','eval_ebe_tree_gsm8k','eval_rev_kl_tree_gsm8k',
       'eval_jsd_tree_gsm8k',
