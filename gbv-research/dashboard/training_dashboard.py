@@ -9,8 +9,16 @@ Shows:
   • HW-tier filter (laptop / colab / a100) to compare results across machines
 
 Start:
-    python dashboard/training_dashboard.py           # http://localhost:5000
+    python dashboard/training_dashboard.py                         # http://localhost:5000
     python dashboard/training_dashboard.py --port 8080
+    python dashboard/training_dashboard.py --db /path/to/results.db        # custom DB
+    python dashboard/training_dashboard.py --root ~/Downloads/kaggle-run/  # all files in one folder
+    python dashboard/training_dashboard.py --root ~/Downloads/kaggle-run/ --port 8080
+
+  --root DIR   sets --db DIR/results.db  +  --logs DIR  +  --state DIR at once.
+               Download results.db, pipeline_output.log, be_progress.log, and
+               pipeline_state_kaggle.json into one folder and use --root to see
+               all results locally.
 
 Endpoints:
     GET /                     HTML dashboard
@@ -3584,10 +3592,54 @@ if __name__ == "__main__":
     p.add_argument("--host", default="127.0.0.1",
                    help="Bind address. Use 0.0.0.0 for Colab/cloud port proxying.")
     p.add_argument("--debug", action="store_true")
+    p.add_argument("--db", metavar="PATH",
+                   help="Path to a results.db SQLite file. Overrides SPECDIST_DB_PATH "
+                        "and the default db/results.db location.")
+    p.add_argument("--root", metavar="DIR",
+                   help="Convenience: point DB, logs, and pipeline-state all at one "
+                        "directory. Equivalent to setting --db DIR/results.db "
+                        "--logs DIR --state DIR. Useful when you download Kaggle output "
+                        "into a single local folder.")
+    p.add_argument("--logs", metavar="DIR",
+                   help="Directory that contains pipeline_output.log / be_progress.log. "
+                        "Overrides SPECDIST_LOGS_ROOT.")
+    p.add_argument("--state", metavar="DIR",
+                   help="Directory that contains pipeline_state_*.json files. "
+                        "Overrides SPECDIST_STORAGE_ROOT.")
     args = p.parse_args()
 
-    # Ensure DB exists
+    # --root is a shorthand that sets DB, logs, and state all to the same folder.
+    if args.root:
+        root = os.path.abspath(args.root)
+        if not args.db:
+            args.db = os.path.join(root, "results.db")
+        if not args.logs:
+            args.logs = root
+        if not args.state:
+            args.state = root
+
+    # Override DB path (CLI > env var > default)
+    if args.db:
+        results_db.DB_PATH = os.path.abspath(args.db)
+
+    # Override log directory
+    global _BE_LOG, _PIPELINE_LOG
+    if args.logs:
+        _logs_dir = os.path.abspath(args.logs)
+        _BE_LOG       = os.path.join(_logs_dir, "be_progress.log")
+        _PIPELINE_LOG = os.path.join(_logs_dir, "pipeline_output.log")
+
+    # Override pipeline-state directory via env var (api_pipeline_status reads it)
+    if args.state:
+        os.environ["SPECDIST_STORAGE_ROOT"] = os.path.abspath(args.state)
+
+    # Ensure DB exists / schema is initialised
     results_db._connect().close()
 
-    print(f"\nSpecDist Dashboard -> http://{args.host}:{args.port}/\n")
+    print(f"\nSpecDist Dashboard  -> http://{args.host}:{args.port}/")
+    print(f"Database            -> {results_db.DB_PATH}")
+    print(f"Logs dir            -> {os.path.dirname(_PIPELINE_LOG)}")
+    state_dir = (os.environ.get("SPECDIST_STORAGE_ROOT")
+                 or os.path.join(_GBV_RESEARCH, "orchestration"))
+    print(f"Pipeline state dir  -> {state_dir}\n")
     app.run(host=args.host, port=args.port, debug=args.debug)
