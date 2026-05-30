@@ -1420,6 +1420,7 @@ def main():
 
     # ── Run sequentially ─────────────────────────────────────────────────────
     all_results = []
+    failed_cells = []
     t_start = time.perf_counter()
     for i, (ds, mode, K, T) in enumerate(cells, 1):
         print(f"\n[{i}/{len(cells)}]", end="")
@@ -1445,6 +1446,7 @@ def main():
                     all_results.append(result)
             except Exception as e:
                 print(f"  [ERROR] {e}")
+                failed_cells.append((ds, mode, K, T, str(e)))
         else:
             # BE result already computed in pre-batch step above
             run_tag = make_run_tag(student_label, mode, ds, K, T)
@@ -1454,6 +1456,7 @@ def main():
             be_val = _be_cache.get((ds, mode, K, T))
             if be_val is None:
                 print(f" [{run_tag}] WARN: no cached BE result (batch may have failed)")
+                failed_cells.append((ds, mode, K, T, "no cached BE result"))
                 continue
             row = dict(
                 run_tag=run_tag,
@@ -1521,6 +1524,18 @@ def main():
             _wmod_final.finish()
     except Exception:
         pass
+
+    if failed_cells:
+        print("\n" + "!" * 70)
+        print(f"  EVAL FAILED — {len(failed_cells)} requested cell(s) produced no result.")
+        print("  This usually means the pre-batched BE subprocess failed or OOMed.")
+        print("  The pipeline step will remain retryable instead of being marked done.")
+        for ds, mode, K, T, reason in failed_cells[:20]:
+            print(f"  - {student_label} | {ds} | {mode} | K={K} | T={T}: {reason}")
+        if len(failed_cells) > 20:
+            print(f"  ... {len(failed_cells) - 20} more")
+        print("!" * 70)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
