@@ -816,8 +816,13 @@ function updateLamState(){
   const wrap = $('lam_wrap'), lbl = $('lam_label'), inp = $('lam');
   wrap.style.opacity = relevant ? '1' : '0.35';
   inp.disabled = !relevant;
+  // auto-fill the recommended λ for this variant when switching loss
+  if(relevant && LAM_DEFAULTS[loss] !== undefined){
+    inp.value = LAM_DEFAULTS[loss];
+  }
+  const def = LAM_DEFAULTS[loss];
   lbl.title = relevant
-    ? 'KL(p‖q) anchor weight λ — active for this variant.  0 = no anchor.'
+    ? `KL(p‖q) anchor weight λ — active for this variant.  Recommended default: ${def !== undefined ? def : '0.1'}.  0 = no anchor.`
     : 'KL λ not used by this loss — parameter is ignored.';
 }
 
@@ -830,8 +835,9 @@ function makeOpt(name, desc){
 
 async function loadLosses(){
   const r = await (await fetch('/api/losses')).json();
-  ALLDESC   = r.descriptions || {};
-  USES_LAM  = new Set(r.uses_lam || []);
+  ALLDESC     = r.descriptions  || {};
+  USES_LAM    = new Set(r.uses_lam || []);
+  LAM_DEFAULTS = r.lam_defaults || {};
   const sel = $('loss');
 
   const gf = document.createElement('optgroup');
