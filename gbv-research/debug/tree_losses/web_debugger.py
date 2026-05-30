@@ -169,11 +169,15 @@ def _breakdown(tr):
 
 def build_session(loss_name, vocab=32, K=3, L=4, steps=80, lr=0.1,
                   seed=0, be_trials=15, batch=8, include_khisti=False, lam=0.1,
-                  be_every=5, teacher_peak=5.0, student_scale=0.4,
+                  be_every=5, teacher_peak=5.0, student_scale=0.5,
                   teacher_temp=0.8, student_temp=1.0, progress=None):
     torch.manual_seed(seed)
     teacher = TinyMarkovModel.teacher_counting(vocab, peak=teacher_peak, seed=seed)
-    student = TinyMarkovModel.student_random(vocab, scale=student_scale, seed=seed + 1)
+    # student_pretrained: starts with fraction=student_scale of teacher peak + noise.
+    # BE_before ≈ 2.0–2.5 (matches real Qwen-0.6B pre-trained baseline before distillation).
+    # Use student_random(scale=student_scale) for a fully random init (BE_before ≈ 1.0).
+    student = TinyMarkovModel.student_pretrained(vocab, teacher_peak=teacher_peak,
+                                                  fraction=student_scale, seed=seed + 1)
     train_toks, test_toks = make_dataset(vocab, seed=seed + 2)
     is_flat = loss_name in _FLAT_LOSS_NAMES
     matched = "gbv" if is_flat else LV.matched_verifier(loss_name)
@@ -420,7 +424,7 @@ def api_train_start():
         include_khisti=a.get("khisti", "0") in ("1", "true", "on"),
         lam=max(0.0, float(a.get("lam", 0.5))),
         teacher_peak=max(0.5, float(a.get("teacher_peak", 5.0))),
-        student_scale=max(0.05, float(a.get("student_scale", 0.4))),
+        student_scale=max(0.0, float(a.get("student_scale", 0.5))),
         teacher_temp=max(0.1, float(a.get("teacher_temp", 0.8))),
         student_temp=max(0.1, float(a.get("student_temp", 1.0))),
     )
@@ -525,7 +529,7 @@ def api_train_all_start():
         include_khisti= False,   # always off for batch compare (too slow)
         lam           = max(0.0, float(a.get("lam",          0.5))),
         teacher_peak  = max(0.5, float(a.get("teacher_peak", 5.0))),
-        student_scale = max(0.05,float(a.get("student_scale",0.4))),
+        student_scale = max(0.0, float(a.get("student_scale", 0.5))),
         teacher_temp  = max(0.1, float(a.get("teacher_temp", 0.8))),
         student_temp  = max(0.1, float(a.get("student_temp", 1.0))),
     )
@@ -632,8 +636,8 @@ PAGE = r"""
     <input type="number" id="teacher_temp" value="0.8" min="0.1" max="5" step="0.1" style="width:48px">
   </span>
   <span style="border-left:1px solid #2b3960;padding-left:10px">
-    <label title="Student init scale s — standard deviation of the student's initial random logit matrix.  Default 0.4 calibrated to Qwen3-0.6B: a small draft model starts significantly weaker than the 8B teacher, creating a meaningful gap for the loss to close.  Smaller = weaker start (more to learn), larger = near-teacher start (less room to improve).">S-scale</label>
-    <input type="number" id="student_scale" value="0.4" min="0.05" max="5" step="0.05" style="width:52px">
+    <label title="Student knowledge fraction f — how much of the teacher's peak pattern the student inherits at init (simulates a smaller pre-trained model). f=0.25 → student has 25% of teacher peak + noise → BE_before ≈ 2.0–2.5, matching real Qwen-0.6B vs Qwen-8B before distillation. f=0 → fully random (BE ≈ 1.0). f=1 → identical to teacher (nothing to learn).">S-scale</label>
+    <input type="number" id="student_scale" value="0.5" min="0" max="1" step="0.05" style="width:52px">
   </span>
   <span>
     <label title="Student inference temperature τ_S — sharpens (< 1) or flattens (> 1) the student's distribution at draft time.  Higher τ_S = more diffuse student = harder to achieve high BE.  Default 1.0.">S-temp</label>
@@ -699,7 +703,7 @@ PAGE = r"""
       (peak=<span id="wa_peak">4.0</span> → logit concentration, τ_T=<span id="wa_ttemp">1.0</span> → inference sharpness;
       together these simulate teacher model <i>size</i>: high peak + low τ_T = large confident teacher) ·
     <span style="color:#3fa7ff">●</span> <b>Student</b> = trainable <b>draft</b> model <i>q</i>
-      (init scale=<span id="wa_scale">0.5</span> → how random its start is, τ_S=<span id="wa_stemp">1.0</span> → draft sharpness;
+      (knowledge fraction=<span id="wa_scale">0.25</span> → how much of teacher pattern student inherits at init; 0.25 ≈ Qwen-0.6B pre-trained baseline, τ_S=<span id="wa_stemp">1.0</span> → draft sharpness;
       low scale + high τ_S = small weak student; matrix W updated every training step).
     <br>
     The tree = <b id="wa_K">K</b> draft paths, depth <b id="wa_L">L</b>, from
@@ -1424,7 +1428,7 @@ function syncLegend(){
   $('wa_V').textContent    = $('vocab').value        || '32';
   $('wa_peak').textContent = $('teacher_peak').value || '5.0';
   $('wa_ttemp').textContent= $('teacher_temp').value || '0.8';
-  $('wa_scale').textContent= $('student_scale').value|| '0.4';
+  $('wa_scale').textContent= $('student_scale').value|| '0.5';
   $('wa_stemp').textContent= $('student_temp').value || '1.0';
   const kv = $('K').value || '3', lv = $('L').value || '4';
   $('wa_K').textContent = 'K='+kv; $('wa_L').textContent = 'L='+lv;

@@ -82,10 +82,42 @@ class TinyMarkovModel(nn.Module):
 
     @staticmethod
     def student_random(vocab: int, scale: float = 0.5, seed: int = 1) -> "TinyMarkovModel":
-        """A near-uniform / mildly random student — deliberately mismatched from
-        the teacher so that training has something to do and BE starts low."""
+        """A near-uniform / mildly random student — no prior knowledge of the
+        teacher pattern.  BE ≈ 1.0–1.2 before training.  Use student_pretrained
+        to simulate a pre-trained model that already has partial alignment."""
         g = torch.Generator().manual_seed(seed)
         W = scale * torch.randn(vocab, vocab, generator=g)
+        return TinyMarkovModel(vocab, W, trainable=True)
+
+    @staticmethod
+    def student_pretrained(vocab: int, teacher_peak: float = 5.0,
+                           fraction: float = 0.5, noise: float = 0.6,
+                           seed: int = 1) -> "TinyMarkovModel":
+        """Simulates a smaller pre-trained model that already knows the same
+        task as the teacher but less sharply (analogue of Qwen-0.6B vs Qwen-8B,
+        both pre-trained on the same corpus, before any distillation).
+
+        Initialised with the same counting pattern as the teacher but at
+        fraction * teacher_peak strength, plus Gaussian noise.
+
+        With teacher_peak=5.0, fraction=0.5, noise=0.6, V=32:
+          → W[i, i+1] ≈ 2.5  (teacher has 5.0)
+          → Starting BE ≈ 2.0–2.5 (bv/gbv/naive) — matches real Qwen-0.6B / Qwen-8B
+            pre-trained baseline before any DistillSpec distillation training.
+            After 80 steps kl_tree training, reaches BE ~3.5–4.5 (matching SOTA).
+
+        fraction: how much of the teacher's peak the student inherits.
+                  0 = fully random (same as student_random at noise scale).
+                  1 = identical to teacher (nothing to learn).
+                  0.25 = realistic pre-trained gap for 0.6B vs 8B.
+        noise:    std of additive Gaussian logit noise (simulates model-size
+                  variance; larger = weaker/more uncertain student).
+        """
+        g = torch.Generator().manual_seed(seed)
+        W = noise * torch.randn(vocab, vocab, generator=g)
+        for i in range(vocab):
+            W[i, (i + 1) % vocab] += fraction * teacher_peak
+            W[i, (i + 2) % vocab] += 0.5 * fraction * teacher_peak
         return TinyMarkovModel(vocab, W, trainable=True)
 
 
