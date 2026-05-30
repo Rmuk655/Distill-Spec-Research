@@ -150,6 +150,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--steps",  type=int, default=1000,
                    help="Total training steps.")
     p.add_argument("--lr",     type=float, default=3e-5)
+    p.add_argument("--warmup_steps", type=int, default=None,
+                   help="Linear warmup steps (DistillSpec/EAGLE convention). "
+                        "Default: 10%% of --steps.  Set 0 to disable.")
     p.add_argument("--max_new_tokens", type=int, default=80,
                    help="Max tokens the teacher generates per step.")
     p.add_argument("--seed", type=int, default=42)
@@ -608,6 +611,18 @@ def main() -> None:
     optimizer = AdamW(
         [p for p in draft_model.parameters() if p.requires_grad], lr=args.lr)
 
+    # Linear warmup → linear decay schedule (DistillSpec / EAGLE convention).
+    # Zero memory and compute overhead; prevents the constant-LR overshoot seen
+    # when val_loss stops improving after the first few hundred steps.
+    from transformers import get_linear_schedule_with_warmup
+    _warmup = args.warmup_steps if args.warmup_steps is not None else max(50, args.steps // 10)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps  = _warmup,
+        num_training_steps= args.steps,
+    )
+    print(f"LR schedule   : linear warmup {_warmup} steps → linear decay to 0 by step {args.steps}")
+
     torch.manual_seed(args.seed)
 
     # ── Crash-safe resume ─────────────────────────────────────────────────────
@@ -872,6 +887,7 @@ def main() -> None:
                 torch.nn.utils.clip_grad_norm_(
                     [p for p in draft_model.parameters() if p.requires_grad], args.grad_clip)
             optimizer.step()
+            scheduler.step()
             optimizer.zero_grad()
 
         losses.append(loss_val)
@@ -886,7 +902,7 @@ def main() -> None:
             if _wandb:
                 _wandb.log({
                     "train/loss": loss_val,
-                    "train/lr": args.lr,
+                    "train/lr": scheduler.get_last_lr()[0],
                     "train/peak_vram_mb": peak_vram,
                     "step": step + 1,
                 })
@@ -923,7 +939,7 @@ def main() -> None:
         if val_prompts and args.val_every > 0 and (step + 1) % args.val_every == 0:
             v_loss, v_aw = _compute_val_loss(
                 draft_model, target_model, val_prompts, _tok_cache,
-                tokenizer, args, device, family, max_prompts=30,
+                tokenizer, args, device, family, max_prompts=100,
             )
             _val_loss_history.append(v_loss)
             print(f"Step {step+1:4d}/{args.steps} | val_loss: {v_loss:.4f}")
