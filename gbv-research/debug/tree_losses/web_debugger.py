@@ -729,8 +729,8 @@ PAGE = r"""
       <h2>Metrics</h2>
       <div class="stat">
         <div title="Raw training loss fed to the optimizer (gradient signal). More negative = student better aligned to teacher.">train loss <b id="m_loss">—</b></div>
-        <div>matched verifier <b id="m_ver">—</b></div>
-        <div title="Block efficiency under the matched verifier at the current step.">BE(matched) <b id="m_be">—</b></div>
+        <div title="The verifier this loss is designed to align with. For verifier-aligned losses (bv_tree, gbv_tree, …) this is the exact verifier whose E[τ] formula the loss surrogates. For generic losses (kl_tree, forward_kl, …) it defaults to gbv — the strongest verifier — as a reference point. BE(matched) tells you: is training actually improving the target verifier?">matched verifier <b id="m_ver">—</b></div>
+        <div title="Block efficiency under the matched verifier at the current step. This is the primary quality signal: higher = the draft tree is accepted more often by the matched verifier. Compare before-training vs after-training values to see if the loss is working.">BE(matched) <b id="m_be">—</b></div>
       </div>
       <div id="info" title="Tracer decomposition: pure tree-acceptance term (excludes KL-anchor λ). Differs from train loss when λ > 0."></div>
       <h2 style="margin-top:12px">Loss</h2>
@@ -754,6 +754,10 @@ PAGE = r"""
     <h2 style="margin:0; font-size:13px; color:#90a0c0; text-transform:uppercase; letter-spacing:.05em">
       ▤ Compare All — final block efficiency after training</h2>
     <span id="cmpstatus" class="muted"></span>
+  </div>
+  <div class="card" style="margin-bottom:10px">
+    <h2>Loss × Verifier BE matrix  <span class="muted" style="font-weight:400;font-size:10px">cell = final BE · colour intensity = higher is better · hover for Δ</span></h2>
+    <div id="cmp_heatmap" style="overflow-x:auto"></div>
   </div>
   <div style="display:grid; grid-template-columns:1.6fr 1fr; gap:12px">
     <div class="card">
@@ -993,6 +997,75 @@ const LOSS_COL = {
 function lossCol(n){ return LOSS_COL[n] || '#aaa'; }
 
 /** Grouped bar chart: x=verifier, one bar per loss, showing final tree BE. */
+/** Heatmap: rows = losses, columns = verifiers, cell = final BE value.
+ *  Cell background: dark-blue (low) → teal → yellow-green (high).
+ *  Hover tooltip: "before → after (Δ)".
+ */
+function compareHeatmap(store){
+  const container = $('cmp_heatmap');
+  container.innerHTML = '';
+  const lossNames = Object.keys(store).filter(k => !store[k].error);
+  if(!lossNames.length){ container.textContent = 'no data yet'; return; }
+  const verifiers = (store[lossNames[0]].verifiers || []);
+  if(!verifiers.length) return;
+
+  // min/max across all cells for colour scale
+  let lo = Infinity, hi = 0;
+  lossNames.forEach(ln => {
+    verifiers.forEach(v => {
+      const be = (store[ln].tree_after || {})[v];
+      if(be !== undefined){ if(be < lo) lo=be; if(be > hi) hi=be; }
+    });
+  });
+  const span = Math.max(hi - lo, 0.01);
+
+  // colour: dark-navy (low) → teal (mid) → lime-green (high)
+  const cellColor = t => {
+    // t in [0,1]
+    const r = Math.round(t < 0.5 ? 20 + t*80  : 60  + (t-0.5)*60);
+    const g = Math.round(t < 0.5 ? 80 + t*140 : 150 + (t-0.5)*100);
+    const b = Math.round(t < 0.5 ? 120 - t*60 : 90  - (t-0.5)*80);
+    return `rgb(${r},${g},${b})`;
+  };
+  const textColor = t => t > 0.55 ? '#111' : '#ddd';
+
+  const tStyle = `border-collapse:collapse;font-size:11px;min-width:${60+verifiers.length*64}px`;
+  const thStyle = `padding:5px 10px;font-weight:600;color:#7a89b3;font-size:10px;white-space:nowrap;border-bottom:1px solid #1e2d4a`;
+  const rowLabelStyle = `padding:5px 10px;color:#9aa7c7;font-size:11px;white-space:nowrap;border-right:1px solid #1e2d4a;font-weight:600`;
+
+  let html = `<table style="${tStyle}"><thead><tr>`;
+  html += `<th style="${thStyle};text-align:left">loss \\ verifier</th>`;
+  verifiers.forEach(v => {
+    html += `<th style="${thStyle};text-align:center;color:${VCOL[v]||'#9aa7c7'}">${v}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  lossNames.forEach(ln => {
+    const isTree = ln.includes('tree');
+    const rowBg = isTree ? 'background:#12213a' : 'background:#0e1a30';
+    html += `<tr style="${rowBg}">`;
+    html += `<td style="${rowLabelStyle}">${ln}</td>`;
+    verifiers.forEach(v => {
+      const before = (store[ln].tree_before || {})[v] || 0;
+      const after  = (store[ln].tree_after  || {})[v];
+      if(after === undefined){
+        html += `<td style="padding:5px 10px;text-align:center;color:#444;border:1px solid #1a2840">—</td>`;
+        return;
+      }
+      const delta = after - before;
+      const t = (after - lo) / span;
+      const bg = cellColor(t);
+      const tc = textColor(t);
+      const tip = `${ln} × ${v}: BE ${before.toFixed(3)} → ${after.toFixed(3)} (Δ${delta>=0?'+':''}${delta.toFixed(3)})`;
+      html += `<td title="${tip}" style="padding:5px 10px;text-align:center;background:${bg};color:${tc};border:1px solid #1a2840;cursor:default">`;
+      html += `<b>${after.toFixed(2)}</b><br><span style="font-size:9px;opacity:0.85">${delta>=0?'+':''}${delta.toFixed(2)}</span></td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+  container.innerHTML = html;
+}
+
 function compareBEChart(svgId, store){
   const svg=$(svgId); svg.innerHTML='';
   const lossNames = Object.keys(store).filter(k=>!store[k].error);
@@ -1184,6 +1257,7 @@ function pollCompare(){
     // done — fetch compare data
     fetch('/api/compare').then(r=>r.json()).then(cmp=>{
       $('cmpstatus').textContent=`Done — ${Object.keys(cmp.store).length} losses trained`;
+      compareHeatmap(cmp.store);
       compareBEChart('cmp_be_chart', cmp.store);
       compareDeltaChart('cmp_delta_chart', cmp.store);
       renderLoadRow(cmp.store);
