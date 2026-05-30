@@ -1412,6 +1412,24 @@ $('go').onclick=()=>{ if(!S) return; const t=+$('jump').value;
 $('scrub').oninput=e=>goto(+e.target.value);
 clampToVocab();   // enforce K/L <= V-1 on first load
 loadLosses();
+
+// ── Sync "WHAT YOU'RE LOOKING AT" legend with current input values ──────────
+function syncLegend(){
+  $('wa_V').textContent    = $('vocab').value        || '32';
+  $('wa_peak').textContent = $('teacher_peak').value || '5.0';
+  $('wa_ttemp').textContent= $('teacher_temp').value || '0.8';
+  $('wa_scale').textContent= $('student_scale').value|| '0.4';
+  $('wa_stemp').textContent= $('student_temp').value || '1.0';
+  const kv = $('K').value || '3', lv = $('L').value || '4';
+  $('wa_K').textContent = 'K='+kv; $('wa_L').textContent = 'L='+lv;
+}
+// update on every input change
+['vocab','teacher_peak','teacher_temp','student_scale','student_temp','K','L'].forEach(id=>{
+  const el = document.getElementById(id);
+  if(el) el.addEventListener('input', syncLegend);
+});
+syncLegend(); // run immediately on page load
+
 </script>
 </body></html>
 """
