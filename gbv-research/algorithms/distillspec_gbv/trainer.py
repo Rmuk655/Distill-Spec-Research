@@ -288,7 +288,7 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
 
     print(f"Loading base: {draft_model_id}")
     base = transformers.AutoModelForCausalLM.from_pretrained(
-        draft_model_id, torch_dtype=torch.bfloat16)
+        draft_model_id, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
 
     print(f"Loading LoRA: {adapter_dir}")
     # On Windows + OneDrive, PEFT's _get_peft_type calls os.path.isfile on
@@ -578,12 +578,14 @@ def main() -> None:
     target_model.eval()
     for p in target_model.parameters():
         p.requires_grad_(False)
-    print(f"  VRAM: {torch.cuda.memory_allocated() / 1024**2:.0f} MB")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    print(f"  VRAM after teacher: {torch.cuda.memory_allocated() / 1024**2:.0f} MB")
 
     # ── Load draft ────────────────────────────────────────────────────────────
     print("Loading draft...")
     draft_base = transformers.AutoModelForCausalLM.from_pretrained(
-        args.draft, torch_dtype=torch.bfloat16,
+        args.draft, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
         attn_implementation=_ATTN_IMPL).to(device)
     if args.no_lora:
         draft_model = draft_base
