@@ -66,6 +66,9 @@ paper/figures/*.png
 paper/tables/*.tex
 paper/tables/*.csv
 
+# ── Debug sandbox runtime output (PNGs / plots generated at run time) ─────────
+debug/tree_losses/out/
+
 # ── OS / IDE noise ─────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

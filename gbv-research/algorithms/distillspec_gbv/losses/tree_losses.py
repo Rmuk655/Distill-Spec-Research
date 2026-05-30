@@ -642,12 +642,20 @@ def ebe_tree_loss(
 
     Ablation role in the paper table
     ---------------------------------
-      flat EBE      → off-policy, token-level acceptance
-      ebe_tree      → on-policy, token-level acceptance    ← this function
-      bv_tree       → on-policy, full-vocab block integral (theoretically optimal)
+      flat EBE      → OFF-POLICY, token-level acceptance (uses training-data tokens)
+      ebe_tree      → ON-POLICY,  token-level acceptance (uses student's own drafts)  ← this function
+      bv_tree       → ON-POLICY,  full-vocab block integral (theoretically optimal)
 
     If ebe_tree >> flat EBE  → the off-policy mismatch was the main culprit.
     If bv_tree   >> ebe_tree → full-vocab integral also matters (use bv_tree).
+
+    Verifier alignment
+    ------------------
+    Matched to the `naive` verifier.  For K=1 (single path) ebe_tree loss equals
+    E[τ_naive] exactly.  For K>1 the naive_otlp_accept correction term
+    (extra probability from K-1 residual candidates) is NOT reflected here —
+    ebe_tree averages per-path EBE independently, so it is an approximation for K>1.
+    Use naive_tree_loss for the exact multi-path OT alignment.
 
     Args:
         q_probs_dict:  Student distributions WITH grad at non-leaf tree nodes.
@@ -1128,7 +1136,7 @@ TREE_LOSS_NAMES = frozenset({
     "bv_tree", "gbv_tree", "traversal_tree",
     # Verifier-aligned (OT-based)
     "naive_tree", "nss_tree", "specinfer_tree", "spectr_tree", "khisti_tree",
-    # Off-policy ablation
+    # On-policy ablation (uses student's own draft tokens; contrast with off-policy flat ebe)
     "ebe_tree",
 })
 

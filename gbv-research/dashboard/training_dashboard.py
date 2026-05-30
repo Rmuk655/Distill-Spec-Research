@@ -3622,8 +3622,7 @@ if __name__ == "__main__":
     if args.db:
         results_db.DB_PATH = os.path.abspath(args.db)
 
-    # Override log directory
-    global _BE_LOG, _PIPELINE_LOG
+    # Override log directory (_BE_LOG / _PIPELINE_LOG are module-level; no global needed)
     if args.logs:
         _logs_dir = os.path.abspath(args.logs)
         _BE_LOG       = os.path.join(_logs_dir, "be_progress.log")

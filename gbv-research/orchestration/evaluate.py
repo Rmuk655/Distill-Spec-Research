@@ -259,6 +259,12 @@ _ATTN_IMPL = _pick_attn_impl()
 
 _run_warnings: list = []
 
+# Module-level reference to parsed CLI args, set by main() before run_cell() is called.
+# run_cell() is a module-level function and cannot see main()'s local scope, so args
+# must live here for run_cell() to access train_steps, hw_tier, and load_in_4bit.
+args = None
+
+
 def _warn(msg: str):
     """Print a warning immediately AND add it to the end-of-run summary block."""
     print(f"  [WARN] {msg}")
@@ -1146,6 +1152,7 @@ def main():
                         "train curves and eval results in one W&B workspace.")
     p.add_argument("--wandb_entity", default=None,
                    help="W&B entity (team or username). Defaults to your logged-in account.")
+    global args
     args = p.parse_args()
 
     # Default experiment_tag: {hostname}-{YYYYMMDD_HHMM}-v{n}

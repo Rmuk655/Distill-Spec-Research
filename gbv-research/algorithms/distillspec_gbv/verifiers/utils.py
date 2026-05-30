@@ -132,10 +132,15 @@ def load_models(
 
     # Validate custom attention mask compatibility BEFORE compile so we can still
     # inspect the underlying model's layer attributes (compile wraps the module).
-    assert p_model.model.layers[0].attention_type == "full_attention", \
-        "Custom attention mask not compatible with this HF Model"
-    assert q_model.model.layers[0].attention_type == "full_attention", \
-        "Custom attention mask not compatible with this HF Model"
+    # Qwen3DecoderLayer (and some other architectures) do not expose attention_type;
+    # they use standard causal attention which is fully compatible with custom masks.
+    # Only check when the attribute is present to avoid AttributeError on Qwen3.
+    if hasattr(p_model.model.layers[0], "attention_type"):
+        assert p_model.model.layers[0].attention_type == "full_attention", \
+            "Custom attention mask not compatible with this HF Model"
+    if hasattr(q_model.model.layers[0], "attention_type"):
+        assert q_model.model.layers[0].attention_type == "full_attention", \
+            "Custom attention mask not compatible with this HF Model"
 
     # Optionally compile the draft model to reduce Python→CUDA dispatch overhead.
     # dynamic=True handles the varying KV-cache length across autoregressive steps.
