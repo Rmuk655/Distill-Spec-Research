@@ -462,6 +462,92 @@ def api_result():
 
 
 # ---------------------------------------------------------------------------
+# Compare-all: train every core loss with the same hyperparams, store results
+# ---------------------------------------------------------------------------
+
+# Core losses shown in the compare view.  Flat baselines first so the chart
+# reads "baseline → tree" left-to-right.
+COMPARE_LOSSES = [
+    "forward_kl",                                          # published flat baseline
+    "kl_tree", "bv_tree", "gbv_tree",                     # core tree losses
+    "traversal_tree", "ebe_tree",                          # more tree losses
+]
+
+_COMPARE_STORE: dict = {}          # loss_name → session data
+_COMPARE_LOCK  = threading.Lock()
+
+
+def _run_compare_all(job_id: str, base_kwargs: dict):
+    """Train each loss in COMPARE_LOSSES sequentially and store results."""
+    n_losses = len(COMPARE_LOSSES)
+    steps     = base_kwargs["steps"]
+    with _COMPARE_LOCK:
+        _COMPARE_STORE.clear()
+
+    for li, loss_name in enumerate(COMPARE_LOSSES):
+        def _prog(phase, cur, total, _li=li, _ln=loss_name):
+            with _JOBS_LOCK:
+                j = JOBS.get(job_id)
+                if j:
+                    j["phase"] = f"[{_li+1}/{n_losses}] {_ln} — {phase}"
+                    j["cur"]   = _li * steps + cur
+        try:
+            data = build_session(progress=_prog, **{**base_kwargs, "loss_name": loss_name})
+        except Exception as exc:  # noqa: BLE001
+            data = {"error": f"{type(exc).__name__}: {exc}",
+                    "loss_name": loss_name, "tree_after": {}, "flat_after": {}, "loss": []}
+        with _COMPARE_LOCK:
+            _COMPARE_STORE[loss_name] = data
+        # mark step done even on error so progress keeps moving
+        with _JOBS_LOCK:
+            j = JOBS.get(job_id)
+            if j:
+                j["cur"] = (li + 1) * steps
+
+    with _JOBS_LOCK:
+        j = JOBS.get(job_id)
+        if j:
+            j.update(phase="done", cur=n_losses * steps, done=True)
+
+
+@app.route("/api/train_all_start")
+def api_train_all_start():
+    a = request.args
+    steps = min(int(a.get("steps", 80)), 200)
+    base_kwargs = dict(
+        vocab         = max(6,   int(a.get("vocab",          32))),
+        K             = int(a.get("K",             3)),
+        L             = int(a.get("L",             4)),
+        steps         = steps,
+        lr            = float(a.get("lr",          0.1)),
+        be_trials     = min(int(a.get("be_trials", 15)), 200),
+        be_every      = max(1,   int(a.get("be_every",       5))),
+        include_khisti= False,   # always off for batch compare (too slow)
+        lam           = max(0.0, float(a.get("lam",          0.5))),
+        teacher_peak  = max(0.5, float(a.get("teacher_peak", 2.5))),
+        student_scale = max(0.05,float(a.get("student_scale",0.8))),
+        teacher_temp  = max(0.1, float(a.get("teacher_temp", 1.0))),
+        student_temp  = max(0.1, float(a.get("student_temp", 1.0))),
+    )
+    job_id = uuid.uuid4().hex[:12]
+    total  = len(COMPARE_LOSSES) * steps
+    with _JOBS_LOCK:
+        for old in list(JOBS.keys())[:-3]:
+            JOBS.pop(old, None)
+        JOBS[job_id] = {"phase": "starting", "cur": 0, "total": total,
+                        "done": False, "error": None, "data": None}
+    threading.Thread(target=_run_compare_all,
+                     args=(job_id, base_kwargs), daemon=True).start()
+    return jsonify({"job": job_id, "total": total, "losses": COMPARE_LOSSES})
+
+
+@app.route("/api/compare")
+def api_compare():
+    with _COMPARE_LOCK:
+        return jsonify({"losses": COMPARE_LOSSES, "store": dict(_COMPARE_STORE)})
+
+
+# ---------------------------------------------------------------------------
 # Single-page UI
 # ---------------------------------------------------------------------------
 
@@ -571,6 +657,7 @@ PAGE = r"""
     <input type="checkbox" id="khisti">
   </span>
   <button id="train">Train</button>
+  <button id="trainall" class="ghost" title="Train ALL core losses with these hyperparams, then show a side-by-side comparison chart. Takes ~N × single-run time.">▶ Compare All</button>
   <span id="status" class="muted"></span>
 </header>
 <div id="treewarn" style="display:none;padding:4px 16px;background:#2a1a10;border-bottom:1px solid #8b4513;color:#f4a261;font-size:12px">
@@ -641,11 +728,11 @@ PAGE = r"""
     <div class="card">
       <h2>Metrics</h2>
       <div class="stat">
-        <div>loss <b id="m_loss">—</b></div>
+        <div title="Raw training loss fed to the optimizer (gradient signal). More negative = student better aligned to teacher.">train loss <b id="m_loss">—</b></div>
         <div>matched verifier <b id="m_ver">—</b></div>
-        <div>BE(matched) <b id="m_be">—</b></div>
+        <div title="Block efficiency under the matched verifier at the current step.">BE(matched) <b id="m_be">—</b></div>
       </div>
-      <div id="info"></div>
+      <div id="info" title="Tracer decomposition: pure tree-acceptance term (excludes KL-anchor λ). Differs from train loss when λ > 0."></div>
       <h2 style="margin-top:12px">Loss</h2>
       <svg id="losschart" viewBox="0 0 360 110"></svg>
     </div>
@@ -659,6 +746,28 @@ PAGE = r"""
       <div class="legend">flat = single chain (K=1): <b>naive</b>=vanilla speculative sampling, <b>bv</b>=block verification.</div>
     </div>
   </div>
+</div>
+
+<!-- ── Compare All panel (hidden until train_all completes) ── -->
+<div id="cmppanel" style="display:none; padding:12px; border-top:2px solid #3fa7ff22">
+  <div style="display:flex; align-items:center; gap:16px; margin-bottom:10px">
+    <h2 style="margin:0; font-size:13px; color:#90a0c0; text-transform:uppercase; letter-spacing:.05em">
+      ▤ Compare All — final block efficiency after training</h2>
+    <span id="cmpstatus" class="muted"></span>
+  </div>
+  <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:12px">
+    <div class="card">
+      <h2>Final BE per verifier × loss  <span class="muted" style="font-weight:400;font-size:10px">(tree verifiers, matched K)</span></h2>
+      <svg id="cmp_be_chart" viewBox="0 0 700 220"></svg>
+      <div class="vlegend" id="cmp_legend"></div>
+    </div>
+    <div class="card">
+      <h2>Loss curves — all trained losses</h2>
+      <svg id="cmp_loss_chart" viewBox="0 0 360 160"></svg>
+      <div class="vlegend" id="cmp_loss_legend"></div>
+    </div>
+  </div>
+  <div id="cmp_load_row" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; font-size:12px"></div>
 </div>
 
 <script>
@@ -869,6 +978,171 @@ function groupedBars(svgId, before, after){
   svg.appendChild(Object.assign(el('text',{x:W-44,y:14,fill:'#3fa7ff','font-size':10}),{textContent:'■ after'}));
   svg.appendChild(Object.assign(el('text',{x:10,y:14,fill:'#6f7ea8','font-size':10}),{textContent:'↑ block efficiency (K=1)'}));
 }
+
+// ── Compare-all chart helpers ──────────────────────────────────────────────
+
+// Palette for loss functions in the compare view
+const LOSS_COL = {
+  forward_kl:      '#94c2f5',
+  kl_tree:         '#fd7e14',
+  bv_tree:         '#28a046',
+  gbv_tree:        '#3fa7ff',
+  traversal_tree:  '#ef476f',
+  ebe_tree:        '#f5c542',
+};
+function lossCol(n){ return LOSS_COL[n] || '#aaa'; }
+
+/** Grouped bar chart: x=verifier, one bar per loss, showing final tree BE. */
+function compareBEChart(svgId, store){
+  const svg=$(svgId); svg.innerHTML='';
+  const lossNames = Object.keys(store).filter(k=>!store[k].error);
+  if(!lossNames.length){ svg.innerHTML='<text x="10" y="20" fill="#888" font-size="11">no data yet</text>'; return; }
+
+  // Collect verifier names from first session
+  const first = store[lossNames[0]];
+  const verifiers = first.verifiers || [];
+  if(!verifiers.length) return;
+
+  const W=700, H=220, padL=30, padB=40, padT=16, padR=10;
+  const cw = (W - padL - padR) / verifiers.length;   // width per verifier group
+  const bw = cw * 0.7 / lossNames.length;             // width per bar
+
+  // find max BE across all data
+  let maxBE = 1;
+  lossNames.forEach(ln=>{ verifiers.forEach(v=>{ const a=(store[ln].tree_after||{})[v]; if(a>maxBE) maxBE=a; }); });
+  const sy = v => H - padB - (v / maxBE) * (H - padB - padT);
+
+  // x-axis
+  svg.appendChild(el('line',{x1:padL,y1:H-padB,x2:W-padR,y2:H-padB,stroke:'#33406a'}));
+  // y gridlines
+  [0, maxBE/2, maxBE].forEach(v=>{
+    const y=sy(v);
+    svg.appendChild(el('line',{x1:padL,y1:y,x2:W-padR,y2:y,stroke:'#1e2d4a'}));
+    svg.appendChild(Object.assign(el('text',{x:padL-2,y:y+3,fill:'#7a89b3','font-size':8,'text-anchor':'end'}),{textContent:v.toFixed(1)}));
+  });
+
+  verifiers.forEach((vname, vi)=>{
+    const gx = padL + vi * cw + cw * 0.15;
+    lossNames.forEach((ln, li)=>{
+      const be = (store[ln].tree_after||{})[vname] || 0;
+      const beBefore = (store[ln].tree_before||{})[vname] || 0;
+      const x = gx + li * bw;
+      // ghost bar: BE before
+      svg.appendChild(el('rect',{x, y:sy(beBefore), width:bw*0.85, height:H-padB-sy(beBefore),
+                                  fill:'#2a3a5a', stroke:'#3a4a6a', 'stroke-width':0.5}));
+      // coloured bar: BE after
+      svg.appendChild(el('rect',{x, y:sy(be), width:bw*0.85, height:H-padB-sy(be),
+                                  fill:lossCol(ln), opacity:0.85}));
+      // value label on top bar
+      if(be > maxBE*0.05)
+        svg.appendChild(Object.assign(el('text',{x:x+bw*0.4,y:sy(be)-2,fill:'#ddd','font-size':7,'text-anchor':'middle'}),{textContent:be.toFixed(1)}));
+    });
+    // verifier label
+    svg.appendChild(Object.assign(el('text',{x:gx+cw*0.35,y:H-padB+12,fill:'#9aa7c7','font-size':9,'text-anchor':'middle'}),{textContent:vname}));
+  });
+
+  // axis label
+  svg.appendChild(Object.assign(el('text',{x:W/2,y:H-2,fill:'#6f7ea8','font-size':9,'text-anchor':'middle'}),{textContent:'verifier →'}));
+  svg.appendChild(Object.assign(el('text',{x:12,y:padT,fill:'#6f7ea8','font-size':9}),{textContent:'↑ BE after training'}));
+
+  // Loss legend
+  const legBox = $('cmp_legend'); legBox.innerHTML='';
+  lossNames.forEach(ln=>{
+    const sp=document.createElement('span');
+    sp.innerHTML=`<i style="background:${lossCol(ln)}"></i>${ln}`;
+    legBox.appendChild(sp);
+  });
+  // ghost legend
+  const ghost=document.createElement('span');
+  ghost.innerHTML='<i style="background:#2a3a5a;border:1px solid #3a4a6a"></i>before';
+  legBox.appendChild(ghost);
+}
+
+/** Overlay loss curves for all trained losses. */
+function compareLossChart(svgId, store){
+  const svg=$(svgId); svg.innerHTML='';
+  const lossNames = Object.keys(store).filter(k=>!store[k].error && (store[k].loss||[]).length);
+  if(!lossNames.length) return;
+  const W=360, H=160, padL=28, padB=20, padT=12;
+  let lo=Infinity, hi=-Infinity;
+  lossNames.forEach(ln=>{ store[ln].loss.forEach(v=>{ if(v<lo)lo=v; if(v>hi)hi=v; }); });
+  if(hi-lo<1e-9) hi=lo+1;
+  const nSteps = store[lossNames[0]].loss.length;
+  const sx = i => padL + i*(W-padL-6)/Math.max(nSteps-1,1);
+  const sy = v => H-padB - (v-lo)*(H-padB-padT)/(hi-lo);
+
+  svg.appendChild(el('line',{x1:padL,y1:H-padB,x2:W-6,y2:H-padB,stroke:'#33406a'}));
+  lossNames.forEach(ln=>{
+    const ys = store[ln].loss;
+    let d=''; ys.forEach((v,i)=>{ d+=(i?'L':'M')+sx(i)+' '+sy(v)+' '; });
+    svg.appendChild(el('path',{d,fill:'none',stroke:lossCol(ln),'stroke-width':1.8}));
+  });
+  svg.appendChild(Object.assign(el('text',{x:W/2,y:H-3,fill:'#6f7ea8','font-size':8,'text-anchor':'middle'}),{textContent:'training step →'}));
+  svg.appendChild(Object.assign(el('text',{x:padL,y:padT,fill:'#6f7ea8','font-size':8}),{textContent:'↑ loss (lower is better)'}));
+
+  // legend
+  const legBox=$('cmp_loss_legend'); legBox.innerHTML='';
+  lossNames.forEach(ln=>{
+    const sp=document.createElement('span');
+    sp.innerHTML=`<i style="background:${lossCol(ln)}"></i>${ln}`;
+    legBox.appendChild(sp);
+  });
+}
+
+/** "Load into debugger" row of buttons. */
+function renderLoadRow(store){
+  const row=$('cmp_load_row'); row.innerHTML='<span class="muted" style="margin-right:4px">Load into debugger:</span>';
+  Object.keys(store).forEach(ln=>{
+    if(store[ln].error){ row.innerHTML+=`<span class="muted" title="${store[ln].error}">${ln} ✗</span>`; return; }
+    const btn=document.createElement('button');
+    btn.className='ghost'; btn.style.fontSize='11px'; btn.style.padding='3px 8px';
+    btn.textContent=ln;
+    btn.onclick=()=>{ S=store[ln]; cur=S.n-1; vlegend(); render(); $('status').textContent=`Loaded: ${ln} (from Compare All)`; };
+    row.appendChild(btn);
+  });
+}
+
+// ── Compare-all flow ───────────────────────────────────────────────────────
+let _cmpJob=null;
+
+function startCompareAll(){
+  $('trainall').disabled=true;
+  $('cmppanel').style.display='block';
+  $('cmpstatus').textContent='Training…';
+  const p=new URLSearchParams({
+    vocab:$('vocab').value, K:$('K').value, L:$('L').value,
+    steps:$('steps').value, lr:$('lr').value,
+    be_trials:'15', be_every:$('steps').value>80?'10':'5',
+    lam:$('lam').value,
+    teacher_peak:$('teacher_peak').value, student_scale:$('student_scale').value,
+    teacher_temp:$('teacher_temp').value, student_temp:$('student_temp').value,
+  });
+  fetch('/api/train_all_start?'+p).then(r=>r.json()).then(j=>{
+    _cmpJob=j.job;
+    $('cmpstatus').textContent=`Job started — ${j.losses.length} losses × ${$('steps').value} steps`;
+    pollCompare();
+  });
+}
+
+function pollCompare(){
+  if(!_cmpJob) return;
+  fetch('/api/progress?job='+_cmpJob).then(r=>r.json()).then(j=>{
+    if(j.error && j.done){ $('cmpstatus').textContent='Error: '+j.error; $('trainall').disabled=false; return; }
+    const pct=j.total>0?Math.round(100*j.cur/j.total):0;
+    $('cmpstatus').textContent=`${j.phase} (${pct}%)`;
+    if(!j.done){ setTimeout(pollCompare, 1200); return; }
+    // done — fetch compare data
+    fetch('/api/compare').then(r=>r.json()).then(cmp=>{
+      $('cmpstatus').textContent=`Done — ${Object.keys(cmp.store).length} losses trained`;
+      compareBEChart('cmp_be_chart', cmp.store);
+      compareLossChart('cmp_loss_chart', cmp.store);
+      renderLoadRow(cmp.store);
+      $('trainall').disabled=false;
+    });
+  });
+}
+
+document.getElementById('trainall').addEventListener('click', startCompareAll);
 
 function renderBreakdown(bd){
   const box=$('bd'); box.innerHTML='';
