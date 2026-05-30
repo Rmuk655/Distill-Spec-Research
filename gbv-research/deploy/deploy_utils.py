@@ -85,15 +85,21 @@ def install_deps(gbv_dir: str = GBV_DIR) -> None:
     # loads the 8B teacher in ~4.5 GB on a T4.  (The "Skipping import of cpp extensions
     # ... torch >= 2.11" line at startup is from torchao, not bitsandbytes, and is
     # harmless — we don't use torchao kernels directly.)
+    # --no-warn-conflicts suppresses the wall of "X requires pydantic>=2 but you
+    # have pydantic 1.x" messages that Kaggle/Colab's base image generates.
+    # Those are pre-existing conflicts inside the platform's own packages (jax,
+    # langchain, google-adk, etc.) — none of which our pipeline uses.  The flag
+    # tells pip to install what we ask without printing unrelated resolver noise.
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q", "-U", "bitsandbytes>=0.46.1"],
+        [sys.executable, "-m", "pip", "install", "-q", "-U",
+         "--no-warn-conflicts", "bitsandbytes>=0.46.1"],
         check=True,
     )
     # torchao>=0.16.0: Colab ships 0.10.0 but PEFT 0.14+ raises ImportError when
     # torchao is present at an incompatible version (instead of silently skipping it).
     # Upgrading torchao here prevents the LoRA init crash in trainer.py.
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-q",
+        [sys.executable, "-m", "pip", "install", "-q", "--no-warn-conflicts",
          "-r", req, "accelerate", "torchao>=0.16.0"],
         check=True,
     )
