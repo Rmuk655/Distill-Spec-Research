@@ -169,8 +169,8 @@ def _breakdown(tr):
 
 def build_session(loss_name, vocab=32, K=3, L=4, steps=80, lr=0.1,
                   seed=0, be_trials=15, batch=8, include_khisti=False, lam=0.1,
-                  be_every=5, teacher_peak=2.5, student_scale=0.8,
-                  teacher_temp=1.0, student_temp=1.0, progress=None):
+                  be_every=5, teacher_peak=5.0, student_scale=0.4,
+                  teacher_temp=0.8, student_temp=1.0, progress=None):
     torch.manual_seed(seed)
     teacher = TinyMarkovModel.teacher_counting(vocab, peak=teacher_peak, seed=seed)
     student = TinyMarkovModel.student_random(vocab, scale=student_scale, seed=seed + 1)
@@ -419,9 +419,9 @@ def api_train_start():
         be_every=max(1, int(a.get("be_every", 5))),
         include_khisti=a.get("khisti", "0") in ("1", "true", "on"),
         lam=max(0.0, float(a.get("lam", 0.5))),
-        teacher_peak=max(0.5, float(a.get("teacher_peak", 2.5))),
-        student_scale=max(0.05, float(a.get("student_scale", 0.8))),
-        teacher_temp=max(0.1, float(a.get("teacher_temp", 1.0))),
+        teacher_peak=max(0.5, float(a.get("teacher_peak", 5.0))),
+        student_scale=max(0.05, float(a.get("student_scale", 0.4))),
+        teacher_temp=max(0.1, float(a.get("teacher_temp", 0.8))),
         student_temp=max(0.1, float(a.get("student_temp", 1.0))),
     )
     job_id = uuid.uuid4().hex[:12]
@@ -524,9 +524,9 @@ def api_train_all_start():
         be_every      = max(1,   int(a.get("be_every",       5))),
         include_khisti= False,   # always off for batch compare (too slow)
         lam           = max(0.0, float(a.get("lam",          0.5))),
-        teacher_peak  = max(0.5, float(a.get("teacher_peak", 2.5))),
-        student_scale = max(0.05,float(a.get("student_scale",0.8))),
-        teacher_temp  = max(0.1, float(a.get("teacher_temp", 1.0))),
+        teacher_peak  = max(0.5, float(a.get("teacher_peak", 5.0))),
+        student_scale = max(0.05,float(a.get("student_scale",0.4))),
+        teacher_temp  = max(0.1, float(a.get("teacher_temp", 0.8))),
         student_temp  = max(0.1, float(a.get("student_temp", 1.0))),
     )
     job_id = uuid.uuid4().hex[:12]
@@ -624,16 +624,16 @@ PAGE = r"""
   </span>
 
   <span style="border-left:1px solid #2b3960;padding-left:10px">
-    <label title="Teacher 'peak' p — controls how peaked (deterministic) the frozen teacher model is.  Higher → more concentrated next-token distribution → harder for student to match.  Analogue of teacher model size: bigger model → higher peak.  Default 4.0.">T-peak</label>
-    <input type="number" id="teacher_peak" value="2.5" min="0.5" max="20" step="0.5" style="width:52px">
+    <label title="Teacher 'peak' p — controls how peaked (deterministic) the frozen teacher model is.  Higher → more concentrated next-token distribution → harder for student to match.  Default 5.0 calibrated to Qwen3-8B: a strong 8B model is very confident. Try 2–3 for a weak teacher, 8–10 for a near-deterministic one.">T-peak</label>
+    <input type="number" id="teacher_peak" value="5.0" min="0.5" max="20" step="0.5" style="width:52px">
   </span>
   <span>
-    <label title="Teacher inference temperature τ_T — sharpens (< 1) or flattens (> 1) the teacher's distribution at inference time, independently of its logit scale.  Lower τ_T = more deterministic teacher = stronger capability gap.  Default 1.0.">T-temp</label>
-    <input type="number" id="teacher_temp" value="1.0" min="0.1" max="5" step="0.1" style="width:48px">
+    <label title="Teacher inference temperature τ_T — sharpens (< 1) or flattens (> 1) the teacher's distribution at inference time.  Default 0.8 matches teacher_temperature in all YAML training configs (kaggle/colab/a100).  Lower = more deterministic teacher.">T-temp</label>
+    <input type="number" id="teacher_temp" value="0.8" min="0.1" max="5" step="0.1" style="width:48px">
   </span>
   <span style="border-left:1px solid #2b3960;padding-left:10px">
-    <label title="Student init scale s — standard deviation of the student's initial random logit matrix.  Smaller → student starts closer to uniform (easier).  Larger → more random start (harder).  Analogue of student model size: weaker student → lower scale.  Default 0.5.">S-scale</label>
-    <input type="number" id="student_scale" value="0.8" min="0.05" max="5" step="0.05" style="width:52px">
+    <label title="Student init scale s — standard deviation of the student's initial random logit matrix.  Default 0.4 calibrated to Qwen3-0.6B: a small draft model starts significantly weaker than the 8B teacher, creating a meaningful gap for the loss to close.  Smaller = weaker start (more to learn), larger = near-teacher start (less room to improve).">S-scale</label>
+    <input type="number" id="student_scale" value="0.4" min="0.05" max="5" step="0.05" style="width:52px">
   </span>
   <span>
     <label title="Student inference temperature τ_S — sharpens (< 1) or flattens (> 1) the student's distribution at draft time.  Higher τ_S = more diffuse student = harder to achieve high BE.  Default 1.0.">S-temp</label>
