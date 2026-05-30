@@ -656,10 +656,12 @@ PAGE = r"""
     <label title="Include khisti verifier in charts — uses a scipy LP solver (~0.5 s/call), much slower.">+khisti</label>
     <input type="checkbox" id="khisti">
   </span>
-  <button id="train">Train</button>
-  <button id="trainall" class="ghost" title="Train ALL core losses with these hyperparams, then show a side-by-side comparison chart. Takes ~N × single-run time.">▶ Compare All</button>
-  <span id="status" class="muted"></span>
 </header>
+<div style="display:flex; align-items:center; gap:10px; padding:6px 16px 8px; background:var(--panel); border-bottom:1px solid #26314f; flex-wrap:wrap">
+  <button id="train">▶ Train</button>
+  <button id="trainall" class="ghost" title="Train ALL core losses with these hyperparams, then show a side-by-side comparison chart. Takes ~N × single-run time." style="padding:5px 14px; font-size:12px">▤ Compare All losses</button>
+  <span id="status" class="muted"></span>
+</div>
 <div id="treewarn" style="display:none;padding:4px 16px;background:#2a1a10;border-bottom:1px solid #8b4513;color:#f4a261;font-size:12px">
   ⚗ <b>Experimental loss</b> — not yet published. Published standard baselines are:
   <code>forward_kl</code>, <code>reverse_kl</code>, <code>jsd</code>, <code>l1</code>.
