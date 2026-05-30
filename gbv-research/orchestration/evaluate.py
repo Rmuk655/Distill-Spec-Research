@@ -483,8 +483,17 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     """
     import torch
     import numpy as np
+    import torch.nn.functional as _F
     from transformers import AutoTokenizer, AutoModelForCausalLM
-    from specInfer.generator import Generator
+
+    # specInfer lives in OSD/distill/ which may not be present on every machine.
+    # Fall back to an inline draft-propose / target-verify loop when it is absent.
+    try:
+        from specInfer.generator import Generator as _SpecInferGenerator
+        _SPECINFER_AVAILABLE = True
+    except ImportError:
+        _SpecInferGenerator = None
+        _SPECINFER_AVAILABLE = False
 
     _owns_models = (preloaded is None)   # True → we loaded, we must free
 
@@ -545,15 +554,19 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     if device == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
-    generator = Generator(
-        small_model=student_model, large_model=teacher_model,
-        tokenizer=tokenizer, max_propose_num=max_propose,
-        is_encoder_decoder=False, use_cache=True,
-    )
-
     alphas, per_prompt_rows = [], []
     total_tokens, total_time = 0, 0.0
     draft_times, verify_times = [], []
+
+    if _SPECINFER_AVAILABLE:
+        generator = _SpecInferGenerator(
+            small_model=student_model, large_model=teacher_model,
+            tokenizer=tokenizer, max_propose_num=max_propose,
+            is_encoder_decoder=False, use_cache=True,
+        )
+    else:
+        generator = None
+        print("  [alpha] specInfer not found — using inline draft-propose/verify fallback")
 
     for i, item in enumerate(prompts):
         prompt = item["prompt"] if isinstance(item, dict) else item
@@ -563,22 +576,85 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         if device == "cuda":
             torch.cuda.synchronize()
         t0 = time.perf_counter()
-        with torch.inference_mode():
-            output = generator.generate(
-                input_ids=input_ids,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                attention_mask=torch.ones_like(input_ids),
-            )
-        if device == "cuda":
-            torch.cuda.synchronize()
-        elapsed = time.perf_counter() - t0
 
-        gen_tokens = (output.output[0].shape[-1] - input_ids.shape[-1]
-                      if hasattr(output.output[0], "shape") else max_tokens)
-        total_tokens += gen_tokens
-        total_time += elapsed
-        alpha = float(output.alpha_sum) / output.sample_steps if output.sample_steps > 0 else 0.0
+        if _SPECINFER_AVAILABLE:
+            with torch.inference_mode():
+                output = generator.generate(
+                    input_ids=input_ids,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    attention_mask=torch.ones_like(input_ids),
+                )
+            if device == "cuda":
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - t0
+
+            gen_tokens = (output.output[0].shape[-1] - input_ids.shape[-1]
+                          if hasattr(output.output[0], "shape") else max_tokens)
+            total_tokens += gen_tokens
+            total_time += elapsed
+            alpha = float(output.alpha_sum) / output.sample_steps if output.sample_steps > 0 else 0.0
+        else:
+            # Inline fallback: run draft-propose / target-verify without specInfer.
+            # Each round: draft proposes `max_propose` tokens greedily; target scores
+            # the full candidate sequence; acceptance is sampled under temperature.
+            accepted_total, proposed_total = 0, 0
+            cur_ids = input_ids
+            with torch.inference_mode():
+                for _ in range(max(1, max_tokens // max_propose)):
+                    # Draft: greedy argmax over next max_propose positions
+                    d_logits = student_model(cur_ids).logits[0, -1:]   # (1, V)
+                    draft_tokens = []
+                    tmp_ids = cur_ids
+                    for _k in range(max_propose):
+                        tok = int(d_logits.argmax(dim=-1))
+                        draft_tokens.append(tok)
+                        next_tok = torch.tensor([[tok]], device=device)
+                        tmp_ids = torch.cat([tmp_ids, next_tok], dim=1)
+                        d_logits = student_model(tmp_ids).logits[0, -1:]
+
+                    # Target: score the full candidate (cur + draft) in one forward pass
+                    cand_ids = tmp_ids  # cur_ids + draft_tokens appended above
+                    t_all_logits = teacher_model(cand_ids).logits[0]  # (seq, V)
+                    # Re-run draft in one shot to get per-token logits for ratio
+                    d_all_logits = student_model(cand_ids).logits[0]
+
+                    # Acceptance under temperature (sequential rejection sampling)
+                    bonus_start = cur_ids.shape[-1] - 1   # position of last cur token
+                    n_accepted = 0
+                    for _k in range(max_propose):
+                        pos = bonus_start + _k
+                        tok = draft_tokens[_k]
+                        if temperature > 0:
+                            t_p = float(_F.softmax(t_all_logits[pos] / temperature, dim=-1)[tok])
+                            d_p = float(_F.softmax(d_all_logits[pos] / temperature, dim=-1)[tok])
+                            ratio = t_p / max(d_p, 1e-9)
+                        else:
+                            ratio = 1.0  # greedy: accept if draft == target argmax
+                            ratio = 1.0 if int(t_all_logits[pos].argmax()) == tok else 0.0
+                        proposed_total += 1
+                        if torch.rand(1).item() < min(1.0, ratio):
+                            n_accepted += 1
+                            accepted_total += 1
+                        else:
+                            break
+
+                    # Advance cur_ids by accepted tokens (+1 bonus token from target)
+                    bonus = int(t_all_logits[bonus_start + n_accepted].argmax())
+                    new_toks = draft_tokens[:n_accepted] + [bonus]
+                    new_tensor = torch.tensor([new_toks], device=device)
+                    cur_ids = torch.cat([cur_ids, new_tensor], dim=1)
+                    if cur_ids.shape[-1] >= input_ids.shape[-1] + max_tokens:
+                        break
+
+            if device == "cuda":
+                torch.cuda.synchronize()
+            elapsed = time.perf_counter() - t0
+            gen_tokens = cur_ids.shape[-1] - input_ids.shape[-1]
+            total_tokens += gen_tokens
+            total_time += elapsed
+            alpha = accepted_total / proposed_total if proposed_total > 0 else 0.0
+
         alphas.append(alpha)
         per_prompt_rows.append(dict(prompt_idx=i, category=category, alpha=alpha,
                                     block_eff=None, gen_tokens=gen_tokens,

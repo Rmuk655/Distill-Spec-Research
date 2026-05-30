@@ -71,6 +71,21 @@ from distillspec_gbv.losses.tree_losses import (  # noqa: E402
 
 DEFAULT_LAMBDA = 0.1   # same weight ebe_tree uses for its KL regulariser
 
+# Per-variant recommended λ defaults. Reflects how much gradient detachment the
+# primary loss has: fully-detached losses need λ=1.0; partially-detached use 0.3–0.5;
+# full-gradient variants use 0.1 (KL is extra regularisation, not the sole signal).
+VARIANT_LAM_DEFAULTS: Dict[str, float] = {
+    "bv_tree_kl":       0.5,   # BV detaches chain weights upstream
+    "bv_tree_fullgrad": 0.1,   # full gradient, no detachment — KL is extra regularisation
+    "bv_tree_faithful": 0.3,   # product-clamp version; partial detach
+    "gbv_tree_kl":      0.5,   # GBV selects one path, detaches others — KL covers 2/3 of nodes
+    "gbv_tree_faithful":0.3,   # similar to gbv_kl but product clamp
+    "spectr_tree_ift":  0.3,   # IFT grad through ρ; partial grad
+    "spectr_tree_kl":   1.0,   # ρ fully detached — KL is sole signal for ρ terms
+    "khisti_tree_kl":   1.0,   # LP fully detached — KL is literally the only gradient
+    "traversal_tree_kl":0.5,   # leaf-weight; terminal nodes have no grad
+}
+
 
 # ---------------------------------------------------------------------------
 # Shared pieces
@@ -201,19 +216,19 @@ def _alpha_spectr_ift(p: torch.Tensor, q: torch.Tensor, K: int) -> torch.Tensor:
 # weight of the KL(p‖q) anchor; set lam=0 to see the raw variant, raise it (via the
 # web slider) to watch a degrading variant become a learner.
 
-def bv_tree_kl(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
+def bv_tree_kl(q, p, paths, L, K, lam=0.5):
     """REAL bv_tree (factor clamp, detached grad) + λ·KL anchor."""
     return bv_tree_loss_all_paths(q, p, paths, L) + lam * _kl_anchor(q, p)
 
 
-def bv_tree_fullgrad(q, p, paths, L, K, lam=0.0):
+def bv_tree_fullgrad(q, p, paths, L, K, lam=0.1):
     """bv surrogate with NO detach (full pathwise gradient) + optional λ·KL.
-    Default lam=0 to expose the raw un-detached gradient."""
+    Full gradient means KL is extra regularisation, not the sole signal."""
     base = _bv_surrogate_all(q, p, paths, L, product_clamp=False, detach=False)
     return base + lam * _kl_anchor(q, p) if lam > 0 else base
 
 
-def bv_tree_faithful(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
+def bv_tree_faithful(q, p, paths, L, K, lam=0.3):
     """Verifier-correct PRODUCT clamp  w_i=min(1, w_{i-1}·p/q)  (recovery allowed)
     on the proven detached gradient + λ·KL.  The product clamp keeps w larger, so
     this variant needs a LARGER λ than bv_tree_kl to let the anchor lead."""
@@ -221,12 +236,12 @@ def bv_tree_faithful(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
             + lam * _kl_anchor(q, p))
 
 
-def gbv_tree_kl(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
+def gbv_tree_kl(q, p, paths, L, K, lam=0.5):
     """REAL gbv_tree + λ·KL anchor."""
     return gbv_tree_loss(q, p, paths, L, K) + lam * _kl_anchor(q, p)
 
 
-def gbv_tree_faithful(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
+def gbv_tree_faithful(q, p, paths, L, K, lam=0.3):
     """GBV select (no grad) → q_skew (with grad) → product-clamp BV + λ·KL."""
     with torch.no_grad():
         best = _gbv_select_path(q, p, paths, L)
@@ -237,24 +252,26 @@ def gbv_tree_faithful(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
             + lam * _kl_anchor(q, p))
 
 
-def spectr_tree_ift(q, p, paths, L, K, lam=0.0):
-    """SpecTr with a REAL gradient through ρ (implicit function theorem) + optional
-    λ·KL.  Default lam=0 to isolate the IFT effect."""
+def spectr_tree_ift(q, p, paths, L, K, lam=0.3):
+    """SpecTr with a REAL gradient through ρ (implicit function theorem) + λ·KL.
+    IFT grad through ρ gives partial gradient; anchor complements it."""
     base = _verifier_aligned_tree_loss(_alpha_spectr_ift, q, p, paths, L, K)
     return base + lam * _kl_anchor(q, p) if lam > 0 else base
 
 
-def spectr_tree_kl(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
-    """REAL spectr_tree (ρ detached) + λ·KL anchor."""
+def spectr_tree_kl(q, p, paths, L, K, lam=1.0):
+    """REAL spectr_tree (ρ detached) + λ·KL anchor.
+    ρ fully detached → KL is sole training signal for ρ terms; needs λ=1.0."""
     return spectr_tree_loss(q, p, paths, L, K) + lam * _kl_anchor(q, p)
 
 
-def khisti_tree_kl(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
-    """REAL khisti_tree (LP-free surrogate) + λ·KL anchor."""
+def khisti_tree_kl(q, p, paths, L, K, lam=1.0):
+    """REAL khisti_tree (LP-free surrogate) + λ·KL anchor.
+    LP fully detached → KL is literally the only gradient; needs λ=1.0."""
     return khisti_tree_loss(q, p, paths, L, K) + lam * _kl_anchor(q, p)
 
 
-def traversal_tree_kl(q, p, paths, L, K, lam=DEFAULT_LAMBDA):
+def traversal_tree_kl(q, p, paths, L, K, lam=0.5):
     """REAL traversal_tree (leaf-weight surrogate) + λ·KL anchor."""
     return traversal_tree_loss(q, p, paths, L, K) + lam * _kl_anchor(q, p)
 
@@ -295,7 +312,8 @@ def variant_descriptions() -> Dict[str, str]:
 def compute_any(name: str, q, p, paths, L, K, lam: float = DEFAULT_LAMBDA) -> torch.Tensor:
     """Dispatch to a production loss or a variant — same signature for both.
     `lam` (KL anchor weight) is forwarded only to variants; production losses
-    ignore it."""
+    ignore it.  Callers that want the per-variant recommended default should
+    pass `lam=VARIANT_LAM_DEFAULTS.get(name, DEFAULT_LAMBDA)`."""
     if name in VARIANTS:
         return VARIANTS[name][0](q, p, paths, L, K, lam)
     return compute_tree_loss(name, q, p, paths, L, K)

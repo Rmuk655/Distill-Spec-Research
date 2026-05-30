@@ -202,9 +202,9 @@ def print_and_plot_trace(tr):
 # 3. Train and watch
 # ===========================================================================
 
-def train_and_watch(loss_name, vocab=6, K=3, L=4, temp=1.0, steps=150,
+def train_and_watch(loss_name, vocab=32, K=3, L=4, temp=1.0, steps=150,
                      lr=0.05, batch=8, eval_every=15, n_trials=160, seed=0,
-                     teacher_peak=6.0, student_scale=0.3,
+                     teacher_peak=2.5, student_scale=0.8,
                      teacher_temp=None, student_temp=None):
     torch.manual_seed(seed)
     tt = teacher_temp if teacher_temp is not None else temp

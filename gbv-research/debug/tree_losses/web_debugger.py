@@ -167,9 +167,9 @@ def _breakdown(tr):
 # Training + snapshot recording
 # ---------------------------------------------------------------------------
 
-def build_session(loss_name, vocab=6, K=3, L=4, steps=80, lr=0.1,
+def build_session(loss_name, vocab=32, K=3, L=4, steps=80, lr=0.1,
                   seed=0, be_trials=15, batch=8, include_khisti=False, lam=0.1,
-                  be_every=5, teacher_peak=6.0, student_scale=0.3,
+                  be_every=5, teacher_peak=2.5, student_scale=0.8,
                   teacher_temp=1.0, student_temp=1.0, progress=None):
     torch.manual_seed(seed)
     teacher = TinyMarkovModel.teacher_counting(vocab, peak=teacher_peak, seed=seed)
@@ -377,12 +377,13 @@ def api_losses():
     all_desc = {**_FLAT_DESCRIPTIONS, **_TREE_DESCRIPTIONS, **{k: f"EXPERIMENTAL VARIANT · {v}" for k, v in var_desc.items()}}
     uses_lam = [k for k, v in var_desc.items() if 'λ' in v]
     return jsonify({
-        "flat":       sorted(_FLAT_DESCRIPTIONS.keys()),
-        "production": sorted(TREE_LOSS_NAMES),
-        "variants":   list(LV.VARIANTS.keys()),
+        "flat":         sorted(_FLAT_DESCRIPTIONS.keys()),
+        "production":   sorted(TREE_LOSS_NAMES),
+        "variants":     list(LV.VARIANTS.keys()),
         "descriptions": all_desc,
-        "uses_lam":   uses_lam,
-        "map":        LOSS_TO_VERIFIER,
+        "uses_lam":     uses_lam,
+        "lam_defaults": LV.VARIANT_LAM_DEFAULTS,
+        "map":          LOSS_TO_VERIFIER,
     })
 
 
@@ -409,7 +410,7 @@ def api_train_start():
     steps = min(int(a.get("steps", 80)), 300)
     kwargs = dict(
         loss_name=a.get("loss", "kl_tree"),
-        vocab=max(6, int(a.get("vocab", 6))),
+        vocab=max(6, int(a.get("vocab", 32))),
         K=int(a.get("K", 3)),
         L=int(a.get("L", 4)),
         steps=steps,
@@ -417,9 +418,9 @@ def api_train_start():
         be_trials=min(int(a.get("be_trials", 15)), 200),
         be_every=max(1, int(a.get("be_every", 5))),
         include_khisti=a.get("khisti", "0") in ("1", "true", "on"),
-        lam=max(0.0, float(a.get("lam", 0.1))),
-        teacher_peak=max(0.5, float(a.get("teacher_peak", 6.0))),
-        student_scale=max(0.05, float(a.get("student_scale", 0.3))),
+        lam=max(0.0, float(a.get("lam", 0.5))),
+        teacher_peak=max(0.5, float(a.get("teacher_peak", 2.5))),
+        student_scale=max(0.05, float(a.get("student_scale", 0.8))),
         teacher_temp=max(0.1, float(a.get("teacher_temp", 1.0))),
         student_temp=max(0.1, float(a.get("student_temp", 1.0))),
     )
@@ -522,7 +523,7 @@ PAGE = r"""
 
   <span style="border-left:1px solid #2b3960;padding-left:10px">
     <label title="Vocabulary size V ≥ 6.  All tokens are integer IDs 0…V-1.  K, L, and model size all scale with V.">V</label>
-    <input type="number" id="vocab" value="6" min="6" max="64" style="width:52px"
+    <input type="number" id="vocab" value="32" min="6" max="64" style="width:52px"
            oninput="clampToVocab()">
   </span>
   <span>
@@ -538,7 +539,7 @@ PAGE = r"""
 
   <span style="border-left:1px solid #2b3960;padding-left:10px">
     <label title="Teacher 'peak' p — controls how peaked (deterministic) the frozen teacher model is.  Higher → more concentrated next-token distribution → harder for student to match.  Analogue of teacher model size: bigger model → higher peak.  Default 4.0.">T-peak</label>
-    <input type="number" id="teacher_peak" value="6.0" min="0.5" max="20" step="0.5" style="width:52px">
+    <input type="number" id="teacher_peak" value="2.5" min="0.5" max="20" step="0.5" style="width:52px">
   </span>
   <span>
     <label title="Teacher inference temperature τ_T — sharpens (< 1) or flattens (> 1) the teacher's distribution at inference time, independently of its logit scale.  Lower τ_T = more deterministic teacher = stronger capability gap.  Default 1.0.">T-temp</label>
@@ -546,7 +547,7 @@ PAGE = r"""
   </span>
   <span style="border-left:1px solid #2b3960;padding-left:10px">
     <label title="Student init scale s — standard deviation of the student's initial random logit matrix.  Smaller → student starts closer to uniform (easier).  Larger → more random start (harder).  Analogue of student model size: weaker student → lower scale.  Default 0.5.">S-scale</label>
-    <input type="number" id="student_scale" value="0.3" min="0.05" max="5" step="0.05" style="width:52px">
+    <input type="number" id="student_scale" value="0.8" min="0.05" max="5" step="0.05" style="width:52px">
   </span>
   <span>
     <label title="Student inference temperature τ_S — sharpens (< 1) or flattens (> 1) the student's distribution at draft time.  Higher τ_S = more diffuse student = harder to achieve high BE.  Default 1.0.">S-temp</label>
@@ -676,7 +677,7 @@ const NS='http://www.w3.org/2000/svg';
 function el(tag,attrs){ const e=document.createElementNS(NS,tag);
   for(const k in attrs) e.setAttribute(k,attrs[k]); return e; }
 
-let ALLDESC = {}, USES_LAM = new Set();
+let ALLDESC = {}, USES_LAM = new Set(), LAM_DEFAULTS = {};
 
 function clampToVocab(){
   const V = Math.max(6, parseInt($('vocab').value)||6);
