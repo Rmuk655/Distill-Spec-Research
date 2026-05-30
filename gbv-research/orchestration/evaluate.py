@@ -444,8 +444,9 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     for item in prompts:
         prompt = item.get("prompt", item) if isinstance(item, dict) else item
         ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+        attn = torch.ones_like(ids)   # suppress pad==eos attention_mask warning
         with torch.inference_mode():
-            out = model.generate(ids, max_new_tokens=max_tokens,
+            out = model.generate(ids, attention_mask=attn, max_new_tokens=max_tokens,
                                  do_sample=False,
                                  pad_token_id=tokenizer.pad_token_id)
         generated = tokenizer.decode(out[0][ids.shape[-1]:], skip_special_tokens=True)
@@ -494,6 +495,10 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     except ImportError:
         _SpecInferGenerator = None
         _SPECINFER_AVAILABLE = False
+        # Likely cause: OSD submodule not initialised on this machine.
+        # Fix: run  git submodule update --init --recursive  from the repo root.
+        # Alpha measurements will use the inline fallback (greedy draft) which
+        # gives slightly different alpha values than the real specInfer generator.
 
     _owns_models = (preloaded is None)   # True → we loaded, we must free
 
@@ -567,6 +572,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     else:
         generator = None
         print("  [alpha] specInfer not found — using inline draft-propose/verify fallback")
+        print("  [alpha] To use real specInfer: git submodule update --init --recursive")
 
     for i, item in enumerate(prompts):
         prompt = item["prompt"] if isinstance(item, dict) else item
