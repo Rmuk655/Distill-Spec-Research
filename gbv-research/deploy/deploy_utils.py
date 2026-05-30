@@ -65,6 +65,58 @@ def _auth_repo_url(base_url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Setup: patch OSD submodule __init__.py files
+# ---------------------------------------------------------------------------
+
+def patch_osd_inits(repo_dir: str = None) -> None:
+    """Ensure every Python package directory under the OSD submodule has an
+    ``__init__.py`` so that ``from specInfer.generator import ...`` and similar
+    OSD imports work after a plain ``git submodule update --init``.
+
+    The upstream OSD repo omits ``__init__.py`` from some of its directories
+    (e.g. ``distill/specInfer/``).  Since we cannot push to that third-party
+    repo, we create the missing files locally as part of every environment
+    setup.  The function is **idempotent** — it is safe to call on every boot.
+
+    A directory is patched when it contains at least one ``.py`` file **and**
+    does not already have an ``__init__.py``.  Directories whose name starts
+    with ``.`` or ``__`` (e.g. ``__pycache__``) are skipped.
+    """
+    if repo_dir is None:
+        # Resolve relative to this file: deploy_utils.py lives in
+        # <repo>/gbv-research/deploy/ → repo root is two levels up.
+        repo_dir = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        )
+    osd_dir = os.path.join(repo_dir, "OSD")
+    if not os.path.isdir(osd_dir):
+        print("[patch_osd] OSD submodule not found — skipping (run: git submodule update --init)")
+        return
+
+    patched = []
+    for dirpath, dirnames, filenames in os.walk(osd_dir):
+        # Skip hidden / cache dirs (modify in-place to prune walk)
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and not d.startswith("__")
+        ]
+        if "__init__.py" in filenames:
+            continue
+        if any(f.endswith(".py") for f in filenames):
+            init_path = os.path.join(dirpath, "__init__.py")
+            with open(init_path, "w") as fh:
+                fh.write("")  # empty marker file
+            patched.append(os.path.relpath(init_path, repo_dir))
+
+    if patched:
+        print(f"[patch_osd] Created {len(patched)} missing __init__.py file(s):")
+        for p in patched:
+            print(f"  + {p}")
+    else:
+        print("[patch_osd] All OSD package directories already have __init__.py — nothing to do.")
+
+
+# ---------------------------------------------------------------------------
 # Setup: install deps
 # ---------------------------------------------------------------------------
 
@@ -512,6 +564,12 @@ def bootstrap(
 
     # 5. Install pip dependencies (wiped on every session restart).
     install_deps(gbv_dir)
+
+    # 5b. Patch OSD submodule: create missing __init__.py files so that
+    #     `from specInfer.generator import ...` and similar imports work.
+    #     The upstream OSD repo omits these; fresh `git submodule update --init`
+    #     removes any local fix.  This call is idempotent.
+    patch_osd_inits(repo_dir=repo_dir)
 
     # 6. HF model cache: use pre-attached Kaggle dataset (instant) or download.
     if kaggle_hf_dataset and os.path.isdir(kaggle_hf_dataset):
