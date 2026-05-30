@@ -33,6 +33,12 @@ models:
 training:
   steps: 2000                   # A100 is ~4x faster than T4; 2000 steps ~= 15-20 min training
   lr: 3.0e-5
+  warmup_steps: 200             # 10% of 2000 steps; linear warmup → linear decay to 0
+                                # DistillSpec/EAGLE convention — prevents early val-loss bounce
+  grad_accum: 16                # effective batch 16 (matches DistillSpec paper); zero VRAM cost
+                                # On A100 you could also raise to true batch=4 per step (--grad_accum 4
+                                # with physical batch 4) for the same effective batch with fewer optimizer
+                                # steps. Grad-accum is simpler and works now without any code change.
   lora_r: 16                    # larger rank for bigger teacher-student gap (8B -> 0.6B)
   lora_alpha: 32
   max_new_tokens: 128           # longer sequences; A100 handles the KV cache easily
