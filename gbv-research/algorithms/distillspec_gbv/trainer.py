@@ -399,16 +399,14 @@ def _compute_val_loss(
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
                 return_dict_in_generate=True,
-                output_scores=True,
             )
-            if not gen_out.scores:
+            full_ids = gen_out.sequences
+            gen_len  = full_ids.shape[1] - plen
+            if gen_len == 0:
                 continue
 
-            full_ids = gen_out.sequences.clone()
-            # Undo family-specific temperature pre-scaling
-            t_log = (torch.stack(gen_out.scores, dim=0)
-                     .squeeze(1).float())
-            t_log = family.recover_raw_logits(t_log, args.teacher_temp)
+            # Single parallel forward pass — raw logits, no recover_raw_logits needed.
+            t_log = target_model(full_ids).logits[0, plen - 1:-1, :].float()
 
             student_logits = draft_model(full_ids).logits[:, :-1, :].float()
             s_log   = student_logits[:, plen - 1:, :].squeeze(0)
@@ -794,18 +792,30 @@ def main() -> None:
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                     return_dict_in_generate=True,
-                    output_scores=True,
+                    # output_scores=True is intentionally omitted: storing 80
+                    # per-token score tensors in a Python list and then
+                    # torch.stack()-ing them on every step is the primary CPU
+                    # bottleneck (80 small sequential GPU dispatches + Python
+                    # list append × 80 + stack).  Instead we do one parallel
+                    # teacher forward pass on the full sequence below, which is
+                    # a single large GPU matmul — same FLOPs, far less Python
+                    # dispatch overhead → significantly better GPU utilisation.
                 )
-            if not gen_out.scores:
+
+            full_ids = gen_out.sequences
+            plen     = prompt_ids.shape[1]
+            gen_len  = full_ids.shape[1] - plen
+            if gen_len == 0:
                 losses.append(float("nan"))
                 continue
 
-            full_ids = gen_out.sequences.clone()
-            plen     = prompt_ids.shape[1]
-
-            # Recover raw logits (undo family-specific temp pre-scaling)
-            raw_scores = torch.stack(gen_out.scores, dim=0).squeeze(1).float()
-            t_log = family.recover_raw_logits(raw_scores, args.teacher_temp)
+            # Single parallel teacher forward pass for all generated positions.
+            # Mathematically identical to output_scores: causal masking ensures
+            # logits[0, plen-1+i] == the distribution the teacher used when
+            # sampling token i during generation.  Raw logits (no temperature
+            # applied), so recover_raw_logits() is not needed.
+            with torch.no_grad():
+                t_log = target_model(full_ids).logits[0, plen - 1:-1, :].float()
 
             # Draft: forward pass with gradient
             draft_model.train()
