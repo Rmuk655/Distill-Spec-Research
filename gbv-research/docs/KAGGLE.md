@@ -66,6 +66,8 @@ Add-ons → Secrets → + Add Secret:
 | `WANDB_API_KEY` | From https://wandb.ai/authorize | Optional — offline mode if missing |
 | `GITHUB_TOKEN` | PAT with `repo` scope | Only if the repo is private |
 | `HF_TOKEN` | From https://huggingface.co/settings/tokens | **Not needed** — all data comes from Kaggle |
+| `KAGGLE_USERNAME` | Your Kaggle username | Only for **auto-backup** (Cell 2b) |
+| `KAGGLE_KEY` | Token from kaggle.com → Settings → API → Create New Token | Only for **auto-backup** (Cell 2b) |
 
 > **Important — enable each secret for the notebook.**  
 > Secrets exist in your Kaggle account but must be explicitly granted per notebook.  
@@ -186,16 +188,50 @@ model across both GPUs automatically. No code changes needed.
 
 ## Persisting checkpoints across sessions
 
-Kaggle's `/kaggle/working/` is **wiped on session restart**. To persist checkpoints:
+Kaggle's `/kaggle/working/` is **wiped on session restart** (idle timeout, the
+9-hour limit, or a browser disconnect). Anything still in
+`/kaggle/working/specdist/checkpoints/` at that moment is lost. Pick **one** of
+the options below — auto-backup (recommended) is the only one that survives an
+unattended overnight reset without manual steps.
 
-### After each session
-1. **Notebook → Data → Output** tab → **+ New Dataset** → name it `specdist-checkpoints`
-2. This saves your entire `/kaggle/working/` directory as a Kaggle dataset
+### Option A — Auto-backup to a Kaggle Dataset (recommended)
 
-### For the next session
-1. **Add Data** → Your Datasets → select `specdist-checkpoints` → **Add**
-2. Run **Cell 1** (Resume) — it automatically restores checkpoints from `/kaggle/input/specdist-checkpoints/`
-3. The pipeline state machine skips all completed training and evaluation steps
+Cell 2b snapshots `checkpoints/` (+ `results.db`) to a Kaggle Dataset every
+30 min and once more when the run finishes, so a session reset only ever costs
+the **in-progress** loss — all finished losses are restored automatically next
+session.
+
+1. One-time: add `KAGGLE_USERNAME` and `KAGGLE_KEY` as Secrets (see Step 4) and
+   tick their checkboxes. Get the key from kaggle.com → Settings → API →
+   **Create New Token** (the `key` field of the downloaded `kaggle.json`).
+2. Each session: run **Cell 1** (Resume), then run **Cell 2b** (Auto-backup) in
+   its own cell and leave it running. The first run **creates** the
+   `specdist-checkpoints` dataset; later runs push new **versions**. It also
+   doubles as a keep-alive; interrupt the cell to stop (it does a final backup).
+3. Next session: **Add Data** → Your Datasets → attach `specdist-checkpoints` →
+   run **Cell 1**, which restores everything before resuming.
+
+> Tune the interval via `INTERVAL_MIN` in Cell 2b. To point at an existing
+> dataset with a different name, set `DATASET_SLUG = "<user>/<name>"` there.
+
+### Option B — Enable Persistence (no extra dataset)
+
+Notebook → right sidebar → **Settings → Persistence → "Files only"** (or
+"Variables and files"). `/kaggle/working/` then survives kernel restarts within
+the saved notebook. Simplest, but does not protect a brand-new session.
+
+### Option C — Manual snapshot after a session
+
+1. **Notebook → Data → Output** tab → **+ New Dataset** → name it `specdist-checkpoints`.
+2. Next session: **Add Data** → Your Datasets → attach it → run **Cell 1**, which
+   restores checkpoints from `/kaggle/input/specdist-checkpoints/`.
+
+In all cases the pipeline state machine skips completed training/eval steps on
+resume, so restored work is never repeated.
+
+> **Overnight runs:** prefer **Save Version → "Save & Run All (Commit)"**, which
+> runs the notebook headless to completion regardless of your browser, with
+> Option A as the safety net.
 
 ---
 
