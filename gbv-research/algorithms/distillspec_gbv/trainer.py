@@ -571,13 +571,34 @@ def main() -> None:
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
+        # Build a max_memory map so device_map="auto" uses ALL visible GPUs,
+        # and reserves 1 GiB on each for activations.  This prevents the new
+        # transformers (4.51+) lazy-load path from packing everything onto
+        # GPU 0 and OOM-ing at 95% during the BF16→NF4 materialization step.
+        import torch as _t
+        _max_mem = {i: f"{int(_t.cuda.get_device_properties(i).total_memory / 1024**3) - 1}GiB"
+                    for i in range(_t.cuda.device_count())}
+        _max_mem["cpu"] = "24GiB"   # allow CPU offload if model > all GPUs combined
         target_model = transformers.AutoModelForCausalLM.from_pretrained(
-            args.target, quantization_config=bnb_cfg, device_map="auto",
+            args.target,
+            quantization_config=bnb_cfg,
+            device_map="auto",
+            max_memory=_max_mem,
+            low_cpu_mem_usage=True,   # load to CPU first → quantize → move to GPU
             attn_implementation=_ATTN_IMPL)
     else:
+        import torch as _t
+        _max_mem_bf16 = (
+            {i: f"{int(_t.cuda.get_device_properties(i).total_memory / 1024**3) - 1}GiB"
+             for i in range(_t.cuda.device_count())}
+            if _t.cuda.is_available() else None
+        )
         target_model = transformers.AutoModelForCausalLM.from_pretrained(
             args.target, torch_dtype=torch.bfloat16,
-            attn_implementation=_ATTN_IMPL).to(device)
+            device_map="auto",
+            max_memory=_max_mem_bf16,
+            low_cpu_mem_usage=True,
+            attn_implementation=_ATTN_IMPL)
     target_model.eval()
     for p in target_model.parameters():
         p.requires_grad_(False)

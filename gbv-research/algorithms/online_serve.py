@@ -714,15 +714,29 @@ def load_models(args: argparse.Namespace, device: torch.device):
         _bnb = _BnB(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                     bnb_4bit_compute_dtype=torch.bfloat16,
                     bnb_4bit_use_double_quant=True)
+        import torch as _t
+        _max_mem = {i: f"{int(_t.cuda.get_device_properties(i).total_memory / 1024**3) - 1}GiB"
+                    for i in range(_t.cuda.device_count())}
+        _max_mem["cpu"] = "24GiB"   # allow CPU offload if model > all GPUs combined
         target_model = AutoModelForCausalLM.from_pretrained(
             args.target, quantization_config=_bnb, device_map="auto",
+            max_memory=_max_mem,
+            low_cpu_mem_usage=True,
         )
         log.info("Target loaded in 4-bit NF4 (QLoRA mode)")
     else:
+        import torch as _t
+        _max_mem_bf16 = (
+            {i: f"{int(_t.cuda.get_device_properties(i).total_memory / 1024**3) - 1}GiB"
+             for i in range(_t.cuda.device_count())}
+            if _t.cuda.is_available() else None
+        )
         target_model = AutoModelForCausalLM.from_pretrained(
             args.target,
             dtype=dtype,          # transformers ≥ 4.51 (torch_dtype= deprecated)
-            device_map=device,
+            device_map="auto",
+            max_memory=_max_mem_bf16,
+            low_cpu_mem_usage=True,
         )
     target_model.eval()
     for p in target_model.parameters():
