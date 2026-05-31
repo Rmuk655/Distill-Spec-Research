@@ -10,15 +10,16 @@
 #
 # PURPOSE: Verify that every code path runs without crashing:
 #   train loop → checkpoint save/load cycle → merge → all eval modes
-#   Use --smoke for a fast crash test (~3-5 min, 10 steps).
-#   Run without --smoke to exercise ALL paths (~15-20 min, 100 steps).
+#   Use --smoke for a fast crash test (~5 min, 50 steps).
+#   Run without --smoke to exercise ALL paths (~30-40 min, 200 steps, K=3/T=0.6 only).
 #
 # TWO-STAGE LAPTOP GATE:
 #   1. python orchestration/experiment.py --config laptop --smoke --yes
 #      Fast crash detector.  Should complete < 5 min.
 #      Gate: no exceptions, losses are finite numbers.
 #   2. python orchestration/experiment.py --config laptop --yes
-#      Code-path exerciser.  Should complete < 20 min.
+#      Full code-path exerciser.  Should complete ~30-40 min.
+#      Single K=3, T=0.6, n=10 -- no parameter sweep, just end-to-end coverage.
 #      Gate: all eval modes produce output, checkpoint resume works,
 #      merge completes, W&B run appears in wandb.ai.
 #      (Block efficiency numbers from this run are meaningless -- ignore them.)
@@ -39,7 +40,7 @@ models:
   target: Qwen/Qwen3-0.6B
 
 training:
-  steps: 100                    # enough to exercise all code paths; NOT enough for trends
+  steps: 200                    # 4× smoke (50), enough to see loss curves fall; NOT for paper
   lr: 3.0e-5
   lora_r: 4                     # smallest rank -- this run is about code, not capacity
   lora_alpha: 8
@@ -54,8 +55,8 @@ dataset:
   eval:  core/datasets/raw/gsm8k_30.jsonl       # 30-prompt fixed eval set (block-efficiency only)
 
 checkpointing:
-  save_every: 10                # fires 10x in 100 steps -- exercises rolling checkpoint logic
-  milestone_every: 50           # fires 2x in 100 steps -- exercises permanent checkpoint logic
+  save_every: 20                # fires 10x in 200 steps -- exercises rolling checkpoint logic
+  milestone_every: 100          # fires 2x in 200 steps -- exercises permanent checkpoint logic
   max_checkpoints: 3
   output_root: db/checkpoints
 
@@ -67,20 +68,21 @@ logging:
   run_label: "0.6B-laptop"
 
 health:
-  val_every: 25                 # fires 4x in 100 steps -- exercises validation path
-  ppl_check_every: 50           # fires 2x in 100 steps -- exercises ppl health check
+  val_every: 50                 # fires 4x in 200 steps -- exercises validation path
+  ppl_check_every: 100          # fires 2x in 200 steps -- exercises ppl health check
   ppl_threshold: 1.25
   nan_action: stop
   early_stop_patience: 3
 
 evaluation:
-  # All 6 modes to verify every evaluator runs without crashing.
-  # n_prompts=5 and K_values=[3] to keep eval fast (~2-3 min total).
-  # The numbers produced are meaningless (0.6B teacher) -- only check for errors.
+  # Single K, single temperature, single n -- laptop run is a code exerciser, not a sweep.
+  # All 6 verifier modes still run to verify every evaluator path.
+  # Numbers produced are meaningless (0.6B teacher) -- only check for no crashes and finite BE.
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [3]                 # single K value -- fast; we're testing code not tuning
+  K_values: [3]                 # single K -- no parameter sweep on laptop
+  temperatures: [0.6]           # single temperature -- no sweep
   L: 8
-  n_prompts: 5                  # just enough to exercise each evaluator
+  n_prompts: 10                 # 10 prompts: fast (~3-4 min total), enough for finite BE check
 
 tree_training:
   # Hyperparameters for tree-structured distillation losses.
