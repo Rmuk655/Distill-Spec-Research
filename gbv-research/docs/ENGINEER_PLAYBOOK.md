@@ -4,12 +4,15 @@ A dependency-aware, sequenced plan an engineer can follow **faithfully**, one
 focused GPU run at a time. It operationalises the LOCKED iteration priority from
 [`docs/RESEARCH_PLAN.md`](RESEARCH_PLAN.md) into concrete runs that each do
 **EXACTLY ONE thing**, using the single-purpose profiles in
-`orchestration/configs/profiles/` and the `--train_only` / `--eval_only`
-orchestration flags.
+`orchestration/configs/profiles/` and the `--light_eval` / `--train_only` /
+`--eval_only` orchestration flags.
 
 > **The one rule that governs everything below:** on free-tier compute you never
 > sit idle waiting for a GPU run, and every GPU run produces exactly one
-> artifact. Training sessions train (no eval). Eval sessions eval (no training).
+> artifact. Phase-1/2 tiered sessions train **and** emit a light BE sanity (one
+> matched verifier, n=100) — they are NOT train-only. Pure `--eval_only` sessions
+> do no training. `--train_only` drops all eval and is only for deliberate
+> pure-training burns, not the Phase-1 default.
 > Every long run has a parallel **no-GPU** to-do list so the human is always
 > making progress.
 

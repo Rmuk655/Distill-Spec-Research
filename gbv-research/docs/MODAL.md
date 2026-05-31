@@ -89,28 +89,40 @@ Quick crash-check: a few prompts, tiny token budget, exercises every loss + veri
 Cheap on the A100; if you want it even cheaper, set `GPU_TYPE = "T4"` at the top of
 `modal_app.py` for smoke runs.
 
-### b) Forward-KL flat baseline first (research iteration order #1)
+### b) Phase-1 tiered iteration (train + val_loss + light BE sanity)
 
-The researcher's priority is **(1) flat baselines like forward KL → (2) tree-losses →
-(3) GBV verifier → (4) online variants last**. The flat forward-KL loss is named **`kl`**
-in this repo (`kl_tree` is its tree variant). Run just that baseline:
-
-```bash
-modal run deploy/modal_app.py --losses kl
-```
-
-You can pass any comma-separated subset, e.g. `--losses kl,rev_kl,jsd`. Valid names are
-the keys in `experiment.py`'s `_LOSS_STEP_PREFIXES` (`kl, rev_kl, jsd, l1, ebe,
-ebe_single, kl_tree, …, gbv_tree, …`).
-
-### c) Full A100 pipeline
+Phase-1 runs are **tiered**: train + val_loss curves + a light BE sanity check (n=100,
+K=3, matched verifier, GSM8K only). Heavy full-GSM8K eval is deferred to A100
+confirmation. Use `profiles/train_one_loss` (flat losses) or `profiles/tree_variant_week`
+(tree losses), which both set `experiment.light_eval: true`.
 
 ```bash
-modal run deploy/modal_app.py
+# Forward-KL flat baseline — tiered (train + val_loss + light BE, 1 verifier):
+modal run deploy/modal_app.py --config profiles/train_one_loss --losses kl
+
+# Tree-loss variant — tiered (train + light BE, tree-matched verifiers):
+modal run deploy/modal_app.py --config profiles/tree_variant_week --losses kl_tree
 ```
 
-Runs **all** losses defined in `a100.yaml` (the full 8×8 loss-verifier matrix). This is
-long (hours) — budget against your credit and prefer running loss subsets across several
+`forward_kl` is accepted as an alias for `kl`. You can pass any comma-separated subset,
+e.g. `--losses kl,rev_kl,jsd`. Valid names are the keys in `experiment.py`'s
+`_LOSS_STEP_PREFIXES` (`kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, …, gbv_tree, …`).
+
+### c) Full A100 confirmation
+
+```bash
+modal run deploy/modal_app.py --config a100 --losses kl
+```
+
+`a100.yaml` references HF repo IDs (`Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`), so `--config
+a100` works directly on Modal. Runs the **full** verifier matrix and heavier eval (n=1319,
+K∈{3,5}, multi-seed) — these are the paper numbers. Reserve for ≤2 confirmed candidates.
+
+```bash
+modal run deploy/modal_app.py   # all losses in a100.yaml (the full 8×8 matrix)
+```
+
+Long (hours) — budget against your credit and prefer running loss subsets across several
 short invocations (each resumes via the Volume; see below).
 
 ### Other options

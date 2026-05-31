@@ -9,6 +9,7 @@ instructions — follow the linked guides for those:
 - [`KAGGLE.md`](./KAGGLE.md) — Kaggle free-tier setup (P100/T4, 4-bit NF4 config).
 - [`MODAL.md`](./MODAL.md) — Modal on-demand A100/T4 setup ($30/mo credit).
 - [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md) — research/ablation plan + **locked algo priority**.
+- [`ENGINEER_PLAYBOOK.md`](./ENGINEER_PLAYBOOK.md) — dependency-aware sequenced run plan with exact commands.
 
 > **Workload size (the key fact):** Qwen3-8B teacher in 4-bit NF4 (~4.5 GB) +
 > Qwen3-0.6B student (~1.5 GB) → **peak ~6 GB VRAM**. This fits *any* 16 GB GPU.
@@ -102,11 +103,11 @@ Tied to the **locked algo priority** in [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md)
 ### Engineer checklist (ordered)
 
 1. **Smoke** on a free pool (`--smoke`) — confirm every loss + verifier runs.
-2. **Phase 1:** `forward_kl` flat baseline on a free pool; collect train + `val_loss`
-   curves + a light BE sanity (n~100, K=3, matched verifier). Add early tree-loss
-   convergence checks. **Defer** the heavy full eval.
-3. **Phase 2:** launch tree-loss ablation batches **in parallel** across Kaggle/Modal/
-   Lightning; rank and keep survivors.
+2. **Phase 1:** `forward_kl` flat baseline on a free pool using `--config profiles/train_one_loss`
+   (`--light_eval` / YAML `experiment.light_eval: true`). Each session = train + `val_loss` curves
+   + a light BE sanity (n=100, K=3, matched verifier, GSM8K only). **Defer** the heavy full eval.
+3. **Phase 2:** launch tree-loss ablation batches **in parallel** across Kaggle/Modal/Lightning using
+   `--config profiles/tree_variant_week` (same `--light_eval` tiered design); rank and keep survivors.
 4. **Phase 3:** GBV verifier runs on free pools.
 5. **Phase 4:** online variants last, on free pools / Lightning.
 6. **Confirmation:** take the surviving **≤2** candidates to the **IITH A100** — full

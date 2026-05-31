@@ -52,7 +52,7 @@ A draft model that is merely close to the target in KL sense need not produce ac
 | Component | Choice |
 |---|---|
 | Models | Qwen3-0.6B (draft) → Qwen3-8B (target, frozen) |
-| GPU | Single 24 GB (A100 / 3090) |
+| GPU | P100/T4 16 GB for exploration (Kaggle free tier); A100 40 GB for paper confirmation only |
 | Distillation losses | forward KL · reverse KL · JSD · L1 · EBE · online KL · online EBE |
 | Verification algorithms | GBV · Traversal · SpecInfer · BV · α-sampling · naive |
 | Datasets | GSM8K · HumanEval · MATH500 · MTBench · Alpaca |
@@ -64,6 +64,27 @@ A draft model that is merely close to the target in KL sense need not produce ac
 ## Results
 
 *Results pending — experiments in progress.*
+
+## Quick Start — Phase-1 Iteration
+
+Phase-1 runs a **tiered** session: **train + val_loss (inside trainer) + light BE sanity** (n=100, K=3, 1 matched verifier, GSM8K only). Heavy full-GSM8K eval is deferred to A100 confirmation.
+
+```bash
+# Smoke first (~5 min, every session):
+python orchestration/experiment.py --config profiles/smoke --smoke --yes --losses forward_kl
+
+# Phase-1 tiered baseline (train + val_loss + light BE, 1 verifier):
+python orchestration/experiment.py --config profiles/train_one_loss --yes \
+  --losses forward_kl --skip_existing --experiment_tag p1_forward_kl
+
+# Phase-2 tiered tree variant (train + light BE, tree-matched verifiers):
+python orchestration/experiment.py --config profiles/tree_variant_week --yes \
+  --losses kl_tree --skip_existing --experiment_tag wk3_kl_tree
+```
+
+`--light_eval` (YAML: `experiment.light_eval: true`) is the flag that enables the tiered mode — it keeps train + merge + one light BE eval step and drops the full baseline + multi-dataset sweep. `--train_only` still exists as an optional flag for pure training burns (no eval at all) but is not the Phase-1 default.
+
+See **[`gbv-research/docs/ENGINEER_PLAYBOOK.md`](gbv-research/docs/ENGINEER_PLAYBOOK.md)** for the full sequenced run plan.
 
 ## Setup and Reproduction
 

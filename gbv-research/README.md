@@ -36,11 +36,12 @@ python core/datasets/downloader.py --datasets gsm8k
 cp orchestration/wandb_config.json.example orchestration/wandb_config.json
 # Edit with your api_key, entity, project
 
-# 4. Smoke test (verifies the full pipeline end-to-end, ~35 min, GPU required)
-python orchestration/experiment.py --config laptop --smoke --yes
+# 4. Smoke first (~5 min, any GPU — run before every real session):
+python orchestration/experiment.py --config profiles/smoke --smoke --yes --losses forward_kl
 
-# 5. Full experiment (~6–8 hrs on laptop)
-python orchestration/experiment.py --config laptop --yes
+# 5. Phase-1 tiered run (train + val_loss + light BE sanity, ~1.5–2 h on P100):
+python orchestration/experiment.py --config profiles/train_one_loss --yes \
+  --losses forward_kl --skip_existing --experiment_tag p1_forward_kl
 ```
 
 ---

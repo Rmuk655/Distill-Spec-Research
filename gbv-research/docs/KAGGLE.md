@@ -26,9 +26,9 @@ first, then converts to NF4. For Qwen3-8B: ~16 GB CPU RAM intermediates.
 - **Kaggle** has 29 GB system RAM → 16 GB NF4 intermediates fit → 8B teacher loads successfully
 
 Use `CONFIG = "kaggle"` in the notebook. This runs the same 8B teacher as the A100 config,
-but in 4-bit NF4 so it fits on the T4's 16 GB VRAM.
+but in 4-bit NF4 so it fits on a single 16 GB GPU (P100 or T4).
 
-**VRAM budget for `kaggle` config (single T4, 16 GB):**
+**VRAM budget for `kaggle` config (single P100/T4, 16 GB):**
 
 | Component | VRAM |
 |---|---|
@@ -141,6 +141,16 @@ After adding both, they appear under **MODELS** in the Input panel. The mount pa
 ### Step 6 — Cell 0 is already configured
 
 All paths are pre-set in `kaggle.ipynb` Cell 0. No editing needed unless you want to change CONFIG.
+
+**Phase-1 tiered design.** Each Kaggle session trains one loss and runs a **light BE sanity check** (n=100, K=3, matched verifier, GSM8K only); heavy full-GSM8K eval is deferred. Use profile `profiles/train_one_loss` (YAML flag `experiment.light_eval: true`) for flat losses, or `profiles/tree_variant_week` for tree losses. To run a tiered session directly:
+
+```bash
+# From gbv-research/ inside Kaggle (or set via EXTRA_ARGS in Cell 0):
+python orchestration/experiment.py --config profiles/train_one_loss --yes \
+  --losses forward_kl --skip_existing --storage_root /kaggle/working/specdist
+```
+
+`--train_only` is still available as an optional flag for a pure training burn (no eval at all) but is **not the Phase-1 default**.
 
 **First session — run cells ONE AT A TIME:**
 

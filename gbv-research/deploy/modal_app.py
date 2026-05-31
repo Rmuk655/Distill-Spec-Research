@@ -25,14 +25,18 @@ Quickstart (full setup in docs/MODAL.md)
     modal secret create specdist-secrets \
         HF_TOKEN=hf_xxx WANDB_API_KEY=xxx GITHUB_TOKEN=ghp_xxx
 
-    # Smoke test first (cheap — a few minutes on the A100):
+    # 1. Smoke test FIRST (cheap — a few minutes; catches setup errors):
     modal run deploy/modal_app.py --smoke
 
-    # Forward-KL flat baseline first (research iteration order #1):
-    modal run deploy/modal_app.py --losses kl
+    # 2. Phase-1 tiered iteration — train + val_loss + light BE sanity:
+    #    forward_kl flat baseline (loss name "forward_kl"; CLI alias "--losses kl"):
+    modal run deploy/modal_app.py --config profiles/train_one_loss --losses kl
+    #    tree-loss variant (Phase-2):
+    modal run deploy/modal_app.py --config profiles/tree_variant_week --losses kl_tree
 
-    # Full A100 pipeline (long — budget against your $30/mo credit):
-    modal run deploy/modal_app.py
+    # 3. A100 confirmation ONLY — full GSM8K n=1319, all verifiers, ≥3 seeds.
+    #    Reserve for ≤2 confirmed publication candidates; these are the paper numbers:
+    modal run deploy/modal_app.py --config a100 --losses kl
 --------------------------------------------------------------------------------
 """
 
