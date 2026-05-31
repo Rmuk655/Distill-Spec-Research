@@ -76,8 +76,8 @@ evaluation:
   #   bv, gbv, traversal               — non-OT (have matching *_tree losses)
   #   alpha                             — on-policy block efficiency baseline (untrained-style)
   modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
-  K_values: [1, 3, 5, 8]       # full K sweep for paper -- A100 handles the eval load
-  temperatures: [0.6, 1.0]     # robustness sweep for paper -- matches DEFAULT_TEMPS in evaluate.py
+  K_values: [3]                 # K=3 only: single representative value; K sweep adds wall time without scientific value
+  temperatures: [1.0]          # T=1.0: DistillSpec/EAGLE/Medusa paper standard; T=0.6 changes acceptance probabilities
   L: 8
   n_prompts: 100                # secondary datasets (alpaca/math500/humaneval/mtbench)
   n_prompts_gsm8k: 1319          # full GSM8K test set (1319 problems) for paper numbers

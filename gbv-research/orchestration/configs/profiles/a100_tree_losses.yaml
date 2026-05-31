@@ -118,7 +118,8 @@ health:
 # that might be included (e.g. baseline).  It is set here for documentation.
 evaluation:
   modes: [bv, gbv, traversal]  # non-OT verifiers only — matches tree loss design
-  K_values: [1, 3, 5, 8]
+  K_values: [3]                 # K=3 only: single representative value for comparative eval
+  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE paper standard
   L: 8                          # must match tree_training.tree_L above
   n_prompts: 50
 

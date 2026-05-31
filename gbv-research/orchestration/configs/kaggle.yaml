@@ -94,14 +94,14 @@ evaluation:
   #   See experiment.py load_in_4bit alpha exclusion note.
   # specinfer and naive kept: laptop data is toy-scale (300 steps, 10 prompts) and cannot
   #   reliably rank verifiers — all modes run so no information is discarded pre-paper.
-  # K=3 only: saves half the eval time; K sweep happens on A100 before paper submission.
-  # temperatures=[0.8]: matches training teacher_temperature; halves eval time vs [0.6,1.0].
-  #   A100 sweeps both for paper robustness.
+  # K=3 only: saves half the eval time; K sweep is not needed for comparative evaluation.
+  # T=1.0: DistillSpec/EAGLE/Medusa paper standard (T=0.6 sharpens distributions, changing
+  #   acceptance probabilities and making comparison to published numbers unfair).
   modes: [bv, gbv, traversal, specinfer, naive]
   K_values: [3]
-  temperatures: [0.8]
+  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
   L: 8
-  n_prompts: 30                 # 30 prompts per dataset � reliable trend direction on T4
+  n_prompts: 100                # 100 prompts per dataset — paper-quality results on Kaggle T4� reliable trend direction on T4
 
 tree_training:
   tree_K: 4

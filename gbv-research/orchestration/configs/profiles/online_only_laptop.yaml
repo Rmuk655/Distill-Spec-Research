@@ -69,6 +69,7 @@ health:
 evaluation:
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
+  temperatures: [0.6]           # laptop-class: single fast temperature (matches laptop.yaml)
   L: 8
   n_prompts: 5
 

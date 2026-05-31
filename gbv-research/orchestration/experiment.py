@@ -30,7 +30,7 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Windows cp1252 stdout can't encode Unicode arrows/checkmarks used by subprocesses.
 # Reconfigure to UTF-8 with replacement so experiment.py never dies on a stray character.
@@ -333,6 +333,8 @@ def _load_config_yaml(config_name: str) -> dict:
             out["eval_n_prompts"] = eval_cfg["n_prompts"]        # int — secondary datasets
         if eval_cfg.get("n_prompts_gsm8k"):
             out["eval_n_prompts_gsm8k"] = eval_cfg["n_prompts_gsm8k"]  # int — GSM8K primary eval
+        if eval_cfg.get("max_tokens"):
+            out["eval_max_tokens"] = eval_cfg["max_tokens"]             # int — override eval max_tokens
         # experiment.seed_override → run a specific seed without editing training.seed
         if "seed_override" in experiment_cfg:
             out["seed"] = experiment_cfg["seed_override"]
@@ -489,7 +491,7 @@ def _hw_tier_from_config(config_slug: str) -> str:
 
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               modes="alpha,specinfer,gbv,traversal",
-              Ks="3,5", temps="0.6,1.0", n=10, max_tokens=50, task_score=False,
+              Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
               experiment_tag=None, train_steps=0, hw_tier="laptop"):
     """Eval command — always passes --skip_existing so restarts are safe.
 
@@ -610,7 +612,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                   so smoke "done" marks never block the real pipeline.
 
     smoke=False:  1000 steps/training · n=10 eval prompts · max_tokens=50 ·
-                  K=3+5 · all 6 verifier modes · temps=0.6+1.0.
+                  K/temps/n from YAML · all 6 verifier modes.
                   ~6–8 hrs total on laptop; use Colab/server for paper results.
 
     eagle=True:   Append Phase 5 — EAGLE Benchmark.  Only meaningful with
@@ -620,8 +622,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _online_steps  = 50    if smoke else 500
     _n             = 5     if smoke else 10
     _max_tok       = 30    if smoke else 50
-    _Ks            = "3"   if smoke else "3,5"
-    _temps         = "0.6" if smoke else "0.6,1.0"
+    _Ks            = "3"   # safe default; yaml always overrides
+    _temps         = "1.0" # T=1.0 paper standard; yaml always overrides
     # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
     _modes = "alpha,bv,gbv,traversal,specinfer,naive"
 
@@ -637,29 +639,37 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     if load_in_4bit:
         _modes = "bv,gbv,traversal,specinfer,naive"
 
-    # ── YAML eval overrides (non-smoke only) ─────────────────────────────────────
-    # evaluation: section values from YAML override the hardcoded full-run defaults.
-    # Smoke defaults are intentionally NOT overridable — smoke must always exercise
-    # every mode so crashes surface before an overnight paid run starts.
+    # ── YAML eval overrides (applied for BOTH smoke and non-smoke runs) ─────────
+    # K_values, temperatures, n_prompts, and eval_max_tokens are always read from
+    # YAML so platform configs fully control eval cost without editing this file.
+    # eval_modes is NOT overridden in smoke — smoke must always exercise every
+    # verifier path so crashes surface before an overnight paid run starts.
     _h = train_hparams or {}
     # _n_gsm8k always defaults to _n.  Non-smoke runs may override via YAML key
     # eval_n_prompts_gsm8k (e.g. A100 uses 1319 for full GSM8K test set).
     _n_gsm8k = _n
+    if _h.get("eval_K_values"):
+        _Ks = ",".join(str(k) for k in _h["eval_K_values"])
+    if _h.get("eval_temps"):
+        _temps = ",".join(str(t) for t in _h["eval_temps"])
     if not smoke:
-        if _h.get("eval_K_values"):
-            _Ks = ",".join(str(k) for k in _h["eval_K_values"])
-        if _h.get("eval_temps"):
-            _temps = ",".join(str(t) for t in _h["eval_temps"])
         if _h.get("eval_modes"):
             # Still enforce the load_in_4bit alpha exclusion even if YAML requests it.
             yaml_modes = [m for m in _h["eval_modes"]
                           if not (load_in_4bit and m == "alpha")]
             if yaml_modes:
                 _modes = ",".join(yaml_modes)
-        if _h.get("eval_n_prompts"):
-            _n = _h["eval_n_prompts"]
-            _n_gsm8k = _n   # stays in sync unless overridden below
-        _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n_gsm8k)
+    if _h.get("eval_n_prompts"):
+        _n = _h["eval_n_prompts"]
+        _n_gsm8k = _n   # stays in sync unless overridden below
+    _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n_gsm8k)
+    if _h.get("eval_max_tokens"):
+        _max_tok = _h["eval_max_tokens"]
+    # Laptop baseline eval: cap K at 3 (computed after YAML override so it also
+    # guards against any YAML that accidentally sets K_values: [3, 5]).
+    # Traversal K=5 takes ~50-70 s/prompt on a 6 GB laptop GPU; even with K=3 from
+    # YAML the explicit cap is kept as a safety net for laptop runs.
+    _Ks_baseline   = "3" if hw_tier == "laptop" else _Ks
 
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
@@ -749,7 +759,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
 
     def _ec(student_path, label, datasets="gsm8k", task_score=False, modes=None,
-            n_override=None):
+            n_override=None, Ks_override=None):
         """Shorthand: eval cmd with smoke-aware parameters.
 
         Automatically infers train_steps from label:
@@ -764,6 +774,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         n_override: if set, overrides _n for this call only.
                Pass _n_gsm8k for Phase 3 GSM8K evals (full test on A100, 30 on T4).
                Pass _n for Phase 4 multi-DS evals (secondary domain sample size).
+        Ks_override: if set, overrides _Ks for this call only.
+               Pass _Ks_baseline for the baseline step to cap K on laptop.
         """
         if label == "baseline":
             ts = 0
@@ -773,8 +785,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             ts = _steps
         _eval_modes = modes if modes is not None else _modes
         _n_this = n_override if n_override is not None else _n
+        _Ks_this = Ks_override if Ks_override is not None else _Ks
         cmd = _eval_cmd(student_path, label, target,
-                        datasets=datasets, modes=_eval_modes, Ks=_Ks, temps=_temps,
+                        datasets=datasets, modes=_eval_modes, Ks=_Ks_this, temps=_temps,
                         n=_n_this, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
@@ -855,7 +868,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_baseline_gsm8k",
             "group": "Phase 1 — Baseline",
             "desc": "Eval unmodified draft on gsm8k (all 6 verifier modes)",
-            "cmd": _ec(draft, "baseline", datasets="gsm8k", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(draft, "baseline", datasets="gsm8k", task_score=True,
+                       n_override=_n_gsm8k, Ks_override=_Ks_baseline),
             "done_check": None,
         },
 
@@ -2199,7 +2213,7 @@ def step_status(step, state):
 def mark_step(state, step_id, status, note=""):
     state["steps"][step_id] = {
         "status": status,
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat(),
         "note": note,
     }
     save_state(state)

@@ -70,7 +70,8 @@ health:
 
 evaluation:
   modes: [bv, gbv, traversal]  # non-OT verifiers only
-  K_values: [3, 5]
+  K_values: [3]                 # K=3 only: K=5 adds wall time without scientific value on T4
+  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE paper standard
   L: 8
   n_prompts: 20
 

@@ -75,15 +75,16 @@ evaluation:
   # Free-tier compute reduction: single K and single temperature only.
   # All 6 verifier modes kept: laptop data is toy-scale and cannot rank verifiers reliably.
   # alpha kept: BF16 Colab has no 4-bit OOM risk; both models fit in VRAM simultaneously.
-  # K=3 only: saves half the eval time; K sweep happens on A100 before paper submission.
-  # temperatures=[0.8]: matches training teacher_temperature; halves eval time vs [0.6,1.0].
+  # K=3 only: saves half the eval time; K sweep is not needed for comparative evaluation.
+  # T=1.0: DistillSpec/EAGLE/Medusa paper standard (T=0.6 sharpens distributions, changing
+  #   acceptance probabilities and making comparison to published numbers unfair).
   # T4 compute budget: train all 17 losses but eval against 6 verifiers only.
-  # (A100 expands to all 8 — see a100.yaml — for the full alignment matrix.)
+  # (A100 expands to 9 — see a100.yaml — for the full alignment matrix.)
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
-  temperatures: [0.8]
+  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
   L: 8
-  n_prompts: 30                 # 30 prompts per dataset � reliable trend direction on T4
+  n_prompts: 50                 # 50 prompts per dataset — mid-quality results on Colab T4� reliable trend direction on T4
 
 tree_training:
   # K=4 on T4 — safe VRAM budget; each path adds ~L forward steps to the tree pass.
