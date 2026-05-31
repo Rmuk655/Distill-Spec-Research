@@ -2123,6 +2123,43 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             },
         ] if eagle else []),
     ]  # end _steps_list
+
+    # ── Parallel-group and VRAM annotations ──────────────────────────────────
+    # Used by HWScheduler (hw_scheduler.py) to decide which steps can run in
+    # parallel and how to assign GPU slots.  Applied here (post-build) so every
+    # call site in the list above stays readable without repeating these fields.
+    #
+    # Group semantics (topological execution order in main()):
+    #   -1 : always serial — admin / setup / PPL / eagle steps
+    #    0 : baseline eval — serial, must run first
+    #    1 : LoRA training — independent, parallel across GPUs
+    #    2 : LoRA merges   — serial, must run after ALL group-1 training
+    #    3 : post-train evals — independent, parallel across GPUs
+    #
+    # Dispatch in sorted order (-1 → 0 → 1 → 2 → 3) naturally enforces the
+    # train → merge → eval dependency chain.
+    def _infer_parallel_group(sid: str) -> int:
+        if sid == "eval_baseline_gsm8k":
+            return 0    # baseline: must run first, serial
+        if sid.startswith("train_"):
+            return 1    # training: parallel across GPUs
+        if sid.startswith("merge_"):
+            return 2    # LoRA merge: serial, after all training
+        if sid.startswith("eval_"):
+            return 3    # post-train eval: parallel across GPUs
+        return -1       # eagle / admin / anything else: always serial
+
+    def _infer_vram_gb(sid: str) -> float:
+        if sid.startswith("train_"):
+            return 10.0
+        if sid.startswith("eval_"):
+            return 6.5
+        return 0.0      # CPU-only (merge, eagle, admin)
+
+    for _s in _steps_list:
+        _s.setdefault("parallel_group", _infer_parallel_group(_s["id"]))
+        _s.setdefault("vram_gb",        _infer_vram_gb(_s["id"]))
+
     # Apply --losses filter: drop steps for unselected losses, keep all others.
     if losses_to_run is not None:
         _selected = set(losses_to_run)
@@ -3107,83 +3144,174 @@ def main():
         if not run_smoke_preflight(draft, target):
             sys.exit(1)
 
-    # Execute steps
+    # ── Hardware-aware parallel scheduler ────────────────────────────────────
+    # Dispatches independent steps in parallel across GPU slots.
+    # Serial steps (merges, admin, single-step groups) still go through the
+    # original run_step() path so all state management, retry logic, orphan
+    # protection, and pipeline logging are preserved exactly.
+    #
+    # Parallel groups (topological order — sorted execution):
+    #   -1 : always serial  (admin / setup steps)
+    #    0 : baseline eval  (serial, single step)
+    #    1 : LoRA training  (parallel across GPUs)
+    #    2 : LoRA merges    (serial, after all training)
+    #    3 : post-train evals (parallel across GPUs)
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        from hw_scheduler import HWScheduler, HWProfile as _HWProfile
+        _scheduler = HWScheduler(_HWProfile.from_runtime())
+    except Exception as _sched_err:
+        print(f"  [scheduler] Warning: hw_scheduler unavailable ({_sched_err}). "
+              f"Falling back to fully sequential execution.")
+        _scheduler = None
+
+    # ── Pass 1: apply skip_until and smoke_skip (order-dependent) ────────────
     skip_until = start_id
-    n_run = 0
+    _steps_after_skip = []
     for step in STEPS:
         sid = step["id"]
-
-        # --from: skip steps before the target
         if skip_until:
             if sid == skip_until:
                 skip_until = None
             else:
                 continue
-
         # In smoke mode, Phase 2/3/4 steps carry smoke_skip=True.
-        # Print once per group, then skip without touching state — the real
-        # pipeline (separate state file) will run them normally.
         if step.get("smoke_skip"):
             print(f"  [smoke] {sid} — skipped "
                   f"(training / post-train eval; run without --smoke for full pipeline)")
             continue
+        _steps_after_skip.append(step)
 
-        status = step_status(step, state)
-        if status == "done":
-            print(f"  {TICK} [{sid}] already done — skipping")
+    # ── Pass 2: group by parallel_group ──────────────────────────────────────
+    _by_group: dict = {}
+    for _s in _steps_after_skip:
+        _g = _s.get("parallel_group", -1)
+        _by_group.setdefault(_g, []).append(_s)
+
+    # Parallel groups: only dispatch in parallel when the scheduler is available
+    # AND the group has more than one runnable step AND we are not in dry_run.
+    _PARALLEL_GROUPS = {1, 3}   # training=1  post-train-eval=3
+
+    n_run = 0
+    for _gid in sorted(_by_group.keys()):
+        _group_steps = _by_group[_gid]
+
+        # ── Per-step guards (applied just before each group runs) ─────────────
+        # Deferred to here (not pass 1) so that "requires" checks for eval
+        # steps are tested AFTER all merge steps have completed.
+        _runnable = []
+        for step in _group_steps:
+            sid = step["id"]
+
+            status = step_status(step, state)
+            if status == "done":
+                print(f"  {TICK} [{sid}] already done — skipping")
+                continue
+
+            # Auto-skip steps whose input checkpoint doesn't exist.
+            skip_path = step.get("skip_if_missing")
+            if skip_path and not os.path.exists(skip_path):
+                print(f"  [skip] [{sid}] prerequisite missing "
+                      f"({os.path.basename(skip_path)}) — auto-skipped")
+                mark_step(state, sid, "done",
+                          f"auto-skipped: {os.path.basename(skip_path)} not found")
+                continue
+
+            # Hard prereq guard: eval steps blocked until merged models exist.
+            requires = step.get("requires")
+            if requires and not os.path.exists(requires):
+                _req_model = os.path.basename(os.path.dirname(requires))
+                _train_id  = "merge_" + _req_model.replace("-", "_")
+                print(f"\n  {CROSS} [{sid}] BLOCKED — merged model not found.")
+                print(f"         Expected : {requires}")
+                print(f"         Fix      : run the train + merge steps for '{_req_model}' first.")
+                print(f"         Hint     : re-run with --from {_train_id}")
+                mark_step(state, sid, "failed",
+                          f"blocked: merged model missing: {_req_model}")
+                continue
+
+            _runnable.append(step)
+
+        if not _runnable:
             continue
 
-        # Auto-skip steps whose input checkpoint doesn't exist (pre-pipeline artifacts).
-        # This keeps clean-from-scratch runs non-blocking without manual state edits.
-        skip_path = step.get("skip_if_missing")
-        if skip_path and not os.path.exists(skip_path):
-            print(f"  [skip] [{sid}] prerequisite missing ({os.path.basename(skip_path)}) — auto-skipped")
-            mark_step(state, sid, "done", f"auto-skipped: {os.path.basename(skip_path)} not found")
-            continue
+        # ── Dispatch ──────────────────────────────────────────────────────────
+        _use_parallel = (
+            _scheduler is not None
+            and _gid in _PARALLEL_GROUPS
+            and len(_runnable) > 1
+            and not args.dry_run
+        )
 
-        # Hard prereq guard: eval steps cannot run until their train+merge steps finish.
-        # Unlike skip_if_missing (silent auto-skip), this is a loud failure — the user
-        # must explicitly run the corresponding train step before eval can proceed.
-        requires = step.get("requires")
-        if requires and not os.path.exists(requires):
-            _req_model = os.path.basename(os.path.dirname(requires))
-            _train_id  = "merge_" + _req_model.replace("-", "_")
-            print(f"\n  {CROSS} [{sid}] BLOCKED — merged model not found.")
-            print(f"         Expected : {requires}")
-            print(f"         Fix      : run the train + merge steps for '{_req_model}' first.")
-            print(f"         Hint     : re-run with --from {_train_id}")
-            mark_step(state, sid, "failed", f"blocked: merged model missing: {_req_model}")
-            continue
+        if not _use_parallel:
+            # ── Serial path: existing run_step() logic with retries ───────────
+            for step in _runnable:
+                sid = step["id"]
+                # Prompt before each step (unless --yes)
+                if not args.yes and n_run > 0:
+                    if not _yn(f"\nContinue to: {step['desc']}?"):
+                        print("Paused. Re-run to continue from this step.")
+                        return
 
-        # Prompt before each step (unless --yes)
-        if not args.yes and n_run > 0:
-            if not _yn(f"\nContinue to: {step['desc']}?"):
-                print("Paused. Re-run to continue from this step.")
-                return
+                # Training steps get up to 2 automatic retries.
+                _is_train_step = step.get("retryable", False)
+                _max_attempts  = 3 if _is_train_step else 1
+                success = False
+                for _attempt in range(_max_attempts):
+                    if _attempt > 0:
+                        print(f"\n  [retry] Attempt {_attempt+1}/{_max_attempts} for '{sid}' "
+                              f"(training resumes from ckpt_latest automatically)...")
+                        mark_step(state, sid, "pending",
+                                  f"auto-retry attempt {_attempt+1}")
+                    success = run_step(step, state, dry_run=args.dry_run)
+                    if success:
+                        break
+                n_run += 1
 
-        # Training steps get up to 2 automatic retries — on Colab/Modal a transient
-        # PermissionError, NFS hiccup, or BOM-corruption can cause a spurious rc=1
-        # that resolves on the next attempt (checkpoint resumes cleanly).
-        # Eval steps are already idempotent via --skip_existing, so no retry needed.
-        _is_train_step = step.get("retryable", False)
-        _max_attempts  = 3 if _is_train_step else 1
-        success = False
-        for _attempt in range(_max_attempts):
-            if _attempt > 0:
-                print(f"\n  [retry] Attempt {_attempt+1}/{_max_attempts} for '{sid}' "
-                      f"(training resumes from ckpt_latest automatically)...")
-                # Reset status so run_step() re-marks it running
-                mark_step(state, sid, "pending", f"auto-retry attempt {_attempt+1}")
-            success = run_step(step, state, dry_run=args.dry_run)
-            if success:
-                break
-        n_run += 1
+                if not success:
+                    print(f"\n{CROSS} Step '{sid}' failed. Fix the issue then re-run experiment.py")
+                    print(f"   The pipeline will skip completed steps and retry from '{sid}'.")
+                    print(f"   Restart: python experiment.py --config {args.config} --yes")
+                    sys.exit(1)
 
-        if not success:
-            print(f"\n{CROSS} Step '{sid}' failed. Fix the issue then re-run experiment.py")
-            print(f"   The pipeline will skip completed steps and retry from '{sid}'.")
-            print(f"   Restart: python experiment.py --config {args.config} --yes")
-            sys.exit(1)
+        else:
+            # ── Parallel path: HWScheduler dispatches across GPU slots ────────
+            _job_type  = "train" if _gid == 1 else "eval"
+            _n_steps   = len(_runnable)
+            _group_desc = (f"{_n_steps} parallel {_job_type} step(s)"
+                           f" [group {_gid}]")
+
+            if not args.yes and n_run > 0:
+                if not _yn(f"\nContinue to: {_group_desc}?"):
+                    print("Paused. Re-run to continue from this step.")
+                    return
+
+            print(f"\n{'='*65}")
+            print(f"  PARALLEL GROUP {_gid}: {_group_desc}")
+            print(f"  Steps: {[s['id'] for s in _runnable]}")
+            print(f"{'='*65}")
+
+            _results = _scheduler.run_parallel(_runnable, job_type=_job_type)
+
+            _failed_ids = []
+            for step in _runnable:
+                sid = step["id"]
+                rc  = _results.get(sid, 1)
+                if rc == 0:
+                    mark_step(state, sid, "done", f"parallel {_job_type} complete")
+                else:
+                    mark_step(state, sid, "failed", f"rc={rc}")
+                    _failed_ids.append(sid)
+            n_run += _n_steps
+
+            if _failed_ids:
+                print(f"\n{CROSS} {len(_failed_ids)} step(s) failed in parallel group {_gid}:")
+                for _fid in _failed_ids:
+                    print(f"   {CROSS} {_fid}")
+                print(f"   Fix the issue then re-run experiment.py")
+                print(f"   Restart: python experiment.py --config {args.config} --yes")
+                sys.exit(1)
 
     # ── End-of-pipeline anomaly sweep ──────────────────────────────────────────
     # Scan the full log (not just tail) so we catch anything from any step.
