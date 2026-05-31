@@ -1,16 +1,20 @@
 """
-modal_app.py — on-demand A100 run path for the SpecDist / Distill-Spec-Research
+modal_app.py — T4 Phase-1 exploration path for the SpecDist / Distill-Spec-Research
 pipeline on Modal (https://modal.com).
 
 This is a *pure launcher*: it builds a GPU image, mounts a persistent Volume,
 clones the repo at runtime, and invokes the SAME CLI entrypoint that the Kaggle
 bootstrap uses:
 
-    python orchestration/experiment.py --config a100 --storage_root /vol/specdist --yes
+    python orchestration/experiment.py --config profiles/train_one_loss --storage_root /vol/specdist --yes
 
 It does NOT touch any core pipeline code (experiment.py / trainer.py /
 evaluate.py / runner.py / hw_scheduler.py).  Same philosophy as the Kaggle
 bootstrap in deploy/kaggle.ipynb + deploy/deploy_utils.py.
+
+Modal is used for **T4 Phase-1 exploration only** (train + val_loss + light BE
+sanity) on the $30 free credit (~50 h at $0.59/hr).  A100 confirmation runs go
+to the IITH cluster — see docs/COMPUTE.md.
 
 --------------------------------------------------------------------------------
 Quickstart (full setup in docs/MODAL.md)
@@ -28,15 +32,10 @@ Quickstart (full setup in docs/MODAL.md)
     # 1. Smoke test FIRST (cheap — a few minutes; catches setup errors):
     modal run deploy/modal_app.py --smoke
 
-    # 2. Phase-1 tiered iteration — train + val_loss + light BE sanity:
-    #    forward_kl flat baseline (loss name "forward_kl"; CLI alias "--losses kl"):
-    modal run deploy/modal_app.py --config profiles/train_one_loss --losses kl
-    #    tree-loss variant (Phase-2):
+    # Phase-1 flat baseline (T4, ~1.5–2.5 h):
+    modal run deploy/modal_app.py --losses kl
+    # Tree variant (T4, ~2–3 h):
     modal run deploy/modal_app.py --config profiles/tree_variant_week --losses kl_tree
-
-    # 3. A100 confirmation ONLY — full GSM8K n=1319, all verifiers, ≥3 seeds.
-    #    Reserve for ≤2 confirmed publication candidates; these are the paper numbers:
-    modal run deploy/modal_app.py --config a100 --losses kl
 --------------------------------------------------------------------------------
 """
 
@@ -53,13 +52,13 @@ import modal
 
 APP_NAME = "specdist"
 
-# GPU type.  Easy to change:  "A100" (40 GB) | "A100-80GB" | "L4" | "T4" | ...
-# A100 ≈ $5.30 / hour on Modal (per-second billing).  A T4 (~$0.59/h) is enough
-# for a --smoke run if you want to conserve credit; the 8B teacher needs the A100.
-GPU_TYPE = "A100"
+# GPU type.  Easy to change:  "T4" (16 GB) | "L4" | "A100" (40 GB) | "A100-80GB" | ...
+# A100 confirmation runs go to IITH cluster (not Modal) — see docs/COMPUTE.md
+# The kaggle config (4-bit NF4) is required for T4; the 8B bf16 teacher does NOT fit T4.
+GPU_TYPE = "T4"
 
-# Wall-clock ceiling for one invocation (training + eval is long).  8 hours.
-TIMEOUT_SECONDS = 8 * 60 * 60
+# Wall-clock ceiling for one invocation.  T4 Phase-1 runs fit in 4 hours.
+TIMEOUT_SECONDS = 4 * 60 * 60
 
 # Repo to clone at runtime (matches the Kaggle bootstrap).  Always pulls the
 # latest pushed code so the run never goes stale against your local tree.
@@ -84,10 +83,9 @@ HF_CACHE_DIR = f"{STORAGE_ROOT}/hf_cache"          # HF_HOME inside the Volume
 # the run with "Secret not found"; you just omit the key you don't have.
 SECRET_NAME = "specdist-secrets"
 
-# Default pipeline config.  a100.yaml already uses HF repo ids
-# (Qwen/Qwen3-0.6B draft, Qwen/Qwen3-8B teacher), so no Modal-specific YAML is
-# needed — the same config the Colab/Lightning A100 runs use.
-DEFAULT_CONFIG = "a100"
+# Default pipeline config.  profiles/train_one_loss uses the kaggle/NF4 config
+# (4-bit NF4 teacher) which fits T4 VRAM.  A100 confirmation runs go to IITH.
+DEFAULT_CONFIG = "profiles/train_one_loss"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Image — install the SAME deps the pipeline needs (derived from
@@ -294,7 +292,7 @@ def run_pipeline(
 
     Parameters
     ----------
-    config      YAML profile name under orchestration/configs/ (default "a100").
+    config      YAML profile name under orchestration/configs/ (default "profiles/train_one_loss").
     smoke       True = quick crash-check (--smoke): a few prompts, tiny tokens.
     losses      Comma-separated subset, e.g. "kl" (forward-KL flat baseline).
                 None = run all losses defined in the config.
@@ -362,7 +360,7 @@ def main(
         modal run deploy/modal_app.py --smoke
         modal run deploy/modal_app.py --losses kl
         modal run deploy/modal_app.py
-        modal run deploy/modal_app.py --config a100 --git-ref main
+        modal run deploy/modal_app.py --config profiles/tree_variant_week --git-ref main
     """
     rc = run_pipeline.remote(
         config=config,

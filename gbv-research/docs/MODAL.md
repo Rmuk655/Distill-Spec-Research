@@ -1,15 +1,16 @@
-# Modal Setup Guide — SpecDist on an on-demand A100
+# Modal Setup Guide — SpecDist on T4 (Phase-1 exploration)
 
 [Modal](https://modal.com) gives every account **$30 / month of free compute credit**.
-This guide runs the full SpecDist pipeline on an **on-demand A100** that you pay for
-only while it runs (per-second billing) — ideal for short, bursty research runs.
+This guide runs the SpecDist **Phase-1 exploration** pipeline on an **on-demand T4**
+that you pay for only while it runs (per-second billing) — ideal for short, bursty
+research iterations (~50 T4-hours on the $30 credit).
 
 It uses `deploy/modal_app.py`, a **pure launcher** that builds a GPU image, mounts a
 persistent Volume, clones the repo, and invokes the **same CLI** the Kaggle bootstrap
 uses:
 
 ```
-python orchestration/experiment.py --config a100 --storage_root /vol/specdist --yes
+python orchestration/experiment.py --config profiles/train_one_loss --storage_root /vol/specdist --yes
 ```
 
 No core pipeline code is modified — `modal_app.py` lives entirely outside
@@ -22,14 +23,14 @@ exactly like the Kaggle bootstrap.
 
 | GPU (Modal) | ~Price / hour | What it's for |
 |---|---|---|
-| **A100 (40 GB)** | **≈ $5.30 / h** | Full pipeline (8B teacher, bf16) — the default |
-| A100-80GB | ≈ $7+ / h | Only if you hit VRAM limits |
-| T4 (16 GB) | ≈ $0.59 / h | Cheap `--smoke` sanity checks |
+| **T4 (16 GB)** | **≈ $0.59 / h** | Phase-1 exploration (default) — `profiles/train_one_loss`, `profiles/tree_variant_week` |
+| A100 (40 GB) | ≈ $5.30 / h | Not used on Modal — use IITH cluster for A100 confirmation runs |
+| A100-80GB | ≈ $7+ / h | Not used on Modal — use IITH cluster |
 
 Billing is **per second** and you are charged **only while the function runs** (image
-build is free, idle time is free). A100 at $5.30/h means the **$30 credit ≈ 5.6 A100-hours**.
+build is free, idle time is free). T4 at $0.59/h means the **$30 credit ≈ 50 T4-hours**.
 
-> **Always run `--smoke` first.** It costs a few minutes of A100 time and catches
+> **Always run `--smoke` first.** It costs a few minutes of T4 time and catches
 > setup/config errors before you commit hours of credit to a full run.
 
 ---
@@ -86,8 +87,7 @@ modal run deploy/modal_app.py --smoke
 ```
 
 Quick crash-check: a few prompts, tiny token budget, exercises every loss + verifier.
-Cheap on the A100; if you want it even cheaper, set `GPU_TYPE = "T4"` at the top of
-`modal_app.py` for smoke runs.
+Cheap on the T4 (the default GPU).
 
 ### b) Phase-1 tiered iteration (train + val_loss + light BE sanity)
 
@@ -108,7 +108,11 @@ modal run deploy/modal_app.py --config profiles/tree_variant_week --losses kl_tr
 e.g. `--losses kl,rev_kl,jsd`. Valid names are the keys in `experiment.py`'s
 `_LOSS_STEP_PREFIXES` (`kl, rev_kl, jsd, l1, ebe, ebe_single, kl_tree, …, gbv_tree, …`).
 
-### c) Full A100 confirmation
+### c) Full A100 confirmation (IITH cluster — not Modal)
+
+A100 confirmation runs use the IITH cluster, not Modal. See `docs/COMPUTE.md` for
+IITH setup. The commands below are provided for reference only if you ever use
+Modal A100.
 
 ```bash
 modal run deploy/modal_app.py --config a100 --losses kl
@@ -128,13 +132,13 @@ short invocations (each resumes via the Volume; see below).
 ### Other options
 
 ```bash
-modal run deploy/modal_app.py --config a100 --git-ref main   # pin a branch/tag/commit
+modal run deploy/modal_app.py --config a100 --git-ref main   # pin a branch/tag/commit (A100, IITH preferred)
 modal run deploy/modal_app.py --losses gbv_tree              # GBV verifier-aligned loss
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--config` | `a100` | YAML profile under `orchestration/configs/` |
+| `--config` | `profiles/train_one_loss` | YAML profile under `orchestration/configs/` |
 | `--smoke` | off | Quick crash-check mode |
 | `--losses` | (all) | Comma-separated subset of losses |
 | `--git-ref` | `main` | Branch / tag / commit to clone |
@@ -175,22 +179,27 @@ code, so a crash still leaves committed checkpoints to resume from).
 Edit the constant near the top of `deploy/modal_app.py`:
 
 ```python
-GPU_TYPE = "A100"        # -> "A100-80GB" | "L4" | "T4" | "H100" | ...
+GPU_TYPE = "T4"          # default — fits kaggle/profiles configs (4-bit NF4 teacher)
+# GPU_TYPE = "A100"      # only if doing a one-off Modal A100 run; prefer IITH cluster
 ```
 
-- `"A100"` = 40 GB (default, fits Qwen3-8B in bf16 with headroom).
+- `"T4"` (16 GB) is the default for Phase-1 exploration — requires the `kaggle` /
+  `profiles/` configs with 4-bit NF4 teacher. **The 8B bf16 teacher does NOT fit a T4.**
+- `"A100"` (40 GB) if doing a one-off Modal A100 run; A100 confirmation runs should
+  normally go to the IITH cluster — see `docs/COMPUTE.md`.
 - `"A100-80GB"` if you ever bump the teacher size or batch.
-- `"T4"` (16 GB) is fine for `--smoke` to save credit, but the 8B bf16 teacher will **not**
-  fit a T4 for a real run — use the `kaggle` config (4-bit NF4) if you must use a T4.
 
-`TIMEOUT_SECONDS` (default 8 h) is right below it if a long full run needs more headroom.
+`TIMEOUT_SECONDS` (default 4 h) is right below it — T4 Phase-1 runs fit comfortably
+in 4 hours.
 
 ---
 
 ## Notes / assumptions
 
-- **No `modal.yaml` needed.** `a100.yaml` already references HF repo ids
-  (`Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`), so `--config a100` works directly on Modal.
+- **No `modal.yaml` needed.** `profiles/train_one_loss.yaml` and `profiles/tree_variant_week.yaml`
+  already reference HF repo ids (`Qwen/Qwen3-0.6B`, `Qwen/Qwen3-8B`), so
+  `--config profiles/train_one_loss` works directly on Modal. Use `--config profiles/train_one_loss`
+  (not `a100`) for T4 runs.
 - **Deps** mirror `requirements.txt` + the extras `deploy_utils.install_deps` adds
   (`bitsandbytes>=0.46.1`, `accelerate`, `torchao>=0.16.0`); `torch` is installed
   separately. Pins match the repo exactly.
