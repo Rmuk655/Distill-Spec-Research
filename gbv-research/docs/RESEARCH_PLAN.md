@@ -156,43 +156,70 @@ All metrics below are columns that already exist in `runs` (Section 0.3) unless
 noted. Primary metric is **block efficiency `block_eff` (BE)**; secondary are
 `throughput`/`ms_per_tok`, `alpha_mean` (α), `task_score`, `perplexity`.
 
-**RQ1 (primary) — Does an on-policy tree-aligned loss improve BE over the
-flat-KL baseline?**
-- **H1.** A draft trained with `kl_tree` (and/or `bv_tree`/`gbv_tree`/
-  `traversal_tree`) achieves higher `block_eff` than a draft trained with flat
-  `forward_kl`, evaluated under the matched verifier at K=3, T=1.0 on GSM8K.
+**The RQ order matches the locked iteration priority (Section D): flat baseline →
+tree loss → GBV verifier → online variants.** Nothing downstream is interpretable
+until RQ1 (the trusted flat baseline) is established.
+
+**RQ1 (foundation, PRIORITY 1) — Is the published flat-loss baseline
+(`forward_kl`) reproduced at a trusted, expected BE on the real A100 setup?**
+- **H1.** A draft distilled with flat `forward_kl` (the standard DistillSpec
+  objective) on the 0.6B→8B pair reaches a stable BE in the expected range under
+  the standard verifiers (`naive`/`bv`) at K=3, T=1.0 on GSM8K — and matches the
+  published-method order of magnitude (SOTA Qwen-class ≈ 3 at K=3; L+1=9 max).
+- *Confirm if:* `forward_kl` BE is finite, reproducible across seeds (across-seed
+  CI tight), and within the expected band; this becomes the **reference number**
+  every later claim is measured against. *Refute if:* the baseline is unstable or
+  implausibly low/high → fix the pipeline before any novel work (the foundation
+  is invalid otherwise).
+
+**RQ2 (PRIORITY 2 — core novel contribution) — Does on-policy tree-loss training
+improve BE over the flat `forward_kl` baseline from RQ1?**
+- **H2.** A draft trained with a tree loss (`kl_tree` first; then `bv_tree`/
+  `gbv_tree`/`traversal_tree`) achieves higher `block_eff` than the RQ1
+  `forward_kl` baseline, evaluated under the matched verifier at K=3, T=1.0 on
+  GSM8K.
 - *Confirm if:* mean BE(tree) − BE(`forward_kl`) > 0 with non-overlapping 95%
   CIs and paired-bootstrap p < 0.05. *Refute if:* CI of the difference contains 0.
 
-**RQ2 — Loss↔verifier alignment: is the best loss for verifier V the loss
-aligned to V?** (the alignment hypothesis stated in `tree_losses.py`.)
-- **H2.** For each verifier V ∈ {naive, nss, specinfer, spectr, khisti, bv, gbv,
-  traversal}, the draft trained with the matching `*_tree` loss is at or near the
-  top of the BE column for V (i.e. the argmax over losses of BE under V lands on
-  the V-aligned loss, or within its CI).
-- *Confirm if:* diagonal of the loss×verifier BE matrix dominates its column
-  (within CI) for ≥ 5/8 verifiers. *Refute if:* a single loss (e.g. `kl_tree`)
-  wins every column → alignment provides no specific advantage.
-
-**RQ3 — On-policy vs off-policy: how much of the gain is the tree (on-policy)
-data source vs the verifier-specific objective?**
+**RQ3 (PRIORITY 2, supporting) — On-policy vs off-policy: how much of the
+tree-loss gain is the on-policy data source vs the verifier-specific objective?**
 - **H3.** BE(`ebe_tree`) > BE(flat `ebe`) (on-policy fixes the off-policy
   mismatch documented in `ebe_tree_loss`), and BE(`bv_tree`) ≥ BE(`ebe_tree`)
   (full-vocab block integral adds further gain). This is the ablation ladder
   already written into the `ebe_tree` docstring.
 
-**RQ4 — K-sensitivity.** **H4.** BE is monotonically non-decreasing from K=3 to
+**RQ4 (PRIORITY 3 — verifier-side contribution) — Loss↔verifier alignment, and
+does the GBV verifier pay off?** (the alignment hypothesis in `tree_losses.py`.)
+- **H4.** For each verifier V ∈ {naive, nss, specinfer, spectr, khisti, bv, gbv,
+  traversal}, the draft trained with the matching `*_tree` loss is at or near the
+  top of the BE column for V; and **`gbv` verification yields higher BE than
+  single-path `bv`** for a tree-loss draft at K≤4.
+- *Confirm if:* the loss×verifier BE diagonal dominates its column (within CI) for
+  ≥ 5/8 verifiers, **and** BE(`gbv`) > BE(`bv`) for the best tree-loss draft.
+  *Refute if:* a single loss wins every column (alignment adds nothing) or `gbv`
+  does not beat `bv`.
+- *Gating:* pursued **only after RQ2 shows tree-loss promise** (priority order).
+
+**RQ5 (PRIORITY 4 — lowest, deferred) — Do online / online-tree variants
+(`online_kl_tree`, `online_ebe_tree`, …) add BE over the best offline tree loss?**
+- **H5.** An online-adapted draft beats its best offline tree-loss counterpart on
+  BE under the matched verifier. *Confirm if:* Δ>0 with non-overlapping CIs.
+  *Refute if:* CI contains 0. **Deferred to the very end** — only attempted if
+  RQ2/RQ4 land and budget remains (online code is currently disabled pending a
+  smoke-verification, per `kaggle.yaml` notes).
+
+**RQ6 — K-sensitivity.** **H6.** BE is monotonically non-decreasing from K=3 to
 K=5 for multi-path verifiers (nss, spectr, specinfer, khisti, traversal, gbv);
 gbv is expected to degrade earliest because `compute_skew()` is documented
 numerically unstable for K>4.
 
-**RQ5 — Temperature-sensitivity.** **H5.** Relative loss ranking by BE is stable
+**RQ7 — Temperature-sensitivity.** **H7.** Relative loss ranking by BE is stable
 between T=0.6 and T=1.0 (T affects absolute acceptance but not which loss wins).
 
-**RQ6 — Generalization.** **H6.** A BE improvement found on GSM8K holds on ≥1 of
+**RQ8 — Generalization.** **H8.** A BE improvement found on GSM8K holds on ≥1 of
 {humaneval, mtbench, math500, alpaca} (sign of Δ preserved, p < 0.05 on ≥1).
 
-**RQ7 — Quality preservation.** **H7.** Tree-loss drafts do not regress
+**RQ9 — Quality preservation.** **H9.** Tree-loss drafts do not regress
 `task_score` (GSM8K exact-match / HumanEval pass@1) or `perplexity` by more than
 the existing guard thresholds (>5pp task drop / >10% PPL rise in `evaluate.py`).
 
@@ -223,7 +250,7 @@ the existing guard thresholds (>5pp task drop / >10% PPL rise in `evaluate.py`).
 
 - **Weeks 2–5 (Kaggle P100): one-factor-at-a-time (OFAT), 1 seed, n=50.** Vary
   loss with verifier fixed to the matched mode, K=3, T=1.0, GSM8K only. Cheap,
-  isolates RQ1/RQ3 for *direction*; Week 5 widens to the verifier columns for RQ2.
+  isolates RQ1–RQ3 for *direction*; Week 5 widens to the verifier columns for RQ4.
 - **A100 confirmation: only the 1–2 promoted loss×verifier pairings + control.**
   Not a grid — the funnel has already collapsed the matrix to its finalists.
 - **Full 13×8 cross-pair grid is "extended"** (appendix-only), deferred to a
@@ -340,10 +367,10 @@ Calibrate after Week 1 and adjust the per-week ceiling.
 
 | comparison | unit | test |
 |---|---|---|
-| tree loss vs `forward_kl`, same verifier/K/T/dataset | **per-prompt BE**, same prompts | **paired bootstrap** over prompts on the BE difference (10k resamples); report Δ and its 95% CI / p. This is the primary RQ1 test. |
+| tree loss vs `forward_kl`, same verifier/K/T/dataset | **per-prompt BE**, same prompts | **paired bootstrap** over prompts on the BE difference (10k resamples); report Δ and its 95% CI / p. This is the primary RQ2 test (vs the RQ1 baseline). |
 | tree loss vs `forward_kl`, aggregate across seeds | seed means (n=3) | **Welch's t-test** across seeds (small-n; report exact p via `scipy.stats.ttest_ind(equal_var=False)`, not the repo's beta approximation). |
-| loss A vs loss B (verifier ranking, RQ2) | per-prompt BE | paired bootstrap per verifier column |
-| K=3 vs K=5 (RQ4) | per-prompt BE, same prompts | paired bootstrap (paired by prompt) |
+| loss A vs loss B (verifier ranking, RQ4) | per-prompt BE | paired bootstrap per verifier column |
+| K=3 vs K=5 (RQ6) | per-prompt BE, same prompts | paired bootstrap (paired by prompt) |
 | effect size | — | report **Cohen's d** (`analyze_results.py` already computes it) alongside every p. |
 
 Paired-over-prompts is strongly preferred over unpaired Welch for the primary
@@ -352,12 +379,12 @@ prompt-difficulty variance (the dominant noise source at small n).
 
 ### C.4 Multiple-comparison correction
 
-The RQ2 matrix is ≈ 6 losses × 8 verifiers = 48 simultaneous comparisons. Apply
+The RQ4 matrix is ≈ 6 losses × 8 verifiers = 48 simultaneous comparisons. Apply
 **Holm–Bonferroni** (less conservative than plain Bonferroni, no independence
 assumption) to the family of p-values within each results table. Report both raw
 and Holm-adjusted p; call a result "significant" only on the adjusted value.
-For the single pre-registered primary comparison (RQ1: best tree loss vs
-`forward_kl` on GSM8K), no correction is needed — it is one planned test.
+For the single pre-registered primary comparison (RQ2: best tree loss vs the RQ1
+`forward_kl` baseline on GSM8K), no correction is needed — it is one planned test.
 
 ### C.5 Minimum sample size
 
@@ -387,19 +414,38 @@ For the single pre-registered primary comparison (RQ1: best tree loss vs
 - [ ] **Seed-aware aggregation** in `analyze_results.py`: group by
       (loss, verifier, K, T, dataset) across seeds before testing, instead of
       grouping by `draft_label` only.
-- [ ] **Pre-registration**: freeze RQ1's test (loss, verifier, dataset, n, seeds)
+- [ ] **Pre-registration**: freeze RQ2's primary test (loss, verifier, dataset, n, seeds)
       before looking at A100 numbers.
 
 ---
 
-## Section D — Quota-bounded execution plan (≈6 Kaggle weeks + 1 A100 confirmation)
+## Section D — Quota-bounded execution plan (≈6 Kaggle weeks + staged A100 confirmation)
+
+> ### 🔒 Iteration priority (LOCKED)
+> The algorithm is **not final** and will need **multiple iterations** — this plan
+> is a **loop, not a one-shot**. Every iteration proceeds in this strict order,
+> and **each step gates the next**:
+>
+> 1. **FIRST — Flat-baseline benchmark (`forward_kl`).** Establish a solid,
+>    trusted published-loss baseline. **The first real A100 (Modal) spend produces
+>    the `forward_kl` baseline numbers** (full GSM8K where budget allows). Nothing
+>    else is meaningful until this is reproduced in the expected BE range.
+> 2. **SECOND — Tree-loss training** (`kl_tree`, `bv_tree`, `gbv_tree`, …), the
+>    core novel contribution, compared against the step-1 baseline.
+> 3. **THIRD — GBV verifier** (verifier-side contribution) — only after tree-loss
+>    training shows promise.
+> 4. **LAST — online / online-tree variants** (`online_kl_tree`,
+>    `online_ebe_tree`, …) — lowest priority, deferred to the very end.
+>
+> Do not advance a step until the previous step's EXIT gate passes. On each loop
+> iteration (algo revision) re-enter at the earliest step the change affects.
 
 **Cadence rule:** Kaggle resets ~30 GPU-h/week. Every week is **one
 hypothesis-batch with a hard ≤30 GPU-h ceiling** (target ≤27 h to keep a safety
 buffer for a crashed session). **P100 / T4×1 only** (B.5 mandate). All Kaggle
 runs: n=50, K=3, T=1.0, **1 seed**, `--skip_existing`, Cell-2b backup at session
-end. Numbers from Weeks 1–6 are **direction only** — they decide promotion, not
-the paper. Each week states a GPU-h budget and a quantitative EXIT gate.
+end. Numbers from the Kaggle weeks are **direction only** — they decide promotion,
+not the paper. Each week states a GPU-h budget and a quantitative EXIT gate.
 
 > **Hour-accounting note:** "train h" assumes P100 ≈ 1.5–3 s/step; flat losses
 > ~0.5–0.8 h/1000 steps, tree losses ~1.0–1.8 h/1000 steps. "eval h" assumes
@@ -437,18 +483,21 @@ quota with per-week headroom for one crashed session. **A100 spend is separate:
   in ~[1.3, 3.0], results in `results.db`, **per-step and per-cell timings
   recorded** for budgeting.
 
-### Week 2 — Convergence + LR tuning: `kl_tree` vs `forward_kl` (Kaggle P100) · budget ≈ 12 GPU-h
-- **Objective:** prove training works; pick LR/warmup/grad_accum from curves.
-- **Runs:** train `forward_kl` (control) and `kl_tree`, **1 seed each**, 1000
-  steps, kaggle config (grad_accum 16, warmup 100, lr 3e-5) ≈ 2 × ~1.3 h ≈ 3 h;
-  if curves look off, **one** LR-variant retrain of `kl_tree` (~1.3 h). Eval both
-  on GSM8K n=50, modes `bv,gbv` K=3 (~1 h). Budget padding covers a session crash.
-- **Inspect:** train vs val curves (`train_curves`, `split`); the **plateau seen
-  earlier at best≈0.3766**; any val bounce after ~step 150 (why warmup was added).
+### Week 2 — PRIORITY 1: flat `forward_kl` baseline + LR tuning (Kaggle P100) · budget ≈ 12 GPU-h
+- **Objective:** establish the **trusted flat baseline first** (priority step 1,
+  Kaggle-direction version); prove training works; pick LR/warmup/grad_accum.
+- **Runs:** train **`forward_kl` (the baseline)**, 1 seed, 1000 steps, kaggle
+  config (grad_accum 16, warmup 100, lr 3e-5) ≈ ~1.3 h; then `kl_tree` (first tree
+  loss) ≈ ~1.3 h; if curves look off, **one** LR-variant retrain (~1.3 h). Eval
+  both on GSM8K n=50, modes `bv,naive` (+`gbv`) K=3 (~1 h). Padding covers a crash.
+- **Inspect:** `forward_kl` train/val curves (`train_curves`, `split`); the
+  **plateau seen earlier at best≈0.3766**; any val bounce after ~step 150 (why
+  warmup was added); is the `forward_kl` baseline BE in the expected band?
 - **Tune:** val bounce → lower LR / lengthen warmup; train flat → raise LR /
   reduce grad_accum; val ≫ train → add LoRA dropout.
-- **EXIT:** val-loss plateau detected and `kl_tree` BE ≥ `forward_kl` BE
-  (direction) at n=50. Frozen LR/warmup carried to all later weeks.
+- **EXIT (gates priority step 2):** `forward_kl` baseline trains cleanly, val-loss
+  plateaus, and its BE is sane/plausible. **Do not interpret any tree-loss number
+  until this flat baseline is established.** Frozen LR/warmup carried forward.
 
 ### Weeks 3–4 — Loss-function ablation, batched (Kaggle P100) · budget ≈ 27 + 27 GPU-h
 - **Objective:** rank all 13 losses by BE direction vs `forward_kl`; kill losers.
@@ -467,15 +516,16 @@ quota with per-week headroom for one crashed session. **A100 spend is separate:
 - **EXIT (end of Week 4):** a ranked list; **top ≤4 losses** that beat
   `forward_kl` direction at n=50 carried forward. Kill the rest (B.6.7).
 
-### Week 5 — Verifier × loss interaction (Kaggle P100, eval-only) · budget ≈ 10 GPU-h
-- **Objective:** find the best loss×verifier pairing (RQ2 direction) — pick the
-  **1–2 pairings** to confirm on A100.
+### Week 5 — PRIORITY 3: verifier × loss interaction incl. GBV (Kaggle P100, eval-only) · budget ≈ 10 GPU-h
+- **Objective:** find the best loss×verifier pairing (RQ4 direction), incl.
+  whether `gbv` beats `bv` — pick the **1–2 pairings** to confirm on A100.
 - **Runs:** **no new training** — reuse the top ≤4 Week-3/4 checkpoints; eval all
   available verifiers (`naive,bv,nss,specinfer,traversal,gbv`; add
   `spectr,khisti` if time), K=3, T=1.0, GSM8K n=50. ~4 ckpt × batched verifiers ≈
   8–10 h.
 - **Inspect:** loss×verifier BE heatmap; does the diagonal (V-aligned loss best
-  under V, RQ2) appear? Note `spectr_tree`/`khisti_tree` (approximate) behaviour.
+  under V, RQ4) appear? Does `gbv` > `bv` for the best tree-loss draft? Note
+  `spectr_tree`/`khisti_tree` (approximate) behaviour.
 - **EXIT:** **the 1–2 best loss×verifier pairings selected** (plus `forward_kl`
   as control) — this is the entire input to the A100 confirmation.
 
@@ -485,28 +535,49 @@ quota with per-week headroom for one crashed session. **A100 spend is separate:
 - **Runs:** for the 1–2 finalists, a cheap K-direction peek on P100 (K=3 vs a
   single K=5 cell, n=50) and T=0.6 vs T=1.0 ranking check (~10 h). Reserve the
   rest as crash buffer for Weeks 2–5 overrun.
-- **Inspect:** does ranking survive a K and T change (RQ4/RQ5 direction)? If a
+- **Inspect:** does ranking survive a K and T change (RQ6/RQ7 direction)? If a
   finalist only wins at one T, note it.
 - **EXIT:** confirmation spec frozen (which 1–2 pairings, which verifier each);
   Modal account created and the run scripted with `--skip_existing` + backup.
 
-### Confirmation — the ONE A100 run (Modal $30 credit) — **the only paper numbers**
-- **Objective:** statistically rigorous BE on the finalists. This is the single
-  paid run; spend it once, last, only after Kaggle narrowed to ≤2 pairings.
-- **Spec (target):** top **1–2** loss×verifier pairings **+ `forward_kl` control**,
-  trained **3 seeds** (42/123/7), 2000 steps, a100 config; eval **full GSM8K
-  n=1319**, the finalists' matched verifiers **+ `bv`/`naive` reference**,
-  **K∈{3,5}**, T=1.0.
-- **Stats:** across-seed mean ± 95% CI (t, df=2) **and** paired-bootstrap Δ vs
-  control over the 1319 prompts (Section C); Holm–Bonferroni over the comparison
-  family; Cohen's d. **These are the numbers that go in the paper.**
-- **$30 fit (see D.cost below):** the *full* spec (2 pairings + control = 3
-  losses × 3 seeds = 9 checkpoints, K∈{3,5}) is **borderline-to-over $30**. The
-  **affordable core** (1 pairing + control = 2 losses × 3 seeds, K=3, matched
-  verifier + `naive` ref) **fits comfortably (~$18–24)**.
-- **EXIT (defines project success):** paired-bootstrap p < 0.05 (Holm-adjusted)
-  **and** non-overlapping across-seed CIs for ≥1 tree loss beating `forward_kl`
-  on BE under its matched verifier, full GSM8K.
+### A100 confirmation — staged Modal $30 spend, **in locked priority order**
+The single $30 Modal credit is spent **once, last, and strictly in priority
+order**. The credit is consumed stage-by-stage; **each stage gates the next**, so
+if the baseline is wrong no novel-method credit is wasted. These are the **only
+paper numbers** (3 seeds, full GSM8K, the Section C stats apply).
+
+- **Stage A — PRIORITY 1: flat `forward_kl` baseline (spend this FIRST).**
+  Train `forward_kl`, **3 seeds** (42/123/7), 2000 steps, a100 config; eval **full
+  GSM8K n=1319**, verifiers `naive` + `bv`, K=3, T=1.0. This is the trusted
+  foundation — the reference BE every later claim is measured against.
+  - **GATE:** the `forward_kl` baseline must reproduce within the expected BE
+    range (Week-1 sanity band, ≈ SOTA Qwen-class order of magnitude) with a tight
+    across-seed CI. **Do NOT proceed to Stage B (tree losses) until this passes.**
+    If it fails, stop and fix the pipeline — spend no further credit.
+- **Stage B — PRIORITY 2: best tree loss vs the Stage-A baseline.**
+  Train the top tree-loss finalist (e.g. `kl_tree`/`bv_tree`/`gbv_tree`), 3 seeds,
+  same config; eval full GSM8K n=1319 under its **matched verifier + `naive`/`bv`
+  reference**, K=3.
+  - **GATE (defines project success):** paired-bootstrap p < 0.05 (Holm-adjusted)
+    **and** non-overlapping across-seed CIs for the tree loss beating the Stage-A
+    `forward_kl` baseline. Proceed to Stage C only if a tree loss wins.
+- **Stage C — PRIORITY 3: GBV verifier.** Re-evaluate the Stage-B winning
+  tree-loss checkpoints under **`gbv` vs `bv`** (and the OT verifiers if credit
+  remains), K≤4, full GSM8K. Tests whether multi-path GBV verification adds BE
+  over single-path BV (H4).
+  - **GATE:** BE(`gbv`) > BE(`bv`) for the tree-loss draft (within CI).
+- **Stage D — PRIORITY 4 (LAST, defer): online / online-tree variants.**
+  `online_kl_tree`/`online_ebe_tree` etc. — **only if credit remains** (it likely
+  will not; online code is disabled pending smoke-verification). In practice push
+  Stage D to a follow-up **Lightning-credit** month so the Modal credit is never
+  blocked on the lowest-priority work.
+
+**$30 fit (see D.cost):** Stages A+B at **3 seeds, K=3, matched + `naive`/`bv`
+ref** are the **Trimmed-B** spec (~$22, ~10.5 A100-h) and **fit**. Stage C is a
+cheap eval-only add-on on existing checkpoints (~$3–5). **K=5, a second pairing,
+and Stage D do NOT fit the $30** — defer them to Lightning credits. Spend order is
+A → B → C, stopping the moment the credit is exhausted (the baseline + the single
+headline tree-loss result are the non-negotiable minimum).
 
 ### D.cost — does the A100 confirmation fit in $30?
 
