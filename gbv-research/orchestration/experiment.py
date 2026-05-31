@@ -3059,13 +3059,6 @@ def main():
             print(f"[hf] {_why} — subprocess HF etag pings disabled "
                   f"(set SPECDIST_FORCE_ONLINE=1 to override).")
         else:
-            # Explicitly override any TRANSFORMERS_OFFLINE=1 that the parent
-            # environment (e.g. Kaggle) may have set, so that all child
-            # subprocesses (trainer, evaluate) can reach HF Hub for the
-            # initial download.  Without this, children inherit the parent's
-            # TRANSFORMERS_OFFLINE=1 and fail with LocalEntryNotFoundError.
-            os.environ["TRANSFORMERS_OFFLINE"] = "0"
-            os.environ["HF_HUB_OFFLINE"]       = "0"
             print(f"[hf] {_why} — leaving HF online (initial downloads may be needed).")
 
     # ── Storage root — single source of truth for all persistent paths ────────
