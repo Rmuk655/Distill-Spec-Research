@@ -13,11 +13,12 @@
 #                (For a deliberate pure-training burn with NO eval at all, set
 #                 experiment.train_only: true or pass --train_only instead.)
 #
-# HARDWARE     : Kaggle P100 (single 16 GB GPU). Qwen3-8B teacher in 4-bit NF4
-#                (~4.5 GB VRAM) + Qwen3-0.6B draft. NEVER select T4 x2 — it burns
-#                2x quota for zero benefit (everything fits one 16 GB GPU).
+# HARDWARE     : Kaggle T4 (single GPU, sm_75). Qwen3-8B teacher in 4-bit NF4
+#                (~4.5 GB VRAM) + Qwen3-0.6B draft. Do NOT use P100 (sm_60 —
+#                incompatible with PyTorch 2.10+cu128). NEVER select T4 x2 — it
+#                burns 2x quota for zero benefit (everything fits one 16 GB GPU).
 #
-# EXPECTED RUN : flat loss (forward_kl): ~1.0-1.5 h / 1000 steps on P100.
+# EXPECTED RUN : flat loss (forward_kl): ~1.0-1.5 h / 1000 steps on T4.
 #                tree loss:              ~1.5-2.5 h / 1000 steps (3 model passes
 #                                        + K-path tree). Both fit ONE ~9 h session
 #                                        with large headroom; raise --train_steps

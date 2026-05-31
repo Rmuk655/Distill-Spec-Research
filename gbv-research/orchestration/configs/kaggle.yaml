@@ -122,3 +122,6 @@ experiment:
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
            naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
+  # Exclude online OSD variants from the default Kaggle run — online is last priority.
+  # Override with --losses online,online_ebe if you specifically want online runs.
+  exclude_losses: [online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]

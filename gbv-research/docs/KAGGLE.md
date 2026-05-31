@@ -9,11 +9,15 @@ Kaggle is a **100% free** platform that gives every registered user:
 | Session length | **9 hours** | ~12 h (but 60-90 min idle timeout) |
 | GPU quota | **30 h / week** (resets dynamically) | ~4-6 h / week |
 | Persistent storage | 20 GB /kaggle/working/ + 100 GB datasets | Google Drive |
-| Accelerator options | **P100 ×1** (recommended), T4 ×1, or T4 ×2 | T4 ×1 |
+| Accelerator options | **T4 ×1** (recommended), T4 ×2 | T4 ×1 |
+
+> ⚠️ **P100 is broken with current Kaggle packages.** P100 = CUDA sm_60, but
+> PyTorch 2.10+cu128 requires sm_70+ (will crash with `ops.cu` symbol not found,
+> exit -11). bitsandbytes 4-bit NF4 also requires sm_70+. **Use T4 (sm_75) instead.**
 
 **For SpecDist, Kaggle is the best free option:** longer sessions, more GPU hours,
-and the 29 GB RAM unlocks the 8B teacher on a **single 16 GB GPU** (one P100 or one T4 —
-the teacher is 4-bit quantized, so a second GPU is never required).
+and the 29 GB RAM unlocks the 8B teacher on a **single 16 GB T4 GPU** —
+the teacher is 4-bit quantized, so a second GPU is never required.
 
 ---
 
@@ -26,9 +30,9 @@ first, then converts to NF4. For Qwen3-8B: ~16 GB CPU RAM intermediates.
 - **Kaggle** has 29 GB system RAM → 16 GB NF4 intermediates fit → 8B teacher loads successfully
 
 Use `CONFIG = "kaggle"` in the notebook. This runs the same 8B teacher as the A100 config,
-but in 4-bit NF4 so it fits on a single 16 GB GPU (P100 or T4).
+but in 4-bit NF4 so it fits on a single 16 GB T4 GPU.
 
-**VRAM budget for `kaggle` config (single P100/T4, 16 GB):**
+**VRAM budget for `kaggle` config (single T4, 16 GB):**
 
 | Component | VRAM |
 |---|---|
@@ -55,32 +59,35 @@ My Work → Code → + New Notebook → File → Import Notebook → upload `dep
 ### Step 3 — Enable GPU and Internet
 
 Right sidebar → Settings:
-- **Accelerator**: **GPU P100** (single GPU) — recommended (see box below)
+- **Accelerator**: **GPU T4** (single GPU) — recommended (see box below)
 - **Internet**: On  _(needed for git clone + pip install; not needed for model weights)_
 
-> **Recommended accelerator: GPU P100 (single GPU). Do NOT use GPU T4 × 2** — it burns your
-> shared 30 h/week quota at **2× the rate** for work that fits in one 16 GB GPU. P100 doubles
-> your usable wall-clock time.
+> **Recommended accelerator: GPU T4 × 1 (single GPU). Do NOT use GPU T4 × 2** — it burns your
+> shared 30 h/week quota at **2× the rate** for work that fits in one 16 GB GPU.
 >
-> The free GPU quota is **30 hours per week**, **shared across P100 and T4 × 2**, and resets
+> **Do NOT use P100.** P100 = CUDA sm_60, which is incompatible with PyTorch 2.10+cu128
+> (requires sm_70+). P100 will crash immediately with `ops.cu` symbol not found / exit -11.
+> bitsandbytes 4-bit NF4 also requires sm_70+. T4 = sm_75 ✓  P100 = sm_60 ✗
+>
+> The free GPU quota is **30 hours per week**, **shared across T4 × 1 and T4 × 2**, and resets
 > **Saturday 00:00 UTC**. Because T4 × 2 uses two GPUs, it drains that single shared budget
 > twice as fast. The teacher is 4-bit quantized (~4.5 GB) and the student is ~1.5 GB, so the
-> whole pipeline fits comfortably in one 16 GB GPU (training peak ~4.4 GB, eval peak ~5.4 GB).
+> whole pipeline fits comfortably in one 16 GB T4 GPU (training peak ~4.4 GB, eval peak ~5.4 GB).
 > A second GPU buys nothing here except a faster-draining quota.
 
 #### Hardware auto-detection
 
-You do **not** need to change any config when you switch accelerators. The runtime scheduler
-`orchestration/hw_scheduler.py` (`HWProfile.from_runtime()`) detects the GPU(s) at startup via
-`torch.cuda.device_count()` and picks train/eval parallelism automatically:
+You do **not** need to change any config when you switch between T4 ×1 and T4 ×2. The runtime
+scheduler `orchestration/hw_scheduler.py` (`HWProfile.from_runtime()`) detects the GPU(s) at
+startup via `torch.cuda.device_count()` and picks train/eval parallelism automatically:
 
 | Accelerator | Detected | Train slots | Eval slots |
 |---|---|---|---|
-| **GPU P100** (1 × 16 GB) | 1 GPU | 1 | 2 |
+| **GPU T4 × 1** (1 × 16 GB) | 1 GPU | 1 | 2 |
 | GPU T4 × 2 (2 × 16 GB) | 2 GPUs | 2 | 4 |
 
-So P100 still runs **parallel eval (2 slots)** — it just can't do 2-way parallel training. No
-manual config change is needed when moving between P100 and T4 × 2; detection is automatic.
+T4 × 1 still runs **parallel eval (2 slots)** — it just can't do 2-way parallel training. No
+manual config change is needed when moving between T4 × 1 and T4 × 2; detection is automatic.
 
 ### Step 4 — Add Kaggle secrets
 
@@ -233,18 +240,17 @@ as long as the browser tab is open.
 ## Dual GPU: T4 × 2 (not recommended)
 
 > ⚠️ **T4 × 2 is not recommended for SpecDist.** It consumes your **shared 30 h/week quota at
-> 2× the rate** (two GPUs) for a workload that fits in one 16 GB GPU. Prefer **GPU P100** — see
-> the recommendation box in Step 3. This section documents T4 × 2 only for completeness.
+> 2× the rate** (two GPUs) for a workload that fits in one 16 GB T4 GPU. Prefer **GPU T4 × 1** —
+> see the recommendation box in Step 3. This section documents T4 × 2 only for completeness.
 
 Kaggle lets you enable **two T4 GPUs** for free. The pipeline runs on it without code changes —
 `hw_scheduler.py` detects 2 GPUs and allocates 2 train + 4 eval slots — but the extra GPU does
-not unlock anything the single 16 GB P100 can't already do, and it halves your usable wall-clock
+not unlock anything the single 16 GB T4 can't already do, and it halves your usable wall-clock
 hours.
 
 | Scenario | GPU 0 | GPU 1 |
 |---|---|---|
-| P100 × 1 (**recommended**) | 8B NF4 (4.5 GB) + draft (1.5 GB), all eval | — |
-| T4 × 1 | 8B NF4 (4.5 GB) + draft (1.5 GB) | — |
+| **T4 × 1** (**recommended**) | 8B NF4 (4.5 GB) + draft (1.5 GB), all eval | — |
 | T4 × 2 (2× quota burn) | 8B NF4 + draft, 2 train + 4 eval slots | parallel train/eval |
 
 ---
@@ -350,13 +356,12 @@ to no-op if missing (W&B runs offline, git clone uses HTTPS without auth).
 Settings → Accelerator must be set **before** starting the session. Changing it mid-session
 requires a restart (all in-progress work is lost). Always set GPU before running any cell.
 
-### P100 training/eval unexpectedly slow (bf16 note — verify on first run)
+### P100 crashes immediately (sm_60 incompatible — switch to T4)
 
-P100 is Pascal architecture with **no native bfloat16**. The NF4 path uses
-`bnb_4bit_compute_dtype=torch.bfloat16` and eval passes `--dtype bf16`. On P100 this stays
-numerically correct but may run slower (possible fp32 fallback). This does **not** definitely
-break anything — verify on your first run. If P100 eval/training is unexpectedly slow, switch
-the 4-bit compute dtype and eval dtype to **fp16** — Pascal has no native bf16.
+P100 = CUDA sm_60. PyTorch 2.10+cu128 requires sm_70+ and will crash with `ops.cu` symbol
+not found / exit -11 before any training starts. bitsandbytes 4-bit NF4 also requires sm_70+.
+**P100 cannot be used at all with current Kaggle packages.** Switch your Accelerator to
+**GPU T4 × 1** (sm_75) — this is detected automatically and requires no config change.
 
 ### Session expired mid-run (9-hour limit)
 
@@ -364,6 +369,6 @@ Run **Cell 1** (Resume). Worst case: 25 steps (~1-2 min) of work is redone.
 
 ### OOM during training
 
-1. Check GPU T4 ×1 or ×2 is selected (not CPU)
+1. Check **GPU T4 ×1** is selected (not CPU, and NOT P100 — P100 is broken with current packages)
 2. Try `CONFIG = "colab"` (4B teacher, BF16, more VRAM headroom)
 3. Confirm no other Kaggle sessions are using your GPU quota simultaneously

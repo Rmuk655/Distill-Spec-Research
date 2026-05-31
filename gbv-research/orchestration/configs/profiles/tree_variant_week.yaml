@@ -17,10 +17,11 @@
 #                  direction; kill the rest (frugality rule: never spend a 2nd week
 #                  on a loss that did not beat the baseline at n=100).
 #
-# HARDWARE     : Kaggle P100 (single 16 GB GPU), Qwen3-8B teacher 4-bit NF4.
+# HARDWARE     : Kaggle T4 (single GPU, sm_75), Qwen3-8B teacher 4-bit NF4.
+#                Do NOT use P100 (sm_60 — incompatible with PyTorch 2.10+cu128).
 #                NEVER T4 x2.
 #
-# EXPECTED RUN : ~1.5-2.5 h / 1000 steps for a tree loss on P100 (3 model passes +
+# EXPECTED RUN : ~1.5-2.5 h / 1000 steps for a tree loss on T4 (3 model passes +
 #                K-path tree per step) + ~20-40 min light eval. Fits ONE ~9 h
 #                session with headroom.
 #

@@ -7,7 +7,8 @@
 #                training means a training session never wastes GPU time on eval,
 #                and eval can batch several checkpoints in one later session.
 #
-# HARDWARE     : Kaggle P100 (single 16 GB GPU), Qwen3-8B teacher 4-bit NF4.
+# HARDWARE     : Kaggle T4 (single GPU, sm_75), Qwen3-8B teacher 4-bit NF4.
+#                Do NOT use P100 (sm_60 — incompatible with PyTorch 2.10+cu128).
 #                NEVER T4 x2 (doubles quota burn for no benefit).
 #
 # EXPECTED RUN : ~0.2-0.4 h per checkpoint-batch across the listed verifiers at

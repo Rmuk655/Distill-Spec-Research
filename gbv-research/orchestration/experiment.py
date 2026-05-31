@@ -317,6 +317,12 @@ def _load_config_yaml(config_name: str) -> dict:
         #          losses: [online]          (Mukund's online-only debug run)
         if "losses" in experiment_cfg:
             out["losses"] = experiment_cfg["losses"]   # list or null
+        # experiment.exclude_losses → blacklist applied to ALL_LOSSES for this config.
+        # CLI --losses still wins. Useful for top-level YAML configs (e.g. kaggle.yaml)
+        # that want to permanently exclude low-priority variants without enumerating the
+        # entire allowlist. Example: exclude_losses: [online, online_ebe, online_kl_tree]
+        if "exclude_losses" in experiment_cfg:
+            out["exclude_losses"] = experiment_cfg["exclude_losses"]   # list
         # evaluation section — K_values, temperatures, modes, n_prompts.
         # Previously these were hardcoded in build_steps(); parsing them here lets each
         # platform YAML control its own eval cost without editing experiment.py.
@@ -511,6 +517,27 @@ def _hw_tier_from_config(config_slug: str) -> str:
     if "kaggle" in s:
         return "kaggle"
     return "laptop"
+
+
+def _check_gpu_compatibility():
+    """Fail fast if the GPU is too old for the installed PyTorch/bitsandbytes."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            cc = props.major * 10 + props.minor   # e.g. sm_60 → 60
+            if cc < 70:
+                name = props.name
+                print(f"\n  [FATAL] GPU {i} ({name}) has CUDA capability sm_{cc}, "
+                      f"but PyTorch 2.10+cu128 requires sm_70+.\n"
+                      f"  bitsandbytes 4-bit NF4 also requires sm_70+.\n"
+                      f"  On Kaggle: switch Accelerator from P100 to T4 (single GPU).\n"
+                      f"  T4 = sm_75 ✓  P100 = sm_60 ✗\n", file=sys.stderr)
+                sys.exit(1)
+    except Exception:
+        pass   # if torch not importable yet, skip — will fail later with a clear error
 
 
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
@@ -2965,6 +2992,9 @@ def main():
                         "(overrides YAML config, default 0.8).")
     args = p.parse_args()
 
+    # Fail fast before any model loading if the GPU is too old for the installed packages.
+    _check_gpu_compatibility()
+
     # Load YAML config first — YAML profiles define models, hardware, training, etc.
     # Must happen before cfg is built so YAML models.draft/target are available.
     _yaml_cfg = _load_config_yaml(args.config)
@@ -3128,6 +3158,14 @@ def main():
         if args.losses else None
     )
     _losses_to_run = _cli_losses or (_yaml_losses if isinstance(_yaml_losses, list) else None)
+    # experiment.exclude_losses: blacklist applied after allowlist (CLI --losses still wins).
+    # Works for ALL configs (profiles + top-level YAML). If --losses is passed on the CLI,
+    # exclude_losses is ignored (the explicit CLI list is the canonical filter).
+    _yaml_exclude = _yaml_cfg.get("exclude_losses")
+    if _yaml_exclude and not _cli_losses:
+        _base = list(_losses_to_run) if _losses_to_run else list(ALL_LOSSES)
+        _losses_to_run = [l for l in _base if l not in _yaml_exclude]
+        print(f"  [pipeline] exclude_losses ({args.config}.yaml): excluding {_yaml_exclude}")
     if _losses_to_run:
         _invalid = [l for l in _losses_to_run if l not in ALL_LOSSES]
         if _invalid:
