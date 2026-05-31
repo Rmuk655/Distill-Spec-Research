@@ -1,9 +1,12 @@
-# Kaggle T4 configuration — single GPU, Qwen3-8B teacher in 4-bit NF4
+# Kaggle T4 x2 configuration — dual GPU (sm_75), Qwen3-8B teacher in 4-bit NF4
+#
+# GPU options on Kaggle: P100 (sm_60, BROKEN) · T4 x2 (sm_75, the only viable option) · TPU (unused)
+# P100 is incompatible with PyTorch 2.10+cu128 (requires sm_70+). Always select T4 x2.
+# T4 x2 burns 2× the weekly quota: 30 GPU-h/wk → ~15 effective session-hours.
 #
 # Why this config exists separately from colab.yaml (T4 / 4B BF16):
 # -------------------------------------------------------------------
-# Kaggle and Colab both have the same T4 GPU (16 GB VRAM), but their system RAM
-# differs hugely:
+# Kaggle T4 x2 (2×16 GB VRAM) and Colab T4 (1×16 GB) differ in system RAM hugely:
 #
 #   Colab free tier:  ~12 GB system RAM
 #   Kaggle free tier: ~29 GB system RAM
@@ -18,18 +21,16 @@
 #   Kaggle: 29 GB RAM > 16 GB needed → NF4 loading succeeds.
 #           Use the 8B teacher, same signal quality as the A100 config.
 #
-# VRAM budget (single T4, 16 GB):
-#   Teacher Qwen3-8B in 4-bit NF4: ~4.5 GB (device_map="auto")
-#   Draft   Qwen3-0.6B in BF16:     1.2 GB
-#   LoRA adapters + optimizer:       0.1 GB
-#   Activations / KV cache (seq 96): 2.0 GB
-#   Total:                          ~7.8 GB  — 8+ GB headroom
+# VRAM budget (T4 x2, 2×16 GB — device_map="auto" splits teacher across both GPUs):
+#   Teacher Qwen3-8B in 4-bit NF4: ~4.5 GB total (split across GPU 0 + GPU 1)
+#   Draft   Qwen3-0.6B in BF16:     1.2 GB (GPU 0)
+#   LoRA adapters + optimizer:       0.1 GB (GPU 0)
+#   Activations / KV cache (seq 96): 2.0 GB (GPU 0)
+#   Total on GPU 0:                 ~7.8 GB — 8+ GB headroom on each 16 GB GPU
 #
-# Dual GPU note (Kaggle T4 x2):
-#   With Accelerator = GPU T4 x2, device_map="auto" automatically splits the
-#   8B NF4 teacher across both GPUs, freeing even more VRAM on the training GPU.
-#   No code changes needed — set Accelerator to T4 x2 in notebook settings and
-#   the trainer handles it automatically.
+#   device_map="auto" automatically splits the 8B NF4 teacher across both T4 GPUs,
+#   freeing even more VRAM on GPU 0 (training GPU). No code changes needed — just
+#   select T4 x2 in Kaggle notebook settings; the trainer handles it automatically.
 #
 # Steps / time on T4:
 #   500 steps  ≈ 2-4 h (colab config level, same teacher quality as A100)

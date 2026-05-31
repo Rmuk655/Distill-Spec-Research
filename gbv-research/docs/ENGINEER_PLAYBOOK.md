@@ -45,14 +45,13 @@ until the previous EXIT GATE passes.
 | Lightning | ~15–22 free credits/mo | backup A100 / K=5 add-on in a follow-up month |
 | Colab free | exhausted | never on the critical path |
 
-- **Kaggle hardware: P100 (single 16 GB GPU) or T4×1 — NEVER T4×2.** Quota burns
-  per GPU-wall-hour; T4×2 burns **2× quota for the same work** and every model
-  here (0.6B draft + 8B-NF4 teacher ≈ 7.8 GB) fits one 16 GB GPU. Select
-  **"P100"** (preferred) in Kaggle notebook settings. If you see T4×2, change it
-  before running anything.
+- **Kaggle hardware: GPU T4 x2 — the only working option.** P100 (sm_60) is broken
+  with PyTorch 2.10+cu128 (requires sm_70+); Kaggle does not offer a single T4.
+  Always select **"GPU T4 x2"** in Kaggle notebook settings. T4 x2 burns **2×
+  quota per session-hour** → 30 GPU-h/wk becomes **~15 effective session-hours/wk**.
 - **Check the quota counter** at <https://www.kaggle.com/me/quota> at the start
-  of every session. Budget each week as **≤27 GPU-h** (safety buffer under 30 for
-  one crashed session). One ~9-hour session ≈ 9 quota-h ≈ **one training run.**
+  of every session. Budget each week as **≤27 GPU-h** (~13-14 effective session-hours;
+  safety buffer under 30 for one crashed session). One ~9-hour session ≈ 18 quota-h.
 - **A100 (Modal) is for confirmation only** — see [`docs/MODAL.md`](MODAL.md).
   Kaggle numbers are **direction only** (1 seed, n=100); never reported.
 
@@ -156,8 +155,8 @@ include it**). All Kaggle runs: 1 seed, K=3, T=1.0, n=100, `--skip_existing`.
 | **Duration** | ~5 min |
 | **Artifact** | throwaway checkpoints + a few smoke-scoped DB rows (numbers meaningless) |
 | **Prerequisite** | none |
-| **EXIT GATE** | every step exits 0; no NaN; no OOM on a single 16 GB GPU |
-| **While this runs (no GPU)** | re-read this playbook's next step; confirm the Kaggle Accelerator is **P100, not T4×2**; check the quota counter |
+| **EXIT GATE** | every step exits 0; no NaN; no OOM |
+| **While this runs (no GPU)** | re-read this playbook's next step; confirm the Kaggle Accelerator is **GPU T4 x2** (not P100 — P100 is broken); check the quota counter |
 
 ### W1 — Pipeline validation + baseline-eval sanity + timing calibration
 

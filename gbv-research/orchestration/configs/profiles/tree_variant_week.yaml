@@ -17,9 +17,10 @@
 #                  direction; kill the rest (frugality rule: never spend a 2nd week
 #                  on a loss that did not beat the baseline at n=100).
 #
-# HARDWARE     : Kaggle T4 (single GPU, sm_75), Qwen3-8B teacher 4-bit NF4.
+# HARDWARE     : Kaggle T4 x2 (dual GPU, sm_75), Qwen3-8B teacher 4-bit NF4.
 #                Do NOT use P100 (sm_60 — incompatible with PyTorch 2.10+cu128).
-#                NEVER T4 x2.
+#                T4 x2 is the only working GPU on Kaggle (no single T4 available).
+#                Burns 2× quota (~15 effective h/wk from 30 GPU-h/wk budget).
 #
 # EXPECTED RUN : ~1.5-2.5 h / 1000 steps for a tree loss on T4 (3 model passes +
 #                K-path tree per step) + ~20-40 min light eval. Fits ONE ~9 h
@@ -111,8 +112,8 @@ checkpointing:
 logging:
   log_every: 10
   wandb_project: distillspec
-  wandb_group: kaggle-p100-tree-week
-  run_label: "8B-P100-treewk"
+  wandb_group: kaggle-t4x2-tree-week
+  run_label: "8B-T4x2-treewk"
 
 health:
   val_every: 50

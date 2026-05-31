@@ -7,9 +7,10 @@
 #                training means a training session never wastes GPU time on eval,
 #                and eval can batch several checkpoints in one later session.
 #
-# HARDWARE     : Kaggle T4 (single GPU, sm_75), Qwen3-8B teacher 4-bit NF4.
+# HARDWARE     : Kaggle T4 x2 (dual GPU, sm_75), Qwen3-8B teacher 4-bit NF4.
 #                Do NOT use P100 (sm_60 — incompatible with PyTorch 2.10+cu128).
-#                NEVER T4 x2 (doubles quota burn for no benefit).
+#                T4 x2 is the only working GPU on Kaggle (no single T4 available).
+#                Burns 2× quota (~15 effective h/wk from 30 GPU-h/wk budget).
 #
 # EXPECTED RUN : ~0.2-0.4 h per checkpoint-batch across the listed verifiers at
 #                n=100, K=3 (traversal/gbv are slowest). Several checkpoints fit a
@@ -80,8 +81,8 @@ checkpointing:
 logging:
   log_every: 10
   wandb_project: distillspec
-  wandb_group: kaggle-p100-eval
-  run_label: "8B-P100-eval"
+  wandb_group: kaggle-t4x2-eval
+  run_label: "8B-T4x2-eval"
 
 health:
   val_every: 50

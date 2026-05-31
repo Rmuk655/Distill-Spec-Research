@@ -6,7 +6,7 @@
 This doc is the **what-to-run-where-and-when** plan. It does **not** repeat setup
 instructions — follow the linked guides for those:
 
-- [`KAGGLE.md`](./KAGGLE.md) — Kaggle free-tier setup (P100/T4, 4-bit NF4 config).
+- [`KAGGLE.md`](./KAGGLE.md) — Kaggle free-tier setup (T4 x2 only; P100 broken; 4-bit NF4 config).
 - [`MODAL.md`](./MODAL.md) — Modal on-demand A100/T4 setup ($30/mo credit).
 - [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md) — research/ablation plan + **locked algo priority**.
 - [`ENGINEER_PLAYBOOK.md`](./ENGINEER_PLAYBOOK.md) — dependency-aware sequenced run plan with exact commands.
@@ -28,7 +28,7 @@ instructions — follow the linked guides for those:
 
 | Pool | Free allowance | GPU to use | Effective T4-h | Notes |
 |---|---|---|---|---|
-| **Kaggle** | free, **~30 GPU-h / week** (resets weekly) | **P100 ×1** (single-GPU) | ~30/wk | Shared P100/T4×2. Use P100 single-GPU — **NOT T4×2** (burns 2× quota). Check `kaggle.com/me/quota`. |
+| **Kaggle** | free, **~30 GPU-h / week** (resets weekly; **T4 x2 burns 2× → ~15 effective h/wk**) | **GPU T4 x2** (sm_75, only working option) | ~15/wk effective | P100 (sm_60) is **broken** with PyTorch 2.10+cu128 (requires sm_70+). T4 x2 is the only viable Kaggle GPU. Check `kaggle.com/me/quota`. |
 | **Modal** | **$30/mo** credit (resets monthly, **no rollover**, no card to start) | T4 ≈ $0.59/hr | **~50 T4-h/mo** | A100 ≈ $2–5/hr (see below). Per-second billing. |
 | **Lightning AI** | **15 credits ($15)/mo** (1 cr = $1; phone-verify) | T4 ≈ $0.60/hr | **~25 T4-h/mo** | Free-tier GPUs = T4/L4/A10G/L40S (A100/H100 ≈ Teams-plan only). **All GPUs draw the same 15-credit pool → use T4**, not pricier GPUs. |
 | **Google Cloud** | **$300** trial, **90 days**, new accounts | T4 (after quota grant) | **~850 T4-h** | Card = verification only, **not** charged upfront; usage draws down $300; account **pauses** at trial end (no auto-charge). GPUs need: (a) upgrade to paid billing [still spends the $300 first] + (b) a GPU quota-increase request (default 0). See [Section 4](#section-4--gcp-300-trial-how-to). $300 ≈ ~850 T4-h or ~80–100 A100-h. |
@@ -54,7 +54,7 @@ Use these **only** once candidates are publication-worthy (≤2 survivors).
 
 ```
   free T4-class pools                               A100 (paid/institutional)
-  Kaggle P100 + Modal T4 + Lightning T4        →   IITH primary · Rahul Thomas A100
+  Kaggle T4 x2 + Modal T4 + Lightning T4       →   IITH primary · Rahul Thomas A100
   + GCP $300 T4 (@iith.ac.in account)              · Modal A100 backup
   ──────────────────────────────────────           ──────────────────────────────
   ALL exploration / hypothesis work                 PUBLICATION confirmation ONLY
@@ -94,7 +94,7 @@ Tied to the **locked algo priority** in [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md)
 | If you are… | Use | Why |
 |---|---|---|
 | Smoke-testing | any free pool | ~5 min, near-zero cost |
-| Running a single baseline / ablation batch | Kaggle P100 | longest sessions, 30 h/wk |
+| Running a single baseline / ablation batch | Kaggle T4 x2 | longest sessions, ~15 effective h/wk (30 GPU-h/wk ÷ 2) |
 | Running 2nd/3rd parallel batch | Modal T4 + Lightning T4 | parallelize across pools |
 | Out of weekly Kaggle quota | Modal/Lightning T4, or GCP T4 ($300 trial, @iith.ac.in) | spread the load |
 | Confirming ≤2 publication candidates | **IITH A100** · Rahul Thomas A100 · Modal/GCP A100 backup | cheapest/closest A100, full-scale stats |

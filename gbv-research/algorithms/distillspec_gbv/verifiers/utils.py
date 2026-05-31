@@ -102,8 +102,8 @@ def load_models(
             trust_remote_code=True,
             quantization_config=bnb_cfg,
             device_map="auto",      # quantized models must use device_map; "auto"
-                                    # keeps everything on cuda:0 (single T4) and
-                                    # transparently splits across T4×2 if present
+                                    # uses cuda:0 on a single GPU, or splits across
+                                    # both T4s on Kaggle T4 x2 (the only Kaggle GPU)
             low_cpu_mem_usage=True, # load shard-by-shard; avoids RAM spike
             use_safetensors=True,
         )

@@ -284,18 +284,17 @@ the funnel below.
 | Lightning | ~15–22 free credits/mo | backup A100 if Modal runs short | secondary |
 | Colab free | **already exhausted** | throwaway / backup only — **never on the critical path** | unreliable |
 
-> ### ⚠️ MANDATE: on Kaggle use **P100 (single 16 GB GPU)** or **T4×1** — **NEVER T4×2.**
-> Quota burns **per GPU-wall-hour**: P100 and T4×1 burn **1 quota-h per wall-h**;
-> **T4×2 burns 2× the quota for the same work.** Every model in this project
-> (Qwen3-0.6B draft + Qwen3-8B teacher in 4-bit NF4 ≈ 7.8 GB, see `kaggle.yaml`)
-> fits in a single 16 GB GPU, so the second GPU buys nothing and doubles the
-> burn rate. **Select "P100" (preferred) or "GPU T4 x1" in Kaggle notebook
-> settings. If you see T4×2, change it before running anything.**
+> ### ⚠️ MANDATE: on Kaggle always use **GPU T4 x2** — P100 is broken, no single T4 exists.
+> Kaggle's GPU options: **P100** (sm_60, broken with PyTorch 2.10+cu128) and **T4 x2**
+> (sm_75, the only working choice). There is no single-T4 option.
+> T4 x2 burns **2× quota per session-hour**: 30 GPU-h/wk → **~15 effective session-hours/wk**.
+> Plan for 1–2 sessions of 8–9 hours per week. **Always select "GPU T4 x2"** in Kaggle
+> notebook settings. P100 will crash immediately (sm_60 < sm_70 required by PyTorch 2.10+).
 
 **The funnel:**
 
 ```
-Kaggle P100 (exploration, ~30 GPU-h/wk × ~6 wk)        Modal A100 (confirm, ONCE)
+Kaggle T4 x2 (exploration, ~15 effective h/wk × ~6 wk)  Modal A100 (confirm, ONCE)
 ┌────────────────────────────────────────────┐        ┌──────────────────────────┐
 │ 13 losses → rank → kill losers → tune LR     │  ───►  │ top 1–2 loss×verifier      │
 │ n=50, K=3, T=1.0, 1 seed (DIRECTION only)    │        │ full GSM8K n=1319          │
@@ -320,7 +319,7 @@ Calibrate after Week 1 and adjust the per-week ceiling.
 
 ### B.6 Frugality rules (non-negotiable on Kaggle)
 
-1. **P100 or T4×1, never T4×2** (see mandate above) — 1 quota-h/wall-h, not 2×.
+1. **Always T4 x2** (the only working Kaggle GPU; P100 is broken) — plan for ~15 effective session-hours/wk.
 2. **n=50 prompts** for all Kaggle eval (not 100). Enough to rank, half the cost.
 3. **K=3 only** on Kaggle. K=5 is deferred entirely to the A100 confirmation.
 4. **1 seed** for Kaggle ranking. Multi-seed is an A100-only luxury.
@@ -440,11 +439,11 @@ For the single pre-registered primary comparison (RQ2: best tree loss vs the RQ1
 > Do not advance a step until the previous step's EXIT gate passes. On each loop
 > iteration (algo revision) re-enter at the earliest step the change affects.
 
-**Cadence rule:** Kaggle resets ~30 GPU-h/week. Every week is **one
-hypothesis-batch with a hard ≤30 GPU-h ceiling** (target ≤27 h to keep a safety
-buffer for a crashed session). **P100 / T4×1 only** (B.5 mandate). All Kaggle
-runs: n=50, K=3, T=1.0, **1 seed**, `--skip_existing`, Cell-2b backup at session
-end. Numbers from the Kaggle weeks are **direction only** — they decide promotion,
+**Cadence rule:** Kaggle resets ~30 GPU-h/week; T4 x2 burns 2×, giving **~15 effective
+session-hours/wk**. Every week is **one hypothesis-batch with a hard ≤27 GPU-h ceiling**
+(safety buffer for a crashed session). **T4 x2 only** (B.5 mandate — P100 is broken).
+All Kaggle runs: n=50, K=3, T=1.0, **1 seed**, `--skip_existing`, Cell-2b backup at
+session end. Numbers from the Kaggle weeks are **direction only** — they decide promotion,
 not the paper. Each week states a GPU-h budget and a quantitative EXIT gate.
 
 > **Hour-accounting note:** "train h" assumes P100 ≈ 1.5–3 s/step; flat losses
@@ -663,6 +662,6 @@ pairing in a follow-up month without touching the spent Modal credit.
 | **Teacher-model appropriateness** (0.6B draft vs 8B teacher; laptop's 0.5B↔0.6B is pure code-check) | laptop.yaml warns its numbers are "meaningless" | never interpret laptop/colab_lite numbers as findings; publish only 8B-teacher (kaggle/a100) results |
 | **Approximate losses misread as exact** | `spectr_tree` (ρ detached), `khisti_tree` (LP-free) are documented surrogates | label both "approximate" in every table; if either underperforms its aligned verifier, attribute to the surrogate, not the alignment hypothesis (per their docstrings) |
 | **Stats invalid by construction** | single seed, no BE variance, approximate p-values (Section 0.6) | implement the Section C.6 checklist *before* the A100 confirmation; Kaggle 1-seed numbers are direction-only, never published |
-| **Wasted weekly quota** (lost session, T4×2 mis-select) | `/kaggle/working` ephemeral; T4×2 doubles burn (B.5) | P100/T4×1 only; Cell-2b backup every session; `--skip_existing`; ≤3 sessions/week so one crash ≤ ⅓ of quota |
+| **Wasted weekly quota** (lost session) | `/kaggle/working` ephemeral; T4 x2 burns 2× → ~15 effective h/wk (B.5) | Always T4 x2 (only working GPU); Cell-2b backup every session; `--skip_existing`; ≤1 session/week so one crash ≤ quota |
 | **Burning the $30 Modal credit early or twice** | one-time, irreplaceable | spend ONCE, last, on the Trimmed-B spec only after Kaggle narrows to ≤2 pairings; keep ~$8 buffer for one retry; Lightning credits for any extension |
 | **gbv numerical instability at K>4** | `compute_skew` docstring: "not recommended … K>4" | restrict gbv/gbv_tree to K≤4; footnote |

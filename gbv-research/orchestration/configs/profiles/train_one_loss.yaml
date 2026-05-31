@@ -13,10 +13,11 @@
 #                (For a deliberate pure-training burn with NO eval at all, set
 #                 experiment.train_only: true or pass --train_only instead.)
 #
-# HARDWARE     : Kaggle T4 (single GPU, sm_75). Qwen3-8B teacher in 4-bit NF4
+# HARDWARE     : Kaggle T4 x2 (dual GPU, sm_75). Qwen3-8B teacher in 4-bit NF4
 #                (~4.5 GB VRAM) + Qwen3-0.6B draft. Do NOT use P100 (sm_60 —
-#                incompatible with PyTorch 2.10+cu128). NEVER select T4 x2 — it
-#                burns 2x quota for zero benefit (everything fits one 16 GB GPU).
+#                incompatible with PyTorch 2.10+cu128). T4 x2 is the only working
+#                GPU option on Kaggle (no single T4 available). Burns 2× quota
+#                (~15 effective h/wk from 30 GPU-h/wk budget).
 #
 # EXPECTED RUN : flat loss (forward_kl): ~1.0-1.5 h / 1000 steps on T4.
 #                tree loss:              ~1.5-2.5 h / 1000 steps (3 model passes
@@ -113,8 +114,8 @@ checkpointing:
 logging:
   log_every: 10
   wandb_project: distillspec
-  wandb_group: kaggle-p100-train1
-  run_label: "8B-P100-train1"
+  wandb_group: kaggle-t4x2-train1
+  run_label: "8B-T4x2-train1"
 
 health:
   val_every: 50                 # val-loss curve (forward-KL proxy for tree losses)
