@@ -82,7 +82,8 @@ def load_models(
     else:
         torch_dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
-    if load_in_4bit:
+    if load_in_4bit and device != "cpu":
+        # NF4 quantisation — CUDA only; device_map="auto" handles multi-GPU
         try:
             from transformers import BitsAndBytesConfig
         except ImportError:
@@ -108,6 +109,10 @@ def load_models(
         )
         print("[INFO] Target model loaded in 4-bit NF4 (QLoRA mode).")
     else:
+        # BF16 or CPU fallback (NF4 requires CUDA; CPU retry uses BF16)
+        if load_in_4bit and device == "cpu":
+            print("[WARN] 4-bit NF4 requires CUDA — loading teacher in BF16 on CPU for OOM retry.")
+            torch_dtype = torch.bfloat16
         p_model = AutoModelForCausalLM.from_pretrained(
             p_name,
             trust_remote_code=True,

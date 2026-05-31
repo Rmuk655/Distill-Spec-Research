@@ -784,7 +784,12 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         cmd.append("--load_in_4bit")   # GBV/main.py loads teacher in 4-bit NF4 on Colab T4
     # PYTHONUNBUFFERED=1 forces line-by-line flushing inside the subprocess so
     # be_progress.log updates in real time rather than in large chunks.
-    _sub_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    _sub_env = {
+        **os.environ,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1",
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    }
     _db_logs = os.path.join(_PARENT, "db", "logs")
     os.makedirs(_db_logs, exist_ok=True)
     _be_log = os.path.join(_db_logs, "be_progress.log")
@@ -794,6 +799,24 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         # Output is teed to BOTH be_progress.log (for Dashboard / tail) AND our own
         # stdout (which pipeline.py redirects to pipeline_output.log), so eval progress
         # is visible in the main pipeline log without opening a second file.
+        # Kill any orphaned runner.py processes from a previous interrupted run.
+        # Without this, a restarted evaluate.py (e.g. after Kaggle cell re-run)
+        # launches a second BE subprocess while the first one is still loading
+        # models, exhausting GPU VRAM.
+        try:
+            import psutil
+            for p in psutil.process_iter(["pid", "cmdline"]):
+                try:
+                    cmdline = " ".join(p.info["cmdline"] or [])
+                    if "runner.py" in cmdline and p.pid != os.getpid():
+                        p.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+        except ImportError:
+            pass  # psutil not installed — best-effort only
+        import torch as _torch
+        _torch.cuda.empty_cache()
+
         with open(_be_log, "w", encoding="utf-8", errors="replace") as _log_f:
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

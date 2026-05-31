@@ -486,6 +486,8 @@ def _hw_tier_from_config(config_slug: str) -> str:
         return "a100"
     if "colab" in s:
         return "colab"
+    if "kaggle" in s:
+        return "kaggle"
     return "laptop"
 
 
