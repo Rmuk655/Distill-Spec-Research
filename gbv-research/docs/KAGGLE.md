@@ -117,7 +117,10 @@ After adding both, they appear under **MODELS** in the Input panel. The mount pa
 
 All paths are pre-set in `kaggle.ipynb` Cell 0. No editing needed unless you want to change CONFIG.
 
-**Run all: Shift+F5.**
+**First session:** Run all: Shift+F5. Then run Cell 2b in its own cell to start auto-backup.
+
+**Every subsequent session:**
+> ⚠️ Attach `specdist-checkpoints` dataset (Input panel → `+ Add Input`) **before** running Cell 1, or checkpoints will not be restored and the pipeline starts over.
 
 ---
 
@@ -217,18 +220,25 @@ Cell 2b snapshots `checkpoints/` (+ `results.db`) to a Kaggle Dataset every
 the **in-progress** loss — all finished losses are restored automatically next
 session.
 
-1. One-time: add either `KAGGLE_API_TOKEN` (paste the full downloaded
-   `kaggle.json` payload), or add the CLI-compatible pair `KAGGLE_USERNAME` +
-   `KAGGLE_KEY` (the `username` and `key` fields from `kaggle.json`). Tick the
-   checkboxes for whichever secrets you use.
-2. Each session: run **Cell 1** (Resume), then run **Cell 2b** (Auto-backup) in
-   its own cell and leave it running. The first run **creates** the
-   `specdist-checkpoints` dataset; later runs push new **versions**. It also
-   doubles as a keep-alive; interrupt the cell to stop (it does a final backup).
-3. Next session: right sidebar → **Input** panel → **`+ Add Input`** → **Datasets** tab → Your Work → attach `specdist-checkpoints` → run **Cell 1**, which restores everything before resuming.
+**One-time setup (first session only):**
 
-> Tune the interval via `INTERVAL_MIN` in Cell 2b. To point at an existing
-> dataset with a different name, set `DATASET_SLUG = "<user>/<name>"` there.
+1. Add either `KAGGLE_API_TOKEN` (paste the full downloaded `kaggle.json` payload),
+   or add the CLI-compatible pair `KAGGLE_USERNAME` + `KAGGLE_KEY`. Tick the
+   checkboxes for whichever secrets you use.
+2. Run **Cell 2b** alongside the pipeline. The first run **creates** the
+   `specdist-checkpoints` dataset (244 MB after a full run).
+
+> Tune the backup interval via `INTERVAL_MIN` in Cell 2b (default 30 min;
+> set to 15 min for safety). Cell 2b also doubles as a keep-alive.
+
+**Every subsequent session — MUST DO BEFORE Cell 1:**
+
+> ⚠️ **If you skip this step, Cell 1 will not find the checkpoints and will start from scratch.**
+
+1. Right sidebar → **Input** panel → **`+ Add Input`** → **Datasets** tab → **Your Work**
+2. Find `specdist-checkpoints` → click **Add**
+3. Now run **Cell 1** (Resume) — it finds the dataset and restores all checkpoints
+4. Run Cell 2b again to keep backing up during this session
 
 ### Option B — Enable Persistence (no extra dataset)
 
