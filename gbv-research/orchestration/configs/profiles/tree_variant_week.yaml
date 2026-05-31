@@ -1,0 +1,110 @@
+# Profile: tree_variant_week — Train ONE surviving tree-loss variant per week
+# =============================================================================
+# PURPOSE      : The weekly tree-loss workflow (Priority-2, RQ2). The tree-loss
+#                family has many candidates (kl_tree, rev_kl_tree, jsd_tree,
+#                bv_tree, gbv_tree, traversal_tree, ...). On a ~30 GPU-h/week
+#                Kaggle budget you CANNOT train them all every week. So each week
+#                you train EXACTLY ONE surviving variant — the candidate that is
+#                still in contention — to checkpoints + loss curves, defer its eval
+#                to eval_after_train, then KEEP the survivor and DROP the losers
+#                before the next week. This profile is one such single-variant,
+#                single-session training run.
+#
+#                Workflow across weeks (survivor funnel):
+#                  Week N   : train variant A (e.g. kl_tree)  -> eval -> decision
+#                  Week N+1 : train variant B (e.g. gbv_tree) -> eval -> decision
+#                  ... keep ONLY the variant that beats the forward_kl baseline
+#                  direction; kill the rest (frugality rule: never spend a 2nd week
+#                  on a loss that did not beat the baseline at n=50/100).
+#
+# HARDWARE     : Kaggle P100 (single 16 GB GPU), Qwen3-8B teacher 4-bit NF4.
+#                NEVER T4 x2.
+#
+# EXPECTED RUN : ~1.5-2.5 h / 1000 steps for a tree loss on P100 (3 model passes +
+#                K-path tree per step). Fits ONE ~9 h session with headroom.
+#
+# PRODUCES     : ckpt_latest / ckpt_best + merged model + train_curves rows for the
+#                ONE tree variant. NO eval (train_only) — eval is a separate
+#                eval_after_train run.
+#
+# DOES NOT     : Evaluate, and does NOT train more than the single variant you pass
+#                via --losses. No BE / alpha numbers here.
+#
+# VARIANT SELECTION (REQUIRED EACH WEEK):
+#   Supply the surviving variant via --losses. Pass exactly ONE tree loss:
+#     --losses kl_tree        # on-policy forward-KL (generic tree baseline)
+#     --losses gbv_tree       # "this work" — GBV-aligned (q_skew), keep tree_K<=4
+#     --losses bv_tree        # block-verification-aligned
+#     --losses traversal_tree # traversal-verifier-aligned
+#   --losses ALWAYS wins over the YAML default (kl_tree).
+#
+# USAGE (run from gbv-research/ on Kaggle):
+#   # FIRST, smoke-check the exact variant you are about to train:
+#   python orchestration/experiment.py --config profiles/smoke --smoke --yes \
+#     --losses gbv_tree --storage_root /kaggle/working/specdist
+#
+#   # This week's surviving variant:
+#   python orchestration/experiment.py --config profiles/tree_variant_week --yes \
+#     --losses gbv_tree --storage_root /kaggle/working/specdist \
+#     --experiment_tag wk4_gbv_tree
+#
+#   # Resume after a crash:
+#   python orchestration/experiment.py --config profiles/tree_variant_week --yes \
+#     --losses gbv_tree --from train_gbv_tree_gsm8k \
+#     --storage_root /kaggle/working/specdist
+#
+# Defer eval to a later session:
+#   python orchestration/experiment.py --config profiles/eval_after_train --yes \
+#     --losses gbv_tree --skip_existing --storage_root /kaggle/working/specdist
+
+hardware:
+  device: cuda
+  load_in_4bit: true            # Qwen3-8B NF4 — Kaggle (29 GB RAM)
+  compile: false
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B
+
+training:
+  steps: 1000                   # one session per surviving variant
+  lr: 3.0e-5
+  warmup_steps: 100
+  grad_accum: 16
+  lora_r: 8
+  lora_alpha: 16
+  max_new_tokens: 96
+  teacher_temperature: 0.8
+  seed: 42                       # 1 seed (direction-only on free tier)
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl   # reference only — NOT used (train_only)
+
+tree_training:
+  tree_K: 4                     # <=4 required for gbv_tree numerical stability (q_skew)
+  tree_L: 8                     # match eval-time L (eval_after_train)
+
+checkpointing:
+  save_every: 25                # crash-safe cadence on ephemeral Kaggle disk
+  milestone_every: 100
+  max_checkpoints: 5
+  storage_root: /kaggle/working/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: kaggle-p100-tree-week
+  run_label: "8B-P100-treewk"
+
+health:
+  val_every: 50
+  ppl_check_every: 100
+  ppl_threshold: 1.25
+  nan_action: skip
+  early_stop_patience: 5
+
+experiment:
+  train_only: true              # KEEP admin + train + merge ONLY. NO eval.
+  losses: [kl_tree]             # default surviving variant; override via --losses each week

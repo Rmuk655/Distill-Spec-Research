@@ -1,0 +1,109 @@
+# Profile: train_one_loss — Train EXACTLY ONE loss in one Kaggle P100 session
+# =============================================================================
+# PURPOSE      : The Phase-1 benchmarking workhorse. One free-tier GPU session
+#                trains ONE loss to checkpoints + loss curves and does NOTHING
+#                else — no baseline eval, no post-train eval. Eval is deferred to
+#                the eval_after_train profile (run later). This is how you spend a
+#                whole 9-hour Kaggle session producing a trained draft, not idling
+#                in eval.
+#
+# HARDWARE     : Kaggle P100 (single 16 GB GPU). Qwen3-8B teacher in 4-bit NF4
+#                (~4.5 GB VRAM) + Qwen3-0.6B draft. NEVER select T4 x2 — it burns
+#                2x quota for zero benefit (everything fits one 16 GB GPU).
+#
+# EXPECTED RUN : flat loss (forward_kl): ~1.0-1.5 h / 1000 steps on P100.
+#                tree loss:              ~1.5-2.5 h / 1000 steps (3 model passes
+#                                        + K-path tree). Both fit ONE ~9 h session
+#                                        with large headroom; raise --train_steps
+#                                        if a session has spare time.
+#
+# PRODUCES     : ckpt_latest / ckpt_best LoRA adapters, the merged model, and the
+#                train_curves rows (step, loss, accept_weight, split) in results.db.
+#                NO block-efficiency / alpha rows — those come from eval_after_train.
+#
+# DOES NOT     : Evaluate anything. Produces no BE / alpha / task_score numbers.
+#
+# LOSS SELECTION (IMPORTANT):
+#   Defaults to forward_kl (the LOCKED priority-1 baseline — train this FIRST).
+#   Override to train any single other loss by passing --losses on the CLI:
+#     --losses kl_tree     (priority-2 tree baseline)
+#     --losses gbv_tree    ("this work" verifier-aligned tree loss)
+#   --losses ALWAYS wins over the YAML default below. Pass exactly ONE loss — the
+#   profile is single-purpose by design (run it once per loss).
+#
+# USAGE (run from gbv-research/ on Kaggle):
+#   # FIRST, always smoke:
+#   python orchestration/experiment.py --config profiles/smoke --smoke --yes \
+#     --storage_root /kaggle/working/specdist
+#
+#   # Phase-1 baseline (forward_kl, the default):
+#   python orchestration/experiment.py --config profiles/train_one_loss --yes \
+#     --storage_root /kaggle/working/specdist --experiment_tag wk2_forward_kl
+#
+#   # Train a different single loss:
+#   python orchestration/experiment.py --config profiles/train_one_loss --yes \
+#     --losses kl_tree --storage_root /kaggle/working/specdist --experiment_tag wk3_kl_tree
+#
+#   # Resume after a crash (skips finished steps automatically):
+#   python orchestration/experiment.py --config profiles/train_one_loss --yes \
+#     --storage_root /kaggle/working/specdist --from train_kl_gsm8k
+#
+# RESUME/BACKUP: /kaggle/working is ephemeral. Always pass --storage_root, mirror
+#               checkpoints + results.db to a Kaggle Dataset at session end
+#               (Cell 2b), and re-attach that dataset before Cell 1 next session.
+
+hardware:
+  device: cuda
+  load_in_4bit: true            # Qwen3-8B NF4 — works on Kaggle (29 GB system RAM)
+  compile: false                # torch.compile unreliable in Kaggle kernels
+
+models:
+  family: qwen
+  draft:  Qwen/Qwen3-0.6B
+  target: Qwen/Qwen3-8B         # 4-bit NF4 ~4.5 GB VRAM; same teacher as a100 config
+
+training:
+  steps: 1000                   # one session = 1000 steps (kaggle.yaml proven budget)
+  lr: 3.0e-5
+  warmup_steps: 100             # linear warmup then decay — prevents val-loss bounce
+  grad_accum: 16                # effective batch 16 (DistillSpec convention); free VRAM-wise
+  lora_r: 8
+  lora_alpha: 16
+  max_new_tokens: 96
+  teacher_temperature: 0.8
+  seed: 42                       # 1 seed for free-tier exploration (direction only)
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl   # reference only — NOT used (train_only)
+
+tree_training:
+  tree_K: 4                     # <=4 for gbv_tree numerical stability (q_skew)
+  tree_L: 8                     # matches the L used at eval time (eval_after_train)
+
+checkpointing:
+  save_every: 25                # ~1-2 min cadence — crash-safe on ephemeral Kaggle disk
+  milestone_every: 100
+  max_checkpoints: 5
+  storage_root: /kaggle/working/specdist
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  wandb_group: kaggle-p100-train1
+  run_label: "8B-P100-train1"
+
+health:
+  val_every: 50                 # val-loss curve (forward-KL proxy for tree losses)
+  ppl_check_every: 100
+  ppl_threshold: 1.25
+  nan_action: skip              # skip NaN batches — Kaggle sessions are precious
+  early_stop_patience: 5
+
+# No evaluation section is consulted: experiment.train_only drops group 0
+# (baseline eval) and group 3 (post-train eval). Eval params live in
+# eval_after_train.yaml instead.
+
+experiment:
+  train_only: true              # KEEP admin + train + merge ONLY. NO eval.
+  losses: [kl]                  # default = forward_kl (priority-1). Override via --losses.

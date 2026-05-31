@@ -343,6 +343,12 @@ def _load_config_yaml(config_name: str) -> dict:
         # you only want to measure verifier performance, not re-train.
         if "eval_only" in experiment_cfg:
             out["eval_only"] = bool(experiment_cfg["eval_only"])
+        # experiment.train_only → symmetric to eval_only: keep admin + train + merge
+        # (parallel groups -1/1/2), DROP baseline eval (group 0) and post-train eval
+        # (group 3).  Produces trained checkpoints + loss curves with NO eval, so a
+        # free-tier session spends all its time training.  CLI --train_only wins.
+        if "train_only" in experiment_cfg:
+            out["train_only"] = bool(experiment_cfg["train_only"])
         # models.draft / models.target — present only when the YAML sets them.
         # Consumed by main() when the config is a YAML-based profile (not a
         # legacy CONFIGS preset) so we know which model pair to load.
@@ -841,22 +847,32 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     }
 
     # ── Loss filter helper ─────────────────────────────────────────────────────
+    def _owning_loss(sid: str):
+        """Loss that owns this step ID, by LONGEST matching prefix.
+
+        Longest-prefix (not first-match) ownership is required because some loss
+        prefixes are prefixes of others: e.g. kl's "train_kl_" is a prefix of
+        kl_tree's "train_kl_tree_", and ebe's "train_ebe_" is a prefix of
+        ebe_single's / ebe_tree's.  A plain `any(startswith)` test leaks the
+        longer-named variants into the shorter loss's selection (so --losses kl
+        would silently also train kl_tree).  Assigning each step to the loss with
+        the longest matching prefix isolates a single loss cleanly.
+        """
+        best_name, best_len = None, -1
+        for name, prefixes in _LOSS_STEP_PREFIXES.items():
+            for pfx in prefixes:
+                if sid.startswith(pfx) and len(pfx) > best_len:
+                    best_name, best_len = name, len(pfx)
+        return best_name
+
     def _is_loss_step(sid: str) -> bool:
         """True if this step ID belongs to a specific loss (train/merge/eval)."""
-        return any(
-            sid.startswith(pfx)
-            for prefixes in _LOSS_STEP_PREFIXES.values()
-            for pfx in prefixes
-        )
+        return _owning_loss(sid) is not None
 
     def _loss_selected(sid: str) -> bool:
         """True if this loss-specific step is for one of the selected losses."""
         selected = set(losses_to_run) if losses_to_run else set(ALL_LOSSES)
-        return any(
-            sid.startswith(pfx)
-            for name in selected
-            for pfx in _LOSS_STEP_PREFIXES.get(name, ())
-        )
+        return _owning_loss(sid) in selected
 
     # ── Build full step list then apply loss filter ────────────────────────
     _steps_list = [
@@ -2836,6 +2852,13 @@ def main():
                         "and Phase 3/4 evals. Requires pre-built merged models in the checkpoint root. "
                         "Use after a baseline run to re-evaluate with different settings, or for the "
                         "verifier sweep profile. Overrides experiment.eval_only in YAML.")
+    p.add_argument("--train_only", action="store_true",
+                   help="Symmetric to --eval_only: keep ONLY admin + training + merge steps "
+                        "(parallel groups -1/1/2). Drop baseline eval (group 0) and post-train "
+                        "eval (group 3). Produces trained checkpoints + loss curves with NO eval, "
+                        "so a free-tier GPU session (e.g. a 9-hour Kaggle P100 run) spends all its "
+                        "time training. Composes with --losses (train one loss) and --smoke. "
+                        "Overrides experiment.train_only in YAML. Mutually exclusive with --eval_only.")
     p.add_argument("--train_steps", type=int, default=None,
                    help="Override per-loss training step count. "
                         "Overrides the smoke (50) / full (1000) default. "
@@ -2871,6 +2894,24 @@ def main():
             "load_in_4bit": _yaml_cfg.get("load_in_4bit", False),
             "desc":         f"YAML profile: {args.config}",
         }
+    # experiment.eval_only / experiment.train_only live in the YAML "experiment:"
+    # block (parsed into _yaml_cfg).  Surface them on cfg so the cfg.get() reads
+    # below honour the YAML for YAML-based profiles too (CLI flags still win).
+    for _exp_key in ("eval_only", "train_only"):
+        if _exp_key in _yaml_cfg:
+            cfg[_exp_key] = _yaml_cfg[_exp_key]
+    # experiment.losses: honour it for profiles/* configs ONLY.  Every profile under
+    # orchestration/configs/profiles/ declares experiment.losses expecting it to filter
+    # the loss set (it is the whole point of a single-purpose profile), but for YAML
+    # profiles this value was previously dropped — the profile silently trained the full
+    # 23-loss family.  Wiring it here (gated to profiles/*) makes profiles behave as their
+    # headers document.  Legacy presets and top-level YAML configs (laptop/server/colab/
+    # kaggle/a100/colab_lite) are deliberately left untouched — their loss behaviour is
+    # unchanged.  A CLI --losses still overrides the YAML value (handled below).
+    _is_profile_cfg = args.config.replace(os.sep, "/").startswith("profiles/")
+    if _is_profile_cfg and "losses" in _yaml_cfg:
+        cfg["losses"] = _yaml_cfg["losses"]
+
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
 
@@ -2973,9 +3014,14 @@ def main():
 
     # Parse --losses filter into a list; None = run all losses.
     # Loss filter: --losses CLI wins; fall back to experiment.losses in YAML; then all.
+    # Accept the published loss names (forward_kl / reverse_kl) as aliases for the
+    # orchestration filter keys (kl / rev_kl) — trainer.py already uses --loss forward_kl,
+    # and docs/RESEARCH_PLAN.md refers to the loss as forward_kl throughout.
+    _LOSS_FILTER_ALIASES = {"forward_kl": "kl", "reverse_kl": "rev_kl"}
     _yaml_losses = cfg.get("losses")   # list or None (from experiment: losses: [...])
     _cli_losses  = (
-        [l.strip() for l in args.losses.split(",") if l.strip()]
+        [_LOSS_FILTER_ALIASES.get(l.strip(), l.strip())
+         for l in args.losses.split(",") if l.strip()]
         if args.losses else None
     )
     _losses_to_run = _cli_losses or (_yaml_losses if isinstance(_yaml_losses, list) else None)
@@ -3001,6 +3047,12 @@ def main():
 
     # eval_only: CLI --eval_only wins over YAML experiment.eval_only.
     _eval_only = args.eval_only or cfg.get("eval_only", False)
+    # train_only: CLI --train_only wins over YAML experiment.train_only (mirror of above).
+    _train_only = args.train_only or cfg.get("train_only", False)
+    if _eval_only and _train_only:
+        p.error("--eval_only and --train_only are mutually exclusive: "
+                "eval_only keeps eval-only (groups 0/3); train_only keeps train-only "
+                "(groups -1/1/2). Pick one.")
 
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
@@ -3017,6 +3069,11 @@ def main():
             STEPS = [s for s in STEPS if "Phase 2" not in s.get("group", "")]
             print(f"  [pipeline] eval_only — skipped {_n_before - len(STEPS)} Phase 2 "
                   f"train/merge steps (requires pre-built merged models)")
+        if _train_only:
+            _n_before = len(STEPS)
+            STEPS = [s for s in STEPS if s.get("parallel_group", -1) not in (0, 3)]
+            print(f"  [pipeline] train_only — skipped {_n_before - len(STEPS)} eval steps "
+                  f"(baseline group 0 + post-train group 3); keeping admin/train/merge only")
         _print_header(cfg, draft, target, args)
         state = load_state()
         for step in STEPS:                          # sync done_check files
@@ -3053,6 +3110,11 @@ def main():
         STEPS = [s for s in STEPS if "Phase 2" not in s.get("group", "")]
         print(f"  [pipeline] eval_only — skipped {_n_before - len(STEPS)} Phase 2 "
               f"train/merge steps (using pre-built merged models)")
+    if _train_only:
+        _n_before = len(STEPS)
+        STEPS = [s for s in STEPS if s.get("parallel_group", -1) not in (0, 3)]
+        print(f"  [pipeline] train_only — skipped {_n_before - len(STEPS)} eval steps "
+              f"(baseline group 0 + post-train group 3); keeping admin/train/merge only")
 
     _print_header(cfg, draft, target, args)
 

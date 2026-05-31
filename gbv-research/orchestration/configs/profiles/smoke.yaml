@@ -1,0 +1,94 @@
+# Profile: smoke — 10-step end-to-end crash check across every code path
+# =============================================================================
+# PURPOSE      : The MANDATORY pre-flight. Run this FIRST, before ANY real GPU
+#                run, every session. It exercises the full pipeline — flat-loss
+#                training, tree-loss training, LoRA merge, baseline eval, and
+#                post-train eval under multiple verifiers — for only 10 steps and
+#                a handful of prompts. It is a "does the plumbing crash?" test,
+#                NOT a research run.
+#
+# EXPECTED RUN : ~5 min (tiny 0.5B->0.6B pair, runs even on a CPU/laptop GPU).
+#
+# PRODUCES     : Throwaway checkpoints + a few DB rows in a smoke-scoped state
+#                file. The NUMBERS ARE MEANINGLESS (0.6B teacher, 10 steps) — only
+#                "did every step exit 0?" matters.
+#
+# DOES NOT     : Train to convergence, produce comparable block-efficiency, or
+#                write any result you should ever interpret or report.
+#
+# USAGE (run from gbv-research/):
+#   # Recommended — also pass --smoke so step counts/prompts shrink even further:
+#   python orchestration/experiment.py --config profiles/smoke --smoke --yes
+#
+#   # Or run this profile's own 10-step config directly:
+#   python orchestration/experiment.py --config profiles/smoke --yes
+#
+#   # Crash-check ONLY the tree-loss path you are about to run for real:
+#   python orchestration/experiment.py --config profiles/smoke --yes --losses gbv_tree
+#
+# WHY FIRST    : A crash 8 hours into a 9-hour Kaggle session wastes irreplaceable
+#               weekly quota. 5 minutes here protects the whole session.
+
+hardware:
+  device: cuda                  # falls back to CPU automatically if no GPU
+  load_in_4bit: false           # tiny models — no quantization needed
+  compile: false
+
+models:
+  family: qwen
+  # Smallest pair so the crash-check is fast and runs anywhere (even the dev
+  # laptop). This is a PLUMBING test — teacher quality is irrelevant here.
+  draft:  Qwen/Qwen2.5-0.5B
+  target: Qwen/Qwen3-0.6B
+
+training:
+  steps: 10                     # 10 steps — just enough to exercise the train loop
+  lr: 3.0e-5
+  lora_r: 4
+  lora_alpha: 8
+  max_new_tokens: 32
+  teacher_temperature: 0.8
+  seed: 42
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+
+tree_training:
+  tree_K: 4
+  tree_L: 8
+
+checkpointing:
+  save_every: 5
+  milestone_every: 10
+  max_checkpoints: 2
+  storage_root: db               # local throwaway storage
+
+logging:
+  log_every: 5
+  wandb_project: distillspec
+  wandb_group: smoke
+  run_label: "smoke"
+
+health:
+  val_every: 5
+  ppl_check_every: 10
+  ppl_threshold: 2.0             # loose — 10 steps will not converge
+  nan_action: stop               # a NaN in a smoke run is a real bug — stop loudly
+  early_stop_patience: 0
+
+evaluation:
+  # Touch one flat verifier (naive), one non-OT verifier (bv), the GBV verifier
+  # ("this work"), and traversal — so every verifier branch is exercised.
+  modes: [naive, bv, gbv, traversal]
+  K_values: [3]
+  temperatures: [1.0]
+  L: 8
+  n_prompts: 5                   # 5 prompts — fast crash check, not a measurement
+
+experiment:
+  # One flat loss + one generic tree loss + the verifier-aligned GBV tree loss.
+  # Covers the three trainer.py code branches (flat / generic-tree / verifier-tree)
+  # without running all 23 losses.  Override with --losses to crash-check a
+  # specific loss you are about to run for real.
+  losses: [kl, kl_tree, gbv_tree]
