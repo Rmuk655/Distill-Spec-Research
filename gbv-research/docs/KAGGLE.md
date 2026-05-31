@@ -59,7 +59,7 @@ Right sidebar → Settings:
 
 ### Step 4 — Add Kaggle secrets
 
-Add-ons → Secrets → + Add Secret:
+**Add-ons → Secrets → + Add Secret** (this menu is still under Add-ons in the top toolbar):
 
 | Secret name | Value | Required? |
 |---|---|---|
@@ -80,7 +80,15 @@ Add-ons → Secrets → + Add Secret:
 
 All three are on Kaggle. Attach them once; they persist across every session automatically.
 
-#### Model weights (Add-ons → Add Model → search `qwen-3`)
+> **New Kaggle UI (2025+):** The old "Add-ons → Add Model" and "Add Data" menus are gone.  
+> Everything is now accessed through the **Input** panel on the right sidebar → **`+ Add Input`** button.
+
+#### Model weights
+
+1. In the notebook editor, find the **Input** panel on the right sidebar.
+2. Click **`+ Add Input`**.
+3. In the overlay that opens, click the **Models** tab.
+4. Search `qwen-3` → select **Qwen LM / qwen-3**.
 
 | Model | Framework | Variation | Mount path |
 |---|---|---|---|
@@ -88,9 +96,16 @@ All three are on Kaggle. Attach them once; they persist across every session aut
 | Qwen3-8B teacher | Transformers | **8b** | `/kaggle/input/models/qwen-lm/qwen-3/transformers/8b/1` |
 
 > **Which 8b variant to pick:** plain `8b` (not `8b-base`, `8b-fp8`, `8b-awq`).  
-> Our code applies 4-bit NF4 quantization itself via bitsandbytes — pre-quantized variants conflict.
+> Our code applies 4-bit NF4 quantization itself via bitsandbytes — pre-quantized variants conflict.  
+> Some models require accepting a license before the **Add** button activates — click through once; it persists.
 
-#### Training data (Add Data → search `grade-school-math-8k`)
+After adding both, they appear under **MODELS** in the Input panel. The mount paths above are fixed by Kaggle and match our config automatically.
+
+#### Training data
+
+1. Click **`+ Add Input`** again.
+2. Click the **Datasets** tab.
+3. Search `grade-school-math-8k`.
 
 | Dataset | Owner | Files used |
 |---|---|---|
@@ -210,8 +225,7 @@ session.
    its own cell and leave it running. The first run **creates** the
    `specdist-checkpoints` dataset; later runs push new **versions**. It also
    doubles as a keep-alive; interrupt the cell to stop (it does a final backup).
-3. Next session: **Add Data** → Your Datasets → attach `specdist-checkpoints` →
-   run **Cell 1**, which restores everything before resuming.
+3. Next session: right sidebar → **Input** panel → **`+ Add Input`** → **Datasets** tab → Your Work → attach `specdist-checkpoints` → run **Cell 1**, which restores everything before resuming.
 
 > Tune the interval via `INTERVAL_MIN` in Cell 2b. To point at an existing
 > dataset with a different name, set `DATASET_SLUG = "<user>/<name>"` there.
@@ -224,9 +238,8 @@ the saved notebook. Simplest, but does not protect a brand-new session.
 
 ### Option C — Manual snapshot after a session
 
-1. **Notebook → Data → Output** tab → **+ New Dataset** → name it `specdist-checkpoints`.
-2. Next session: **Add Data** → Your Datasets → attach it → run **Cell 1**, which
-   restores checkpoints from `/kaggle/input/specdist-checkpoints/`.
+1. Right sidebar → **Output** tab → **+ New Dataset** → name it `specdist-checkpoints`.
+2. Next session: right sidebar → **Input** panel → **`+ Add Input`** → **Datasets** tab → Your Work → attach `specdist-checkpoints` → run **Cell 1**, which restores checkpoints from `/kaggle/input/specdist-checkpoints/`.
 
 In all cases the pipeline state machine skips completed training/eval steps on
 resume, so restored work is never repeated.
@@ -255,9 +268,10 @@ fit T4 VRAM. Quantization noise averages out over 1000 training steps.
 ### Model path not found (`os.path.isdir` returns False)
 
 The Kaggle Model was not attached, or the variation was wrong.
-- Confirm: Add-ons → the model should appear in the input panel
-- Check the path: it must be **Transformers framework**, not GGUF or AWQ
+- Confirm: right sidebar → **Input** panel — both Qwen3 models should appear under **MODELS**
+- Check the path: it must be **Transformers** framework, not GGUF or AWQ
 - Variation must be exactly `0.6b` and `8b` (plain, not `0.6b-base`, `8b-fp8`, etc.)
+- To add: **`+ Add Input`** → Models tab → search `qwen-3`
 - If paths don't exist, the notebook falls back to HF Hub download automatically (~10 min)
 
 ### `git clone` fails — _"could not read Username"_ or exit code 128
@@ -266,15 +280,15 @@ Two separate causes:
 
 **Cause 1: secret not enabled for this notebook.**  
 The secret exists in your account but the checkbox next to it in the Secrets panel is unchecked.  
-Fix: Add-ons → Secrets → tick the checkbox next to `GITHUB_TOKEN` → re-run Cell 0.
+Fix: **Add-ons → Secrets** → tick the checkbox next to `GITHUB_TOKEN` → re-run Cell 0.
 
 **Cause 2: secret doesn't exist yet.**  
-Fix: Add-ons → Secrets → + Add Secret → Name: `GITHUB_TOKEN` → Value: your PAT → Save → tick checkbox → re-run Cell 0.  
+Fix: **Add-ons → Secrets** → + Add Secret → Name: `GITHUB_TOKEN` → Value: your PAT → Save → tick checkbox → re-run Cell 0.  
 Create a classic PAT at github.com → Settings → Developer settings → Personal access tokens → tick `repo` scope.
 
 ### `UserSecretsClient` raises `BackendError`
 
-The secret doesn't exist yet. Add-ons → Secrets → add it. The `_kread()` helper falls back
+The secret doesn't exist yet. **Add-ons → Secrets** → add it. The `_kread()` helper falls back
 to no-op if missing (W&B runs offline, git clone uses HTTPS without auth).
 
 ### GPU not available
