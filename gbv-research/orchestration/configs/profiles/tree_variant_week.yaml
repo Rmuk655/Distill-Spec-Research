@@ -1,34 +1,45 @@
-# Profile: tree_variant_week — Train ONE surviving tree-loss variant per week
+# Profile: tree_variant_week — ONE surviving tree-loss variant/week (train + light BE)
 # =============================================================================
 # PURPOSE      : The weekly tree-loss workflow (Priority-2, RQ2). The tree-loss
 #                family has many candidates (kl_tree, rev_kl_tree, jsd_tree,
 #                bv_tree, gbv_tree, traversal_tree, ...). On a ~30 GPU-h/week
 #                Kaggle budget you CANNOT train them all every week. So each week
 #                you train EXACTLY ONE surviving variant — the candidate that is
-#                still in contention — to checkpoints + loss curves, defer its eval
-#                to eval_after_train, then KEEP the survivor and DROP the losers
+#                still in contention — as a TIERED run (train + val_loss curves +
+#                a LIGHT BE sanity), then KEEP the survivor and DROP the losers
 #                before the next week. This profile is one such single-variant,
-#                single-session training run.
+#                single-session run.
 #
 #                Workflow across weeks (survivor funnel):
-#                  Week N   : train variant A (e.g. kl_tree)  -> eval -> decision
-#                  Week N+1 : train variant B (e.g. gbv_tree) -> eval -> decision
+#                  Week N   : train variant A (e.g. kl_tree)  -> light sanity -> decision
+#                  Week N+1 : train variant B (e.g. gbv_tree) -> light sanity -> decision
 #                  ... keep ONLY the variant that beats the forward_kl baseline
 #                  direction; kill the rest (frugality rule: never spend a 2nd week
-#                  on a loss that did not beat the baseline at n=50/100).
+#                  on a loss that did not beat the baseline at n=100).
 #
 # HARDWARE     : Kaggle P100 (single 16 GB GPU), Qwen3-8B teacher 4-bit NF4.
 #                NEVER T4 x2.
 #
 # EXPECTED RUN : ~1.5-2.5 h / 1000 steps for a tree loss on P100 (3 model passes +
-#                K-path tree per step). Fits ONE ~9 h session with headroom.
+#                K-path tree per step) + ~20-40 min light eval. Fits ONE ~9 h
+#                session with headroom.
 #
-# PRODUCES     : ckpt_latest / ckpt_best + merged model + train_curves rows for the
-#                ONE tree variant. NO eval (train_only) — eval is a separate
-#                eval_after_train run.
+# PRODUCES     : ckpt_latest / ckpt_best + merged model + train_curves rows (incl.
+#                the in-training val_loss) for the ONE tree variant, PLUS a LIGHT BE
+#                sanity row (K=3, T=1.0, n=100). The val_loss curve is produced
+#                inside trainer.py (health.val_every) independent of the BE eval.
 #
-# DOES NOT     : Evaluate, and does NOT train more than the single variant you pass
-#                via --losses. No BE / alpha numbers here.
+# LIGHT EVAL   : For *_tree losses the pipeline forces the tree-matched non-OT
+#                subset (bv,gbv,traversal) for the eval step regardless of profile
+#                modes — this is the tree "matched verifier" sanity. It is still
+#                LIGHT vs the full 8-verifier x K{3,5} x n=1319 sweep, which is
+#                deferred to eval_after_train.yaml / the A100 confirmation.
+#                experiment.light_eval drops the baseline eval + Phase-4 multi-dataset.
+#
+# DOES NOT     : Run the heavy eval (full verifier matrix, K=5, n=1319, multi-dataset,
+#                multi-seed), and does NOT train more than the single variant you pass
+#                via --losses.
+#                (For a pure-training burn with NO eval, pass --train_only instead.)
 #
 # VARIANT SELECTION (REQUIRED EACH WEEK):
 #   Supply the surviving variant via --losses. Pass exactly ONE tree loss:
@@ -43,17 +54,21 @@
 #   python orchestration/experiment.py --config profiles/smoke --smoke --yes \
 #     --losses gbv_tree --storage_root /kaggle/working/specdist
 #
-#   # This week's surviving variant:
+#   # This week's surviving variant (train + light BE sanity):
 #   python orchestration/experiment.py --config profiles/tree_variant_week --yes \
-#     --losses gbv_tree --storage_root /kaggle/working/specdist \
+#     --losses gbv_tree --skip_existing --storage_root /kaggle/working/specdist \
 #     --experiment_tag wk4_gbv_tree
+#
+#   # Pure training burn (NO eval) — opt out of the light sanity:
+#   python orchestration/experiment.py --config profiles/tree_variant_week --yes \
+#     --train_only --losses gbv_tree --storage_root /kaggle/working/specdist
 #
 #   # Resume after a crash:
 #   python orchestration/experiment.py --config profiles/tree_variant_week --yes \
-#     --losses gbv_tree --from train_gbv_tree_gsm8k \
+#     --losses gbv_tree --skip_existing --from train_gbv_tree_gsm8k \
 #     --storage_root /kaggle/working/specdist
 #
-# Defer eval to a later session:
+# Later, the HEAVY deferred eval (full matrix, larger n) in its own session:
 #   python orchestration/experiment.py --config profiles/eval_after_train --yes \
 #     --losses gbv_tree --skip_existing --storage_root /kaggle/working/specdist
 
@@ -80,7 +95,7 @@ training:
 
 dataset:
   train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_30.jsonl   # reference only — NOT used (train_only)
+  eval:  core/datasets/raw/gsm8k_30.jsonl
 
 tree_training:
   tree_K: 4                     # <=4 required for gbv_tree numerical stability (q_skew)
@@ -105,6 +120,21 @@ health:
   nan_action: skip
   early_stop_patience: 5
 
+# ── LIGHT BE sanity eval ─────────────────────────────────────────────────────
+# Light sanity at K=3, T=1.0, n=100. For *_tree losses the pipeline forces the
+# tree-matched non-OT subset (bv,gbv,traversal) for the eval step regardless of
+# the modes listed here — that subset IS the tree "matched verifier" sanity, and
+# is still light vs the full 8-verifier x K{3,5} x n=1319 sweep (deferred to
+# eval_after_train.yaml / A100). The modes below apply only to any flat-loss eval.
+evaluation:
+  modes: [bv, gbv, traversal]   # tree-matched non-OT subset (forced for *_tree anyway)
+  K_values: [3]                 # K=3 only (K=5 reserved for the A100 confirmation)
+  temperatures: [1.0]           # T=1.0 — paper standard
+  L: 8                          # must match tree_training.tree_L
+  n_prompts: 100                # free-tier sanity size (full 1319 is A100-only)
+
 experiment:
-  train_only: true              # KEEP admin + train + merge ONLY. NO eval.
+  light_eval: true              # train + merge + ONE light GSM8K eval; drop baseline + Phase-4
   losses: [kl_tree]             # default surviving variant; override via --losses each week
+  # For a pure-training burn with NO eval, pass --train_only instead (mutually
+  # exclusive with light_eval — pick exactly one).

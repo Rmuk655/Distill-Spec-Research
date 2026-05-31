@@ -349,6 +349,15 @@ def _load_config_yaml(config_name: str) -> dict:
         # free-tier session spends all its time training.  CLI --train_only wins.
         if "train_only" in experiment_cfg:
             out["train_only"] = bool(experiment_cfg["train_only"])
+        # experiment.light_eval → tiered Phase-1 mode: keep admin + train + merge
+        # (groups -1/1/2) AND the Phase-3 GSM8K post-train eval, but DROP the
+        # baseline eval (group 0) and the Phase-4 multi-dataset sweep.  Combined
+        # with a single-verifier / K=3 / n=100 evaluation block this yields
+        # "train + val_loss curves + a LIGHT BE sanity" in one session; the heavy
+        # multi-verifier / multi-K / large-n / multi-dataset sweep is deferred to
+        # eval_after_train / the A100 confirmation.  CLI --light_eval wins.
+        if "light_eval" in experiment_cfg:
+            out["light_eval"] = bool(experiment_cfg["light_eval"])
         # models.draft / models.target — present only when the YAML sets them.
         # Consumed by main() when the config is a YAML-based profile (not a
         # legacy CONFIGS preset) so we know which model pair to load.
@@ -2859,6 +2868,15 @@ def main():
                         "so a free-tier GPU session (e.g. a 9-hour Kaggle P100 run) spends all its "
                         "time training. Composes with --losses (train one loss) and --smoke. "
                         "Overrides experiment.train_only in YAML. Mutually exclusive with --eval_only.")
+    p.add_argument("--light_eval", action="store_true",
+                   help="Tiered Phase-1 mode: keep admin + training + merge AND the Phase-3 "
+                        "GSM8K post-train eval, but DROP the baseline eval (group 0) and the "
+                        "Phase-4 multi-dataset sweep. With a single-verifier / K=3 / n=100 eval "
+                        "block this gives 'train + val_loss curves + a LIGHT BE sanity' in one "
+                        "session; the heavy multi-verifier/multi-K/large-n/multi-dataset sweep is "
+                        "deferred to eval_after_train / the A100 confirmation. Composes with "
+                        "--losses and --smoke. Overrides experiment.light_eval in YAML. "
+                        "Mutually exclusive with --eval_only and --train_only.")
     p.add_argument("--train_steps", type=int, default=None,
                    help="Override per-loss training step count. "
                         "Overrides the smoke (50) / full (1000) default. "
@@ -2897,7 +2915,7 @@ def main():
     # experiment.eval_only / experiment.train_only live in the YAML "experiment:"
     # block (parsed into _yaml_cfg).  Surface them on cfg so the cfg.get() reads
     # below honour the YAML for YAML-based profiles too (CLI flags still win).
-    for _exp_key in ("eval_only", "train_only"):
+    for _exp_key in ("eval_only", "train_only", "light_eval"):
         if _exp_key in _yaml_cfg:
             cfg[_exp_key] = _yaml_cfg[_exp_key]
     # experiment.losses: honour it for profiles/* configs ONLY.  Every profile under
@@ -3011,6 +3029,19 @@ def main():
         # 1e-4 (3x lower than online_lr).  Set in laptop/server/colab YAML if needed.
         "online_ebe_lr":  _yaml_cfg.get("online_ebe_lr", 1e-4),
     }
+    # Profiles honour their YAML `evaluation:` block (modes / K_values / temperatures
+    # / n_prompts / n_prompts_gsm8k / max_tokens). build_steps reads these off
+    # train_hparams, but they were never copied onto it — so for YAML profiles the
+    # evaluation block was silently ignored and eval fell back to the hardcoded
+    # defaults (n=10, all verifiers). Wire them here, gated to profiles/* only, so a
+    # profile can set a LIGHT single-verifier / n=100 sanity (train_one_loss) or its
+    # own modes (eval_after_train). Legacy presets and top-level YAML configs
+    # (laptop/server/colab/kaggle/a100/colab_lite) are deliberately left unchanged.
+    if _is_profile_cfg:
+        for _ek in ("eval_modes", "eval_K_values", "eval_temps",
+                    "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens"):
+            if _ek in _yaml_cfg:
+                train_hparams[_ek] = _yaml_cfg[_ek]
 
     # Parse --losses filter into a list; None = run all losses.
     # Loss filter: --losses CLI wins; fall back to experiment.losses in YAML; then all.
@@ -3045,14 +3076,28 @@ def main():
         _effective_state_dir, f"pipeline_state_{_config_slug}{_smoke_tag}.json"
     )
 
-    # eval_only: CLI --eval_only wins over YAML experiment.eval_only.
-    _eval_only = args.eval_only or cfg.get("eval_only", False)
-    # train_only: CLI --train_only wins over YAML experiment.train_only (mirror of above).
-    _train_only = args.train_only or cfg.get("train_only", False)
-    if _eval_only and _train_only:
-        p.error("--eval_only and --train_only are mutually exclusive: "
-                "eval_only keeps eval-only (groups 0/3); train_only keeps train-only "
-                "(groups -1/1/2). Pick one.")
+    # Run-mode resolution. The three modes are mutually exclusive:
+    #   eval_only  = eval existing checkpoints           (groups 0/3, no train/merge)
+    #   train_only = train + merge only                  (groups -1/1/2, no eval)
+    #   light_eval = train + merge + ONE light GSM8K eval (drops baseline + Phase-4)
+    # A CLI flag ALWAYS wins and overrides any YAML mode: e.g. a profile with
+    # experiment.light_eval: true can be turned into a pure-training burn by passing
+    # --train_only on the CLI.  Only when NO CLI mode flag is passed do we read the
+    # YAML experiment.{eval_only,train_only,light_eval}.
+    _cli_modes = sum(bool(x) for x in (args.eval_only, args.train_only, args.light_eval))
+    if _cli_modes > 1:
+        p.error("Pass at most ONE of --eval_only / --train_only / --light_eval.")
+    if _cli_modes == 1:
+        _eval_only, _train_only, _light_eval = (
+            args.eval_only, args.train_only, args.light_eval)
+    else:
+        _eval_only  = bool(cfg.get("eval_only", False))
+        _train_only = bool(cfg.get("train_only", False))
+        _light_eval = bool(cfg.get("light_eval", False))
+        if sum(bool(x) for x in (_eval_only, _train_only, _light_eval)) > 1:
+            p.error("YAML sets more than one of experiment."
+                    "{eval_only,train_only,light_eval} — these modes are mutually "
+                    "exclusive. Set exactly one (or override on the CLI).")
 
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
@@ -3074,6 +3119,14 @@ def main():
             STEPS = [s for s in STEPS if s.get("parallel_group", -1) not in (0, 3)]
             print(f"  [pipeline] train_only — skipped {_n_before - len(STEPS)} eval steps "
                   f"(baseline group 0 + post-train group 3); keeping admin/train/merge only")
+        if _light_eval:
+            _n_before = len(STEPS)
+            STEPS = [s for s in STEPS
+                     if s.get("parallel_group", -1) in (-1, 1, 2)
+                     or "Phase 3" in s.get("group", "")]
+            print(f"  [pipeline] light_eval — kept admin/train/merge + Phase-3 GSM8K eval; "
+                  f"dropped {_n_before - len(STEPS)} step(s) "
+                  f"(baseline group 0 + Phase-4 multi-dataset)")
         _print_header(cfg, draft, target, args)
         state = load_state()
         for step in STEPS:                          # sync done_check files
@@ -3115,6 +3168,14 @@ def main():
         STEPS = [s for s in STEPS if s.get("parallel_group", -1) not in (0, 3)]
         print(f"  [pipeline] train_only — skipped {_n_before - len(STEPS)} eval steps "
               f"(baseline group 0 + post-train group 3); keeping admin/train/merge only")
+    if _light_eval:
+        _n_before = len(STEPS)
+        STEPS = [s for s in STEPS
+                 if s.get("parallel_group", -1) in (-1, 1, 2)
+                 or "Phase 3" in s.get("group", "")]
+        print(f"  [pipeline] light_eval — kept admin/train/merge + Phase-3 GSM8K eval; "
+              f"dropped {_n_before - len(STEPS)} step(s) "
+              f"(baseline group 0 + Phase-4 multi-dataset)")
 
     _print_header(cfg, draft, target, args)
 

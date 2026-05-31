@@ -1,11 +1,17 @@
-# Profile: train_one_loss — Train EXACTLY ONE loss in one Kaggle P100 session
+# Profile: train_one_loss — Train EXACTLY ONE loss + LIGHT BE sanity (tiered)
 # =============================================================================
 # PURPOSE      : The Phase-1 benchmarking workhorse. One free-tier GPU session
-#                trains ONE loss to checkpoints + loss curves and does NOTHING
-#                else — no baseline eval, no post-train eval. Eval is deferred to
-#                the eval_after_train profile (run later). This is how you spend a
-#                whole 9-hour Kaggle session producing a trained draft, not idling
-#                in eval.
+#                does a TIERED run: train + val_loss curves + a LIGHT BE sanity
+#                (1 matched verifier, K=3, n=100); the heavy full-GSM8K eval is
+#                deferred to eval_after_train.yaml / the A100 confirmation.
+#                Concretely it runs train -> merge -> ONE light GSM8K post-train
+#                eval (single verifier), and DROPS the baseline eval (group 0) and
+#                the Phase-4 multi-dataset sweep (via experiment.light_eval).
+#                The val_loss curve is produced INSIDE trainer.py (health.val_every)
+#                during training regardless of the BE eval — it is the
+#                train-down / val-up overfit signal.
+#                (For a deliberate pure-training burn with NO eval at all, set
+#                 experiment.train_only: true or pass --train_only instead.)
 #
 # HARDWARE     : Kaggle P100 (single 16 GB GPU). Qwen3-8B teacher in 4-bit NF4
 #                (~4.5 GB VRAM) + Qwen3-0.6B draft. NEVER select T4 x2 — it burns
@@ -17,11 +23,23 @@
 #                                        with large headroom; raise --train_steps
 #                                        if a session has spare time.
 #
-# PRODUCES     : ckpt_latest / ckpt_best LoRA adapters, the merged model, and the
-#                train_curves rows (step, loss, accept_weight, split) in results.db.
-#                NO block-efficiency / alpha rows — those come from eval_after_train.
+# PRODUCES     : ckpt_latest / ckpt_best LoRA adapters, the merged model, the
+#                train_curves rows (step, loss, accept_weight, split — incl. the
+#                in-training val_loss) AND a LIGHT BE sanity row in results.db
+#                (block_eff / alpha under ONE matched verifier, K=3, T=1.0, n=100).
+#                NOT produced here: the multi-verifier / multi-K / n=1319 sweep,
+#                multi-dataset generalization, or the baseline-eval row.
 #
-# DOES NOT     : Evaluate anything. Produces no BE / alpha / task_score numbers.
+# DOES NOT     : Run the heavy eval — no full verifier matrix, no K=5, no n=1319,
+#                no humaneval/math500/mtbench/alpaca, no baseline eval. Those are
+#                deferred to eval_after_train.yaml / the A100 confirmation.
+#
+# LIGHT EVAL   : The single sanity verifier is `bv` (the cheap, universal non-OT
+#                reference for the flat forward_kl default). For TREE losses the
+#                pipeline forces the tree-matched non-OT subset (bv,gbv,traversal)
+#                for any *_tree eval step regardless of this profile — that 3-verifier
+#                subset is the tree "matched verifier" sanity and is still light vs
+#                the full 8-verifier x K{3,5} x n=1319 sweep.
 #
 # LOSS SELECTION (IMPORTANT):
 #   Defaults to forward_kl (the LOCKED priority-1 baseline — train this FIRST).
@@ -36,17 +54,21 @@
 #   python orchestration/experiment.py --config profiles/smoke --smoke --yes \
 #     --storage_root /kaggle/working/specdist
 #
-#   # Phase-1 baseline (forward_kl, the default):
+#   # Phase-1 baseline (forward_kl, the default) — train + light BE sanity:
 #   python orchestration/experiment.py --config profiles/train_one_loss --yes \
-#     --storage_root /kaggle/working/specdist --experiment_tag wk2_forward_kl
+#     --skip_existing --storage_root /kaggle/working/specdist --experiment_tag wk2_forward_kl
 #
-#   # Train a different single loss:
+#   # Train a different single loss (+ light sanity):
 #   python orchestration/experiment.py --config profiles/train_one_loss --yes \
-#     --losses kl_tree --storage_root /kaggle/working/specdist --experiment_tag wk3_kl_tree
+#     --losses kl_tree --skip_existing --storage_root /kaggle/working/specdist --experiment_tag wk3_kl_tree
+#
+#   # Pure training burn (NO eval at all) — opt out of the light sanity:
+#   python orchestration/experiment.py --config profiles/train_one_loss --yes \
+#     --train_only --losses forward_kl --storage_root /kaggle/working/specdist
 #
 #   # Resume after a crash (skips finished steps automatically):
 #   python orchestration/experiment.py --config profiles/train_one_loss --yes \
-#     --storage_root /kaggle/working/specdist --from train_kl_gsm8k
+#     --skip_existing --storage_root /kaggle/working/specdist --from train_kl_gsm8k
 #
 # RESUME/BACKUP: /kaggle/working is ephemeral. Always pass --storage_root, mirror
 #               checkpoints + results.db to a Kaggle Dataset at session end
@@ -100,10 +122,25 @@ health:
   nan_action: skip              # skip NaN batches — Kaggle sessions are precious
   early_stop_patience: 5
 
-# No evaluation section is consulted: experiment.train_only drops group 0
-# (baseline eval) and group 3 (post-train eval). Eval params live in
-# eval_after_train.yaml instead.
+# ── LIGHT BE sanity eval ─────────────────────────────────────────────────────
+# The cheapest useful sanity: ONE verifier, K=3, T=1.0, n=100, GSM8K only.
+# experiment.light_eval (below) drops the baseline eval + the Phase-4 multi-dataset
+# sweep, so only this single GSM8K post-train eval runs (~20-30 min). The heavy
+# full sweep (all verifiers, K in {3,5}, n=1319, multi-dataset, multi-seed) is
+# deferred to eval_after_train.yaml / the A100 confirmation.
+# NOTE: for flat losses (the forward_kl default) `bv` is used. For *_tree losses
+# the pipeline forces the tree-matched non-OT subset (bv,gbv,traversal) regardless
+# of this list — still light vs the full matrix.
+evaluation:
+  modes: [bv]                   # single cheap matched verifier for the flat default
+  K_values: [3]                 # K=3 only (K=5 is reserved for the A100 confirmation)
+  temperatures: [1.0]           # T=1.0 — DistillSpec/EAGLE paper standard
+  L: 8                          # must match tree_training.tree_L
+  n_prompts: 100                # free-tier sanity size (full 1319 is A100-only)
 
 experiment:
-  train_only: true              # KEEP admin + train + merge ONLY. NO eval.
+  light_eval: true              # train + merge + ONE light GSM8K eval; drop baseline + Phase-4
   losses: [kl]                  # default = forward_kl (priority-1). Override via --losses.
+  # For a deliberate pure-training burn with NO eval, pass --train_only on the CLI
+  # (or set train_only: true here instead of light_eval). The two modes are
+  # mutually exclusive — pass exactly one.
