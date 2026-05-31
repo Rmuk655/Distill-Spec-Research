@@ -117,7 +117,13 @@ After adding both, they appear under **MODELS** in the Input panel. The mount pa
 
 All paths are pre-set in `kaggle.ipynb` Cell 0. No editing needed unless you want to change CONFIG.
 
-**First session:** Run all: Shift+F5. Then run Cell 2b in its own cell to start auto-backup.
+**First session — run cells ONE AT A TIME:**
+
+> ⚠️ **Do NOT use "Run All" (Shift+F5).** Running all cells at once starts the pipeline twice
+> (Cell 0 and Cell 1 both invoke it), leaving orphan subprocesses that exhaust GPU VRAM.
+
+1. Run **Cell 0** → wait for it to print `[BG] FULL pipeline … PID …`
+2. Only after Cell 0 is running, open a second cell and run **Cell 2b** to start auto-backup
 
 **Every subsequent session:**
 > ⚠️ Attach `specdist-checkpoints` dataset (Input panel → `+ Add Input`) **before** running Cell 1, or checkpoints will not be restored and the pipeline starts over.
@@ -254,9 +260,9 @@ the saved notebook. Simplest, but does not protect a brand-new session.
 In all cases the pipeline state machine skips completed training/eval steps on
 resume, so restored work is never repeated.
 
-> **Overnight runs:** prefer **Save Version → "Save & Run All (Commit)"**, which
-> runs the notebook headless to completion regardless of your browser, with
-> Option A as the safety net.
+> **Overnight runs:** prefer **Save Version → "Save & Run All (Commit)"** only if your
+> notebook has a **single pipeline cell** (Cell 0). With two cells (Cell 0 + Cell 1),
+> use Option B (Persistence) or Option A (manual Cell 0 → Cell 2b) instead.
 
 ---
 
