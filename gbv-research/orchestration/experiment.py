@@ -358,6 +358,13 @@ def _load_config_yaml(config_name: str) -> dict:
         # eval_after_train / the A100 confirmation.  CLI --light_eval wins.
         if "light_eval" in experiment_cfg:
             out["light_eval"] = bool(experiment_cfg["light_eval"])
+        # experiment.light_eval_verifier → optional comma-separated verifier
+        # name(s) that override _LOSS_LIGHT_VERIFIER for all active losses when
+        # light_eval is True.  Example: "bv" forces every loss to use bv only;
+        # "gbv" forces every loss to use gbv.  When absent, each loss gets its
+        # natural matched verifier from _LOSS_LIGHT_VERIFIER automatically.
+        if "light_eval_verifier" in experiment_cfg:
+            out["light_eval_verifier"] = str(experiment_cfg["light_eval_verifier"])
         # models.draft / models.target — present only when the YAML sets them.
         # Consumed by main() when the config is a YAML-based profile (not a
         # legacy CONFIGS preset) so we know which model pair to load.
@@ -600,10 +607,58 @@ _LOSS_STEP_PREFIXES: dict = {
 }
 ALL_LOSSES = list(_LOSS_STEP_PREFIXES.keys())
 
+# ── Per-loss light-eval verifier map ─────────────────────────────────────────
+# Maps each loss name → the SINGLE matched verifier used for `light_eval` sanity
+# evals.  "Matched" means the verifier most directly aligned with the loss:
+#   • Flat losses default to "bv" (cheapest, universal non-OT reference).
+#   • Tree losses use their naturally paired verifier (the one the surrogate
+#     integrates over).
+#
+# Can be overridden per-profile via `experiment.light_eval_verifier: <verifier>`
+# in the YAML, which forces ALL active losses to use the specified verifier.
+#
+# When light_eval is False this map is never consulted — zero behaviour change.
+_LOSS_LIGHT_VERIFIER: dict = {
+    # ── Flat losses (standard distillation objectives) ───────────────────────
+    "kl":                "bv",
+    "rev_kl":            "bv",
+    "jsd":               "bv",
+    "l1":                "bv",
+    "ebe":               "bv",
+    "ebe_single":        "bv",
+    "online":            "bv",
+    "online_ebe":        "bv",
+    "online_ebe_single": "bv",
+    # ── Tree losses — divergence variants (universal baselines) ─────────────
+    # kl/rev_kl/jsd tree are mode-agnostic; use cheapest verifier for light sanity.
+    "kl_tree":           "bv",
+    "rev_kl_tree":       "bv",
+    "jsd_tree":          "bv",
+    # ── Tree losses — verifier-specific surrogates (non-OT) ─────────────────
+    "bv_tree":           "bv",
+    "gbv_tree":          "gbv",
+    "traversal_tree":    "traversal",
+    # ── Tree losses — on-policy EBE ablation ────────────────────────────────
+    "ebe_tree":          "bv",
+    # ── Tree losses — OT-based verifier-aligned (added 2026-05) ─────────────
+    "naive_tree":        "naive",
+    "nss_tree":          "nss",
+    "specinfer_tree":    "specinfer",
+    "spectr_tree":       "spectr",
+    "khisti_tree":       "khisti",
+    # ── Online tree distillation variants ────────────────────────────────────
+    "online_kl_tree":    "bv",
+    "online_ebe_tree":   "bv",
+}
+# Fallback for any loss not explicitly listed (should not occur if the dict
+# above is kept in sync with _LOSS_STEP_PREFIXES, but kept as a safety net).
+_LIGHT_VERIFIER_DEFAULT = "bv"
+
 
 def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 load_in_4bit=False, ckpt_root=None,
-                train_hparams=None, losses_to_run=None, hw_tier="laptop"):
+                train_hparams=None, losses_to_run=None, hw_tier="laptop",
+                _light_eval_verifier_override=None):
     """Build the STEPS list for a given draft/target model pair.
 
     Pipeline structure (same for both smoke and full — only numbers differ):
@@ -2185,6 +2240,23 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _s.setdefault("parallel_group", _infer_parallel_group(_s["id"]))
         _s.setdefault("vram_gb",        _infer_vram_gb(_s["id"]))
 
+    # ── Light-eval verifier override ─────────────────────────────────────────
+    # When _light_eval_verifier_override is set (built in main() for light_eval
+    # mode), rewrite --modes in every Phase-3 (post-train) eval step's cmd so
+    # each loss uses its single matched verifier instead of the full multi-
+    # verifier set.  Only parallel_group==3 steps are touched; baseline (group 0)
+    # is dropped entirely by the light_eval filter in main() and is never reached.
+    if _light_eval_verifier_override:
+        for _s in _steps_list:
+            if _s.get("parallel_group") == 3:
+                _loss = _owning_loss(_s["id"])
+                if _loss is not None:
+                    _ov_modes = _light_eval_verifier_override.get(_loss)
+                    if _ov_modes:
+                        _cmd = _s.get("cmd", [])
+                        if "--modes" in _cmd:
+                            _cmd[_cmd.index("--modes") + 1] = _ov_modes
+
     # Apply --losses filter: drop steps for unselected losses, keep all others.
     if losses_to_run is not None:
         _selected = set(losses_to_run)
@@ -2915,7 +2987,7 @@ def main():
     # experiment.eval_only / experiment.train_only live in the YAML "experiment:"
     # block (parsed into _yaml_cfg).  Surface them on cfg so the cfg.get() reads
     # below honour the YAML for YAML-based profiles too (CLI flags still win).
-    for _exp_key in ("eval_only", "train_only", "light_eval"):
+    for _exp_key in ("eval_only", "train_only", "light_eval", "light_eval_verifier"):
         if _exp_key in _yaml_cfg:
             cfg[_exp_key] = _yaml_cfg[_exp_key]
     # experiment.losses: honour it for profiles/* configs ONLY.  Every profile under
@@ -3099,6 +3171,26 @@ def main():
                     "{eval_only,train_only,light_eval} — these modes are mutually "
                     "exclusive. Set exactly one (or override on the CLI).")
 
+    # ── Light-eval verifier override dict ────────────────────────────────────
+    # When light_eval is True, build a loss→verifier dict that overrides
+    # --modes in every Phase-3 eval step to the single matched verifier.
+    # Priority: YAML experiment.light_eval_verifier (if set) > _LOSS_LIGHT_VERIFIER map.
+    # When light_eval is False: None → build_steps() leaves all --modes intact
+    # (zero behaviour change on existing runs without light_eval).
+    _light_verifier_override = None
+    if _light_eval:
+        _yaml_lev = cfg.get("light_eval_verifier")   # str or None
+        _active_losses = set(_losses_to_run) if _losses_to_run else set(ALL_LOSSES)
+        if _yaml_lev:
+            # YAML override: force every active loss to use this verifier
+            _light_verifier_override = {loss: str(_yaml_lev) for loss in _active_losses}
+        else:
+            # Per-loss map: each loss gets its naturally matched verifier
+            _light_verifier_override = {
+                loss: _LOSS_LIGHT_VERIFIER.get(loss, _LIGHT_VERIFIER_DEFAULT)
+                for loss in _active_losses
+            }
+
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
     _load_4bit = cfg.get("load_in_4bit", False)
@@ -3108,7 +3200,8 @@ def main():
                             load_in_4bit=_load_4bit,
                             ckpt_root=_effective_ckpt_root,
                             train_hparams=train_hparams,
-                            losses_to_run=_losses_to_run)
+                            losses_to_run=_losses_to_run,
+                            _light_eval_verifier_override=_light_verifier_override)
         if _eval_only:
             _n_before = len(STEPS)
             STEPS = [s for s in STEPS if "Phase 2" not in s.get("group", "")]
@@ -3156,7 +3249,8 @@ def main():
                         ckpt_root=_effective_ckpt_root,  # was args.ckpt_root — ignored --storage_root
                         train_hparams=train_hparams,
                         losses_to_run=_losses_to_run,
-                        hw_tier=_hw_tier_from_config(args.config))
+                        hw_tier=_hw_tier_from_config(args.config),
+                        _light_eval_verifier_override=_light_verifier_override)
 
     if _eval_only:
         _n_before = len(STEPS)

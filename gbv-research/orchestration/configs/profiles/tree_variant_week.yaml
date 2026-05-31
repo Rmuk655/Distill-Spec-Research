@@ -136,5 +136,10 @@ evaluation:
 experiment:
   light_eval: true              # train + merge + ONE light GSM8K eval; drop baseline + Phase-4
   losses: [kl_tree]             # default surviving variant; override via --losses each week
+  # light_eval_verifier: bv     # optional: override matched verifier for ALL active losses.
+  #                             # Default (when absent): each tree loss uses its naturally
+  #                             # paired verifier from _LOSS_LIGHT_VERIFIER (e.g. gbv for
+  #                             # gbv_tree, traversal for traversal_tree, bv for kl_tree).
+  #                             # Set to a single verifier name to force all losses to use it.
   # For a pure-training burn with NO eval, pass --train_only instead (mutually
   # exclusive with light_eval — pick exactly one).
