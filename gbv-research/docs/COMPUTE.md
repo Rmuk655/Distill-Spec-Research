@@ -44,23 +44,22 @@ Use these **only** once candidates are publication-worthy (≤2 survivors).
 | Source | ~Price | Reliability | When |
 |---|---|---|---|
 | **IITH cluster prepaid** | **₹80/GPU-hr (~$0.96/hr)** | reliable, institutional, no application | **PRIMARY A100** (likely SLURM-based). |
+| **Rahul Thomas (researcher)** | — (access TBD) | institutional | Collaborator A100 — confirm available hours before scheduling confirmation runs. |
 | **Modal A100** | ~$2–5/hr | instant | Backup; $30/mo free covers a trimmed run. |
-| **E2E Networks (India)** | A100-80GB **~$1.08/hr** | on-demand | Backup. |
-| **RunPod community** | **~$1.19/hr** | on-demand | Backup. |
-| **Vast.ai spot** | **$0.08–0.67/hr** | **interruptible** | Avoid for long training. |
-| **GCP / AWS on-demand A100** | ~$3–4/hr | on-demand (+ quota friction) | Last resort. |
+| **GCP A100** | ~$3–4/hr | on-demand (+ quota friction) | Last resort backup. |
 
 ---
 
 ## Section 2 — Strategy (the funnel)
 
 ```
-  free T4-class pools                          A100 (paid)
-  Kaggle P100 + Modal T4 + Lightning T4   →    IITH primary (Modal/GCP backup)
-  ───────────────────────────────────         ──────────────────────────────
-  ALL exploration / hypothesis work            PUBLICATION confirmation ONLY
-  run loss batches in PARALLEL across pools     ≤2 candidate loss×verifier pairs
-  workload fits 16 GB → T4/P100 sufficient      full GSM8K, ≥3 seeds, stats
+  free T4-class pools                               A100 (paid/institutional)
+  Kaggle P100 + Modal T4 + Lightning T4        →   IITH primary · Rahul Thomas A100
+  + GCP $300 T4 (@iith.ac.in account)              · Modal A100 backup
+  ──────────────────────────────────────           ──────────────────────────────
+  ALL exploration / hypothesis work                 PUBLICATION confirmation ONLY
+  run loss batches in PARALLEL across pools         ≤2 candidate loss×verifier pairs
+  workload fits 16 GB → T4/P100 sufficient          full GSM8K, ≥3 seeds, stats
 ```
 
 - **T4-class free pools = ALL exploration / hypothesis establishment.** Run
@@ -97,8 +96,8 @@ Tied to the **locked algo priority** in [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md)
 | Smoke-testing | any free pool | ~5 min, near-zero cost |
 | Running a single baseline / ablation batch | Kaggle P100 | longest sessions, 30 h/wk |
 | Running 2nd/3rd parallel batch | Modal T4 + Lightning T4 | parallelize across pools |
-| Out of weekly Kaggle quota | Modal/Lightning T4, or GCP T4 | spread the load |
-| Confirming ≤2 publication candidates | **IITH A100** (Modal/GCP backup) | reliable, cheapest A100, full-scale stats |
+| Out of weekly Kaggle quota | Modal/Lightning T4, or GCP T4 ($300 trial, @iith.ac.in) | spread the load |
+| Confirming ≤2 publication candidates | **IITH A100** · Rahul Thomas A100 · Modal/GCP A100 backup | cheapest/closest A100, full-scale stats |
 
 ### Engineer checklist (ordered)
 
@@ -140,9 +139,10 @@ explicitly upgrade and then incur **overage** beyond the credit.
 
 ## Section 5 — Action checklist (immediate)
 
-1. **Keep using free pools now.** Kaggle quota is back ~**June 5**;
-   **Lightning + Modal T4 are available immediately** — start there.
-2. **Sign up Modal + Lightning** with your **@iith.ac.in** email.
-3. *(Optional)* Grab the **GCP $300 trial** and **request a T4 quota** (Section 4).
-4. **Load a small IITH prepaid balance** now so the eventual A100 confirmation isn't blocked.
-5. **Pursue AWS/GCP research-credit grants** only as **non-blocking** future scaling — not a dependency.
+1. **Use Lightning + Modal T4 now** (available immediately, no quota wait). Check Kaggle quota at `kaggle.com/me/quota`.
+2. **Sign up Modal + Lightning** with your **@iith.ac.in** email (institutional email speeds verification and grant eligibility).
+3. **Grab the GCP $300 trial** using your **@iith.ac.in** account and request a T4 quota (Section 4). No AWS.
+4. **Confirm Rahul Thomas A100 access** — agree on available hours before scheduling confirmation runs.
+5. **Load a small IITH prepaid balance** now so the eventual A100 confirmation isn't blocked.
+6. **Always use `--skip_existing`** and attach checkpoint datasets before every session — never re-run work that is already in `results.db` or a saved checkpoint. See `KAGGLE.md` and `ENGINEER_PLAYBOOK.md` for restore steps.
+7. **Pursue GCP/AWS research-credit grants** only as non-blocking future scaling — not a dependency.
