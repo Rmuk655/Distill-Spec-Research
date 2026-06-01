@@ -566,8 +566,13 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               modes="alpha,specinfer,gbv,traversal",
               Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
               experiment_tag=None, train_steps=0, hw_tier="laptop",
-              wandb_group=None, wandb_project="distillspec"):
-    """Eval command — always passes --skip_existing so restarts are safe.
+              wandb_group=None, wandb_project="distillspec",
+              force_rerun=False):
+    """Eval command.
+
+    Passes --skip_existing by default so session restarts never duplicate DB rows.
+    Set force_rerun=True (smoke mode) to omit --skip_existing so every eval cell
+    actually executes, confirming the full code path even when results are cached.
 
     Defaults (laptop): n=10 prompts, max_tokens=50.  Run with n=30/max_tokens=100
     on Colab/server T4 for paper-quality results.
@@ -579,7 +584,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
 
     hw_tier is passed to evaluate.py so every DB row is tagged with the
     hardware/teacher-scale tier.  Without this all rows default to 'laptop'
-    and colab_lite / colab runs can't be filtered in the dashboard.
+    and colab / colab configs can't be filtered in the dashboard.
     """
     cmd = [
         sys.executable, os.path.join(HERE, "evaluate.py"),
@@ -592,10 +597,11 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         "--temperature", temps,
         "--n", str(n),
         "--max_tokens", str(max_tokens),
-        "--skip_existing",
         "--skip_fetch",
         "--hw_tier", hw_tier,
     ]
+    if not force_rerun:
+        cmd.append("--skip_existing")
     if train_steps:
         cmd += ["--train_steps", str(train_steps)]
     if task_score:
@@ -942,7 +948,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         train_steps=ts,
                         hw_tier=hw_tier,
                         wandb_group=_h.get("wandb_group", ""),
-                        wandb_project=_h.get("wandb_project", "distillspec"))
+                        wandb_project=_h.get("wandb_project", "distillspec"),
+                        force_rerun=smoke)  # smoke: run even if result already in DB
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy
