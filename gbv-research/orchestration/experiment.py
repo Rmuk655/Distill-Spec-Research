@@ -3099,7 +3099,10 @@ def main():
     # kaggle/a100/colab_lite) are deliberately left untouched — their loss behaviour is
     # unchanged.  A CLI --losses still overrides the YAML value (handled below).
     _is_profile_cfg = args.config.replace(os.sep, "/").startswith("profiles/")
-    if _is_profile_cfg and "losses" in _yaml_cfg:
+    # experiment.losses is now honoured for ALL configs, not just profiles.
+    # Previously gated to profiles/* only; top-level configs (laptop/kaggle/a100/colab)
+    # can now declare a losses: list to limit which losses run without editing experiment.py.
+    if "losses" in _yaml_cfg:
         cfg["losses"] = _yaml_cfg["losses"]
 
     draft  = args.draft  or cfg["draft"]
@@ -3222,19 +3225,15 @@ def main():
         # When absent, trainer falls back to val_split=0.1 (10% of train set = very slow).
         "val_dataset":          _yaml_cfg.get("val_dataset"),
     }
-    # Profiles honour their YAML `evaluation:` block (modes / K_values / temperatures
-    # / n_prompts / n_prompts_gsm8k / max_tokens). build_steps reads these off
-    # train_hparams, but they were never copied onto it — so for YAML profiles the
-    # evaluation block was silently ignored and eval fell back to the hardcoded
-    # defaults (n=10, all verifiers). Wire them here, gated to profiles/* only, so a
-    # profile can set a LIGHT single-verifier / n=100 sanity (train_one_loss) or its
-    # own modes (eval_after_train). Legacy presets and top-level YAML configs
-    # (laptop/server/colab/kaggle/a100/colab_lite) are deliberately left unchanged.
-    if _is_profile_cfg:
-        for _ek in ("eval_modes", "eval_K_values", "eval_temps",
-                    "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens"):
-            if _ek in _yaml_cfg:
-                train_hparams[_ek] = _yaml_cfg[_ek]
+    # Wire YAML `evaluation:` block (modes / K_values / temperatures / n_prompts /
+    # n_prompts_gsm8k / max_tokens) for ALL configs — profiles AND top-level YAMLs.
+    # Previously only profiles/* were wired; laptop/kaggle/a100/colab evaluation:
+    # sections were silently ignored, causing eval to fall back to hardcoded defaults
+    # (n=10 prompts regardless of YAML).  Now every config YAML can control eval cost.
+    for _ek in ("eval_modes", "eval_K_values", "eval_temps",
+                "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens"):
+        if _ek in _yaml_cfg:
+            train_hparams[_ek] = _yaml_cfg[_ek]
 
     # Parse --losses filter into a list; None = run all losses.
     # Loss filter: --losses CLI wins; fall back to experiment.losses in YAML; then all.

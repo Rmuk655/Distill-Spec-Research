@@ -10,23 +10,25 @@
 #
 # PURPOSE: Verify that every code path runs without crashing:
 #   train loop → checkpoint save/load cycle → merge → all eval modes
-#   Use --smoke for a fast crash test (~5 min, 50 steps).
-#   Run without --smoke to exercise ALL paths (~30-40 min, 200 steps, K=3/T=0.6 only).
+#   Use --smoke for a fast crash test (~8-15 min, 10 steps).
+#   Run without --smoke to exercise ALL paths (~60-75 min, 200 steps).
+#   Only kl (flat loss) + kl_tree (tree loss) run — one representative per family.
+#   All other losses share the same code path; running all 17 would take 4+ hours.
 #
 # TWO-STAGE LAPTOP GATE:
 #   1. python orchestration/experiment.py --config laptop --smoke --yes
-#      Fast crash detector.  Should complete < 5 min.
+#      Fast crash detector.  Should complete ~8-15 min.
 #      Gate: no exceptions, losses are finite numbers.
 #   2. python orchestration/experiment.py --config laptop --yes
-#      Full code-path exerciser.  Should complete ~30-40 min.
-#      Single K=3, T=0.6, n=10 -- no parameter sweep, just end-to-end coverage.
+#      Full code-path exerciser.  Should complete ~60-75 min.
+#      kl + kl_tree losses, K=3, T=0.6, n=5 -- no parameter sweep.
 #      Gate: all eval modes produce output, checkpoint resume works,
 #      merge completes, W&B run appears in wandb.ai.
 #      (Block efficiency numbers from this run are meaningless -- ignore them.)
 #
-# WHEN TO MOVE TO colab_lite:
+# WHEN TO MOVE TO T4 (Kaggle/Modal):
 #   Both gates pass AND you want to assess whether a new loss function or
-#   verifier implementation actually helps.  colab_lite uses Qwen3-1.7B
+#   verifier implementation actually helps.  T4 uses Qwen3-8B NF4
 #   teacher → real distillation signal → real trends.
 
 hardware:
@@ -91,7 +93,10 @@ evaluation:
   K_values: [3]                 # single K -- no parameter sweep on laptop
   temperatures: [0.6]           # single temperature -- no sweep
   L: 8
-  n_prompts: 10                 # 10 prompts: fast (~3-4 min total), enough for finite BE check
+  # 5 prompts: ~3 min per eval mode, ~18 min total for 6 modes.
+  # Smoke uses 3 prompts (overrides this).  10 was the old default but 5 is enough
+  # to confirm finite BE and catch shape errors on all code paths.
+  n_prompts: 5
 
 tree_training:
   # Hyperparameters for tree-structured distillation losses.
@@ -102,16 +107,11 @@ tree_training:
   tree_L: 8
 
 experiment:
-  # Laptop runs every non-online loss for ~200 steps to confirm no crash.
-  # Numbers are meaningless (0.6B teacher = same capacity as draft) — only check
-  # that each training + eval code path runs without exception.
-  # NOTE: experiment.losses is only honoured for profiles/* configs.
-  # Use exclude_losses (works for ALL configs) to suppress online variants.
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
-           kl_tree, rev_kl_tree, jsd_tree,
-           bv_tree, gbv_tree, traversal_tree,
-           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
-  # exclude_losses: honoured for all configs (unlike experiment.losses above).
-  # Online OSD requires online_serve.py + two models in VRAM simultaneously —
-  # that exceeds 4-6 GB laptop VRAM and is last priority in the research plan.
-  exclude_losses: [online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]
+  # Only 2 representative losses run on laptop:
+  #   kl       — one flat loss (exercises the flat-sequence code path)
+  #   kl_tree  — one tree loss (exercises the tree-structured code path)
+  # All other losses (rev_kl, jsd, l1, ebe, bv_tree, gbv_tree, ...) share the same
+  # code paths as kl and kl_tree respectively — running all 17 would take 4+ hours
+  # for no additional code coverage.
+  # To test a different loss pair: python experiment.py --config laptop --losses kl,ebe --yes
+  losses: [kl, kl_tree]

@@ -13,7 +13,7 @@ confirm on production hardware.**
 
 | Tier | Hardware | Config | Teacher | Steps | Wall time | W&B group | Purpose |
 |------|----------|--------|---------|-------|-----------|-----------|---------|
-| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: 10) | ~15-25 min (smoke) / ~30-40 min (full) | `laptop-gsm8k` | Code exerciser: does every path run? |
+| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: 10) | ~8-15 min (smoke) / ~60-75 min (full, 2 losses) | `laptop-gsm8k` | Code exerciser: does every path run? |
 | 2 | Kaggle T4x2 / Modal T4 | `kaggle` | Qwen3-8B NF4 | 1000 | ~4-8 h | `kaggle-t4x2` | Exploration: which losses rank best? |
 | 3 | A100 | `a100` | Qwen3-8B BF16 | 2000 | ~15-20 min train | `a100` | Confirmation: paper-quality numbers |
 
@@ -126,7 +126,9 @@ python orchestration/experiment.py --config laptop --yes --restart
 
 > **Note**: `--smoke` always auto-resets (no `--restart` needed with smoke). Use `--restart` to force-clean a non-smoke run.
 
-Runs **200 training steps**, full eval suite. Should complete in **~30-40 min**.
+Runs **200 training steps** on **2 representative losses** (`kl` + `kl_tree`) with **5 eval prompts per mode**. Should complete in **~60-75 min**.
+
+> Why only 2 losses? All flat losses (`kl`, `rev_kl`, `jsd`, `l1`, `ebe`, ...) share the same training code path. All tree losses (`kl_tree`, `bv_tree`, `gbv_tree`, ...) share the same tree code path. One representative per family is enough for a code coverage gate. Running all 17 would take 4+ hours.
 
 What the full laptop run exercises that smoke does NOT:
 - Rolling checkpoint save/load cycle (save_every=20 → 10 saves)
@@ -134,7 +136,7 @@ What the full laptop run exercises that smoke does NOT:
 - Validation health check (val_every=50 → 4 validation passes)
 - PPL threshold check (ppl_check_every=100 → 2 checks)
 - Full merge step (LoRA → base model)
-- All eval modes: alpha, bv, gbv, traversal, specinfer, naive
+- All eval modes: alpha, bv, gbv, traversal, specinfer, naive (5 prompts each)
 - W&B logging (run appears in wandb.ai under group `laptop-gsm8k`)
 - Database writes (results.db)
 - Pipeline state machine (done_check files)
