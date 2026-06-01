@@ -99,10 +99,16 @@ tree_training:
   tree_L: 8
 
 experiment:
-  # Laptop runs every loss for ~100 steps just to confirm no crash.
-  # Numbers are meaningless (0.6B teacher) — only check that each branch runs.
-  # Verifier-aligned tree losses added 2026-05; see tree_losses.py for math.
+  # Laptop runs every non-online loss for ~200 steps to confirm no crash.
+  # Numbers are meaningless (0.6B teacher = same capacity as draft) — only check
+  # that each training + eval code path runs without exception.
+  # NOTE: experiment.losses is only honoured for profiles/* configs.
+  # Use exclude_losses (works for ALL configs) to suppress online variants.
   losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
            naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
+  # exclude_losses: honoured for all configs (unlike experiment.losses above).
+  # Online OSD requires online_serve.py + two models in VRAM simultaneously —
+  # that exceeds 4-6 GB laptop VRAM and is last priority in the research plan.
+  exclude_losses: [online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]
