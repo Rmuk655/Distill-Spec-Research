@@ -788,8 +788,9 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1",
-        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
     }
+    if sys.platform != "win32":   # expandable_segments is Linux-only
+        _sub_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     _db_logs = os.path.join(_PARENT, "db", "logs")
     os.makedirs(_db_logs, exist_ok=True)
     _be_log = os.path.join(_db_logs, "be_progress.log")
