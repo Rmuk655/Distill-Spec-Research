@@ -1049,36 +1049,27 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
             r["run_id"] = run_id
         results_db.insert_per_prompt_batch(pp)
 
-        # ── W&B: log alpha-mode eval metrics ──────────────────────────────────
+        # ── W&B: eval runs have no time-series; write everything to summary ──
+        # Using wandb.summary (not wandb.log) avoids meaningless "step" charts.
+        # Summary keys show up as columns in the W&B runs comparison table.
         try:
             import wandb as _wmod
             if _wmod.run is not None:
-                _wlog = {
-                    f"eval/{dataset}/{mode}/alpha_mean":  res["alpha_mean"],
-                    f"eval/{dataset}/{mode}/alpha_ci95":  res["alpha_ci95"],
-                    f"eval/{dataset}/{mode}/throughput":  res["throughput"],
-                    f"eval/{dataset}/{mode}/ms_per_tok":  res.get("ms_per_tok", 0),
-                    # Per-verifier flat keys for cross-dataset comparison in W&B
-                    f"eval/{mode}/alpha":       res["alpha_mean"],
-                    f"eval/{mode}/throughput":  res["throughput"],
-                    # Flat keys for easy cross-run comparison in W&B
-                    "eval/alpha_mean":  res["alpha_mean"],
-                    "eval/throughput":  res["throughput"],
-                    "eval/dataset":     dataset,
-                    "eval/temperature": temperature,
-                }
+                _wmod.summary[f"alpha/{dataset}"]              = res["alpha_mean"]
+                _wmod.summary[f"alpha/{dataset}/ci95"]         = res["alpha_ci95"]
+                _wmod.summary[f"alpha/{dataset}/throughput"]   = res["throughput"]
+                _wmod.summary[f"alpha/{dataset}/ms_per_tok"]   = res.get("ms_per_tok", 0)
                 if row.get("task_score") is not None:
-                    _wlog[f"eval/{dataset}/task_score"] = row["task_score"]
-                    _wlog["eval/task_score"] = row["task_score"]
-                _wmod.log(_wlog)
-                # Per-prompt table — visible in W&B Tables panel
+                    _wmod.summary[f"task_score/{dataset}"] = row["task_score"]
+                # Per-prompt table stored as a W&B artifact (browse via Artifacts tab,
+                # not shown as a chart panel since there is no meaningful step axis).
                 if pp:
                     _tbl = _wmod.Table(
                         columns=["prompt_idx", "alpha"],
                         data=[[r2.get("prompt_idx", i), r2.get("alpha_mean", 0)]
                               for i, r2 in enumerate(pp)]
                     )
-                    _wmod.log({f"eval/{dataset}/{mode}/per_prompt_alpha": _tbl})
+                    _wmod.log({f"per_prompt_alpha/{dataset}": _tbl})
         except Exception:
             pass  # W&B logging is always best-effort
 
@@ -1090,20 +1081,12 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         print(f"  block_eff={res['block_eff']:.4f}")
         run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
 
-        # ── W&B: log BE-mode eval metrics ─────────────────────────────────────
+        # ── W&B: BE results go directly to summary (no step axis for eval) ──
         try:
             import wandb as _wmod2
             if _wmod2.run is not None:
-                _wmod2.log({
-                    f"eval/{dataset}/{mode}/K{K}/block_eff": res["block_eff"],
-                    # Per-verifier flat key for cross-dataset comparison in W&B
-                    f"eval/{mode}/BE":  res["block_eff"],
-                    "eval/block_eff":  res["block_eff"],
-                    "eval/dataset":    dataset,
-                    "eval/mode":       mode,
-                    "eval/K":          K,
-                    "eval/temperature": temperature,
-                })
+                _wmod2.summary[f"BE/{mode}/{dataset}"] = res["block_eff"]
+                _wmod2.summary[f"BE/{mode}"]           = res["block_eff"]  # overwritten by last ds; fine
         except Exception:
             pass  # best-effort
 
