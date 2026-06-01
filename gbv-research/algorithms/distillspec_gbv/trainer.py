@@ -717,7 +717,14 @@ def main() -> None:
                         "attn_impl": _ATTN_IMPL},
                 resume="allow",
             )
-            _w.watch(draft_model, log="gradients", log_freq=100)
+            # Use training step as x-axis for all train metrics.
+            # This ensures charts show step 0-1000, not W&B's internal 0-N counter.
+            _w.define_metric("train_step")
+            _w.define_metric("train/*",   step_metric="train_step")
+            _w.define_metric("val/*",     step_metric="train_step")
+            _w.define_metric("gradients/*", step_metric="train_step")
+            # Do NOT watch gradients (log="gradients" uploads 392 per-layer histograms
+            # that are unreadable). We log aggregated LoRA grad norms manually instead.
             print(f"  [wandb] {_wandb.url}")
         except Exception as e:
             print(f"  [wandb] Skipped ({type(e).__name__}: {e})")
@@ -930,14 +937,40 @@ def main() -> None:
             print(f"Step {step+1:4d}/{args.steps} | "
                   f"train_loss: {loss_val:.4f} | peak VRAM: {peak_vram:.0f} MB")
             if _wandb:
+                # EMA-smoothed loss (α=0.1): cleaner trend line than raw per-step loss.
+                _loss_ema = getattr(_wandb, "_loss_ema", loss_val)
+                _loss_ema = 0.9 * _loss_ema + 0.1 * loss_val
+                _wandb._loss_ema = _loss_ema  # stash on run object (avoids a global)
+
                 _wlog = {
-                    "train/loss": loss_val,
-                    "train/lr": scheduler.get_last_lr()[0],
-                    "train/peak_vram_mb": peak_vram,
-                    "step": step + 1,
+                    "train_step":          step + 1,   # x-axis for all train/* metrics
+                    "train/loss":          loss_val,
+                    "train/loss_ema":      _loss_ema,  # smooth trend line
+                    "train/lr":            scheduler.get_last_lr()[0],
+                    "train/peak_vram_mb":  peak_vram,
                 }
                 if _grad_norm is not None:
-                    _wlog["train/grad_norm"] = _grad_norm
+                    _wlog["train/grad_norm"] = float(_grad_norm)
+                    # Per-component LoRA gradient health (replaces 392 histogram panels).
+                    # Logs mean grad norm across all LoRA-A and LoRA-B matrices separately.
+                    # Near-zero for either = dead adapter; diverging = LR too high.
+                    try:
+                        _a_norms, _b_norms = [], []
+                        for name, p in draft_model.named_parameters():
+                            if p.grad is not None:
+                                _n = p.grad.norm().item()
+                                if "lora_A" in name:
+                                    _a_norms.append(_n)
+                                elif "lora_B" in name:
+                                    _b_norms.append(_n)
+                        if _a_norms:
+                            _wlog["gradients/lora_A_norm_mean"] = sum(_a_norms) / len(_a_norms)
+                            _wlog["gradients/lora_A_norm_max"]  = max(_a_norms)
+                        if _b_norms:
+                            _wlog["gradients/lora_B_norm_mean"] = sum(_b_norms) / len(_b_norms)
+                            _wlog["gradients/lora_B_norm_max"]  = max(_b_norms)
+                    except Exception:
+                        pass  # gradient logging is best-effort; never crash training
                 _wandb.log(_wlog)
             if _results_db is not None:
                 try:
@@ -995,7 +1028,16 @@ def main() -> None:
                       f"(best={_best_val_loss:.4f}, streak={_val_no_improve_count})")
 
             if _wandb:
-                log = {"train/val_loss": v_loss, "step": step + 1}
+                _cur_ema = getattr(_wandb, "_loss_ema", v_loss)
+                log = {
+                    "train_step":      step + 1,
+                    "train/val_loss":  v_loss,
+                    # Include smoothed train loss at same step so both lines
+                    # share the x-axis and W&B renders them on the same panel.
+                    "train/loss_ema":  _cur_ema,
+                    # Overfit ratio: val/train > 1.3 = overfitting signal
+                    "train/overfit_ratio": v_loss / max(_cur_ema, 1e-8),
+                }
                 if v_aw is not None:
                     log["val/accept_weight"] = v_aw
                 _wandb.log(log)
