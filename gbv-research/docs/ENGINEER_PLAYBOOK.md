@@ -40,8 +40,9 @@ until the previous EXIT GATE passes.
 
 | resource | budget | role |
 |---|---|---|
-| **Kaggle free** | **~30 GPU-h / week, resets weekly** | ALL exploration (rank losses, kill losers, tune LR) — **minimum valid platform for research decisions (8B NF4 teacher)** |
-| Modal | **$30 one-time credit** | **ONE A100 confirmation run, spent LAST** |
+| **Kaggle free** | **~30 GPU-h / week, resets weekly** | ALL exploration (rank losses, kill losers, tune LR) — **minimum valid platform for research decisions (8B NF4 teacher)**. Use Modal T4 as parallel pool when Kaggle quota is exhausted. |
+| Modal T4 | **~$0.59/hr, ~50 h free/mo** | **Exploration parallel pool** — same `--config kaggle` YAML, same 8B NF4 teacher, same research validity; interchangeable with Kaggle T4 x2 |
+| Modal A100 | **$30 one-time credit** | **ONE A100 confirmation run, spent LAST** |
 | Lightning | ~15–22 free credits/mo | backup A100 / K=5 add-on in a follow-up month |
 | Colab free | exhausted | **crash check / quota fallback only** — 4B teacher ≠ paper setting (8B); NOT for research direction |
 | Colab_lite | n/a | **crash check only** — 1.7B teacher: 3× gap too small; loss rankings unreliable vs 8B→0.6B (~13×) |

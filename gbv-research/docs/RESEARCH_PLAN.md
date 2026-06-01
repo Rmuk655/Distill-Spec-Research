@@ -120,7 +120,7 @@ The user-facing draft↔teacher gap is **0.6B → 8B** at the top tier.
 > | Crash check | `laptop` | any | No — code-only verification |
 > | **Crash check only** | `colab_lite` | **1.7B BF16** | **No** — 1.7B→0.6B gap (~3×) too small; loss rankings can reverse vs 8B→0.6B (~13×) |
 > | **Crash check / quota fallback** | `colab` | **4B BF16** | **No** — 4B teacher ≠ paper setting (8B); trends not transferable to A100 results |
-> | **✓ Exploration** | **`kaggle`** | **8B NF4** | **Yes** — same 8B teacher as A100; quantized NF4 gives same loss rankings as full BF16 |
+> | **✓ Exploration** | **`kaggle` + Modal T4** | **8B NF4** | **Yes** — same 8B teacher as A100; quantized NF4 gives same loss rankings as full BF16; Modal T4 ($0.59/hr, ~50 h free/mo) is interchangeable when Kaggle quota is exhausted |
 > | **✓ Confirmation** | **`a100`** | **8B BF16** | **Yes** — paper numbers, ≥3 seeds, full GSM8K |
 >
 > **Key principle: always use 8B teacher for any research decision.**

@@ -64,7 +64,7 @@ Use these **only** once candidates are publication-worthy (≤2 survivors).
 | Crash check | Laptop | any | code doesn't crash | No |
 | Crash check | Colab_lite (1.7B) | 1.7B BF16 | code path verification, cheap | **No** — 1.7B→0.6B gap (~3×) too small; rankings unreliable |
 | Crash check / fallback | Colab (4B) | 4B BF16 | quota-exhausted fallback only | **No** — 4B teacher ≠ paper setting (8B); rankings not transferable |
-| **Exploration** | **Kaggle T4 x2** | **8B NF4** | rank losses, tune LR, kill losers | **✓ Yes** |
+| **Exploration** | **Kaggle T4 x2 + Modal T4** | **8B NF4** | rank losses, tune LR, kill losers — interchangeable, use whichever has quota remaining | **✓ Yes** |
 | **Confirmation** | **A100** | **8B BF16** | paper numbers, multi-seed | **✓ Yes** |
 
 ```
