@@ -1116,12 +1116,18 @@ def main() -> None:
 
             if _wandb:
                 _cur_ema = _ema_state.get("loss_ema", v_loss)
-                _overfit = v_loss / max(_cur_ema, 1e-8)
+                # val_train_gap = val - train_ema: positive means val is worse than train
+                # (overfitting). Works correctly for both positive-range losses (KL, L1: 0→∞)
+                # and negative-range losses (EBE, tree: -∞→0). The old overfit_ratio
+                # (v_loss / train_ema) blew up to ±1e8 in early warmup when train_ema≈1e-9,
+                # and had inverted sign semantics for negative losses.
+                # Renamed from train/overfit_ratio as of this commit.
+                _val_gap = v_loss - _cur_ema
                 log = {
-                    "train_step":          step + 1,
-                    "train/val_loss":      v_loss,
-                    "train/loss_ema":      _cur_ema,
-                    "train/overfit_ratio": _overfit,
+                    "train_step":           step + 1,
+                    "train/val_loss":       v_loss,
+                    "train/loss_ema":       _cur_ema,
+                    "train/val_train_gap":  _val_gap,
                 }
                 if v_aw is not None:
                     log["val/accept_weight"] = v_aw
@@ -1130,15 +1136,15 @@ def main() -> None:
                 # ── Automated alerts for convergence decisions ─────────────────
                 try:
                     _cur_step = step + 1
-                    if _overfit > 1.3:
+                    if _val_gap > 0.5:
                         _wandb.alert(
                             title="Overfitting detected",
-                            text=f"val_loss/train_loss_ema={_overfit:.2f} at step {_cur_step} "
+                            text=f"val_train_gap={_val_gap:.4f} at step {_cur_step} "
                                  f"(val={v_loss:.4f}, train_ema={_cur_ema:.4f}). "
                                  f"ACTION: lower --lr, reduce steps, or add more data.",
                             level="WARN",
                         )
-                        print(f"  [ALERT] overfit_ratio={_overfit:.2f} > 1.3 — check LR/data")
+                        print(f"  [ALERT] val_train_gap={_val_gap:.4f} > 0.5 — check LR/data")
                     if _val_no_improve_count >= args.early_stop_patience > 0:
                         _wandb.alert(
                             title="Val loss plateau",
