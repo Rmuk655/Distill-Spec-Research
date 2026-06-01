@@ -736,10 +736,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         Phase 4 — Multi-dataset   (always skipped in smoke; slow)
             eval top models on humaneval, math500, mtbench, alpaca
 
-    smoke=True:   50 steps/training · 50 online prompts · n=5 eval prompts ·
-                  max_tokens=30 · K=3 · all 6 verifier modes · temp=0.6.
-                  Exercises every loss + every verifier in ~30–40 min on laptop.
-                  Purpose: catch crashes / NaN / shape errors before overnight run.
+    smoke=True:   10 steps/training · 20 train prompts (cap) · n=5 eval prompts ·
+                  max_tokens=30 · K=3 · all 6 verifier modes · temp=1.0.
+                  Exercises every loss + every verifier in ~15–25 min on laptop.
+                  Purpose: catch crashes / NaN / shape errors before any real run.
+                  Always force-reruns every step (ignores "done" in state) so it
+                  is immune to OneDrive sync races and prior-run state pollution.
                   Uses a SEPARATE state file (pipeline_state_<config>_smoke.json)
                   so smoke "done" marks never block the real pipeline.
 
@@ -860,9 +862,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
            if _h.get("early_stop_patience", 0) != 0 else [] ),
         # no_lora: boolean flag — only pass when True (no value).
         *( ["--no_lora"] if _h.get("no_lora") else [] ),
-        # smoke: cap training dataset to 50 prompts so pre-tokenization is fast (~2s).
+        # smoke: cap training dataset to 20 prompts so pre-tokenization is instant (~0.3s).
         # Without this, trainer loads and tokenizes all 6726 prompts even for a 10-step run.
-        *( ["--max_train_prompts", "50"] if smoke else [] ),
+        # 20 gives enough variety for shuffle (10 steps × 1 prompt/step = 10 used; 2× margin).
+        *( ["--max_train_prompts", "20"] if smoke else [] ),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.
@@ -2980,10 +2983,10 @@ def main():
                         "Visible in the viz dashboard as a filter. Each run still has "
                         "its own unique run_tag timestamp.")
     p.add_argument("--smoke", action="store_true",
-                   help="Quick sanity-check mode: n=5 prompts, max_tokens=30, K=3, "
-                        "modes=alpha+bv+gbv+traversal+specinfer+naive, temp=0.6.  "
-                        "Always resets state (force-clean run — never skips done steps). "
-                        "Time: ~30-40 min total on laptop (limited by CPU/small GPU). "
+                   help="Smoke mode: 10 train steps, 20 prompts (capped), n=5 eval prompts, "
+                        "max_tokens=30, K=3, all 6 verifier modes. "
+                        "Always force-reruns every step (ignores state — immune to OneDrive races). "
+                        "Time: ~15-25 min on laptop. "
                         "Use --restart to force-clean a non-smoke run.")
     p.add_argument("--no_smoke_first", action="store_true",
                    help="Skip the automatic 2-prompt preflight smoke check that normally "

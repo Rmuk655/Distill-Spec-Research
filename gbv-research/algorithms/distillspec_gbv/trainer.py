@@ -190,7 +190,8 @@ def parse_args() -> argparse.Namespace:
                    help="Compute validation loss every N steps (0 to disable).")
     p.add_argument("--max_train_prompts", type=int, default=0,
                    help="Cap training dataset to this many prompts (0 = no cap). "
-                        "Smoke mode passes 50 to keep pre-tokenisation fast.")
+                        "Smoke mode passes 20 — enough for 10 steps with shuffle variety, "
+                        "tokenises in ~0.3s vs ~2min for the full 6726-prompt set.")
 
     # ── Output / checkpointing ────────────────────────────────────────────────
     p.add_argument("--output", default=None,

@@ -13,7 +13,7 @@ confirm on production hardware.**
 
 | Tier | Hardware | Config | Teacher | Steps | Wall time | W&B group | Purpose |
 |------|----------|--------|---------|-------|-----------|-----------|---------|
-| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: ~50) | ~30-40 min | `laptop-gsm8k` | Code exerciser: does every path run? |
+| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: 10) | ~15-25 min (smoke) / ~30-40 min (full) | `laptop-gsm8k` | Code exerciser: does every path run? |
 | 2 | Kaggle T4x2 / Modal T4 | `kaggle` | Qwen3-8B NF4 | 1000 | ~4-8 h | `kaggle-t4x2` | Exploration: which losses rank best? |
 | 3 | A100 | `a100` | Qwen3-8B BF16 | 2000 | ~15-20 min train | `a100` | Confirmation: paper-quality numbers |
 
@@ -99,14 +99,15 @@ Run Cell 0 first. If the session crashes, reopen the notebook and run Cell 1.
 python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
-Runs **n=5 prompts, K=3, all loss modes**. Should complete in **~30-40 min on laptop** (CPU-limited; not 5 min — each loss mode runs a full forward+backward cycle). `--smoke` always auto-resets state — no need to pass `--restart`.
+Runs **10 training steps, 20 prompts, K=3, 5 eval prompts, all loss modes**. Each training step is ~5-10s on laptop CPU/GPU; total **~15-25 min**. `--smoke` always auto-resets state AND always re-runs every step, even if the state file says "done" — immune to OneDrive sync races.
 
 What `--smoke` exercises:
-- Python imports, CUDA device detection
-- One forward + backward pass per loss function
-- Dataset loading
+- Python imports, CUDA/MPS device detection
+- 10 forward + backward passes per loss function (enough to confirm grad flow, no NaN)
+- Dataset loading + tokenization (20 prompts — fast, ~0.3s vs ~2min for full 6726)
 - One checkpoint save
-- A tiny eval (1-2 prompts per mode)
+- One validation pass (5 fixed prompts from `gsm8k_5.jsonl`)
+- A tiny eval (5 prompts per verifier mode)
 
 **Gate**: no exceptions, loss values are finite numbers.
 **If this fails**: fix the code. Do not proceed to 1b until 1a passes.
@@ -259,7 +260,7 @@ sessions (4-8 h) where continuous terminal monitoring is not practical.
 | Parameter | Tier 1 (laptop) | Tier 2 (Kaggle T4x2 / Modal T4) | Tier 3 (A100) |
 |-----------|-----------------|----------------------|--------------------|
 | `target` (teacher) | Qwen3-0.6B | Qwen3-8B NF4 | Qwen3-8B BF16 |
-| `steps` | 200 (smoke: ~50) | 1000 | 2000 |
+| `steps` | 200 (smoke: 10) | 1000 | 2000 |
 | `lora_r` | 4 | 8 | 16 |
 | `lora_alpha` | 8 | 16 | 32 |
 | `save_every` | 20 | 25 | 100 |
