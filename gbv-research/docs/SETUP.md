@@ -106,7 +106,7 @@ work without any file.
 
 Run this on any new machine before the overnight full run.
 It exercises every loss function and every verifier at reduced scale
-(50 steps instead of 1000, 5 eval prompts instead of 10).
+(10 steps instead of 100, 3 eval prompts instead of 5).
 
 ```bash
 # From gbv-research/
@@ -115,9 +115,14 @@ python orchestration/experiment.py --config laptop --smoke --yes
 
 What it runs:
 - **Phase 1**: baseline eval (untrained draft, all 6 verifier modes)
-- **Phase 2**: 50-step training for each of 7 losses (kl, ebe, rev_kl, jsd, l1, online, online_ebe)
-- **Phase 3**: eval every trained model on gsm8k (all 6 verifiers)
-- **Phase 4**: skipped in smoke (multi-dataset eval — too slow)
+- **Phase 2**: 10-step training for every loss in `laptop.yaml` (flat losses kl, rev_kl,
+  jsd, l1, ebe, ebe_single + the `*_tree` losses; online losses are excluded on laptop)
+- **Phase 3**: eval every trained model on gsm8k (all 6 verifiers; tree losses use the
+  paired tree verifier only)
+- **Phase 4**: skipped on laptop (multi-dataset eval runs on T4/A100 only)
+
+For the exact loss list, step counts, and eval params see the canonical
+[`orchestration/configs/laptop.yaml`](../orchestration/configs/laptop.yaml).
 
 Expected time breakdown:
 - Phase 1 eval: ~5 min
@@ -202,12 +207,15 @@ Test coverage:
 python orchestration/experiment.py --config laptop --yes
 ```
 
-What changes vs smoke:
-- 1000 steps/loss (instead of 50)
-- n=10 eval prompts, max_tokens=50, K=3+5, temps=0.6+1.0 (instead of n=5, K=3, temp=0.6)
-- Phase 4 (multi-dataset) runs: humaneval, math500, mtbench, alpaca
+What changes vs smoke (see [`orchestration/configs/laptop.yaml`](../orchestration/configs/laptop.yaml)
+for the canonical values):
+- 100 steps/loss (instead of 10) — exercises all checkpoint/val/PPL paths; **not** paper-scale
+- n=5 eval prompts (instead of 3); K and temperature stay single-valued (K=3, temp=0.6 —
+  laptop is a code exerciser, not a sweep)
+- Phase 4 multi-dataset eval is **not** run on laptop (T4/A100 only)
 
-Expected time: 6-8 hours on laptop (RTX 500 4GB), ~2 hours on A100.
+Expected time: ~2-3 hours on laptop (RTX 500). The laptop run is a code-path exerciser
+with a 0.6B teacher — its numbers are meaningless; real trends come from T4/A100.
 
 ---
 
@@ -221,10 +229,13 @@ python dashboard/training_dashboard.py          # http://127.0.0.1:5000
 python dashboard/training_dashboard.py --port 8080   # custom port
 ```
 
+The UI is organized into tabs: **Training**, **Results**, **Robustness**, **Analysis**, **Data**.
 What it shows:
-- Block efficiency table (rows = trained models, cols = verifier modes)
-- Training loss curves
-- Per-prompt acceptance rate breakdown
+- Block efficiency table / heatmap (rows = trained models, cols = verifier modes) — **Results** tab
+- Training loss curves (**Training** tab) and acceptance-rate / verifier robustness charts (**Robustness** tab)
+- **Per-prompt acceptance-rate breakdown** — the **α by Category (diverse50)** heatmap on the
+  **Analysis** tab, built from the `/api/per_prompt/<run_id>` endpoint (needs the diverse50
+  Phase-4 alpha runs, so it's empty on laptop where Phase 4 is skipped)
 - Live pipeline log tail (polls `db/logs/pipeline_output.log`)
 - Pipeline step progress bar (reads `orchestration/pipeline_state_*.json`)
 
@@ -248,201 +259,60 @@ Both `pipeline_state_laptop.json` and `pipeline_state_laptop_smoke.json` are res
 
 ---
 
-## 9. Ephemeral compute — Colab, Kaggle, Modal
+## 9. Ephemeral compute — Colab, Kaggle, Modal (pointers)
 
 Colab, Kaggle, and Modal all wipe local `/content` or `/tmp` disk when the
-session ends.  **Without persistent storage you lose every checkpoint.**
-This section shows the exact commands for each platform.
+session ends, so each platform persists checkpoints to Drive or a Modal Volume.
+**This guide stays focused on local setup** — the full, authoritative workflow
+for each platform lives in its own doc. Use this routing table and follow the link:
+
+| Platform | Use it for | Persistence | Canonical guide |
+|---|---|---|---|
+| **Colab (free T4)** | one-click smoke / single-loss runs | Google Drive | [`deploy/colab_quickstart.ipynb`](../deploy/colab_quickstart.ipynb) — open and **Runtime → Run all** |
+| **Kaggle (free T4)** | recommended free T4 (29 GB RAM → 8B NF4 teacher) | Kaggle datasets / auto-backup | [`docs/KAGGLE.md`](./KAGGLE.md) (uses `deploy/kaggle.ipynb`) |
+| **Colab Pro / A100 (24 GB+)** | bf16 8B teacher, 3-tier profile sweep | Drive | [`deploy/PROGRESSION.md`](../deploy/PROGRESSION.md) + [`orchestration/configs/profiles/README.md`](../orchestration/configs/profiles/README.md) |
+| **Modal (on-demand T4)** | bursty per-second-billed Phase-1 exploration | persistent Modal Volume | [`docs/MODAL.md`](./MODAL.md) — see 9c below |
+
+Common to every ephemeral session:
+- Pass `--yes` to skip interactive prompts.
+- Point `--storage_root` (or `--ckpt_root`) at Drive / the Modal Volume so
+  `done_check` files survive a session death and re-running auto-skips completed steps.
+- W&B logs sync to the cloud in real time, so they survive even if the session dies mid-run.
 
 ---
 
-### 9a. Free Colab T4 — one-click notebook
+### 9c. Modal — on-demand T4, per-second billing
 
-> **Full setup guide (secrets, Drive paths, resume, VRAM breakdown):**
-> [`deploy/colab_quickstart.ipynb`](../deploy/colab_quickstart.ipynb)
-
-Open the notebook and **Runtime → Run all** (Ctrl+F9). That's it.
-
----
-
-### 9b. Kaggle (free T4, recommended)
-
-> **Full Kaggle setup guide:** `docs/KAGGLE.md`  
-> Use `deploy/kaggle.ipynb` — it handles git sync, deps, model attachment,
-> checkpoint auto-backup, and resume automatically.
-
-Key difference from Colab: Kaggle has **29 GB RAM** (vs Colab's ~12 GB), which
-is what allows the 8B teacher to load in 4-bit NF4 without an OOM kill.
-Use `CONFIG = "kaggle"` in the notebook (Qwen3-8B NF4, 1000 steps, ~7.8 GB VRAM).
-
-For checkpoint persistence across sessions see `docs/KAGGLE.md →
-"Persisting checkpoints"`.
-
-### 9b2. Colab Pro / any A100 (24 GB+)
-
-No 4-bit needed — the 8B teacher fits in bfloat16 on 24+ GB.
-
-A100 runs use the **3-tier profile system** (`orchestration/configs/profiles/`).
-See `deploy/PROGRESSION.md` Step 4 or `orchestration/configs/profiles/README.md`
-for the full workflow. The three tiers in order:
-
-```bash
-# Tier 1 — train baseline losses (KL/JSD/L1/online):
-!python orchestration/experiment.py \
-    --config profiles/a100_baseline_losses --yes \
-    --storage_root /content/drive/MyDrive/specdist
-
-# Tier 2 — verifier sweep (eval_only, no training, uses Tier 1 checkpoints):
-!python orchestration/experiment.py \
-    --config profiles/a100_verifier_sweep --yes \
-    --storage_root /content/drive/MyDrive/specdist
-
-# Tier 3 — new loss (copy template, set losses: [new_loss, kl, jsd, l1, online]):
-!python orchestration/experiment.py \
-    --config profiles/a100_my_loss --yes \
-    --storage_root /content/drive/MyDrive/specdist
-```
-
-To run a specific subset of losses without a profile file:
-```bash
-python orchestration/experiment.py --config a100 --losses kl,jsd --yes \
-  --storage_root /content/drive/MyDrive/specdist
-```
-
-To re-evaluate existing checkpoints without retraining:
-```bash
-python orchestration/experiment.py --config profiles/a100_baseline_losses \
-  --eval_only --yes --storage_root /content/drive/MyDrive/specdist
-```
-
----
-
-### 9c. Modal (recommended for overnight / paper-quality runs)
-
-Modal gives on-demand A100 GPUs billed per second.  All checkpoints live in
-a **persistent Modal Volume** (`specdist-vol`) that survives container
-restarts — you never lose a checkpoint even if Modal preempts your run.
-
-The training script commits the volume every 5 minutes automatically.
-On restart, `trainer.py` auto-resumes from `ckpt_latest/` — no flags
-needed.
-
-#### One-time setup
+Modal runs the **same** `experiment.py` CLI that Kaggle uses via the pure launcher
+`deploy/modal_app.py`. Checkpoints, `results.db`, logs, and the HF model cache all
+live in a persistent Modal Volume (`specdist-vol`), so re-running the same command
+resumes automatically. The launcher exposes a single `modal run` entrypoint with a
+few flags — there are **no** `::train_kl` / `::download_models`-style subcommands.
 
 ```bash
 pip install modal
-modal token new          # opens browser for auth (one-time per machine)
+modal setup                                  # one-time browser auth
+
+# Always smoke first (a few minutes of T4 time):
+modal run deploy/modal_app.py --smoke
+
+# Phase-1 flat baseline (forward KL):
+modal run deploy/modal_app.py --losses kl
+
+# Tree-loss variant:
+modal run deploy/modal_app.py --config profiles/tree_variant_week --losses kl_tree
 ```
 
-#### First run — download models (~10 min, ~16 GB, free)
+| Flag | Default | Meaning |
+|---|---|---|
+| `--config` | `profiles/train_one_loss` | YAML profile under `orchestration/configs/` |
+| `--smoke` | off | quick crash-check (a few prompts, tiny tokens) |
+| `--losses` | (all) | comma-separated loss subset, e.g. `kl,rev_kl,jsd` |
+| `--git-ref` | `main` | branch / tag / commit to clone at runtime |
 
-```bash
-# Downloads Qwen3-0.6B and Qwen3-8B into the persistent volume's HF cache.
-# Run once; all subsequent training runs use the cached weights offline.
-modal run deploy/modal_app.py::download_models
-```
-
-#### Upload training data
-
-```bash
-# Copies core/datasets/raw/gsm8k_train.jsonl (and any other .jsonl) to /vol/data/
-# Run after download_models and before any training.
-modal run deploy/modal_app.py::upload_dataset
-```
-
-#### Train individual losses
-
-```bash
-modal run deploy/modal_app.py::train_kl       # forward KL (DistillSpec baseline)
-modal run deploy/modal_app.py::train_ebe      # EBE block-level loss (novel)
-modal run deploy/modal_app.py::train_rev_kl   # reverse KL (ablation)
-modal run deploy/modal_app.py::train_jsd      # Jensen-Shannon (ablation)
-modal run deploy/modal_app.py::train_l1       # L1 total-variation (ablation)
-modal run deploy/modal_app.py::train_online   # Online OSD adaptation
-
-# Custom args — override steps, lr, dataset:
-modal run deploy/modal_app.py::run --loss ebe --steps 2000 --lr 1e-4
-modal run deploy/modal_app.py::run --loss forward_kl \
-    --dataset /vol/data/gsm8k_train.jsonl --steps 1000
-```
-
-#### Run the full pipeline (all 6 losses, ~2 hours on A100-40GB)
-
-```bash
-modal run deploy/modal_app.py::run_pipeline
-modal run deploy/modal_app.py::run_pipeline --steps 500   # shorter sweep
-```
-
-#### Monitor progress
-
-```bash
-# In a second terminal while training is running:
-modal app logs <app-id>     # tail live logs
-```
-
-#### Download checkpoints when done
-
-```bash
-# Convenience command (wraps modal volume get):
-modal run deploy/modal_app.py::download_checkpoints
-
-# Or manually:
-modal volume get specdist-vol /checkpoints ./local_checkpoints
-```
-
-#### Crash resume
-
-Modal containers can be preempted or OOM-killed.  The training script saves
-`ckpt_latest/` every 100 steps (configurable via `--save_every`), and the
-Modal volume is committed every 5 minutes.  To resume:
-
-```bash
-# Just re-run the same command — trainer.py detects ckpt_latest/ and
-# resumes from the last saved step automatically.
-modal run deploy/modal_app.py::train_kl
-```
-
-#### GPU options
-
-| GPU | VRAM | Cost | Use case |
-|-----|------|------|----------|
-| `A10G` | 24 GB | ~$1.10/hr | Use with `--load_in_4bit` for 8B teacher |
-| `A100-40GB` | 40 GB | ~$2.50/hr | Default — 8B teacher in bfloat16 |
-| `A100-80GB` | 80 GB | ~$3.70/hr | Extra headroom, long sequences |
-
-To use a different GPU, edit `@app.function(gpu=...)` in `deploy/modal_app.py` or
-run with `run.with_options(gpu="A10G").local(...)`.
-
----
-
-### 9d. Manual standalone run (single training step, no pipeline orchestrator)
-
-```bash
-# Colab free T4 — must pass --load_in_4bit manually:
-python algorithms/distillspec_gbv/trainer.py \
-    --draft  Qwen/Qwen3-0.6B \
-    --target Qwen/Qwen3-8B \
-    --loss   forward_kl \
-    --load_in_4bit \
-    --steps  1000 \
-    --output /content/drive/MyDrive/specdist/checkpoints/kl-8b
-
-# Server / A100 — no 4-bit flag needed:
-python algorithms/distillspec_gbv/trainer.py \
-    --draft  Qwen/Qwen3-0.6B \
-    --target Qwen/Qwen3-8B \
-    --loss   forward_kl \
-    --steps  1000 \
-    --output ./db/checkpoints/kl-8b
-```
-
-**Notes for all ephemeral sessions:**
-- Always pass `--yes` on Colab/Kaggle/Modal to skip interactive prompts.
-- The pipeline state file (`pipeline_state_colab.json`) is on local disk and
-  lost on session death — but `--ckpt_root` on Drive/volume means `done_check`
-  files persist, so re-running `experiment.py --yes` auto-skips completed steps.
-- W&B logs sync to the cloud in real time — they are always preserved even if
-  the session dies mid-run.
+> **Full Modal guide** (secret setup, cost/budget, GPU switching, resume details):
+> [`docs/MODAL.md`](./MODAL.md). A100 confirmation runs go to the IITH cluster, not
+> Modal — see `docs/COMPUTE.md`.
 
 ---
 
@@ -498,7 +368,7 @@ Each compute environment has a YAML in `orchestration/configs/`:
 
 | File | Environment | Key settings |
 |------|-------------|-------------|
-| `laptop.yaml` | RTX 500, 6 GB | lr=3e-5, lora_r=8, steps=1000 |
+| `laptop.yaml` | RTX 500, 6 GB | lr=3e-5, lora_r=4, steps=100 |
 | `server.yaml` | A100 40/80 GB | lr=3e-5, lora_r=16, steps=5000 |
 | `colab.yaml`  | T4 15 GB | lr=3e-5, lora_r=8, steps=500, 4-bit teacher |
 
