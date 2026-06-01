@@ -1074,21 +1074,28 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         try:
             import wandb as _wmod
             if _wmod.run is not None:
-                _wmod.summary[f"alpha/{dataset}"]              = res["alpha_mean"]
-                _wmod.summary[f"alpha/{dataset}/ci95"]         = res["alpha_ci95"]
-                _wmod.summary[f"alpha/{dataset}/throughput"]   = res["throughput"]
-                _wmod.summary[f"alpha/{dataset}/ms_per_tok"]   = res.get("ms_per_tok", 0)
+                _wmod.summary[f"eval/{dataset}/alpha/alpha_mean"]  = res["alpha_mean"]
+                _wmod.summary[f"eval/{dataset}/alpha/alpha_ci95"]  = res["alpha_ci95"]
+                _wmod.summary[f"eval/{dataset}/alpha/throughput"]  = res["throughput"]
+                _wmod.summary[f"eval/{dataset}/alpha/ms_per_tok"]  = res.get("ms_per_tok", 0)
                 if row.get("task_score") is not None:
                     _wmod.summary[f"task_score/{dataset}"] = row["task_score"]
-                # Per-prompt table stored as a W&B artifact (browse via Artifacts tab,
-                # not shown as a chart panel since there is no meaningful step axis).
+                # Per-prompt table stored as a W&B Artifact so it appears in the
+                # Artifacts tab (not as a chart panel — there is no meaningful step axis).
                 if pp:
+                    _art = _wmod.Artifact(
+                        name=f"per_prompt_alpha_{dataset}_{run_tag}",
+                        type="eval_detail",
+                        description=f"Per-prompt alpha values for {dataset}",
+                    )
                     _tbl = _wmod.Table(
-                        columns=["prompt_idx", "alpha"],
-                        data=[[r2.get("prompt_idx", i), r2.get("alpha_mean", 0)]
+                        columns=["prompt_idx", "category", "alpha", "wall_ms"],
+                        data=[[r2.get("prompt_idx", i), r2.get("category"),
+                               r2.get("alpha", 0), r2.get("wall_ms")]
                               for i, r2 in enumerate(pp)]
                     )
-                    _wmod.log({f"per_prompt_alpha/{dataset}": _tbl})
+                    _art.add(_tbl, f"alpha_{dataset}")
+                    _wmod.log_artifact(_art)
         except Exception:
             pass  # W&B logging is always best-effort
 
@@ -1105,7 +1112,9 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
             import wandb as _wmod2
             if _wmod2.run is not None:
                 _wmod2.summary[f"BE/{mode}/{dataset}"] = res["block_eff"]
-                _wmod2.summary[f"BE/{mode}"]           = res["block_eff"]  # overwritten by last ds; fine
+                # NOTE: do NOT write BE/{mode} here — that key is overwritten per dataset,
+                # creating a jagged overwrite chart in W&B.  The per-mode average is
+                # computed once at end-of-run in main() and written there instead.
         except Exception:
             pass  # best-effort
 
@@ -1634,22 +1643,9 @@ def main():
             print(f" [{run_tag}] block_eff={be_val:.4f}")
             all_results.append(row)
 
-            # ── W&B: log per-verifier BE ──────────────────────────────────────
-            try:
-                import wandb as _wmod3
-                if _wmod3.run is not None:
-                    _wmod3.log({
-                        f"eval/{ds}/{mode}/K{K}/block_eff": be_val,
-                        # Per-verifier flat key — e.g. eval/gbv/BE, eval/traversal/BE
-                        f"eval/{mode}/BE":  be_val,
-                        "eval/block_eff":   be_val,
-                        "eval/dataset":     ds,
-                        "eval/mode":        mode,
-                        "eval/K":           K,
-                        "eval/temperature": T,
-                    })
-            except Exception:
-                pass  # W&B logging is always best-effort
+            # BE results are aggregated into a single eval_summary_table at end-of-run
+            # (see main() W&B finish block below).  Logging per-cell via wandb.log()
+            # would create separate tiny panels per verifier mode — not useful.
 
     # Release pre-loaded alpha models now that all cells are done
     if _alpha_preloaded is not None:
@@ -1709,6 +1705,24 @@ def main():
                 _wmod_final.summary[f"BE/{_mode}"] = sum(_vals) / len(_vals)
             for (_ds, _mode), _vals in _be_by_ds_mode.items():
                 _wmod_final.summary[f"BE/{_ds}/{_mode}"] = sum(_vals) / len(_vals)
+
+            # ── Single comparison table: all verifier modes + alpha side-by-side ──
+            # One row per result; researcher can sort/filter in W&B Table view.
+            # Log once at the end so it shows as a single artifact, not a step chart.
+            _tbl_rows = [
+                [r.get("dataset", ""), r.get("mode", ""),
+                 r.get("K", 1), r.get("temperature", 1.0),
+                 r.get("block_eff"), r.get("alpha_mean")]
+                for r in all_results
+            ]
+            if _tbl_rows:
+                _eval_tbl = _wmod_final.Table(
+                    columns=["dataset", "mode", "K", "temperature", "block_eff", "alpha_mean"],
+                    data=_tbl_rows,
+                )
+                _wmod_final.log({"eval_summary_table": _eval_tbl})
+            if _all_bes:
+                _wmod_final.summary["summary/best_BE"] = max(_all_bes)
 
             _wmod_final.finish()
     except Exception:

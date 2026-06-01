@@ -1408,9 +1408,12 @@ const STEP_DESC = {
 
 // Phases grouped for the step panel
 // MUST stay in sync with experiment.py build_steps() step IDs.
+// minTier: minimum hw_tier required to run this phase.
+//   laptop < colab_lite < colab < a100
+// Phases with minTier > current pipeline config are shown grayed-out with a tooltip.
 const PHASE_GROUPS = [
-  { label: 'Ph 1 — Baseline',  steps: ['eval_baseline_gsm8k'] },
-  { label: 'Ph 2 — Training',  steps: [
+  { label: 'Ph 1 — Baseline',  minTier: 'laptop', steps: ['eval_baseline_gsm8k'] },
+  { label: 'Ph 2 — Training',  minTier: 'laptop', steps: [
       'train_kl_gsm8k','merge_kl_gsm8k',
       'train_ebe_gsm8k','merge_ebe_gsm8k',
       'train_ebe_single_gsm8k','merge_ebe_single_gsm8k',
@@ -1421,19 +1424,19 @@ const PHASE_GROUPS = [
       'online_ebe_adapt_gsm8k','merge_online_ebe_gsm8k',
       'online_ebe_single_adapt_gsm8k','merge_online_ebe_single_gsm8k',
   ]},
-  { label: 'Ph 3 — GSM8K Eval', steps: [
+  { label: 'Ph 3 — GSM8K Eval', minTier: 'laptop', steps: [
       'eval_kl_gsm8k','eval_ebe_gsm8k','eval_ebe_single_gsm8k',
       'eval_rev_kl_gsm8k','eval_jsd_gsm8k','eval_l1_gsm8k',
       'eval_online_gsm8k','eval_online_ebe_gsm8k','eval_online_ebe_single_gsm8k',
   ]},
-  { label: 'Ph 4 — Multi-DS',   steps: [
+  { label: 'Ph 4 — Multi-DS',   minTier: 'colab', steps: [
       'eval_baseline_all',
       'eval_kl_all','eval_ebe_all','eval_ebe_single_all','eval_rev_kl_all',
       'eval_jsd_all','eval_l1_all',
       'eval_online_all','eval_online_ebe_all','eval_online_ebe_single_all',
   ]},
-  { label: 'Ph 5 — EAGLE',     steps: ['eagle_gen','eagle_train','eagle_eval'] },
-  { label: 'Ph 6 — Tree Train', steps: [
+  { label: 'Ph 5 — EAGLE',     minTier: 'colab', steps: ['eagle_gen','eagle_train','eagle_eval'] },
+  { label: 'Ph 6 — Tree Train', minTier: 'colab_lite', steps: [
       'train_kl_tree_gsm8k','merge_kl_tree_gsm8k',
       'train_bv_tree_gsm8k','merge_bv_tree_gsm8k',
       'train_gbv_tree_gsm8k','merge_gbv_tree_gsm8k',
@@ -1449,7 +1452,7 @@ const PHASE_GROUPS = [
       'online_kl_tree_adapt_gsm8k','merge_online_kl_tree_gsm8k',
       'online_ebe_tree_adapt_gsm8k','merge_online_ebe_tree_gsm8k',
   ]},
-  { label: 'Ph 6 — Tree GSM8K Eval', steps: [
+  { label: 'Ph 6 — Tree GSM8K Eval', minTier: 'colab_lite', steps: [
       'eval_kl_tree_gsm8k','eval_bv_tree_gsm8k','eval_gbv_tree_gsm8k',
       'eval_trav_tree_gsm8k','eval_ebe_tree_gsm8k','eval_rev_kl_tree_gsm8k',
       'eval_jsd_tree_gsm8k',
@@ -1457,7 +1460,7 @@ const PHASE_GROUPS = [
       'eval_st_tree_gsm8k','eval_khisti_tree_gsm8k',
       'eval_online_kl_tree_gsm8k','eval_online_ebe_tree_gsm8k',
   ]},
-  { label: 'Ph 7 — Tree Multi-DS', steps: [
+  { label: 'Ph 7 — Tree Multi-DS', minTier: 'colab', steps: [
       'eval_kl_tree_all','eval_bv_tree_all','eval_gbv_tree_all','eval_trav_tree_all',
       'eval_ebe_tree_all','eval_rev_kl_tree_all','eval_jsd_tree_all',
       'eval_naive_tree_all','eval_nss_tree_all','eval_si_tree_all',
@@ -3400,7 +3403,30 @@ async function updatePipelineStatus() {
       ps.steps.forEach(s => statusMap[s.id] = s.status);
       window._pipelineStatusMap = statusMap;   // shared with togglePhase()
 
+      // Tier rank: higher number = more powerful hardware required
+      const TIER_RANK = { laptop: 0, colab_lite: 1, colab: 2, a100: 3 };
+      const _currentTier = ps.config || 'laptop';
+      const _currentTierRank = TIER_RANK[_currentTier] ?? 0;
+
       const chips = PHASE_GROUPS.map((ph, pi) => {
+        const phMinTierRank = TIER_RANK[ph.minTier || 'laptop'] ?? 0;
+        const isDisabled = phMinTierRank > _currentTierRank;
+
+        if (isDisabled) {
+          // Phase requires a higher-tier machine — render grayed out with tooltip
+          const tierLabel = ph.minTier === 'colab_lite' ? 'T4 (colab_lite)'
+                          : ph.minTier === 'colab'      ? 'T4/A100'
+                          : ph.minTier === 'a100'       ? 'A100'
+                          : ph.minTier;
+          const tooltipText = `\u2298 Disabled for ${_currentTier} — runs on ${tierLabel} only`;
+          return `<button disabled title="${tooltipText}" data-pi="${pi}"
+            style="cursor:not-allowed;padding:2px 9px;border-radius:12px;
+                   border:1px solid #55555566;background:#3333331a;color:#777;
+                   font-size:10px;font-weight:700;white-space:nowrap;
+                   margin:1px 3px 1px 0;outline:none;opacity:0.55"
+          >\u2298&nbsp;${ph.label}</button>`;
+        }
+
         const phDone    = ph.steps.filter(s => ['done','stopped'].includes(statusMap[s])).length;
         const phRunning = ph.steps.some(s => statusMap[s] === 'running');
         const phFailed  = ph.steps.some(s => statusMap[s] === 'failed');
