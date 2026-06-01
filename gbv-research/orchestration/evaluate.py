@@ -1053,6 +1053,9 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
                     f"eval/{dataset}/{mode}/alpha_ci95":  res["alpha_ci95"],
                     f"eval/{dataset}/{mode}/throughput":  res["throughput"],
                     f"eval/{dataset}/{mode}/ms_per_tok":  res.get("ms_per_tok", 0),
+                    # Per-verifier flat keys for cross-dataset comparison in W&B
+                    f"eval/{mode}/alpha":       res["alpha_mean"],
+                    f"eval/{mode}/throughput":  res["throughput"],
                     # Flat keys for easy cross-run comparison in W&B
                     "eval/alpha_mean":  res["alpha_mean"],
                     "eval/throughput":  res["throughput"],
@@ -1088,6 +1091,8 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
             if _wmod2.run is not None:
                 _wmod2.log({
                     f"eval/{dataset}/{mode}/K{K}/block_eff": res["block_eff"],
+                    # Per-verifier flat key for cross-dataset comparison in W&B
+                    f"eval/{mode}/BE":  res["block_eff"],
                     "eval/block_eff":  res["block_eff"],
                     "eval/dataset":    dataset,
                     "eval/mode":       mode,
@@ -1315,7 +1320,8 @@ def main():
             _wandb_mod.init(
                 project=args.wandb_project,
                 entity=getattr(args, "wandb_entity", None),
-                name=f"eval_{student_label}_{datetime.now().strftime('%Y%m%d_%H%M')}",
+                name=f"eval_{student_label}_{args.hw_tier}",
+                tags=[student_label, "eval", "phase1", args.hw_tier],
                 group=args.experiment_tag,
                 dir=_wandb_dir,   # store run files under db/wandb/, not orchestration/wandb/
                 config={
@@ -1326,6 +1332,7 @@ def main():
                     "gpu":            _gpu_info(),
                     "n_prompts":      args.n,
                     "max_tokens":     args.max_tokens,
+                    "hw_tier":        args.hw_tier,
                 },
                 reinit="return_previous",
             )
@@ -1586,6 +1593,23 @@ def main():
             row["id"] = run_id
             print(f" [{run_tag}] block_eff={be_val:.4f}")
             all_results.append(row)
+
+            # ── W&B: log per-verifier BE ──────────────────────────────────────
+            try:
+                import wandb as _wmod3
+                if _wmod3.run is not None:
+                    _wmod3.log({
+                        f"eval/{ds}/{mode}/K{K}/block_eff": be_val,
+                        # Per-verifier flat key — e.g. eval/gbv/BE, eval/traversal/BE
+                        f"eval/{mode}/BE":  be_val,
+                        "eval/block_eff":   be_val,
+                        "eval/dataset":     ds,
+                        "eval/mode":        mode,
+                        "eval/K":           K,
+                        "eval/temperature": T,
+                    })
+            except Exception:
+                pass  # W&B logging is always best-effort
 
     # Release pre-loaded alpha models now that all cells are done
     if _alpha_preloaded is not None:

@@ -705,11 +705,13 @@ def main() -> None:
             # run_label comes from logging.run_label in the YAML (forwarded by
             # experiment.py); if absent falls back to plain loss+family+steps.
             _label_prefix = f"{args.run_label}-" if args.run_label else ""
-            _run_name = f"{_label_prefix}{args.loss}_{family.name}_{args.steps}steps"
+            _run_name = f"{_label_prefix}{args.loss}_{args.steps}steps_seed{args.seed}"
             _wandb = _w.init(
                 project=args.wandb_project, entity=args.wandb_entity,
                 group=args.wandb_group or None,
                 name=_run_name,
+                tags=[args.loss, "train", "phase1",
+                      getattr(args, "hw_tier", "unknown")],
                 config={**vars(args), "family": family.name,
                         "attn_impl": _ATTN_IMPL},
                 resume="allow",
@@ -806,6 +808,7 @@ def main() -> None:
 
     # ── Training loop ─────────────────────────────────────────────────────────
     optimizer.zero_grad()   # start clean; re-zeroed inside loop after each accum window
+    _grad_norm: float | None = None   # updated on each optimizer step; logged to W&B
     for step in range(start_step, args.steps):
         if _stop_training:
             break
@@ -904,9 +907,14 @@ def main() -> None:
         # Dividing by grad_accum keeps loss magnitude consistent regardless of accum size.
         (loss / args.grad_accum).backward()
         if (step + 1) % args.grad_accum == 0 or (step + 1) == args.steps:
-            if args.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    [p for p in draft_model.parameters() if p.requires_grad], args.grad_clip)
+            _trainable = [p for p in draft_model.parameters() if p.requires_grad]
+            # Always compute the total grad norm (pre-clip); clip_grad_norm_ returns it.
+            # When grad_clip==0 (disabled) use inf so clipping is a no-op but norm is still
+            # computed — spikes > 5.0 signal instability, persistent high = clip too loose.
+            _grad_norm = torch.nn.utils.clip_grad_norm_(
+                _trainable,
+                args.grad_clip if args.grad_clip > 0 else float("inf"),
+            ).item()
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
@@ -921,12 +929,15 @@ def main() -> None:
             print(f"Step {step+1:4d}/{args.steps} | "
                   f"train_loss: {loss_val:.4f} | peak VRAM: {peak_vram:.0f} MB")
             if _wandb:
-                _wandb.log({
+                _wlog = {
                     "train/loss": loss_val,
                     "train/lr": scheduler.get_last_lr()[0],
                     "train/peak_vram_mb": peak_vram,
                     "step": step + 1,
-                })
+                }
+                if _grad_norm is not None:
+                    _wlog["train/grad_norm"] = _grad_norm
+                _wandb.log(_wlog)
             if _results_db is not None:
                 try:
                     _results_db.insert_train_step(
@@ -983,7 +994,7 @@ def main() -> None:
                       f"(best={_best_val_loss:.4f}, streak={_val_no_improve_count})")
 
             if _wandb:
-                log = {"val/loss": v_loss, "step": step + 1}
+                log = {"train/val_loss": v_loss, "step": step + 1}
                 if v_aw is not None:
                     log["val/accept_weight"] = v_aw
                 _wandb.log(log)
