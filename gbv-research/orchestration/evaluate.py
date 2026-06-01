@@ -1157,16 +1157,10 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         print(f"  block_eff={res['block_eff']:.4f}")
         run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
 
-        # ── W&B: BE results go directly to summary (no step axis for eval) ──
-        try:
-            import wandb as _wmod2
-            if _wmod2.run is not None:
-                _wmod2.summary[f"BE/{mode}/{dataset}"] = res["block_eff"]
-                # NOTE: do NOT write BE/{mode} here — that key is overwritten per dataset,
-                # creating a jagged overwrite chart in W&B.  The per-mode average is
-                # computed once at end-of-run in main() and written there instead.
-        except Exception:
-            pass  # best-effort
+        # No per-(mode,dataset) W&B summary key here: writing BE/{mode}/{dataset}
+        # produces up to 25 panels (5 modes × 5 datasets) that clutter the run.
+        # The per-mode average (BE/{mode}) is written once at end-of-run in main(),
+        # and full per-(mode,dataset) detail lives in the eval_summary_table.
 
     row["id"] = run_id
     return row
