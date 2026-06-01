@@ -118,7 +118,7 @@ class TestStepPresence:
 
 class TestStepCounts:
 
-    def test_smoke_uses_50_steps(self):
+    def test_smoke_uses_10_steps(self):
         steps = _steps_by_id(build_steps(DRAFT, TARGET, smoke=True))
         for sid in EXPECTED_TRAIN_STEP_IDS:
             if sid in _ONLINE_STEP_IDS:
@@ -126,8 +126,8 @@ class TestStepCounts:
             cmd = steps[sid]["cmd"]
             steps_idx = cmd.index("--steps") if "--steps" in cmd else None
             assert steps_idx is not None, f"{sid}: --steps flag missing"
-            assert cmd[steps_idx + 1] == "50", \
-                f"{sid}: smoke should use 50 steps, got {cmd[steps_idx+1]}"
+            assert cmd[steps_idx + 1] == "10", \
+                f"{sid}: smoke should use 10 steps, got {cmd[steps_idx+1]}"
 
     def test_full_uses_1000_steps(self):
         steps = _steps_by_id(build_steps(DRAFT, TARGET, smoke=False))
@@ -140,13 +140,13 @@ class TestStepCounts:
             assert cmd[steps_idx + 1] == "1000", \
                 f"{sid}: full should use 1000 steps, got {cmd[steps_idx+1]}"
 
-    def test_smoke_eval_uses_n5(self):
+    def test_smoke_eval_uses_n3(self):
         steps = _steps_by_id(build_steps(DRAFT, TARGET, smoke=True))
         cmd = steps["eval_baseline_gsm8k"]["cmd"]
         n_idx = cmd.index("--n") if "--n" in cmd else None
         assert n_idx is not None, "eval cmd missing --n flag"
-        assert cmd[n_idx + 1] == "5", \
-            f"smoke eval should use n=5 prompts, got {cmd[n_idx+1]}"
+        assert cmd[n_idx + 1] == "3", \
+            f"smoke eval should use n=3 prompts, got {cmd[n_idx+1]}"
 
     def test_full_eval_uses_n10(self):
         steps = _steps_by_id(build_steps(DRAFT, TARGET, smoke=False))
