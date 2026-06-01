@@ -639,14 +639,25 @@ def main() -> None:
     # Linear warmup → linear decay schedule (DistillSpec / EAGLE convention).
     # Zero memory and compute overhead; prevents the constant-LR overshoot seen
     # when val_loss stops improving after the first few hundred steps.
+    #
+    # IMPORTANT: the scheduler must be expressed in OPTIMIZER steps, not gradient
+    # accumulation steps.  scheduler.step() is called only once every grad_accum
+    # gradient steps, so num_training_steps must be steps // grad_accum.  If we
+    # pass raw `args.steps` (gradient steps) the scheduler expects 1000 calls but
+    # only receives 62 (for grad_accum=16) — training ends during warmup and the
+    # LR never decays.
     from transformers import get_linear_schedule_with_warmup
-    _warmup = args.warmup_steps if args.warmup_steps is not None else max(50, args.steps // 10)
+    _ga = max(1, args.grad_accum)
+    _n_opt_steps  = max(1, (args.steps + _ga - 1) // _ga)  # total optimizer updates
+    _warmup_grad  = args.warmup_steps if args.warmup_steps is not None else max(50, args.steps // 10)
+    _warmup_opt   = max(1, _warmup_grad // _ga)             # warmup in optimizer steps
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
-        num_warmup_steps  = _warmup,
-        num_training_steps= args.steps,
+        num_warmup_steps  = _warmup_opt,
+        num_training_steps= _n_opt_steps,
     )
-    print(f"LR schedule   : linear warmup {_warmup} steps → linear decay to 0 by step {args.steps}")
+    print(f"LR schedule   : linear warmup {_warmup_opt} opt-steps ({_warmup_grad} grad-steps)"
+          f" → linear decay to 0 by opt-step {_n_opt_steps} (grad-step {args.steps})")
 
     torch.manual_seed(args.seed)
 
