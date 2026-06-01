@@ -1,48 +1,52 @@
 # SpecDist ML Research Progression
 
-This document describes the standard 4-level workflow for running SpecDist
-experiments, from local sanity checks through to paper-quality results.
+This document describes the standard **3-tier research hierarchy** for running SpecDist
+experiments, from laptop crash checks through to paper-quality results.
 
 This mirrors standard MLOps practice for ML research with large language
-models: **debug on the smallest hardware, look for trends on mid-tier, establish
-results on production hardware, finalize on the largest scale.**
+models: **debug on the smallest hardware, find trends on mid-tier free compute,
+confirm on production hardware.**
 
 ---
 
-## The 4-Level Ladder
+## The 3-Tier Research Hierarchy
 
-| Level | Mode | Config | Teacher | Steps | Wall time | W&B group | Purpose |
-|-------|------|--------|---------|-------|-----------|-----------|---------|
-| 1a | `--smoke` | `laptop` | 0.6B | 10 | ~3-5 min | `laptop-gsm8k` | Crash test: does the pipeline start? |
-| 1b | full | `laptop` | 0.6B | 100 | ~15-20 min | `laptop-gsm8k` | Code exercise: does every path work? |
-| 2 | full | `colab_lite` | 1.7B BF16 | 300 | ~25 min | `colab-lite` | Trend: does the loss function help? |
-| 3 | full | `colab` | 4B BF16 | 500 | ~2-4 h | `colab-t4` | Results: publishable block-efficiency numbers |
-| 4 | full | `a100` | 8B BF16 | 2000 | ~2-3 h | `colab-a100` | Paper: best quality, full eval, ablations |
+| Tier | Hardware | Config | Teacher | Steps | Wall time | W&B group | Purpose |
+|------|----------|--------|---------|-------|-----------|-----------|---------|
+| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: ~50) | ~30-40 min | `laptop-gsm8k` | Code exerciser: does every path run? |
+| 2 | Kaggle T4x2 / Modal T4 | `kaggle` | Qwen3-8B NF4 | 1000 | ~4-8 h | `kaggle-t4x2` | Exploration: which losses rank best? |
+| 3 | IITH A100 | `a100` | Qwen3-8B BF16 | 2000 | ~15-20 min train | `a100` | Confirmation: paper-quality numbers |
 
-> **Why can't Level 1 produce trends?**
+> **Why can't Tier 1 produce trends?**
 > The laptop teacher (Qwen3-0.6B) is the *same size class* as the draft (Qwen2.5-0.5B).
-> Distillation from an equal-capacity model produces near-zero signal.
-> Level 1 is purely a code correctness gate. Start looking for trends at Level 2.
+> Distillation from a near-equal-capacity model produces near-zero signal.
+> Tier 1 is purely a code correctness gate. Start looking for trends at Tier 2.
+
+> **Why Kaggle T4x2 for exploration, not Colab?**
+> Kaggle provides ~29 GB system RAM vs Colab's ~12 GB. 4-bit NF4 loading of the
+> Qwen3-8B teacher requires ~16 GB CPU RAM intermediates — feasible on Kaggle, OOM
+> on Colab. Kaggle gives A100-equivalent teacher quality on free-tier hardware.
 
 ---
 
-## VRAM Budget by Level
+## VRAM Budget by Tier
 
-| Level | Draft | Teacher | Activations | Total | Headroom |
-|-------|-------|---------|------------|-------|----------|
+| Tier | Draft | Teacher | Activations | Total | Headroom |
+|------|-------|---------|-------------|-------|----------|
 | 1 (laptop) | 1.2 GB | 1.2 GB | ~0.5 GB | ~3 GB | CPU/MPS headroom varies |
-| 2 (colab_lite) | 1.2 GB | 3.4 GB | ~1.0 GB | **~5.6 GB** | 9.4 GB free on T4 |
-| 3 (colab) | 1.2 GB | 8.0 GB | ~1.5 GB | **~10.7 GB** | 4.3 GB free on T4 |
-| 4 (a100) | 1.2 GB | 16.0 GB | ~2.5 GB | **~19.7 GB** | 20 GB free on A100 |
+| 2 (Kaggle T4x2) | 1.2 GB | 4.5 GB NF4 | ~2.0 GB | **~7.8 GB** on GPU 0 | 8+ GB free; teacher split across both T4s |
+| 3 (IITH A100) | 1.2 GB | 16.0 GB BF16 | ~2.5 GB | **~19.7 GB** | ~20 GB free on A100 40 GB |
 
-**Why no 4-bit quantization?**
-4-bit NF4 loading (bitsandbytes) reads each weight tensor as BF16 into CPU RAM
-first, then converts to NF4. For Qwen3-8B: ~399 tensors × ~40 MB = ~16 GB of
-CPU RAM intermediates. Colab has ~12 GB system RAM. The Linux OOM killer fires
-with SIGKILL (exit code -9) — Python never runs, no retry possible.
+**Why 4-bit NF4 on Kaggle T4x2?**
+Each T4 has 16 GB VRAM. Qwen3-8B in BF16 (~16 GB) won't fit on a single card.
+4-bit NF4 reduces teacher VRAM to ~4.5 GB. `device_map="auto"` automatically
+splits the teacher across both T4 GPUs — no code changes needed, just select T4 x2
+in Kaggle notebook settings. The BF16→NF4 conversion uses ~16 GB of CPU RAM
+intermediates; Kaggle's ~29 GB system RAM handles this; Colab's ~12 GB does not.
 
-All three T4/A100 configs use plain BF16 loading: direct mmap from disk to
-VRAM, zero CPU RAM spike, zero OOM risk.
+**Why plain BF16 on A100?**
+The A100 (40 GB) fits Qwen3-8B in BF16 directly: mmap from disk to VRAM, zero
+CPU RAM spike, zero OOM risk. BF16 also gives a cleaner distillation signal than NF4.
 
 ---
 
@@ -55,14 +59,14 @@ Every training run produces a W&B run named:
 ```
 
 Examples:
-- `0.6B-laptop-kl_qwen_100steps`      — Level 1 laptop debug
-- `1.7B-T4-lite-kl_qwen_300steps`     — Level 2 colab_lite trend run
-- `1.7B-T4-lite-ebe_qwen_300steps`    — Level 2 with EBE loss
-- `4B-T4-kl_qwen_500steps`            — Level 3 production T4 run
-- `4B-T4-gbv_qwen_500steps`           — Level 3 with GBV loss
-- `8B-A100-kl_qwen_2000steps`         — Level 4 paper run
+- `0.6B-laptop-kl_qwen_200steps`        — Tier 1 laptop code check
+- `0.6B-laptop-gbv_tree_qwen_200steps`  — Tier 1 with GBV tree loss
+- `8B-kaggle-kl_qwen_1000steps`         — Tier 2 Kaggle exploration
+- `8B-kaggle-ebe_qwen_1000steps`        — Tier 2 with EBE loss
+- `8B-A100-kl_qwen_2000steps`           — Tier 3 paper confirmation
+- `8B-A100-gbv_tree_qwen_2000steps`     — Tier 3 with GBV tree loss
 
-This makes it possible to compare across levels in a single W&B dashboard:
+This makes it possible to compare across tiers in a single W&B dashboard:
 filter by `run_label` prefix to see all EBE runs regardless of teacher size,
 or filter by `wandb_group` to see only a specific tier.
 
@@ -73,28 +77,28 @@ automatically forwarded from the YAML through `experiment.py` to `trainer.py`.
 
 ## Notebooks
 
-| Notebook | Config | Teacher | When to use |
-|----------|--------|---------|-------------|
-| `colab_lite_quickstart.ipynb` | `colab_lite` | 1.7B BF16 | Level 2: first T4 run, ~25 min, trend check |
-| `colab_quickstart.ipynb` | `colab` | 4B BF16 | Level 3: production T4 run, ~2-4 h |
-| `a100_quickstart.ipynb` | `a100` | 8B BF16 | Level 4: paper runs on A100 (Pro/Pro+ only) |
+Kaggle T4x2 runs use **`deploy/kaggle.ipynb`**:
 
-All three notebooks share the same cell structure (Cell 0 one-shot bootstrap,
-Cell 5 monitor, etc.). The only differences are the `CONFIG` default and the
-VRAM budget notes in the title cell.
+- **Cell 0** — one-shot bootstrap: installs dependencies, mounts storage, launches training
+- **Cell 1** — resume: re-runs from the latest checkpoint after a session restart
+
+Run Cell 0 first. If the session crashes, reopen the notebook and run Cell 1.
+
+> There are no separate quickstart notebooks for Colab or A100. Kaggle T4x2 is
+> the primary free-tier compute. IITH A100 runs use `experiment.py` directly.
 
 ---
 
 ## Standard Experiment Workflow
 
-### Step 1a — Crash test (Level 1a)
+### Step 1a — Crash test (Tier 1)
 
 ```bash
 # In gbv-research/
 python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
-Runs **10 training steps** and a minimal eval. Should complete in **< 5 min**.
+Runs **~50 training steps** and a minimal eval. Should complete in **< 5 min**.
 
 What `--smoke` exercises:
 - Python imports, CUDA device detection
@@ -108,76 +112,70 @@ What `--smoke` exercises:
 
 ---
 
-### Step 1b — Full code-path exercise (Level 1b)
+### Step 1b — Full code-path exercise (Tier 1)
 
 ```bash
 # In gbv-research/
 python orchestration/experiment.py --config laptop --yes
 ```
 
-Runs **100 training steps**, full eval suite. Should complete in **< 20 min**.
+Runs **200 training steps**, full eval suite. Should complete in **~30-40 min**.
 
 What the full laptop run exercises that smoke does NOT:
-- Rolling checkpoint save/load cycle (save_every=10 → 10 saves)
-- Milestone checkpoints (milestone_every=50 → 2 permanent saves)
-- Validation health check (val_every=25 → 4 validation passes)
-- PPL threshold check (ppl_check_every=50 → 2 checks)
+- Rolling checkpoint save/load cycle (save_every=20 → 10 saves)
+- Milestone checkpoints (milestone_every=100 → 2 permanent saves)
+- Validation health check (val_every=50 → 4 validation passes)
+- PPL threshold check (ppl_check_every=100 → 2 checks)
 - Full merge step (LoRA → base model)
-- All 6 eval modes: alpha, bv, gbv, traversal, specinfer, naive
+- All eval modes: alpha, bv, gbv, traversal, specinfer, naive
 - W&B logging (run appears in wandb.ai under group `laptop-gsm8k`)
 - Database writes (results.db)
 - Pipeline state machine (done_check files)
 
-**Gate**: all 6 eval modes produce output, W&B run visible, no exceptions.
+**Gate**: all eval modes produce output, W&B run visible, no exceptions.
 
 > **Important**: do NOT interpret block-efficiency numbers from this run.
 > The 0.6B teacher is the same size as the draft — distillation signal is
 > near-zero. The numbers are structurally meaningless at this level.
 > Only check that the eval modes *ran* and produced valid-looking numbers.
 
-**If this fails**: fix the code. Do not run colab_lite until 1b passes.
+**If this fails**: fix the code. Do not run Kaggle until Tier 1 passes.
 
-**After 1b passes — summarize and log:**
-```bash
-python tools/run_summary.py --hw_tier laptop --markdown --log_id 20260528-001
-# paste output into deploy/RUN_LOG.md Level 1 section
-```
-
-**🔐 Code Review Gate → Level 2** (must complete before first colab_lite run):
-- [ ] Level 1b passes (all 6 modes, no errors)
+**🔐 Code Review Gate → Tier 2** (must complete before first Kaggle run):
+- [ ] Tier 1b passes (all eval modes, no errors)
 - [ ] PR opened with all changes since last review
 - [ ] Loss function implementation reviewed against paper/spec
 - [ ] Verifier implementation reviewed against GBV spec
-- [ ] Reviewer sign-off recorded in `deploy/RUN_LOG.md` Level 1 section
+- [ ] Reviewer sign-off recorded in `deploy/RUN_LOG.md` Tier 1 section
 
 ---
 
-### Step 2 — Colab Lite trend run (Level 2)
+### Step 2 — Kaggle T4x2 exploration runs (Tier 2)
 
-Open `deploy/colab_lite_quickstart.ipynb` on a free T4 runtime.
+Open **`deploy/kaggle.ipynb`** on a **Kaggle T4 x2** session (always T4 x2 — P100
+is incompatible with PyTorch 2.10+cu128).
 
-Run Cell 0 with `SMOKE = False` (or `SMOKE = True` first to verify end-to-end
-in ~10 min before committing to the full 25 min run).
+Run **Cell 0** with `SMOKE = False`. For a quick end-to-end check (~10 min),
+run with `SMOKE = True` first before committing to the full 4-8 h run.
+
+If a session crashes, reopen the notebook and run **Cell 1** (resume from
+latest checkpoint — worst-case loss is 25 steps).
+
+> **Compute budget**: Kaggle gives 30 GPU-h/week. T4 x2 burns 2× the weekly
+> quota, leaving ~15 effective session-hours per week. Plan runs accordingly.
 
 **What to look for:**
 - Loss curve: should decrease steadily (not flatline, not spike)
 - Block efficiency: any improvement over the naive baseline?
-- Alpha eval (token acceptance): direction consistent with loss improvement?
-
-**After the run — summarize and log:**
-```bash
-python tools/run_summary.py --hw_tier colab_lite --markdown --log_id 20260528-002
-# paste output into deploy/RUN_LOG.md Level 2 section
-# record W&B run URL immediately
-```
+- W&B: no grad_norm, overfit, or plateau alerts firing
 
 **Gate**: at least one loss function shows a consistent positive trend.
-**If no trend**: revisit the loss implementation before moving to Level 3.
-**Cost if wrong**: 25 min × 2 seeds, not 4 hours × 2 seeds.
+**If no trend**: revisit the loss implementation before moving to Tier 3.
+**Cost if wrong**: 4-8 h × 2 seeds here, not 15-20 min × 2 seeds on A100.
 
-**🔐 Code Review Gate → Level 3** (must complete before first colab run):
-- [ ] Level 2 shows positive trend on ≥2 verifiers
-- [ ] Second Level 2 seed (different `seed:` in YAML) confirms direction
+**🔐 Code Review Gate → Tier 3** (must complete before any A100 run):
+- [ ] Tier 2 shows positive trend on ≥ 2 verifiers
+- [ ] Second Tier 2 seed (different `seed:` in YAML) confirms direction
 - [ ] PR reviewed: hypothesis matches what the code actually tests
 - [ ] PR reviewed: no data leakage (eval prompts not in train set)
 - [ ] W&B run URLs recorded in `deploy/RUN_LOG.md`
@@ -185,157 +183,127 @@ python tools/run_summary.py --hw_tier colab_lite --markdown --log_id 20260528-00
 
 ---
 
-### Step 3 — Colab T4 production run (Level 3)
+### Step 3 — IITH A100 confirmation runs (Tier 3)
 
-Open `deploy/colab_quickstart.ipynb` on a free T4 runtime.
+```bash
+# On IITH A100 (in gbv-research/):
+python orchestration/experiment.py --config a100 --storage_root /path/to/specdist --yes
+```
 
-Run with `CONFIG = "colab"` (default). 500 steps, ~2-4 h.
+2000 steps, ~15-20 min training (A100 is ~4× faster than T4).
 
 **What to look for:**
 - Block efficiency delta vs naive baseline > noise (> 5% consistently)
 - Results reproducible across 2 seeds
 - Alpha eval consistent with block efficiency improvement
 
-**After the run — summarize and log:**
-```bash
-python tools/run_summary.py --hw_tier colab --markdown --log_id 20260528-003
-# paste into deploy/RUN_LOG.md Level 3 section
-```
-
 **Gate**: effect is statistically meaningful, directionally consistent, and
 larger than run-to-run variance (compare two seeds).
 **These are publishable numbers.** Record the W&B run IDs immediately.
 
-**🔐 Code Review Gate → Level 4** (must complete before any A100 run):
-- [ ] Level 3 confirmed across ≥2 seeds
-- [ ] Effect > 5% on ≥1 verifier × K combination
-- [ ] PR reviewed: no bugs introduced since Level 2 review
+**🔐 Final Review Gate**:
+- [ ] Tier 3 confirmed across ≥ 2 seeds
+- [ ] Effect > 5% on ≥ 1 verifier × K combination
+- [ ] PR reviewed: no bugs introduced since Tier 2 review
 - [ ] Hypothesis text finalized and written into `GUIDE.md` — no more code changes
 - [ ] Ablation plan agreed (what to ablate on A100, which seeds, which K values)
 - [ ] Both researchers sign off — this is the commitment point before expensive compute
 - [ ] Sign-off recorded in `deploy/RUN_LOG.md`
 
----
-
-### Step 4 — A100 paper runs (Level 4)
-
-Open `deploy/a100_quickstart.ipynb` on a **Colab Pro/Pro+ A100 runtime**.
-
-A100 runs use the **3-tier profile system** — do not call `--config a100` directly.
-Full workflow: `orchestration/configs/profiles/README.md`.
-
-**Tier 1 — train baseline losses** (~2-3 h, run first):
-```bash
-# Smoke first (catches crashes in ~5 min):
-python orchestration/experiment.py --config profiles/a100_baseline_losses --smoke --yes \
-  --storage_root /content/drive/MyDrive/specdist
-# Full run:
-python orchestration/experiment.py --config profiles/a100_baseline_losses --yes \
-  --storage_root /content/drive/MyDrive/specdist
-```
-Trains KL, JSD, L1, online KL. Produces 4 merged model checkpoints.
-
-**Tier 2 — verifier sweep** (~1-2 h, after Tier 1 checkpoints exist):
-```bash
-python orchestration/experiment.py --config profiles/a100_verifier_sweep --yes \
-  --storage_root /content/drive/MyDrive/specdist
-```
-`eval_only: true` — no training. Re-evaluates all baselines at n=200 across all 6 verifiers.
-
-**Tier 3 — new loss** (~2-3 h, when a new algorithm is ready):
-```bash
-cp orchestration/configs/profiles/a100_new_loss_template.yaml \
-   orchestration/configs/profiles/a100_ebe_v2.yaml
-# edit: set losses: [ebe, kl, jsd, l1, online], update wandb_group and run_label
-python orchestration/experiment.py --config profiles/a100_ebe_v2 --yes \
-  --storage_root /content/drive/MyDrive/specdist
-```
-
-**Requirements before running Level 4** (all gates above must be closed):
-- Level 3 results are clean and reproducible
-- The hypothesis being tested is finalized (no more code changes)
-- At least 2 Level 3 seeds confirm the direction
-- Ablation plan is written down
-
-**After each tier — summarize and log:**
-```bash
-python tools/run_summary.py --hw_tier a100 --markdown --log_id 20260528-004
-# paste into deploy/RUN_LOG.md Level 4 section
-```
-
-**What's different from Level 3:**
-- Larger teacher (8B vs 4B) → stronger distillation signal
-- More steps (2000 vs 500) → converged model
+**What's different from Tier 2:**
+- Teacher in plain BF16 (vs NF4) → stronger, cleaner distillation signal
+- More steps (2000 vs 1000) → more converged model
 - Larger LoRA rank (r=16 vs r=8) → better adaptation
 - `torch.compile` enabled → ~10-30% faster training
-- Tier 2 verifier sweep uses n=200 → paper-quality confidence intervals
+- Full GSM8K test set (n=1319) → paper-quality confidence intervals
+- 9-verifier eval matrix → complete loss × verifier alignment table
 
 ---
 
-## What Changes Between Levels (What Stays the Same)
+## Automated W&B Alerts
 
-### Same across all levels:
+Four health checks fire W&B alerts automatically during training:
+
+| Alert | Condition | What it means |
+|-------|-----------|---------------|
+| **Grad norm spike** | `grad_norm > 10` | Training instability; check LR or data batch |
+| **Overfitting** | `overfit_ratio > 1.3` | Train loss diverging from val loss; possible memorization |
+| **Val plateau** | val loss flat for N consecutive checks | Model stopped learning; consider LR or loss change |
+| **Slow convergence** | loss barely moved at 10% of total steps | Run may be wasted; verify hyperparameters before continuing |
+
+These alerts fire at all tiers. They are especially useful during long Kaggle
+sessions (4-8 h) where continuous terminal monitoring is not practical.
+
+---
+
+## What Changes Between Tiers (What Stays the Same)
+
+### Same across all tiers:
 - Codebase (orchestration/, algorithms/, core/)
 - Pipeline steps (train → merge → eval)
-- Loss functions (KL, EBE, GBV, etc.)
+- Loss functions (KL, EBE, GBV, tree variants, etc.)
 - Verifier implementations (SpecInfer, GBV, traversal, etc.)
 - Dataset (GSM8K train/eval split)
 - W&B project (`distillspec`)
 - Crash-safe checkpoint resume
 
-### Varies by level:
-| Parameter | laptop (1a/1b) | colab_lite (2) | colab (3) | a100 (4) |
-|-----------|---------------|----------------|-----------|----------------|
-| `target` (teacher) | Qwen3-0.6B | Qwen3-1.7B | Qwen3-4B | Qwen3-8B |
-| `steps` | 10 (smoke) / 100 | 300 | 500 | 2000 |
-| `lora_r` | 4 | 4 | 8 | 16 |
-| `lora_alpha` | 8 | 8 | 16 | 32 |
-| `save_every` | 10 | 25 | 25 | 100 |
-| `max_new_tokens` | 32 | 128 | 96 | 128 |
-| `n_prompts` (eval) | 5 | 20 | 20 | 50 |
-| `K_values` (eval) | [3] | [3,5] | [3,5] | [1,3,5,8] |
-| `compile` | false | false | false | true |
-| `load_in_4bit` | false | false | false | false |
-| `wandb_group` | laptop-gsm8k | colab-lite | colab-t4 | colab-a100 |
-| `run_label` | 0.6B-laptop | 1.7B-T4-lite | 4B-T4 | 8B-A100 |
-| Results meaningful? | **No** (code check only) | Yes (trends) | Yes (publishable) | Yes (paper) |
+### Varies by tier:
+
+| Parameter | Tier 1 (laptop) | Tier 2 (Kaggle T4x2) | Tier 3 (IITH A100) |
+|-----------|-----------------|----------------------|--------------------|
+| `target` (teacher) | Qwen3-0.6B | Qwen3-8B NF4 | Qwen3-8B BF16 |
+| `steps` | 200 (smoke: ~50) | 1000 | 2000 |
+| `lora_r` | 4 | 8 | 16 |
+| `lora_alpha` | 8 | 16 | 32 |
+| `save_every` | 20 | 25 | 100 |
+| `max_new_tokens` | 32 | 96 | 128 |
+| `n_prompts` (eval) | 10 | 10 | 100 (GSM8K: 1319) |
+| `K_values` (eval) | [3] | [3] | [3] |
+| `compile` | false | false | true |
+| `load_in_4bit` | false | true | false |
+| `wandb_group` | laptop-gsm8k | kaggle-t4x2 | a100 |
+| `run_label` | 0.6B-laptop | 8B-kaggle | 8B-A100 |
+| Results meaningful? | **No** (code check only) | Yes (trends) | Yes (paper) |
 
 ---
 
-## Comparing Levels in W&B
+## Comparing Tiers in W&B
 
-In the W&B project `distillspec`, use these filters to compare:
+In the W&B project `distillspec`, use these filters:
+
+**See all runs at a given tier:**
+```
+group:laptop-gsm8k    ← all Tier 1 runs
+group:kaggle-t4x2     ← all Tier 2 runs
+group:a100            ← all Tier 3 runs
+```
 
 **Compare a single loss across teacher sizes:**
 ```
-# Filter runs by name prefix
-run_label:1.7B-T4-lite AND loss:ebe   ← Level 2 EBE
-run_label:4B-T4 AND loss:ebe           ← Level 3 EBE
-run_label:8B-A100 AND loss:ebe         ← Level 4 EBE
+run_label:8B-kaggle AND loss:ebe    ← Tier 2 EBE
+run_label:8B-A100 AND loss:ebe      ← Tier 3 EBE
 ```
 
-**See all runs at a given level:**
+**Compare losses at the same tier:**
 ```
-group:colab-lite        ← all Level 2 runs
-group:colab-t4          ← all Level 3 runs
-group:colab-a100        ← all Level 4 runs
+group:kaggle-t4x2    → overlay kl, ebe, gbv, jsd, l1 curves
 ```
 
-**Compare losses at the same level:**
+**Filter to a specific pipeline session (experiment tag):**
 ```
-group:colab-t4          → overlay kl, ebe, gbv, jsd, l1 curves
+tags contains kri655-20260601_1041    ← one specific pipeline session
 ```
 
 ---
 
 ## Adding a New Config Tier
 
-If you need a new hardware tier (e.g. Kaggle T4x2, Lambda Labs A10G):
+If you need a new hardware tier (e.g. Modal T4, Lambda Labs A10G):
 
-1. Copy the nearest YAML (e.g. `cp colab.yaml kaggle.yaml`)
+1. Copy the nearest YAML (e.g. `cp kaggle.yaml modal.yaml`)
 2. Update `hardware:`, `models:`, `training:`, `checkpointing:`, `logging:`
-3. Set `logging.run_label` to something like `"4B-kaggle"` or `"8B-A10G"`
-4. Set `logging.wandb_group` to something like `"kaggle-t4"` or `"lambda-a10g"`
+3. Set `logging.run_label` to something like `"8B-modal"` or `"8B-A10G"`
+4. Set `logging.wandb_group` to something like `"modal-t4"` or `"lambda-a10g"`
 5. The pipeline, trainer, and W&B wiring pick up the new config automatically
 
 No code changes needed — the config is self-contained.
