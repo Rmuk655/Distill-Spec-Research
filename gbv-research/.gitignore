@@ -27,6 +27,7 @@ core/datasets/raw/.cache/
 
 # … then un-ignore the small curated eval/seed sets that ARE tracked
 # GSM8K slices (test split — no overlap with gsm8k_train.jsonl which is gitignored)
+!core/datasets/raw/gsm8k_3.jsonl
 !core/datasets/raw/gsm8k_5.jsonl
 !core/datasets/raw/gsm8k_10.jsonl
 !core/datasets/raw/gsm8k_30.jsonl
