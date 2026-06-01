@@ -888,8 +888,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--tree_L", str(_h.get("tree_L", 8)),
     ]
 
-    # Override step count if train_steps was specified via CLI
-    if _h.get("train_steps") is not None:
+    # Override step count from YAML only when NOT in smoke mode.
+    # Smoke always uses its own fixed step count (10) to stay fast regardless
+    # of whatever training.steps is set in the tier's YAML.
+    if _h.get("train_steps") is not None and not smoke:
         _steps = _h["train_steps"]
         _online_steps = _h["train_steps"]
 
