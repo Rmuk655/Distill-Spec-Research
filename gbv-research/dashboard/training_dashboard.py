@@ -597,6 +597,8 @@ _HTML = r"""<!DOCTYPE html>
           border-radius: 12px; background: #e9ecef; cursor: pointer;
           font-size: 12px; user-select: none; border: 1px solid #ced4da; }
   .chip.active { background: #0d6efd; color: #fff; border-color: #0d6efd; }
+  /* smoke filter chip turns amber (not blue) when active = smoke runs hidden */
+  .smoke-filter-chip.active { background: #ed8936; color: #fff; border-color: #ed8936; }
   .chart-card { background: #fff; border-radius: 8px; padding: 1rem;
                 box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 1.5rem; }
   .chart-card h6 { color: #333; font-weight: 600; margin-bottom: .75rem; }
@@ -620,6 +622,12 @@ _HTML = r"""<!DOCTYPE html>
 
   <!-- Phase label -->
   <span id="bar-phase" style="color:#aaa;font-size:11px"></span>
+
+  <!-- SMOKE indicator: shown when the active pipeline_state file is a *_smoke.json run -->
+  <span id="bar-smoke-badge"
+        style="display:none;background:#ed8936;color:#fff;font-size:10px;font-weight:700;
+               padding:2px 8px;border-radius:10px;white-space:nowrap"
+        title="Active pipeline state comes from a smoke run — code-path test, not real results">SMOKE &mdash; code-path test, not real results</span>
 
   <!-- Sub-step: current GBV combo + prompt progress -->
   <span id="bar-current-combo"
@@ -694,6 +702,17 @@ _HTML = r"""<!DOCTYPE html>
             style="border-color:#ed8936" onclick="toggleTierChip(this)" title="publishable results, T4">colab</span>
       <span class="chip hw-tier-chip active" data-tier="a100"
             style="border-color:#48bb78" onclick="toggleTierChip(this)" title="paper quality, A100">a100</span>
+    </div>
+  </div>
+
+  <!-- Run type: smoke runs (train_steps<=10) are code-path tests, not real results -->
+  <div class="filter-section">
+    <label style="color:#718096">Run Type <small>(annotation only)</small></label>
+    <div id="f-smoke">
+      <span class="chip smoke-filter-chip" id="chip-hide-smoke"
+            style="border-color:#ed8936"
+            onclick="toggleSmokeChip(this)"
+            title="Hide runs with train_steps<=10 (code-path tests, not real results)">Hide smoke runs</span>
     </div>
   </div>
 
@@ -1290,6 +1309,21 @@ let _logPanelOpen  = false;
 // HW_TIER_FILTER: Set of selected tiers. Default = all four selected.
 let HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
 
+// SHOW_SMOKE: when false, smoke runs (0 < train_steps <= 10) are hidden everywhere.
+// Default true = show all. Composes with HW_TIER_FILTER (both filters apply).
+let SHOW_SMOKE = true;
+
+// runMode: classify a run by its train_steps column.
+//   train_steps == 0          -> 'baseline' (untrained reference)
+//   0 < train_steps <= 10     -> 'smoke'    (code-path test, not real results)
+//   train_steps > 10          -> 'full'     (real training run)
+function runMode(r) {
+  const ts = r.train_steps;
+  if (ts == null || ts === 0) return 'baseline';
+  if (ts <= 10) return 'smoke';
+  return 'full';
+}
+
 // MODEL_PAIR_FILTER: Set of "draft||target" composite keys.
 // null = all pairs shown; a non-null Set restricts to selected pairs only.
 // Key format: draft_path + "||" + target_path
@@ -1652,6 +1686,14 @@ function toggleTierChip(chip) {
   applyFilters();
 }
 
+function toggleSmokeChip(chip) {
+  SHOW_SMOKE = !SHOW_SMOKE;
+  // active (amber filled) = smoke runs are being hidden
+  chip.classList.toggle('active', !SHOW_SMOKE);
+  chip.textContent = SHOW_SMOKE ? 'Hide smoke runs' : 'Smoke hidden \u2014 click to show';
+  applyFilters();
+}
+
 function toggleModelPairChip(chip) {
   const key = chip.dataset.draft + '||' + chip.dataset.target;
   const allChips = document.querySelectorAll('.model-pair-chip');
@@ -1697,6 +1739,10 @@ function clearFilters() {
   // Reset HW_TIER_FILTER to all tiers selected
   HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
   document.querySelectorAll('.hw-tier-chip').forEach(c => c.classList.add('active'));
+  // Reset smoke filter to "show all"
+  SHOW_SMOKE = true;
+  const _smokeChip = document.getElementById('chip-hide-smoke');
+  if (_smokeChip) { _smokeChip.classList.remove('active'); _smokeChip.textContent = 'Hide smoke runs'; }
   applyFilters();
 }
 
@@ -1770,6 +1816,12 @@ async function loadData() {
     runs = runs.filter(r => HW_TIER_FILTER.has(r.hw_tier || 'laptop'));
   }
 
+  // Client-side filter: hide smoke runs (0 < train_steps <= 10) when toggled off.
+  // Composes with the hw_tier filter above — both restrictions apply.
+  if (!SHOW_SMOKE) {
+    runs = runs.filter(r => runMode(r) !== 'smoke');
+  }
+
   // Client-side filter for multi-select chips
   Object.entries(activeChips).forEach(([col, vals]) => {
     if (vals.length > 0) {
@@ -1836,10 +1888,13 @@ function renderSummaryStats() {
   let html = '';
 
   // ── Total Runs — show the 3-way breakdown so the number is never mysterious ──
+  // Also surface the smoke count so the headline total is never read as all-real.
+  const smokeCount = ALL_RUNS.filter(r => runMode(r) === 'smoke').length;
   const runBreakdown = [
     beRuns.length  ? `${beRuns.length} BE`    : null,
     pplRuns.length ? `${pplRuns.length} PPL`  : null,
     alphaRuns.length ? `${alphaRuns.length} α` : null,
+    smokeCount ? `${smokeCount} smoke` : null,
   ].filter(Boolean).join(' + ');
   html += statBox('Total Runs', ALL_RUNS.length, runBreakdown);
 
@@ -3203,6 +3258,15 @@ function renderTable() {
     `<tr>${TABLE_COLS.map(c => {
       const v = row[c];
       if (v == null) return '<td style="color:#aaa">—</td>';
+      if (c === 'train_steps') {
+        // amber "smoke" pill for code-path test runs (0 < train_steps <= 10)
+        const smoke = runMode(row) === 'smoke'
+          ? ' <span style="background:#ed8936;color:#fff;font-size:9px;font-weight:700;'
+            + 'padding:1px 5px;border-radius:8px;vertical-align:middle" '
+            + 'title="train_steps&le;10 — code-path test, not real results">smoke</span>'
+          : '';
+        return `<td>${v}${smoke}</td>`;
+      }
       if (c === 'alpha_eff') {
         const pct = (v * 100).toFixed(1);
         const col = v > 0.55 ? '#198754' : v > 0.45 ? '#856404' : '#dc3545';
@@ -3371,6 +3435,14 @@ async function updatePipelineStatus() {
       const running  = ps.steps.filter(s => s.status === 'running');
       const failed   = ps.steps.filter(s => s.status === 'failed');
       const stopped  = ps.steps.filter(s => s.status === 'stopped');
+
+      // SMOKE badge — config label ends in/contains "_smoke" when the active state
+      // file is pipeline_state_<config>_smoke.json (see api_pipeline_status, ~line 458).
+      const smokeBadge = document.getElementById('bar-smoke-badge');
+      if (smokeBadge) {
+        const isSmoke = typeof ps.config === 'string' && ps.config.includes('_smoke');
+        smokeBadge.style.display = isSmoke ? 'inline-block' : 'none';
+      }
       if (running.length) {
         currentEl.innerHTML =
           `<span class="step-badge badge-running">${running[0].id}</span>`;
