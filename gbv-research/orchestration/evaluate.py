@@ -1444,13 +1444,80 @@ def main():
             except Exception as e:
                 print(f"  [WARN] perplexity failed for {ds}: {e}")
 
+    # ── Note on evaluation ordering ──────────────────────────────────────────
+    # BE batch runs BEFORE alpha pre-load so both never compete for VRAM
+    # simultaneously.  The BE subprocess exits (freeing GPU memory) before alpha
+    # models are loaded into the main process.  On a 6 GB laptop GPU this saves
+    # ~2.4 GB peak concurrent usage (student+teacher loaded twice = 4.8 GB) and
+    # avoids the BE subprocess OOM-retrying on CPU due to the alpha pre-load
+    # already holding half the VRAM.  The sequential cell loop uses _be_cache and
+    # _alpha_preloaded independently, so the swap is safe.
     # ── Pre-load models for alpha evaluation (shared across all datasets) ───
     # Without this, run_alpha() reloads both models from disk for every
     # (dataset × temperature) cell — N_alpha_cells cold-starts.
     # On a T4 with 8B models each cold-start costs ~60 s; keeping them resident
     # cuts that to one load total (saves N_cells-1 loads).
+    # NOTE: pre-load happens AFTER BE batch (see block below) so alpha and BE
+    # never compete for VRAM at the same time.
     _alpha_preloaded = None
     _has_alpha = any(mode == "alpha" for _, mode, _, _ in cells)
+
+    # ── Pre-batch all GBV / BE evaluations (one subprocess per dataset) ────
+    # Runs BEFORE alpha pre-load so BE subprocess and alpha models never compete
+    # for VRAM simultaneously.  On a 6 GB laptop, having both loaded at once
+    # costs ~4.8 GB (student+teacher×2) and can force the BE subprocess to retry
+    # on CPU.  By running BE first (VRAM clean), both can use the full GPU budget.
+    # Avoids N×72 separate subprocess launches each reloading both models.
+    # Instead: one GBV process per dataset loads models once, runs all
+    # (mode, K, T) combos for that dataset, then exits cleanly before alpha loads.
+    be_cells_to_run: set = set()
+    for ds, mode, K, T in cells:
+        if mode != "alpha":
+            if not (args.skip_existing and _already_run(student_label, ds, mode, K, T)):
+                be_cells_to_run.add((ds, mode, K, T))
+
+    _be_cache: dict = {}   # (ds, mode, K, T) -> block_eff
+    if be_cells_to_run:
+        be_by_ds: dict = {}
+        for (ds, mode, K, T) in be_cells_to_run:
+            entry = be_by_ds.setdefault(ds, {"modes": set(), "Ks": set(), "Ts": set()})
+            entry["modes"].add(mode)
+            entry["Ks"].add(K)
+            entry["Ts"].add(T)
+
+        n_old = len(be_cells_to_run)
+        n_new = len(be_by_ds)
+        print(f"\n-- Pre-batching {n_old} BE cell(s) -> {n_new} subprocess(es) "
+              f"(was {n_old} before batching) --")
+        for ds, items in be_by_ds.items():
+            modes_list = sorted(items["modes"])
+            Ks_list    = sorted(items["Ks"])
+            Ts_list    = sorted(items["Ts"])
+            # Cap at the benchmark's full size but always respect --n.
+            # humaneval=164, mtbench=80 are the full benchmark sizes.
+            # With --n 5 (laptop), use 5 prompts — enough to exercise all code paths.
+            _ds_max = {"humaneval": 164, "mtbench": 80}
+            n_ds = min(args.n, _ds_max.get(ds, args.n)) if args.n else _ds_max.get(ds, 10)
+            data_path = get_dataset_path(ds, n_ds)
+            n_c = len(modes_list) * len(Ks_list) * len(Ts_list)
+            print(f"  {ds}: {len(modes_list)} mode(s) × {len(Ks_list)} K × "
+                  f"{len(Ts_list)} temp(s) = {n_c} combo(s)")
+            batch_res = run_be_batch(
+                args.student, args.teacher, data_path,
+                modes_list, Ks_list, Ts_list,
+                args.L, args.max_tokens,
+                load_in_4bit=getattr(args, "load_in_4bit", False),
+            )
+            for (m, k, t), be in batch_res.items():
+                _be_cache[(ds, m, k, t)] = be
+        print(f"  BE pre-batch done: {len(_be_cache)} result(s) cached.\n")
+
+    # ── Pre-load models for alpha evaluation (shared across all datasets) ───
+    # Runs AFTER BE batch so both never compete for VRAM simultaneously.
+    # Without pre-loading, run_alpha() reloads both models from disk for every
+    # (dataset × temperature) cell — N_alpha_cells cold-starts.
+    # On a T4 with 8B models each cold-start costs ~60 s; keeping them resident
+    # cuts that to one load total (saves N_cells-1 loads).
     if _has_alpha:
         import torch as _torch
         from transformers import AutoTokenizer as _ATok, AutoModelForCausalLM as _AMLM
@@ -1509,52 +1576,6 @@ def main():
         print(f"  Models resident. VRAM: {_vram:.0f} MB  "
               f"(kept until all alpha cells finish)")
         _alpha_preloaded = (_device, _dtype, _tok, _s_model, _t_model, _same_models)
-
-    # ── Pre-batch all GBV / BE evaluations (one subprocess per dataset) ────
-    # Avoids N×72 separate subprocess launches each reloading both models.
-    # Instead: one GBV process per dataset loads models once, runs all
-    # (mode, K, T) combos for that dataset, then exits.
-    be_cells_to_run: set = set()
-    for ds, mode, K, T in cells:
-        if mode != "alpha":
-            if not (args.skip_existing and _already_run(student_label, ds, mode, K, T)):
-                be_cells_to_run.add((ds, mode, K, T))
-
-    _be_cache: dict = {}   # (ds, mode, K, T) -> block_eff
-    if be_cells_to_run:
-        be_by_ds: dict = {}
-        for (ds, mode, K, T) in be_cells_to_run:
-            entry = be_by_ds.setdefault(ds, {"modes": set(), "Ks": set(), "Ts": set()})
-            entry["modes"].add(mode)
-            entry["Ks"].add(K)
-            entry["Ts"].add(T)
-
-        n_old = len(be_cells_to_run)
-        n_new = len(be_by_ds)
-        print(f"\n-- Pre-batching {n_old} BE cell(s) -> {n_new} subprocess(es) "
-              f"(was {n_old} before batching) --")
-        for ds, items in be_by_ds.items():
-            modes_list = sorted(items["modes"])
-            Ks_list    = sorted(items["Ks"])
-            Ts_list    = sorted(items["Ts"])
-            # Cap at the benchmark's full size but always respect --n.
-            # humaneval=164, mtbench=80 are the full benchmark sizes.
-            # With --n 10 (laptop), use 10 prompts — enough to exercise all code paths.
-            _ds_max = {"humaneval": 164, "mtbench": 80}
-            n_ds = min(args.n, _ds_max.get(ds, args.n)) if args.n else _ds_max.get(ds, 10)
-            data_path = get_dataset_path(ds, n_ds)
-            n_c = len(modes_list) * len(Ks_list) * len(Ts_list)
-            print(f"  {ds}: {len(modes_list)} mode(s) × {len(Ks_list)} K × "
-                  f"{len(Ts_list)} temp(s) = {n_c} combo(s)")
-            batch_res = run_be_batch(
-                args.student, args.teacher, data_path,
-                modes_list, Ks_list, Ts_list,
-                args.L, args.max_tokens,
-                load_in_4bit=getattr(args, "load_in_4bit", False),
-            )
-            for (m, k, t), be in batch_res.items():
-                _be_cache[(ds, m, k, t)] = be
-        print(f"  BE pre-batch done: {len(_be_cache)} result(s) cached.\n")
 
     # ── Run sequentially ─────────────────────────────────────────────────────
     all_results = []
