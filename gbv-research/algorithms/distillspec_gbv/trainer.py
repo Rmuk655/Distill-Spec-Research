@@ -700,14 +700,29 @@ def main() -> None:
     if not args.no_wandb:
         try:
             import wandb as _w
-            # Run name encodes: teacher-size + config-tier + loss + family + steps
-            # e.g. "4B-T4-kl_qwen_500steps" or "1.7B-T4-lite-ebe_qwen_300steps"
+
+            def _teacher_short(target: str) -> str:
+                """Extract a short version tag from the teacher model path or HF ID.
+                'Qwen/Qwen3-8B' → 'qwen3-8b', '/kaggle/input/.../qwen3-8b/1' → 'qwen3-8b'
+                Strips numeric-only last segments (e.g. /1, /v2) from paths.
+                """
+                import re
+                parts = re.split(r"[/\\]", target.strip())
+                # Drop empty parts and numeric-only segments at the end
+                parts = [p for p in parts if p and not re.fullmatch(r"\d+", p)]
+                tag = parts[-1] if parts else "unknown"
+                # Strip org prefix from HF IDs like "Qwen/Qwen3-8B"
+                tag = tag.split("/")[-1]
+                return tag.lower().replace("_", "-")
+
+            # Run name encodes: teacher-size + config-tier + loss + family + teacher + steps
+            # e.g. "8B-kaggle-kl_qwen_qwen3-8b_1000steps"
             # run_label comes from logging.run_label in the YAML (forwarded by
             # experiment.py); if absent falls back to plain loss+family+steps.
             _label_prefix = f"{args.run_label}-" if args.run_label else ""
-            # Format matches PROGRESSION.md: {run_label}-{loss}_{family}_{steps}steps
-            # e.g. "0.6B-laptop-kl_qwen_200steps", "4B-T4-kl_tree_qwen_1000steps"
-            _run_name = f"{_label_prefix}{args.loss}_{family.name}_{args.steps}steps"
+            # Format: {run_label}-{loss}_{family}_{teacher}_{steps}steps
+            # e.g. "0.6B-laptop-kl_qwen_qwen3-0.6b_200steps"
+            _run_name = f"{_label_prefix}{args.loss}_{family.name}_{_teacher_short(args.target)}_{args.steps}steps"
             _wandb = _w.init(
                 project=args.wandb_project, entity=args.wandb_entity,
                 group=args.wandb_group or None,

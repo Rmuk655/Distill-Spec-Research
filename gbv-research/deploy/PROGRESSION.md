@@ -55,16 +55,17 @@ CPU RAM spike, zero OOM risk. BF16 also gives a cleaner distillation signal than
 Every training run produces a W&B run named:
 
 ```
-{run_label}-{loss}_{family}_{steps}steps
+{run_label}-{loss}_{family}_{teacher}_{steps}steps
 ```
 
 Examples:
-- `0.6B-laptop-kl_qwen_200steps`        — Tier 1 laptop code check
-- `0.6B-laptop-gbv_tree_qwen_200steps`  — Tier 1 with GBV tree loss
-- `8B-kaggle-kl_qwen_1000steps`         — Tier 2 Kaggle exploration
-- `8B-kaggle-ebe_qwen_1000steps`        — Tier 2 with EBE loss
-- `8B-A100-kl_qwen_2000steps`           — Tier 3 paper confirmation
-- `8B-A100-gbv_tree_qwen_2000steps`     — Tier 3 with GBV tree loss
+- `0.6B-laptop-kl_qwen_qwen3-0.6b_200steps`        — Tier 1 laptop code check
+- `0.6B-laptop-gbv_tree_qwen_qwen3-0.6b_200steps`  — Tier 1 with GBV tree loss
+- `8B-kaggle-kl_qwen_qwen3-8b_1000steps`           — Tier 2 Kaggle exploration
+- `8B-kaggle-ebe_qwen_qwen3-8b_1000steps`          — Tier 2 with EBE loss
+- `8B-modal-ebe_qwen_qwen3-8b_1000steps`           — Tier 2 Modal T4 EBE run
+- `8B-a100-kl_qwen_qwen3-8b_2000steps`            — Tier 3 paper confirmation
+- `8B-a100-gbv_tree_qwen_qwen3-8b_2000steps`      — Tier 3 with GBV tree loss
 
 This makes it possible to compare across tiers in a single W&B dashboard:
 filter by `run_label` prefix to see all EBE runs regardless of teacher size,
@@ -98,7 +99,7 @@ Run Cell 0 first. If the session crashes, reopen the notebook and run Cell 1.
 python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
-Runs **~50 training steps** and a minimal eval. Should complete in **< 5 min**.
+Runs **n=5 prompts, K=3, all loss modes**. Should complete in **~30-40 min on laptop** (CPU-limited; not 5 min — each loss mode runs a full forward+backward cycle). `--smoke` always auto-resets state — no need to pass `--restart`.
 
 What `--smoke` exercises:
 - Python imports, CUDA device detection
@@ -117,7 +118,12 @@ What `--smoke` exercises:
 ```bash
 # In gbv-research/
 python orchestration/experiment.py --config laptop --yes
+
+# Force clean re-run (wipe all done marks, restart from step 1):
+python orchestration/experiment.py --config laptop --yes --restart
 ```
+
+> **Note**: `--smoke` always auto-resets (no `--restart` needed with smoke). Use `--restart` to force-clean a non-smoke run.
 
 Runs **200 training steps**, full eval suite. Should complete in **~30-40 min**.
 
@@ -163,6 +169,7 @@ latest checkpoint — worst-case loss is 25 steps).
 
 > **Compute budget**: Kaggle gives 30 GPU-h/week. T4 x2 burns 2× the weekly
 > quota, leaving ~15 effective session-hours per week. Plan runs accordingly.
+> Tier 2 trains one loss at a time; budget **3-4 h per loss** on Kaggle T4x2.
 
 **What to look for:**
 - Loss curve: should decrease steadily (not flatline, not spike)
@@ -262,7 +269,7 @@ sessions (4-8 h) where continuous terminal monitoring is not practical.
 | `compile` | false | false | true |
 | `load_in_4bit` | false | true | false |
 | `wandb_group` | laptop-gsm8k | kaggle-t4x2 | a100 |
-| `run_label` | 0.6B-laptop | 8B-kaggle | 8B-A100 |
+| `run_label` | 0.6B-laptop | 8B-kaggle | 8B-a100 |
 | Results meaningful? | **No** (code check only) | Yes (trends) | Yes (paper) |
 
 ---
@@ -274,14 +281,15 @@ In the W&B project `distillspec`, use these filters:
 **See all runs at a given tier:**
 ```
 group:laptop-gsm8k    ← all Tier 1 runs
-group:kaggle-t4x2     ← all Tier 2 runs
-group:a100            ← all Tier 3 runs
+group:kaggle-t4x2     ← all Tier 2 Kaggle runs
+group:modal-t4        ← all Tier 2 Modal runs (once modal.yaml is configured)
+group:a100            ← all Tier 3 IITH A100 runs
 ```
 
 **Compare a single loss across teacher sizes:**
 ```
 run_label:8B-kaggle AND loss:ebe    ← Tier 2 EBE
-run_label:8B-A100 AND loss:ebe      ← Tier 3 EBE
+run_label:8B-a100 AND loss:ebe      ← Tier 3 EBE
 ```
 
 **Compare losses at the same tier:**

@@ -2959,7 +2959,9 @@ def main():
     p.add_argument("--smoke", action="store_true",
                    help="Quick sanity-check mode: n=5 prompts, max_tokens=30, K=3, "
                         "modes=alpha+bv+gbv+traversal+specinfer+naive, temp=0.6.  "
-                        "Exercises every loss + every verifier.  ~30-40 min total on laptop.")
+                        "Always resets state (force-clean run — never skips done steps). "
+                        "Time: ~30-40 min total on laptop (limited by CPU/small GPU). "
+                        "Use --restart to force-clean a non-smoke run.")
     p.add_argument("--no_smoke_first", action="store_true",
                    help="Skip the automatic 2-prompt preflight smoke check that normally "
                         "runs before the first eval step on laptop config.  Use this if "
@@ -3398,6 +3400,12 @@ def main():
             failed = sum(1 for s in STEPS if step_status(s, state) == "failed")
             print(f"  Summary: {done} done, {pending} pending, {failed} failed / {len(STEPS)} total\n")
             return
+
+    # Smoke runs are always clean — they are code-correctness gates and must
+    # re-run every step.  Auto-set restart so the user never has to pass
+    # --restart manually with --smoke.
+    if args.smoke and not args.restart:
+        args.restart = True
 
     if args.restart:
         if not args.yes and not _yn("Reset ALL state and restart from step 1?"):
