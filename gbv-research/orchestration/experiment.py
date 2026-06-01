@@ -567,6 +567,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
               experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
+              loss_name=None,
               force_rerun=False):
     """Eval command.
 
@@ -604,6 +605,8 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         cmd.append("--skip_existing")
     if train_steps:
         cmd += ["--train_steps", str(train_steps)]
+    if loss_name:
+        cmd += ["--loss_name", loss_name]
     if task_score:
         cmd.append("--task_score")
     if experiment_tag:
@@ -932,13 +935,22 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _merged = globals()["_merged"]  # noqa: E731
 
     # Smoke runs must never collide with full-run checkpoints.
-    # Full:  db/checkpoints/kl-gsm8k/
-    # Smoke: db/checkpoints/smoke/kl-gsm8k/
+    # Full:  db/checkpoints/kl-gsm8k/          (or ckpt_root/kl-gsm8k/)
+    # Smoke: db/checkpoints/smoke/kl-gsm8k/    (or ckpt_root/smoke/kl-gsm8k/)
+    #
+    # IMPORTANT: do NOT route through the module-level _ckpt() here.  That
+    # function's OSD-existence fallback calls os.path.exists() at build time
+    # and can return a non-smoke OSD path when a full-run tree checkpoint
+    # exists under OSD/checkpoints/<name> — causing tree-loss steps to write
+    # into the full-run directory and then see a stale high step_count on the
+    # next smoke invocation ([RESUME] Training already complete (100/10)).
+    # Instead, close over the base directory directly so every _ckpt() call
+    # in the step list — flat AND tree losses — goes to <base>/smoke/<name>.
     if smoke:
-        _ckpt_full   = _ckpt
-        _merged_full = _merged
-        _ckpt   = lambda n, _f=_ckpt_full:   _f(os.path.join("smoke", n))   # noqa: E731
-        _merged = lambda n, _f=_merged_full: _f(os.path.join("smoke", n))   # noqa: E731
+        _smoke_base = (ckpt_root if ckpt_root
+                       else os.path.join(_GBV_RESEARCH, "db", "checkpoints"))
+        _ckpt   = lambda n, _b=_smoke_base: os.path.join(_b, "smoke", n)          # noqa: E731
+        _merged = lambda n, _b=_smoke_base: os.path.join(_b, "smoke", n + "_merged")  # noqa: E731
 
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
@@ -976,6 +988,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         n=_n_this, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
+                        loss_name=label,
                         hw_tier=hw_tier,
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),

@@ -687,7 +687,11 @@ def main() -> None:
         _resumed_no_improve = int(saved.get("val_no_improve_count", 0))
         if not args.no_lora:
             _tmp = PeftModel.from_pretrained(draft_base, ckpt_latest, is_trainable=True)
-            draft_model.load_state_dict(_tmp.state_dict())
+            # strict=False: _tmp wraps draft_base in a new adapter layer while
+            # draft_model is already a PeftModel — keys differ by adapter name.
+            # We are copying weights, not stacking a second adapter, so missing
+            # or unexpected keys are expected and should not raise an error.
+            draft_model.load_state_dict(_tmp.state_dict(), strict=False)
             del _tmp
         else:
             draft_model.load_state_dict(

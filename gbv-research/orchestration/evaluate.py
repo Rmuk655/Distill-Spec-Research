@@ -1074,12 +1074,9 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         try:
             import wandb as _wmod
             if _wmod.run is not None:
-                _wmod.summary[f"eval/{dataset}/alpha/alpha_mean"]  = res["alpha_mean"]
-                _wmod.summary[f"eval/{dataset}/alpha/alpha_ci95"]  = res["alpha_ci95"]
-                _wmod.summary[f"eval/{dataset}/alpha/throughput"]  = res["throughput"]
-                _wmod.summary[f"eval/{dataset}/alpha/ms_per_tok"]  = res.get("ms_per_tok", 0)
-                if row.get("task_score") is not None:
-                    _wmod.summary[f"task_score/{dataset}"] = row["task_score"]
+                # Per-dataset alpha detail omitted from summary to keep panel count ≤12.
+                # Full per-prompt detail is in the per_prompt_alpha artifact below.
+                # Aggregate mean_alpha / max_alpha are written at end-of-run in main().
                 # Per-prompt table stored as a W&B Artifact so it appears in the
                 # Artifacts tab (not as a chart panel — there is no meaningful step axis).
                 if pp:
@@ -1247,6 +1244,10 @@ def main():
                    help="Number of training steps used to produce this checkpoint "
                         "(stored in DB; 0 = baseline / not trained). "
                         "Passed automatically by experiment.py.")
+    p.add_argument("--loss_name", default=None,
+                   help="Loss function name of the trained model (e.g. kl_tree). "
+                        "Logged to W&B config for cross-run comparison. "
+                        "Passed automatically by experiment.py.")
     p.add_argument("--lora_rank", type=int, default=None,
                    help="LoRA rank used for this checkpoint (stored in DB for analysis)")
     p.add_argument("--experiment_tag", default=None,
@@ -1362,6 +1363,8 @@ def main():
                     "max_tokens":     args.max_tokens,
                     "hw_tier":        args.hw_tier,
                     "run_mode":       _run_mode,
+                    "train_steps":    getattr(args, "train_steps", None),
+                    "loss_name":      getattr(args, "loss_name", None),
                 },
                 reinit="return_previous",
             )
@@ -1697,17 +1700,15 @@ def main():
                 _wmod_final.summary["max_block_eff"]  = max(_all_bes)
 
             # Per-verifier BE summary (e.g. "BE/bv", "BE/gbv") — key for cross-run comparison
+            # Per-dataset-mode breakdown omitted to keep W&B panel count ≤12;
+            # full detail is available in eval_summary_table.
             from collections import defaultdict as _dd
             _be_by_mode: dict = _dd(list)
-            _be_by_ds_mode: dict = _dd(list)
             for r in all_results:
                 if r.get("block_eff") is not None:
                     _be_by_mode[r["mode"]].append(r["block_eff"])
-                    _be_by_ds_mode[(r["dataset"], r["mode"])].append(r["block_eff"])
             for _mode, _vals in _be_by_mode.items():
                 _wmod_final.summary[f"BE/{_mode}"] = sum(_vals) / len(_vals)
-            for (_ds, _mode), _vals in _be_by_ds_mode.items():
-                _wmod_final.summary[f"BE/{_ds}/{_mode}"] = sum(_vals) / len(_vals)
 
             # ── Single comparison table: all verifier modes + alpha side-by-side ──
             # One row per result; researcher can sort/filter in W&B Table view.
