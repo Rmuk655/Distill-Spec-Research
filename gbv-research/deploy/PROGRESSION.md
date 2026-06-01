@@ -13,7 +13,7 @@ confirm on production hardware.**
 
 | Tier | Hardware | Config | Teacher | Steps | Wall time | W&B group | Purpose |
 |------|----------|--------|---------|-------|-----------|-----------|---------|
-| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: 10) | ~8-15 min (smoke) / ~60-75 min (full, 2 losses) | `laptop-gsm8k` | Code exerciser: does every path run? |
+| 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 100 (smoke: 10) | ~25 min (smoke, all losses) / ~2-3 hr (full, all losses) | `laptop-gsm8k` | Code exerciser: does every loss path run? |
 | 2 | Kaggle T4x2 / Modal T4 | `kaggle` | Qwen3-8B NF4 | 1000 | ~4-8 h | `kaggle-t4x2` | Exploration: which losses rank best? |
 | 3 | A100 | `a100` | Qwen3-8B BF16 | 2000 | ~15-20 min train | `a100` | Confirmation: paper-quality numbers |
 
@@ -126,16 +126,18 @@ python orchestration/experiment.py --config laptop --yes --restart
 
 > **Note**: `--smoke` always auto-resets (no `--restart` needed with smoke). Use `--restart` to force-clean a non-smoke run.
 
-Runs **200 training steps** on **2 representative losses** (`kl` + `kl_tree`) with **5 eval prompts per mode**. Should complete in **~60-75 min**.
+Runs **100 training steps on every non-online loss** with **5 eval prompts per mode**. Should complete in **~2-3 hr**.
 
-> Why only 2 losses? All flat losses (`kl`, `rev_kl`, `jsd`, `l1`, `ebe`, ...) share the same training code path. All tree losses (`kl_tree`, `bv_tree`, `gbv_tree`, ...) share the same tree code path. One representative per family is enough for a code coverage gate. Running all 17 would take 4+ hours.
+> Each loss function (`ebe`, `rev_kl`, `jsd`, `bv_tree`, `gbv_tree`, ...) has unique code. All must be exercised here before T4 promotion — bugs found on laptop are cheap; bugs found on T4 cost GPU-hours.
+>
+> For a faster (~60-75 min) pipeline-only check: `python orchestration/experiment.py --config laptop --losses kl,kl_tree --yes`
 
 What the full laptop run exercises that smoke does NOT:
-- Rolling checkpoint save/load cycle (save_every=20 → 10 saves)
-- Milestone checkpoints (milestone_every=100 → 2 permanent saves)
-- Validation health check (val_every=50 → 4 validation passes)
-- PPL threshold check (ppl_check_every=100 → 2 checks)
-- Full merge step (LoRA → base model)
+- Rolling checkpoint save/load cycle (save_every=20 → 5 saves per loss at 100 steps)
+- Milestone checkpoints (milestone_every=100 → fires at step 100 per loss)
+- Validation health check (val_every=50 → 2 val passes per loss)
+- PPL threshold check (ppl_check_every=100 → 1 check per loss)
+- Full merge step (LoRA → base model, per loss)
 - All eval modes: alpha, bv, gbv, traversal, specinfer, naive (5 prompts each)
 - W&B logging (run appears in wandb.ai under group `laptop-gsm8k`)
 - Database writes (results.db)

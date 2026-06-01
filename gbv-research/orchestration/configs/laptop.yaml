@@ -9,22 +9,25 @@
 #   essentially noise.  Do not interpret laptop results as research findings.
 #
 # PURPOSE: Verify that every code path runs without crashing:
-#   train loop → checkpoint save/load cycle → merge → all eval modes
-#   Use --smoke for a fast crash test (~8-15 min, 10 steps).
-#   Run without --smoke to exercise ALL paths (~60-75 min, 200 steps).
-#   Only kl (flat loss) + kl_tree (tree loss) run — one representative per family.
-#   All other losses share the same code path; running all 17 would take 4+ hours.
+#   Every loss function is unique code — bugs in ebe, rev_kl, bv_tree, etc.
+#   must be caught here before they reach T4 (expensive to debug there).
+#   Use --smoke for a fast all-loss crash test (~25 min, 10 steps each).
+#   Run without --smoke to exercise ALL paths (~2-3 hr, 100 steps each).
 #
 # TWO-STAGE LAPTOP GATE:
 #   1. python orchestration/experiment.py --config laptop --smoke --yes
-#      Fast crash detector.  Should complete ~8-15 min.
+#      All losses, 10 steps each.  Fast all-loss code-path check.
 #      Gate: no exceptions, losses are finite numbers.
+#      ~25 min (all losses).
 #   2. python orchestration/experiment.py --config laptop --yes
-#      Full code-path exerciser.  Should complete ~60-75 min.
-#      kl + kl_tree losses, K=3, T=0.6, n=5 -- no parameter sweep.
+#      All losses, 100 steps each.  Full pipeline exerciser.
+#      Exercises checkpoint save/load (save_every=20 → 5 saves), milestone
+#      checkpoint (milestone_every=100 → 1 save), 2 val passes (val_every=50),
+#      PPL health check (ppl_check_every=100 → fires at step 100), merge, eval.
 #      Gate: all eval modes produce output, checkpoint resume works,
 #      merge completes, W&B run appears in wandb.ai.
-#      (Block efficiency numbers from this run are meaningless -- ignore them.)
+#      ~2-3 hr total.  Use --losses kl,kl_tree for a faster 60-75 min run
+#      when you only want to check the pipeline, not every loss.
 #
 # WHEN TO MOVE TO T4 (Kaggle/Modal):
 #   Both gates pass AND you want to assess whether a new loss function or
@@ -42,7 +45,7 @@ models:
   target: Qwen/Qwen3-0.6B
 
 training:
-  steps: 200                    # 4× smoke (50), enough to see loss curves fall; NOT for paper
+  steps: 100                    # 10× smoke (10), exercises all checkpointing paths; NOT for paper
   lr: 3.0e-5
   lora_r: 4                     # smallest rank -- this run is about code, not capacity
   lora_alpha: 8
@@ -107,11 +110,14 @@ tree_training:
   tree_L: 8
 
 experiment:
-  # Only 2 representative losses run on laptop:
-  #   kl       — one flat loss (exercises the flat-sequence code path)
-  #   kl_tree  — one tree loss (exercises the tree-structured code path)
-  # All other losses (rev_kl, jsd, l1, ebe, bv_tree, gbv_tree, ...) share the same
-  # code paths as kl and kl_tree respectively — running all 17 would take 4+ hours
-  # for no additional code coverage.
-  # To test a different loss pair: python experiment.py --config laptop --losses kl,ebe --yes
-  losses: [kl, kl_tree]
+  # All non-online losses run — every loss function has unique code that must be
+  # exercised before promoting to T4.  Bugs in ebe, rev_kl, jsd, bv_tree, etc.
+  # must be found here.  Online OSD is excluded (needs 2 models simultaneously,
+  # exceeds laptop VRAM and is lowest-priority in the research plan).
+  #
+  # For a faster pipeline-only check (no per-loss coverage), pass --losses kl,kl_tree.
+  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+           kl_tree, rev_kl_tree, jsd_tree,
+           bv_tree, gbv_tree, traversal_tree,
+           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
+  exclude_losses: [online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]
