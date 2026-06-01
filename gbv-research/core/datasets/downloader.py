@@ -82,8 +82,13 @@ def _hf_load(dataset_id, split, field, config=None, n=None, trust=False,
 
 def _hf_parquet_load(dataset_id, split, field, config=None, n=None, extra_fields=None):
     """Download parquet shard via huggingface_hub and read with pandas."""
+    import logging
     import pandas as pd
     from huggingface_hub import hf_hub_download
+    # Suppress the noisy "Couldn't access the Hub to check for update but local file
+    # already exists" WARNING that fires when HF_HUB_OFFLINE=1 is set.  The fallback
+    # to the cached file is exactly what we want — no action needed from the user.
+    logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
 
     repo_id = dataset_id
     subfolder = config if config else ""
