@@ -163,7 +163,7 @@ python -m pytest tests/unit/ -q     # full suite (~60 s on CPU, no GPU needed)
 
 The suite exercises every loss function, every verifier, all cache operations,
 pipeline step generation, data loading, and trainer correctness — all on CPU
-with no model downloads.  **163 tests**, expected output: `163 passed`.
+with no model downloads.  **182 tests**, expected output: `182 passed`.
 
 **Pre-commit hook** — the hook script is committed at `hooks/pre-commit` and
 must be installed once per machine:
