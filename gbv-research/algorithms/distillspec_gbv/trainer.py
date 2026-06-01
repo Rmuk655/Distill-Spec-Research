@@ -188,6 +188,9 @@ def parse_args() -> argparse.Namespace:
                    help="Fraction of training data held out for validation.")
     p.add_argument("--val_every", type=int, default=50,
                    help="Compute validation loss every N steps (0 to disable).")
+    p.add_argument("--max_train_prompts", type=int, default=0,
+                   help="Cap training dataset to this many prompts (0 = no cap). "
+                        "Smoke mode passes 50 to keep pre-tokenisation fast.")
 
     # ── Output / checkpointing ────────────────────────────────────────────────
     p.add_argument("--output", default=None,
@@ -749,6 +752,10 @@ def main() -> None:
 
     # ── Dataset split ─────────────────────────────────────────────────────────
     all_prompts = load_prompts(args.dataset)
+    # Smoke mode: cap training dataset so pre-tokenization is fast.
+    # --max_train_prompts 50 → tokenize 50 prompts instead of 6726 (saves ~2 min on laptop).
+    if getattr(args, "max_train_prompts", 0) > 0:
+        all_prompts = all_prompts[:args.max_train_prompts]
     if args.val_dataset:
         val_prompts   = load_prompts(args.val_dataset)
         train_prompts = all_prompts
@@ -794,6 +801,9 @@ def main() -> None:
     _current_ppl          = None
     _baseline_ppl         = None
     _stop_training        = False
+    # EMA state dict: stash loss_ema here instead of on the wandb Run object.
+    # Newer W&B versions raise AttributeError when setting arbitrary attributes on Run.
+    _ema_state: dict = {}
 
     if args.ppl_check_every > 0:
         _ppl_sample  = val_prompts[:5] if val_prompts else prompts[:5]
@@ -956,9 +966,11 @@ def main() -> None:
                   f"train_loss: {loss_val:.4f} | peak VRAM: {peak_vram:.0f} MB")
             if _wandb:
                 # EMA-smoothed loss (α=0.1): cleaner trend line than raw per-step loss.
-                _loss_ema = getattr(_wandb, "_loss_ema", loss_val)
+                # Use a local dict instead of setting attributes on the wandb Run object
+                # (newer wandb versions raise AttributeError on arbitrary attribute sets).
+                _loss_ema = _ema_state.get("loss_ema", loss_val)
                 _loss_ema = 0.9 * _loss_ema + 0.1 * loss_val
-                _wandb._loss_ema = _loss_ema  # stash on run object (avoids a global)
+                _ema_state["loss_ema"] = _loss_ema
 
                 _wlog = {
                     "train_step":          step + 1,   # x-axis for all train/* metrics
@@ -1066,7 +1078,7 @@ def main() -> None:
                       f"(best={_best_val_loss:.4f}, streak={_val_no_improve_count})")
 
             if _wandb:
-                _cur_ema = getattr(_wandb, "_loss_ema", v_loss)
+                _cur_ema = _ema_state.get("loss_ema", v_loss)
                 _overfit = v_loss / max(_cur_ema, 1e-8)
                 log = {
                     "train_step":          step + 1,

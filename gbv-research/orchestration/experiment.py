@@ -750,8 +750,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     eagle=True:   Append Phase 5 — EAGLE Benchmark.  Only meaningful with
                   --config server/colab (Qwen3-8B target).
     """
-    _steps         = 50    if smoke else 1000
-    _online_steps  = 50    if smoke else 500
+    _steps         = 10    if smoke else 1000   # 10 steps = enough for 1 fwd+bwd, ckpt save, val check
+    _online_steps  = 10    if smoke else 500
     _n             = 5     if smoke else 10
     _max_tok       = 30    if smoke else 50
     _Ks            = "3"   # safe default; yaml always overrides
@@ -860,6 +860,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
            if _h.get("early_stop_patience", 0) != 0 else [] ),
         # no_lora: boolean flag — only pass when True (no value).
         *( ["--no_lora"] if _h.get("no_lora") else [] ),
+        # smoke: cap training dataset to 50 prompts so pre-tokenization is fast (~2s).
+        # Without this, trainer loads and tokenizes all 6726 prompts even for a 10-step run.
+        *( ["--max_train_prompts", "50"] if smoke else [] ),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.
@@ -3554,8 +3557,14 @@ def main():
 
             status = step_status(step, state)
             if status == "done":
-                print(f"  {TICK} [{sid}] already done — skipping")
-                continue
+                if args.smoke:
+                    # Smoke always re-runs every step even if state says "done".
+                    # This makes smoke immune to OneDrive state-file races AND
+                    # ensures every code path is exercised regardless of prior runs.
+                    pass
+                else:
+                    print(f"  {TICK} [{sid}] already done — skipping")
+                    continue
 
             # Auto-skip steps whose input checkpoint doesn't exist.
             skip_path = step.get("skip_if_missing")
