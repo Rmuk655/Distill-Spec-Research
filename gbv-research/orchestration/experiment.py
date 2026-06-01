@@ -558,7 +558,8 @@ def _check_gpu_compatibility():
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               modes="alpha,specinfer,gbv,traversal",
               Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
-              experiment_tag=None, train_steps=0, hw_tier="laptop"):
+              experiment_tag=None, train_steps=0, hw_tier="laptop",
+              wandb_group=None, wandb_project="distillspec"):
     """Eval command — always passes --skip_existing so restarts are safe.
 
     Defaults (laptop): n=10 prompts, max_tokens=50.  Run with n=30/max_tokens=100
@@ -594,6 +595,10 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         cmd.append("--task_score")
     if experiment_tag:
         cmd += ["--experiment_tag", experiment_tag]
+    if wandb_group:
+        cmd += ["--wandb_group", wandb_group]
+    if wandb_project and wandb_project != "distillspec":
+        cmd += ["--wandb_project", wandb_project]
     return cmd
 
 
@@ -922,7 +927,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         n=_n_this, max_tokens=_max_tok,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
-                        hw_tier=hw_tier)   # passed in via build_steps signature
+                        hw_tier=hw_tier,
+                        wandb_group=_h.get("wandb_group", ""),
+                        wandb_project=_h.get("wandb_project", "distillspec"))
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy

@@ -1258,6 +1258,11 @@ def main():
                         "train curves and eval results in one W&B workspace.")
     p.add_argument("--wandb_entity", default=None,
                    help="W&B entity (team or username). Defaults to your logged-in account.")
+    p.add_argument("--wandb_group", default=None,
+                   help="W&B group for this eval run. Should match the trainer's wandb_group "
+                        "(e.g. 'laptop-gsm8k', 'colab-lite') so training and eval runs from "
+                        "the same tier appear together in W&B. Forwarded from YAML by "
+                        "experiment.py. Falls back to experiment_tag when not set.")
     global args
     args = p.parse_args()
 
@@ -1318,8 +1323,12 @@ def main():
                 entity=getattr(args, "wandb_entity", None),
                 name=f"eval_{student_label}_{args.hw_tier}_{_now_tag()}",
                 job_type="eval",
-                tags=[student_label, "eval", "phase1", args.hw_tier],
-                group=args.experiment_tag,
+                # Group matches trainer's wandb_group (e.g. "laptop-gsm8k", "colab-lite")
+                # so training + eval runs from the same tier are in the same W&B group.
+                # Falls back to experiment_tag for backward compat when group not set.
+                group=getattr(args, "wandb_group", None) or args.experiment_tag,
+                tags=[student_label, "eval", "phase1", args.hw_tier,
+                      args.experiment_tag],   # session tag searchable via tags
                 dir=_wandb_dir,   # store run files under db/wandb/, not orchestration/wandb/
                 config={
                     "student":        args.student,

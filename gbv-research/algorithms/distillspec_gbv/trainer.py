@@ -705,14 +705,17 @@ def main() -> None:
             # run_label comes from logging.run_label in the YAML (forwarded by
             # experiment.py); if absent falls back to plain loss+family+steps.
             _label_prefix = f"{args.run_label}-" if args.run_label else ""
-            _run_name = f"{_label_prefix}{args.loss}_{args.steps}steps_seed{args.seed}"
+            # Format matches PROGRESSION.md: {run_label}-{loss}_{family}_{steps}steps
+            # e.g. "0.6B-laptop-kl_qwen_200steps", "4B-T4-kl_tree_qwen_1000steps"
+            _run_name = f"{_label_prefix}{args.loss}_{family.name}_{args.steps}steps"
             _wandb = _w.init(
                 project=args.wandb_project, entity=args.wandb_entity,
                 group=args.wandb_group or None,
                 job_type="train",
                 name=_run_name,
                 tags=[args.loss, "train", "phase1",
-                      getattr(args, "hw_tier", "unknown")],
+                      getattr(args, "hw_tier", "unknown"),
+                      f"seed{args.seed}"],   # seed in tags, not in name
                 config={**vars(args), "family": family.name,
                         "attn_impl": _ATTN_IMPL},
                 resume="allow",
@@ -950,27 +953,47 @@ def main() -> None:
                     "train/peak_vram_mb":  peak_vram,
                 }
                 if _grad_norm is not None:
-                    _wlog["train/grad_norm"] = float(_grad_norm)
+                    _gn = float(_grad_norm)
+                    _wlog["train/grad_norm"] = _gn
                     # Per-component LoRA gradient health (replaces 392 histogram panels).
-                    # Logs mean grad norm across all LoRA-A and LoRA-B matrices separately.
-                    # Near-zero for either = dead adapter; diverging = LR too high.
+                    # Mean + std + max across all LoRA-A and LoRA-B matrices.
+                    # Near-zero mean = dead adapter.  High std = uneven layer updates.
                     try:
+                        import statistics as _stats
                         _a_norms, _b_norms = [], []
-                        for name, p in draft_model.named_parameters():
-                            if p.grad is not None:
-                                _n = p.grad.norm().item()
-                                if "lora_A" in name:
-                                    _a_norms.append(_n)
-                                elif "lora_B" in name:
-                                    _b_norms.append(_n)
+                        for _pname, _pp in draft_model.named_parameters():
+                            if _pp.grad is not None:
+                                _pn = _pp.grad.norm().item()
+                                if "lora_A" in _pname:
+                                    _a_norms.append(_pn)
+                                elif "lora_B" in _pname:
+                                    _b_norms.append(_pn)
                         if _a_norms:
                             _wlog["gradients/lora_A_norm_mean"] = sum(_a_norms) / len(_a_norms)
                             _wlog["gradients/lora_A_norm_max"]  = max(_a_norms)
+                            if len(_a_norms) > 1:
+                                _wlog["gradients/lora_A_norm_std"] = _stats.stdev(_a_norms)
                         if _b_norms:
                             _wlog["gradients/lora_B_norm_mean"] = sum(_b_norms) / len(_b_norms)
                             _wlog["gradients/lora_B_norm_max"]  = max(_b_norms)
+                            if len(_b_norms) > 1:
+                                _wlog["gradients/lora_B_norm_std"] = _stats.stdev(_b_norms)
                     except Exception:
                         pass  # gradient logging is best-effort; never crash training
+
+                    # ── Automated alerts (appear in W&B notifications + run log) ──
+                    try:
+                        _cur_step = step + 1
+                        if _gn > 10.0:
+                            _wandb.alert(
+                                title="Gradient explosion",
+                                text=f"grad_norm={_gn:.2f} at step {_cur_step}. "
+                                     f"ACTION: reduce --lr or lower --grad_clip.",
+                                level="WARN",
+                            )
+                            print(f"  [ALERT] grad_norm={_gn:.2f} > 10 — consider reducing LR")
+                    except Exception:
+                        pass
                 _wandb.log(_wlog)
             if _results_db is not None:
                 try:
@@ -1029,18 +1052,54 @@ def main() -> None:
 
             if _wandb:
                 _cur_ema = getattr(_wandb, "_loss_ema", v_loss)
+                _overfit = v_loss / max(_cur_ema, 1e-8)
                 log = {
-                    "train_step":      step + 1,
-                    "train/val_loss":  v_loss,
-                    # Include smoothed train loss at same step so both lines
-                    # share the x-axis and W&B renders them on the same panel.
-                    "train/loss_ema":  _cur_ema,
-                    # Overfit ratio: val/train > 1.3 = overfitting signal
-                    "train/overfit_ratio": v_loss / max(_cur_ema, 1e-8),
+                    "train_step":          step + 1,
+                    "train/val_loss":      v_loss,
+                    "train/loss_ema":      _cur_ema,
+                    "train/overfit_ratio": _overfit,
                 }
                 if v_aw is not None:
                     log["val/accept_weight"] = v_aw
                 _wandb.log(log)
+
+                # ── Automated alerts for convergence decisions ─────────────────
+                try:
+                    _cur_step = step + 1
+                    if _overfit > 1.3:
+                        _wandb.alert(
+                            title="Overfitting detected",
+                            text=f"val_loss/train_loss_ema={_overfit:.2f} at step {_cur_step} "
+                                 f"(val={v_loss:.4f}, train_ema={_cur_ema:.4f}). "
+                                 f"ACTION: lower --lr, reduce steps, or add more data.",
+                            level="WARN",
+                        )
+                        print(f"  [ALERT] overfit_ratio={_overfit:.2f} > 1.3 — check LR/data")
+                    if _val_no_improve_count >= args.early_stop_patience > 0:
+                        _wandb.alert(
+                            title="Val loss plateau",
+                            text=f"No val improvement for {_val_no_improve_count} checks "
+                                 f"(best={_best_val_loss:.4f}). "
+                                 f"ACTION: check train/lr curve — warmup may need tuning.",
+                            level="WARN",
+                        )
+                    # Early convergence check: after 10% of steps, loss should have dropped
+                    if _cur_step == max(10, args.steps // 10):
+                        _initial_loss = losses[0] if losses else v_loss
+                        _drop_pct = (_initial_loss - _cur_ema) / max(_initial_loss, 1e-8) * 100
+                        if _drop_pct < 10:
+                            _wandb.alert(
+                                title="Slow convergence",
+                                text=f"Loss dropped only {_drop_pct:.1f}% after "
+                                     f"{_cur_step} steps (from {_initial_loss:.4f} to "
+                                     f"{_cur_ema:.4f}). "
+                                     f"ACTION: increase --lr or check --warmup_steps.",
+                                level="WARN",
+                            )
+                            print(f"  [ALERT] slow convergence: {_drop_pct:.1f}% drop after "
+                                  f"{_cur_step} steps — consider increasing LR")
+                except Exception:
+                    pass  # alerts are best-effort
             if _results_db is not None:
                 try:
                     _results_db.insert_train_step(
