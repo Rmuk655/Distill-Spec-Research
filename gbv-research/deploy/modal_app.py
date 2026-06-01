@@ -94,6 +94,14 @@ DEFAULT_CONFIG = "profiles/train_one_loss"
 # separately (as setup_env.py does); on Modal GPU containers the default PyPI
 # torch wheel ships bundled CUDA.  Pins mirror the repo exactly — nothing extra
 # is pinned.
+#
+# CANONICAL DEP LIST = gbv-research/requirements.txt.  This block is inlined
+# (not .pip_install_from_requirements) because the repo is cloned at RUN time,
+# so requirements.txt is not in the image BUILD context.  Deltas vs that file:
+#   + torchao>=0.16.0   (deploy_utils extra, PEFT LoRA init compat)
+#   - pytest            (test-only; not needed in the runtime image)
+#   bitsandbytes/torch installed first for ordering (NF4 + CUDA wheel).
+# When you bump a pin in requirements.txt, update the matching line here too.
 # ──────────────────────────────────────────────────────────────────────────────
 
 image = (
