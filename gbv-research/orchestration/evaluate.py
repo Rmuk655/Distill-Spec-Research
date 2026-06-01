@@ -596,23 +596,34 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         t0 = time.perf_counter()
 
         if _SPECINFER_AVAILABLE:
-            with torch.inference_mode():
-                output = generator.generate(
-                    input_ids=input_ids,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    attention_mask=torch.ones_like(input_ids),
-                )
-            if device == "cuda":
-                torch.cuda.synchronize()
-            elapsed = time.perf_counter() - t0
+            try:
+                with torch.inference_mode():
+                    output = generator.generate(
+                        input_ids=input_ids,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        attention_mask=torch.ones_like(input_ids),
+                    )
+                if device == "cuda":
+                    torch.cuda.synchronize()
+                elapsed = time.perf_counter() - t0
 
-            gen_tokens = (output.output[0].shape[-1] - input_ids.shape[-1]
-                          if hasattr(output.output[0], "shape") else max_tokens)
-            total_tokens += gen_tokens
-            total_time += elapsed
-            alpha = float(output.alpha_sum) / output.sample_steps if output.sample_steps > 0 else 0.0
-        else:
+                gen_tokens = (output.output[0].shape[-1] - input_ids.shape[-1]
+                              if hasattr(output.output[0], "shape") else max_tokens)
+                total_tokens += gen_tokens
+                total_time += elapsed
+                alpha = float(output.alpha_sum) / output.sample_steps if output.sample_steps > 0 else 0.0
+            except (AttributeError, TypeError) as _spec_err:
+                # specInfer KV-cache API mismatch (e.g. model returns legacy tuple cache but
+                # specInfer calls .get_seq_length() which only exists on DynamicCache).
+                # Switch all remaining prompts to the inline fallback — same results, no crash.
+                if i == 0:
+                    print(f"  [alpha] specInfer incompatible with this transformers version "
+                          f"({type(_spec_err).__name__}: {_spec_err}); using inline fallback.")
+                _SPECINFER_AVAILABLE = False
+                generator = None
+                # Fall through to inline block below for this prompt.
+        if not _SPECINFER_AVAILABLE:
             # Inline fallback: run draft-propose / target-verify without specInfer.
             # Each round: draft proposes `max_propose` tokens greedily; target scores
             # the full candidate sequence; acceptance is sampled under temperature.
