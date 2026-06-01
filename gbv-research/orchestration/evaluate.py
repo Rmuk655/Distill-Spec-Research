@@ -499,6 +499,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         # Fix: run  git submodule update --init --recursive  from the repo root.
         # Alpha measurements will use the inline fallback (greedy draft) which
         # gives slightly different alpha values than the real specInfer generator.
+        _SPECINFER_FALLBACK_WARNED = False  # warn only once per session
 
     _owns_models = (preloaded is None)   # True → we loaded, we must free
 
@@ -571,8 +572,11 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         )
     else:
         generator = None
-        print("  [alpha] specInfer not found — using inline draft-propose/verify fallback")
-        print("  [alpha] To use real specInfer: git submodule update --init --recursive")
+        global _SPECINFER_FALLBACK_WARNED
+        if not _SPECINFER_FALLBACK_WARNED:
+            print("  [alpha] specInfer not found — using inline fallback "
+                  "(git submodule update --init --recursive to fix; warned once per session)")
+            _SPECINFER_FALLBACK_WARNED = True
 
     for i, item in enumerate(prompts):
         prompt = item["prompt"] if isinstance(item, dict) else item
@@ -1521,9 +1525,11 @@ def main():
             modes_list = sorted(items["modes"])
             Ks_list    = sorted(items["Ks"])
             Ts_list    = sorted(items["Ts"])
-            n_ds = args.n
-            if ds == "humaneval": n_ds = 164
-            elif ds == "mtbench": n_ds = 80
+            # Cap at the benchmark's full size but always respect --n.
+            # humaneval=164, mtbench=80 are the full benchmark sizes.
+            # With --n 10 (laptop), use 10 prompts — enough to exercise all code paths.
+            _ds_max = {"humaneval": 164, "mtbench": 80}
+            n_ds = min(args.n, _ds_max.get(ds, args.n)) if args.n else _ds_max.get(ds, 10)
             data_path = get_dataset_path(ds, n_ds)
             n_c = len(modes_list) * len(Ks_list) * len(Ts_list)
             print(f"  {ds}: {len(modes_list)} mode(s) × {len(Ks_list)} K × "
@@ -1645,11 +1651,10 @@ def main():
 
     print(f"\nDashboard: python viz_server.py  ->  http://localhost:5000/\n")
 
-    # W&B: close eval run cleanly
+    # W&B: close eval run cleanly with full summary
     try:
         import wandb as _wmod_final
         if _wmod_final.run is not None:
-            # Log summary stats across all cells
             _all_alphas = [r.get("alpha_mean") for r in all_results if r.get("alpha_mean") is not None]
             _all_bes    = [r.get("block_eff")  for r in all_results if r.get("block_eff")  is not None]
             if _all_alphas:
@@ -1658,6 +1663,20 @@ def main():
             if _all_bes:
                 _wmod_final.summary["mean_block_eff"] = sum(_all_bes) / len(_all_bes)
                 _wmod_final.summary["max_block_eff"]  = max(_all_bes)
+
+            # Per-verifier BE summary (e.g. "BE/bv", "BE/gbv") — key for cross-run comparison
+            from collections import defaultdict as _dd
+            _be_by_mode: dict = _dd(list)
+            _be_by_ds_mode: dict = _dd(list)
+            for r in all_results:
+                if r.get("block_eff") is not None:
+                    _be_by_mode[r["mode"]].append(r["block_eff"])
+                    _be_by_ds_mode[(r["dataset"], r["mode"])].append(r["block_eff"])
+            for _mode, _vals in _be_by_mode.items():
+                _wmod_final.summary[f"BE/{_mode}"] = sum(_vals) / len(_vals)
+            for (_ds, _mode), _vals in _be_by_ds_mode.items():
+                _wmod_final.summary[f"BE/{_ds}/{_mode}"] = sum(_vals) / len(_vals)
+
             _wmod_final.finish()
     except Exception:
         pass
