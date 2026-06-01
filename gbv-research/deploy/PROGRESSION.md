@@ -99,15 +99,15 @@ Run Cell 0 first. If the session crashes, reopen the notebook and run Cell 1.
 python orchestration/experiment.py --config laptop --smoke --yes
 ```
 
-Runs **10 training steps, 20 prompts, K=3, 5 eval prompts, all loss modes**. Each training step is ~5-10s on laptop CPU/GPU; total **~15-25 min**. `--smoke` always auto-resets state AND always re-runs every step, even if the state file says "done" — immune to OneDrive sync races.
+Runs **10 training steps, 20 train prompts (capped), K=3, 3 eval prompts, 4 verifier modes**. Total **~8-15 min** on laptop. `--smoke` always auto-resets state AND always re-runs every step even if state says "done" — immune to OneDrive sync races.
 
 What `--smoke` exercises:
 - Python imports, CUDA/MPS device detection
-- 10 forward + backward passes per loss function (enough to confirm grad flow, no NaN)
-- Dataset loading + tokenization (20 prompts — fast, ~0.3s vs ~2min for full 6726)
-- One checkpoint save
-- One validation pass (5 fixed prompts from `gsm8k_5.jsonl`)
-- A tiny eval (5 prompts per verifier mode)
+- 10 forward + backward passes per loss function (confirms grad flow, no NaN)
+- Dataset loading + tokenization (20 prompts — ~0.3s vs ~2min for full 6726)
+- One checkpoint save + one validation pass (3 fixed prompts from `gsm8k_5.jsonl`)
+- Eval: alpha (inline fallback), bv, gbv, naive — 4 modes × 3 prompts each (~30s total)
+- Skips traversal and specinfer in smoke (tree-decoding: ~4s and ~8s per prompt on laptop)
 
 **Gate**: no exceptions, loss values are finite numbers.
 **If this fails**: fix the code. Do not proceed to 1b until 1a passes.

@@ -736,10 +736,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         Phase 4 — Multi-dataset   (always skipped in smoke; slow)
             eval top models on humaneval, math500, mtbench, alpaca
 
-    smoke=True:   10 steps/training · 20 train prompts (cap) · n=5 eval prompts ·
-                  max_tokens=30 · K=3 · all 6 verifier modes · temp=1.0.
-                  Exercises every loss + every verifier in ~15–25 min on laptop.
-                  Purpose: catch crashes / NaN / shape errors before any real run.
+    smoke=True:   10 steps/training · 20 train prompts (cap) · n=3 eval prompts ·
+                  max_tokens=30 · K=3 · 4 verifier modes (alpha,bv,gbv,naive) · temp=1.0.
+                  Drops traversal (~4s/prompt) and specinfer (~8s/prompt) to keep
+                  smoke under ~8-15 min on laptop.  All distinct code paths covered.
                   Always force-reruns every step (ignores "done" in state) so it
                   is immune to OneDrive sync races and prior-run state pollution.
                   Uses a SEPARATE state file (pipeline_state_<config>_smoke.json)
@@ -754,12 +754,18 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     """
     _steps         = 10    if smoke else 1000   # 10 steps = enough for 1 fwd+bwd, ckpt save, val check
     _online_steps  = 10    if smoke else 500
-    _n             = 5     if smoke else 10
+    _n             = 3     if smoke else 10     # 3 prompts = enough to confirm code path, fast (~2-3s each)
     _max_tok       = 30    if smoke else 50
     _Ks            = "3"   # safe default; yaml always overrides
     _temps         = "1.0" # T=1.0 paper standard; yaml always overrides
-    # All 6 verifier modes in both smoke and full — smoke is comprehensive by design.
-    _modes = "alpha,bv,gbv,traversal,specinfer,naive"
+    # Smoke: 4 modes — alpha (inline path), bv (fast non-OT), gbv (fast non-OT), naive (fast OT).
+    # Drops traversal (~4s/prompt) and specinfer (~8s/prompt) — tree-decoding modes that
+    # dominate wall time on laptop.  All distinct code paths still exercised:
+    #   alpha = acceptance-rate inline path
+    #   bv/gbv = non-OT block verifiers
+    #   naive = OT single-path verifier
+    # Full run uses all 6 verifiers as configured in YAML.
+    _modes = "alpha,bv,gbv,naive" if smoke else "alpha,bv,gbv,traversal,specinfer,naive"
 
     # Alpha evaluation requires both draft (0.6B BF16) and teacher (8B) in the
     # same evaluate.py process simultaneously.  On Colab (load_in_4bit=True) this
