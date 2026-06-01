@@ -1338,6 +1338,7 @@ def main():
             import wandb as _wandb_mod
             _wandb_dir = os.path.join(_PARENT, "db", "wandb")
             os.makedirs(_wandb_dir, exist_ok=True)
+            _run_mode = "smoke" if getattr(args, "n", 10) <= 3 else "full"
             _wandb_mod.init(
                 project=args.wandb_project,
                 entity=getattr(args, "wandb_entity", None),
@@ -1348,7 +1349,8 @@ def main():
                 # Falls back to experiment_tag for backward compat when group not set.
                 group=getattr(args, "wandb_group", None) or args.experiment_tag,
                 tags=[student_label, "eval", "phase1", args.hw_tier,
-                      args.experiment_tag],   # session tag searchable via tags
+                      args.experiment_tag,
+                      _run_mode],   # "smoke" or "full" for easy filtering
                 dir=_wandb_dir,   # store run files under db/wandb/, not orchestration/wandb/
                 config={
                     "student":        args.student,
@@ -1359,6 +1361,7 @@ def main():
                     "n_prompts":      args.n,
                     "max_tokens":     args.max_tokens,
                     "hw_tier":        args.hw_tier,
+                    "run_mode":       _run_mode,
                 },
                 reinit="return_previous",
             )

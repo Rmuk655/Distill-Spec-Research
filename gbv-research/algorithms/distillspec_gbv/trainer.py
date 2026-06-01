@@ -653,7 +653,7 @@ def main() -> None:
     from transformers import get_linear_schedule_with_warmup
     _ga = max(1, args.grad_accum)
     _n_opt_steps  = max(1, (args.steps + _ga - 1) // _ga)  # total optimizer updates
-    _warmup_grad  = args.warmup_steps if args.warmup_steps is not None else max(50, args.steps // 10)
+    _warmup_grad  = args.warmup_steps if args.warmup_steps is not None else max(1, args.steps // 10)
     _warmup_opt   = max(1, _warmup_grad // _ga)             # warmup in optimizer steps
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
@@ -742,6 +742,8 @@ def main() -> None:
             # Format: {run_label}-{loss}_{family}_{teacher}_{steps}steps
             # e.g. "0.6B-laptop-kl_qwen_qwen3-0.6b_200steps"
             _run_name = f"{_label_prefix}{args.loss}_{family.name}_{_teacher_short(args.target)}_{args.steps}steps"
+            _is_smoke = (args.steps <= 10)
+            _run_mode = "smoke" if _is_smoke else "full"
             _wandb = _w.init(
                 project=args.wandb_project, entity=args.wandb_entity,
                 group=args.wandb_group or None,
@@ -749,9 +751,25 @@ def main() -> None:
                 name=_run_name,
                 tags=[args.loss, "train", "phase1",
                       getattr(args, "hw_tier", "unknown"),
-                      f"seed{args.seed}"],   # seed in tags, not in name
-                config={**vars(args), "family": family.name,
-                        "attn_impl": _ATTN_IMPL},
+                      f"seed{args.seed}",
+                      _run_mode],   # "smoke" or "full" for easy filtering
+                config={
+                    "loss":              args.loss,
+                    "hw_tier":           getattr(args, "hw_tier", "unknown"),
+                    "run_mode":          _run_mode,
+                    "steps":             args.steps,
+                    "lr":                args.lr,
+                    "grad_accum":        args.grad_accum,
+                    "batch_size":        getattr(args, "batch_size", 1),
+                    "lora_r":            args.lora_r,
+                    "teacher_temp":      args.teacher_temp,
+                    "seed":              args.seed,
+                    "family":            family.name,
+                    "draft":             args.draft,
+                    "target":            args.target,
+                    "attn_impl":         _ATTN_IMPL,
+                    "max_train_prompts": getattr(args, "max_train_prompts", 0),
+                },
                 resume="allow",
             )
             # Use training step as x-axis for all train metrics.
