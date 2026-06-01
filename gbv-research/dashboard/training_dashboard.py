@@ -1411,9 +1411,13 @@ const STEP_DESC = {
 // minTier: minimum hw_tier required to run this phase.
 //   laptop < colab_lite < colab < a100
 // Phases with minTier > current pipeline config are shown grayed-out with a tooltip.
+// CUDA compile note: torch.compile is already false in laptop.yaml.
+// The CUDA startup delay visible on Windows is lazy CUDA initialisation
+// (DLL loading + kernel JIT) that happens once per subprocess regardless
+// of torch.compile — it cannot be avoided by any config change.
 const PHASE_GROUPS = [
-  { label: 'Ph 1 — Baseline',  minTier: 'laptop', steps: ['eval_baseline_gsm8k'] },
-  { label: 'Ph 2 — Training',  minTier: 'laptop', steps: [
+  { label: 'Ph 1 — Baseline',              minTier: 'laptop', steps: ['eval_baseline_gsm8k'] },
+  { label: 'Ph 2 — Flat-loss Training',    minTier: 'laptop', steps: [
       'train_kl_gsm8k','merge_kl_gsm8k',
       'train_ebe_gsm8k','merge_ebe_gsm8k',
       'train_ebe_single_gsm8k','merge_ebe_single_gsm8k',
@@ -1423,20 +1427,14 @@ const PHASE_GROUPS = [
       'online_adapt_gsm8k','merge_online_gsm8k',
       'online_ebe_adapt_gsm8k','merge_online_ebe_gsm8k',
       'online_ebe_single_adapt_gsm8k','merge_online_ebe_single_gsm8k',
+      'eagle_gen','eagle_train','eagle_eval',
   ]},
-  { label: 'Ph 3 — GSM8K Eval', minTier: 'laptop', steps: [
+  { label: 'Ph 3 — Flat-loss Eval (GSM8K)', minTier: 'laptop', steps: [
       'eval_kl_gsm8k','eval_ebe_gsm8k','eval_ebe_single_gsm8k',
       'eval_rev_kl_gsm8k','eval_jsd_gsm8k','eval_l1_gsm8k',
       'eval_online_gsm8k','eval_online_ebe_gsm8k','eval_online_ebe_single_gsm8k',
   ]},
-  { label: 'Ph 4 — Multi-DS',   minTier: 'colab', steps: [
-      'eval_baseline_all',
-      'eval_kl_all','eval_ebe_all','eval_ebe_single_all','eval_rev_kl_all',
-      'eval_jsd_all','eval_l1_all',
-      'eval_online_all','eval_online_ebe_all','eval_online_ebe_single_all',
-  ]},
-  { label: 'Ph 5 — EAGLE',     minTier: 'colab', steps: ['eagle_gen','eagle_train','eagle_eval'] },
-  { label: 'Ph 6 — Tree Train', minTier: 'colab_lite', steps: [
+  { label: 'Ph 4 — Tree-loss Training',    minTier: 'laptop', steps: [
       'train_kl_tree_gsm8k','merge_kl_tree_gsm8k',
       'train_bv_tree_gsm8k','merge_bv_tree_gsm8k',
       'train_gbv_tree_gsm8k','merge_gbv_tree_gsm8k',
@@ -1452,7 +1450,7 @@ const PHASE_GROUPS = [
       'online_kl_tree_adapt_gsm8k','merge_online_kl_tree_gsm8k',
       'online_ebe_tree_adapt_gsm8k','merge_online_ebe_tree_gsm8k',
   ]},
-  { label: 'Ph 6 — Tree GSM8K Eval', minTier: 'colab_lite', steps: [
+  { label: 'Ph 5 — Tree-loss Eval (GSM8K)', minTier: 'laptop', steps: [
       'eval_kl_tree_gsm8k','eval_bv_tree_gsm8k','eval_gbv_tree_gsm8k',
       'eval_trav_tree_gsm8k','eval_ebe_tree_gsm8k','eval_rev_kl_tree_gsm8k',
       'eval_jsd_tree_gsm8k',
@@ -1460,7 +1458,12 @@ const PHASE_GROUPS = [
       'eval_st_tree_gsm8k','eval_khisti_tree_gsm8k',
       'eval_online_kl_tree_gsm8k','eval_online_ebe_tree_gsm8k',
   ]},
-  { label: 'Ph 7 — Tree Multi-DS', minTier: 'colab', steps: [
+  // Disabled on laptop: 0.6B teacher has no signal across multiple domains
+  { label: 'Ph 6 — Multi-DS Eval',          minTier: 'colab', steps: [
+      'eval_baseline_all',
+      'eval_kl_all','eval_ebe_all','eval_ebe_single_all','eval_rev_kl_all',
+      'eval_jsd_all','eval_l1_all',
+      'eval_online_all','eval_online_ebe_all','eval_online_ebe_single_all',
       'eval_kl_tree_all','eval_bv_tree_all','eval_gbv_tree_all','eval_trav_tree_all',
       'eval_ebe_tree_all','eval_rev_kl_tree_all','eval_jsd_tree_all',
       'eval_naive_tree_all','eval_nss_tree_all','eval_si_tree_all',
