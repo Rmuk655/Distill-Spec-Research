@@ -56,9 +56,12 @@ training:
   jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
 
 dataset:
-  # These paths are for reference only — pipeline hardcodes core/datasets/raw/ via _data().
-  train: core/datasets/raw/gsm8k_train.jsonl   # 7,473 prompts; 6,726 train / 747 val (10% split)
-  eval:  core/datasets/raw/gsm8k_30.jsonl       # 30-prompt fixed eval set (block-efficiency only)
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_5.jsonl
+  # val_dataset: fixed 5-prompt val set passed to trainer.py --val_dataset.
+  # Without this, trainer uses val_split=0.1 → last 10% of 6726 = 672 prompts → very slow.
+  # Same 5 prompts every run (deterministic) — consistent signal, fast (~30 s on laptop).
+  val_dataset: gsm8k_5.jsonl
 
 checkpointing:
   save_every: 20                # fires 10x in 200 steps -- exercises rolling checkpoint logic

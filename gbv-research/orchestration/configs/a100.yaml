@@ -52,9 +52,13 @@ training:
   jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
 
 dataset:
-  # These paths are for reference only -- pipeline hardcodes core/datasets/raw/ via _data().
   train: core/datasets/raw/gsm8k_train.jsonl
   eval:  core/datasets/raw/gsm8k_30.jsonl
+  # val_dataset: fixed 30-prompt val set passed to trainer.py --val_dataset.
+  # A100 is fast enough for 30 prompts (~2 min/check); gives a more reliable signal
+  # for paper runs than the 10-prompt Kaggle set.
+  # Without this, trainer uses val_split=0.1 → 672 prompts → ~20 min/check even on A100.
+  val_dataset: gsm8k_30.jsonl
 
 checkpointing:
   save_every: 100               # save every 100 steps (~30-50 s on A100) -- less crash risk than T4
@@ -67,7 +71,7 @@ logging:
   wandb_project: distillspec
   wandb_group: a100
   # run_label is prepended to every W&B run name: "8B-A100-kl_qwen_2000steps"
-  run_label: "8B-A100"
+  run_label: "8B-a100"
 
 health:
   val_every: 100

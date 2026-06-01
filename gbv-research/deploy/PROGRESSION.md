@@ -15,7 +15,7 @@ confirm on production hardware.**
 |------|----------|--------|---------|-------|-----------|-----------|---------|
 | 1 | Laptop (RTX 500 Ada) | `laptop` | Qwen3-0.6B | 200 (smoke: ~50) | ~30-40 min | `laptop-gsm8k` | Code exerciser: does every path run? |
 | 2 | Kaggle T4x2 / Modal T4 | `kaggle` | Qwen3-8B NF4 | 1000 | ~4-8 h | `kaggle-t4x2` | Exploration: which losses rank best? |
-| 3 | IITH A100 | `a100` | Qwen3-8B BF16 | 2000 | ~15-20 min train | `a100` | Confirmation: paper-quality numbers |
+| 3 | A100 | `a100` | Qwen3-8B BF16 | 2000 | ~15-20 min train | `a100` | Confirmation: paper-quality numbers |
 
 > **Why can't Tier 1 produce trends?**
 > The laptop teacher (Qwen3-0.6B) is the *same size class* as the draft (Qwen2.5-0.5B).
@@ -35,7 +35,7 @@ confirm on production hardware.**
 |------|-------|---------|-------------|-------|----------|
 | 1 (laptop) | 1.2 GB | 1.2 GB | ~0.5 GB | ~3 GB | CPU/MPS headroom varies |
 | 2 (Kaggle T4x2) | 1.2 GB | 4.5 GB NF4 | ~2.0 GB | **~7.8 GB** on GPU 0 | 8+ GB free; teacher split across both T4s |
-| 3 (IITH A100) | 1.2 GB | 16.0 GB BF16 | ~2.5 GB | **~19.7 GB** | ~20 GB free on A100 40 GB |
+| 3 (A100) | 1.2 GB | 16.0 GB BF16 | ~2.5 GB | **~19.7 GB** | ~20 GB free on A100 40 GB |
 
 **Why 4-bit NF4 on Kaggle T4x2?**
 Each T4 has 16 GB VRAM. Qwen3-8B in BF16 (~16 GB) won't fit on a single card.
@@ -86,7 +86,7 @@ Kaggle T4x2 runs use **`deploy/kaggle.ipynb`**:
 Run Cell 0 first. If the session crashes, reopen the notebook and run Cell 1.
 
 > There are no separate quickstart notebooks for Colab or A100. Kaggle T4x2 is
-> the primary free-tier compute. IITH A100 runs use `experiment.py` directly.
+> the primary free-tier compute. A100 runs use `experiment.py` directly.
 
 ---
 
@@ -147,19 +147,20 @@ What the full laptop run exercises that smoke does NOT:
 
 **If this fails**: fix the code. Do not run Kaggle until Tier 1 passes.
 
-**🔐 Code Review Gate → Tier 2** (must complete before first Kaggle run):
+**🔐 Code Review Gate → Tier 2** (must complete before first Tier 2 run):
+
+> Tier 2 can be Kaggle T4x2 OR Modal T4 — both are valid Tier 2 platforms.
+
 - [ ] Tier 1b passes (all eval modes, no errors)
 - [ ] PR opened with all changes since last review
 - [ ] Loss function implementation reviewed against paper/spec
 - [ ] Verifier implementation reviewed against GBV spec
-- [ ] Reviewer sign-off recorded in `deploy/RUN_LOG.md` Tier 1 section
 
 ---
 
-### Step 2 — Kaggle T4x2 exploration runs (Tier 2)
+### Step 2 — Tier 2 exploration runs (Kaggle T4x2 or Modal T4)
 
-Open **`deploy/kaggle.ipynb`** on a **Kaggle T4 x2** session (always T4 x2 — P100
-is incompatible with PyTorch 2.10+cu128).
+Kaggle T4x2 and Modal T4 are equivalent Tier 2 platforms — use whichever has quota remaining. For Kaggle, open **`deploy/kaggle.ipynb`** on a **Kaggle T4 x2** session (always T4 x2 — P100 is incompatible with PyTorch 2.10+cu128); for Modal T4, run `experiment.py` directly on the Modal instance.
 
 Run **Cell 0** with `SMOKE = False`. For a quick end-to-end check (~10 min),
 run with `SMOKE = True` first before committing to the full 4-8 h run.
@@ -186,14 +187,15 @@ latest checkpoint — worst-case loss is 25 steps).
 - [ ] PR reviewed: hypothesis matches what the code actually tests
 - [ ] PR reviewed: no data leakage (eval prompts not in train set)
 - [ ] W&B run URLs recorded in `deploy/RUN_LOG.md`
-- [ ] Reviewer sign-off recorded
 
 ---
 
-### Step 3 — IITH A100 confirmation runs (Tier 3)
+### Step 3 — A100 confirmation runs (Tier 3)
+
+Run on any A100 — IITH, Modal A100, Colab Pro/Pro+, or any cloud A100.
 
 ```bash
-# On IITH A100 (in gbv-research/):
+# In gbv-research/ (on any A100):
 python orchestration/experiment.py --config a100 --storage_root /path/to/specdist --yes
 ```
 
@@ -212,10 +214,8 @@ larger than run-to-run variance (compare two seeds).
 - [ ] Tier 3 confirmed across ≥ 2 seeds
 - [ ] Effect > 5% on ≥ 1 verifier × K combination
 - [ ] PR reviewed: no bugs introduced since Tier 2 review
-- [ ] Hypothesis text finalized and written into `GUIDE.md` — no more code changes
-- [ ] Ablation plan agreed (what to ablate on A100, which seeds, which K values)
-- [ ] Both researchers sign off — this is the commitment point before expensive compute
-- [ ] Sign-off recorded in `deploy/RUN_LOG.md`
+- [ ] Hypothesis text finalized — no more code changes before paper submission
+- [ ] Ablation plan agreed (what to ablate, which seeds, which K values)
 
 **What's different from Tier 2:**
 - Teacher in plain BF16 (vs NF4) → stronger, cleaner distillation signal
@@ -256,7 +256,7 @@ sessions (4-8 h) where continuous terminal monitoring is not practical.
 
 ### Varies by tier:
 
-| Parameter | Tier 1 (laptop) | Tier 2 (Kaggle T4x2) | Tier 3 (IITH A100) |
+| Parameter | Tier 1 (laptop) | Tier 2 (Kaggle T4x2 / Modal T4) | Tier 3 (A100) |
 |-----------|-----------------|----------------------|--------------------|
 | `target` (teacher) | Qwen3-0.6B | Qwen3-8B NF4 | Qwen3-8B BF16 |
 | `steps` | 200 (smoke: ~50) | 1000 | 2000 |
@@ -283,7 +283,7 @@ In the W&B project `distillspec`, use these filters:
 group:laptop-gsm8k    ← all Tier 1 runs
 group:kaggle-t4x2     ← all Tier 2 Kaggle runs
 group:modal-t4        ← all Tier 2 Modal runs (once modal.yaml is configured)
-group:a100            ← all Tier 3 IITH A100 runs
+group:a100            ← all Tier 3 A100 runs
 ```
 
 **Compare a single loss across teacher sizes:**

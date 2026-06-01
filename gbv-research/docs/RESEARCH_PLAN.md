@@ -99,70 +99,31 @@ verify_latency_ms, notes, experiment_tag, hw_tier, seed, git_sha, wandb_url`.
 | `gsm8k_train` | 7,473 (6,726 train / 747 val @ 10% split) | training |
 | `alpaca_train` | 52,002 | training |
 
-### 0.5 Configs / hardware tiers — `orchestration/configs/`
+### 0.5 Hardware tiers and run commands
 
-| config | draft | teacher | quant | steps | lr | warmup | grad_accum | lora r/α | max_new_tok | eval K / T / n | eval modes |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `laptop` | Qwen2.5-0.5B | Qwen3-0.6B | none | 200 | 3e-5 | — | 4 (default) | 4/8 | 32 | K3 / T0.6 / 10 | alpha,bv,gbv,traversal,specinfer,naive |
-| `colab_lite` | Qwen3-0.6B | Qwen3-1.7B | none | 300 | 3e-5 | — | 4 | 4/8 | 128 | K3 / T1.0 / 20 | bv,gbv |
-| `colab` | Qwen3-0.6B | Qwen3-4B | none | 500 | 3e-5 | 50 | 16 | 8/16 | 96 | K3 / T1.0 / 50 | alpha,bv,gbv,traversal,specinfer,naive |
-| `kaggle` | Qwen3-0.6B | Qwen3-8B | 4-bit NF4 | 1000 | 3e-5 | 100 | 16 | 8/16 | 96 | K3 / T1.0 / 100 | bv,gbv,traversal,specinfer,naive |
-| `a100` | Qwen3-0.6B | Qwen3-8B | bf16 | 2000 | 3e-5 | 200 | 16 | 16/32 | 128 | K3 / T1.0 / 100 (gsm8k **1319**) | alpha,naive,nss,specinfer,spectr,khisti,bv,gbv,traversal |
+> For hardware tier configs, step-by-step run commands, and W&B group structure, see `deploy/PROGRESSION.md`. For compute costs and tier selection, see `docs/COMPUTE.md`.
 
-Train `teacher_temperature = 0.8` across configs; eval `T=1.0` is the paper
-standard. T4 tiers train all 17 losses; `a100` runs the 9-verifier matrix.
-The user-facing draft↔teacher gap is **0.6B → 8B** at the top tier.
-
-> **Research-valid tiers and the teacher-gap principle:**
->
-> | Tier | Config | Teacher | Research-valid? |
-> |---|---|---|---|
-> | Crash check | `laptop` | any | No — code-only verification |
-> | **Crash check only** | `colab_lite` | **1.7B BF16** | **No** — 1.7B→0.6B gap (~3×) too small; loss rankings can reverse vs 8B→0.6B (~13×) |
-> | **Crash check / quota fallback** | `colab` | **4B BF16** | **No** — 4B teacher ≠ paper setting (8B); trends not transferable to A100 results |
-> | **✓ Exploration** | **`kaggle` + Modal T4** | **8B NF4** | **Yes** — same 8B teacher as A100; quantized NF4 gives same loss rankings as full BF16; Modal T4 ($0.59/hr, ~50 h free/mo) is interchangeable when Kaggle quota is exhausted |
-> | **✓ Confirmation** | **`a100`** | **8B BF16** | **Yes** — paper numbers, ≥3 seeds, full GSM8K |
->
-> **Key principle: always use 8B teacher for any research decision.**
-> The 1.7B→0.6B gap (~3×) is too small — loss rankings established there are not
-> reliable for predicting 8B→0.6B (~13×) behaviour. Colab/colab_lite are code
-> verification only. `kaggle` (8B NF4) is the minimum valid platform for research
-> direction; `a100` (8B BF16) is for publication confirmation.
+**Key principle: always use 8B teacher for any research decision.** The 1.7B→0.6B gap (~3×) is too small — loss rankings established there are not reliable for predicting 8B→0.6B (~13×) behaviour. Only T4-class hardware with the 8B NF4 teacher (Kaggle T4x2 or Modal T4) is the minimum valid platform for research direction; an A100 with 8B BF16 is required for publication confirmation.
 
 ### 0.6 Existing statistical rigor — what EXISTS vs MISSING
 
-**Exists** (`paper/analyze_results.py`):
-- Welch's two-sample t-test (`welch_t_pvalue`), Cohen's d, `ci95 = 1.96·σ/√n`,
-  significance stars, % change, K-sensitivity tables, cross-dataset CV.
-- **But** the p-value uses a hand-rolled incomplete-beta approximation
-  (`_regularized_incomplete_beta`, commented "very rough… good enough for
-  p<0.05"), and the tests group **across runs by label** — with one run per cell
-  the group size is 1 and the test returns `n/a`.
+**Exists:**
+- **Statistical analysis** (`paper/analyze_results.py`): Welch's two-sample t-test, Cohen's d, `ci95 = 1.96·σ/√n`, significance stars, % change, K-sensitivity tables, cross-dataset CV. Note: p-values use a hand-rolled incomplete-beta approximation — approximate, not scipy-backed; with a single run per cell the test returns `n/a`.
+- **W&B logging**: per-run summary metrics (eval/BE/alpha by verifier/dataset), `job_type=train/eval`, `wandb_group` per tier, run name encodes teacher+loss+family+steps. See `deploy/PROGRESSION.md` for the full W&B metric taxonomy and run naming convention.
+- **Automated training alerts** (`trainer.py`): grad_norm > 10, overfit_ratio > 1.3, val plateau, slow convergence at 10% of steps — all fire W&B alerts automatically.
+- **LoRA gradient health**: lora_A/B mean/max/std logged per step to W&B.
 
 **Missing (must be added for publication):**
-1. **Multi-seed orchestration.** `experiment.py` runs a single `seed` (default
-   42, optional `seed_override`); no loop over seeds, no seed dimension in run
-   identity beyond the (unused-for-aggregation) `seed` column.
-2. **BE variance/CI.** `block_eff_std` and `per_prompt.block_eff` are never
-   populated; the verifier prints a single mean. No way to put error bars on BE.
-3. **Bootstrap.** No bootstrap anywhere in the repo.
-4. **Paired tests over prompts.** No paired bootstrap / paired t-test; current
-   comparison is unpaired Welch across runs.
-5. **Multiple-comparison correction.** No Bonferroni/Holm despite many
-   loss×verifier comparisons.
-6. **Exact p-values.** No `scipy.stats` dependency; p-values are approximate.
+1. **Multi-seed orchestration.** `experiment.py` runs a single `seed` (default 42); no loop over seeds, no seed dimension in run identity beyond the (unused-for-aggregation) `seed` column.
+2. **BE variance/CI.** `block_eff_std` and `per_prompt.block_eff` are never populated; the verifier prints a single mean. No way to put error bars on BE.
+3. **Bootstrap CI for BE comparisons.** No bootstrap anywhere in the repo.
+4. **Paired tests over prompts.** No paired bootstrap / paired t-test; current comparison is unpaired Welch across runs.
+5. **Multiple-comparison correction.** No Bonferroni/Holm despite many loss×verifier comparisons.
+6. **Exact p-values.** No `scipy.stats` dependency; p-values are approximate (hand-rolled incomplete-beta).
 
-### 0.7 W&B logging
+### 0.7 Current W&B observable metrics
 
-- **Training** (`trainer.py`): `train/loss`, `train/lr`, `train/peak_vram_mb`,
-  `step`; `val/loss`, `val/accept_weight`; `wandb.watch(log="gradients",
-  log_freq=100)`. Run name = `{run_label}-{loss}_{family}_{steps}steps`.
-- **Eval** (`evaluate.py`): `eval/{dataset}/{mode}/alpha_mean|alpha_ci95|
-  throughput|ms_per_tok`, flat `eval/alpha_mean`, `eval/throughput`,
-  `eval/{dataset}/task_score`, per-prompt `alpha` `wandb.Table`; BE mode:
-  `eval/{dataset}/{mode}/K{K}/block_eff`, `eval/block_eff`; run summary
-  `mean/max_alpha`, `mean/max_block_eff`. Training and eval share the
-  `distillspec` project and group by `experiment_tag`.
+For the current W&B metric taxonomy, run naming convention, and group structure, see `deploy/PROGRESSION.md` — W&B details are not duplicated here.
 
 ---
 
@@ -264,9 +225,9 @@ the existing guard thresholds (>5pp task drop / >10% PPL rise in `evaluate.py`).
 
 ### B.3 One-factor-at-a-time vs full grid
 
-- **Weeks 2–5 (Kaggle P100): one-factor-at-a-time (OFAT), 1 seed, n=50.** Vary
+- **Tier 2 exploration (Kaggle T4x2 or Modal T4): one-factor-at-a-time (OFAT), 1 seed, n=50.** Vary
   loss with verifier fixed to the matched mode, K=3, T=1.0, GSM8K only. Cheap,
-  isolates RQ1–RQ3 for *direction*; Week 5 widens to the verifier columns for RQ4.
+  isolates RQ1–RQ3 for *direction*; later widens to the verifier columns for RQ4.
 - **A100 confirmation: only the 1–2 promoted loss×verifier pairings + control.**
   Not a grid — the funnel has already collapsed the matrix to its finalists.
 - **Full 13×8 cross-pair grid is "extended"** (appendix-only), deferred to a
@@ -285,72 +246,13 @@ the existing guard thresholds (>5pp task drop / >10% PPL rise in `evaluate.py`).
 `nss`, `spectr`, `khisti`; datasets humaneval/mtbench/math500/alpaca; T=0.6;
 K=8; full 13×8 grid.
 
-### B.5 The free-tier funnel (hard budget reframe)
+### B.5 Compute platform selection and budget
 
-This is a **strict free-tier project**. There is no paid A100 pool. The earlier
-~165 GPU-hour plan (incl. ~115 A100-h) is **not affordable** and is replaced by
-the funnel below.
+> For compute platform selection, quota constraints, the exploration/confirmation funnel, and cost breakdown, see `docs/COMPUTE.md`.
 
-**Compute reality (hard limits):**
+### B.6 Per-session protocol and frugality rules
 
-| resource | budget | role | reliability |
-|---|---|---|---|
-| **Kaggle free (8B NF4 teacher)** | **~30 GPU-h / week, resets weekly** | **ALL exploration** (rank losses, kill losers, tune LR) — **minimum valid platform for research decisions** | the only reliable compute |
-| Modal | **$30 one-time signup credit** (not yet signed up) | **ONE A100 confirmation run, spent last** | one-shot, irreplaceable |
-| Lightning | ~15–22 free credits/mo | backup A100 if Modal runs short | secondary |
-| Colab free (4B teacher) | **already exhausted** | **crash check / quota fallback only** — 4B teacher ≠ paper setting (8B); NOT for research direction | unreliable |
-| Colab_lite (1.7B teacher) | n/a | **crash check only** — 1.7B→0.6B gap (~3×) too small; loss rankings unreliable | unreliable |
-
-> ### ⚠️ MANDATE: on Kaggle always use **GPU T4 x2** — P100 is broken, no single T4 exists.
-> Kaggle's GPU options: **P100** (sm_60, broken with PyTorch 2.10+cu128) and **T4 x2**
-> (sm_75, the only working choice). There is no single-T4 option.
-> T4 x2 burns **2× quota per session-hour**: 30 GPU-h/wk → **~15 effective session-hours/wk**.
-> Plan for 1–2 sessions of 8–9 hours per week. **Always select "GPU T4 x2"** in Kaggle
-> notebook settings. P100 will crash immediately (sm_60 < sm_70 required by PyTorch 2.10+).
-
-**The funnel:**
-
-```
-Kaggle T4 x2 (exploration, ~15 effective h/wk × ~6 wk)  Modal A100 (confirm, ONCE)
-┌────────────────────────────────────────────┐        ┌──────────────────────────┐
-│ 13 losses → rank → kill losers → tune LR     │  ───►  │ top 1–2 loss×verifier      │
-│ n=50, K=3, T=1.0, 1 seed (DIRECTION only)    │        │ full GSM8K n=1319          │
-│ matched verifier + bv/naive refs             │        │ 3 seeds, K∈{3,5}           │
-│ exit: ≤2 candidates that beat forward_kl     │        │ → the ONLY paper numbers   │
-└────────────────────────────────────────────┘        └──────────────────────────┘
-```
-
-- **Kaggle P100 = exploration.** Everything that *ranks* losses and tunes
-  hyperparameters happens here, cheaply: n=50 prompts, K=3 only, T=1.0, **1 seed**.
-  These numbers establish **direction only** — they decide what to promote, not
-  what goes in the paper.
-- **Modal A100 = confirmation, once.** After T4 narrows to ≤2 loss×verifier
-  pairings, spend the $30 credit on a **single** rigorous run: full GSM8K
-  (n=1319), 3 seeds, K∈{3,5}. These are the only publication numbers.
-
-Assumptions (from configs): P100 training ≈ 1.5–3 s/step (slower than T4 for
-matmul but fits 16 GB); tree losses ~2–4× flat (K-path tree + 3 model passes per
-step, see `_tree_training_step`); A100 ≈ 0.3–0.6 s/step. BE eval scales with
-`n_prompts × max_new_tokens` × verifier complexity (traversal/gbv slowest).
-Calibrate after Week 1 and adjust the per-week ceiling.
-
-### B.6 Frugality rules (non-negotiable on Kaggle)
-
-1. **Always T4 x2** (the only working Kaggle GPU; P100 is broken) — plan for ~15 effective session-hours/wk.
-2. **n=50 prompts** for all Kaggle eval (not 100). Enough to rank, half the cost.
-3. **K=3 only** on Kaggle. K=5 is deferred entirely to the A100 confirmation.
-4. **1 seed** for Kaggle ranking. Multi-seed is an A100-only luxury.
-5. **`--skip_existing` always.** Every restart resumes; never recompute a cell
-   already in `results.db`.
-6. **Religious Cell-2b checkpoint backup.** `/kaggle/working` is ephemeral; a
-   lost session = wasted *irreplaceable* weekly quota. Always pass
-   `--storage_root`, mirror `ckpt_latest`/`ckpt_best` + `results.db` to a Kaggle
-   Dataset (or Drive) at session end, `save_every=25`.
-7. **Kill losers immediately.** A loss that doesn't beat `forward_kl` direction
-   at n=50 after a full 1000-step train is dropped — do not spend a second week
-   on it. One hypothesis-batch per week; protect the ceiling.
-8. **One 9-hour session ≈ 9 quota-h.** Plan each week as ≤3 sessions so a single
-   crash costs ≤⅓ of the week's budget.
+> For per-session frugality rules, checkpoint backup procedures, Kaggle/Modal session protocol, and the full run checklist, see `deploy/PROGRESSION.md`.
 
 ---
 
@@ -404,16 +306,11 @@ For the single pre-registered primary comparison (RQ2: best tree loss vs the RQ1
 
 ### C.5 Minimum sample size
 
-- Current configs: T4 `n_prompts` = 10 (laptop) / 20 (colab_lite) / 50 (colab) /
-  100 (kaggle); A100 = 100 secondary, **1319 (full GSM8K) primary**.
-- **Free-tier recommendation:** **Kaggle exploration uses n=50** (frugality rule
-  B.6.2 — enough to *rank*, half the cost of 100, never published). **The single
-  A100 confirmation uses the full 1319-prompt GSM8K test set**
-  (`eval_n_prompts_gsm8k: 1319` already in `a100.yaml`).
-- A paired-bootstrap on 1319 prompts resolves BE differences of ~0.1 block;
-  n=50 resolves only ~0.4–0.5 — adequate for ranking direction, not for the
-  final delta. This is exactly why n=50 stays on Kaggle and 1319 is reserved for
-  the one A100 run.
+- **Tier 2 exploration uses n=50** — enough to rank losses, half the eval cost of n=100, and never published as final results.
+- **A100 confirmation uses the full 1319-prompt GSM8K test set** — this is the only sample size that goes in the paper.
+- A paired-bootstrap on 1319 prompts resolves BE differences of ~0.1 block; n=50 resolves only ~0.4–0.5 — adequate for ranking direction, not for the final delta. This is exactly why n=50 stays on Tier 2 and 1319 is reserved for the one A100 run.
+
+> For per-tier n_prompts configuration values, see `deploy/PROGRESSION.md`.
 
 ### C.6 MISSING-in-code checklist (to add — **not implemented in this plan**)
 
@@ -435,7 +332,7 @@ For the single pre-registered primary comparison (RQ2: best tree loss vs the RQ1
 
 ---
 
-## Section D — Quota-bounded execution plan (≈6 Kaggle weeks + staged A100 confirmation)
+## Section D — Iteration priority and A100 staged confirmation
 
 > ### 🔒 Iteration priority (LOCKED)
 > The algorithm is **not final** and will need **multiple iterations** — this plan
@@ -443,9 +340,9 @@ For the single pre-registered primary comparison (RQ2: best tree loss vs the RQ1
 > and **each step gates the next**:
 >
 > 1. **FIRST — Flat-baseline benchmark (`forward_kl`).** Establish a solid,
->    trusted published-loss baseline. **The first real A100 (Modal) spend produces
->    the `forward_kl` baseline numbers** (full GSM8K where budget allows). Nothing
->    else is meaningful until this is reproduced in the expected BE range.
+>    trusted published-loss baseline. The first A100 spend produces the
+>    `forward_kl` baseline numbers (full GSM8K). Nothing else is meaningful until
+>    this is reproduced in the expected BE range.
 > 2. **SECOND — Tree-loss training** (`kl_tree`, `bv_tree`, `gbv_tree`, …), the
 >    core novel contribution, compared against the step-1 baseline.
 > 3. **THIRD — GBV verifier** (verifier-side contribution) — only after tree-loss
@@ -456,111 +353,13 @@ For the single pre-registered primary comparison (RQ2: best tree loss vs the RQ1
 > Do not advance a step until the previous step's EXIT gate passes. On each loop
 > iteration (algo revision) re-enter at the earliest step the change affects.
 
-**Cadence rule:** Kaggle resets ~30 GPU-h/week; T4 x2 burns 2×, giving **~15 effective
-session-hours/wk**. Every week is **one hypothesis-batch with a hard ≤27 GPU-h ceiling**
-(safety buffer for a crashed session). **T4 x2 only** (B.5 mandate — P100 is broken).
-All Kaggle runs: n=50, K=3, T=1.0, **1 seed**, `--skip_existing`, Cell-2b backup at
-session end. Numbers from the Kaggle weeks are **direction only** — they decide promotion,
-not the paper. Each week states a GPU-h budget and a quantitative EXIT gate.
+> For the week-by-week Tier 2 execution plan, session protocol, and per-tier EXIT gates, see `deploy/PROGRESSION.md`. For compute budget, quota constraints, and cost breakdown, see `docs/COMPUTE.md`.
 
-> **Hour-accounting note:** "train h" assumes P100 ≈ 1.5–3 s/step; flat losses
-> ~0.5–0.8 h/1000 steps, tree losses ~1.0–1.8 h/1000 steps. "eval h" assumes
-> GSM8K n=50, K=3, batched per checkpoint across the listed verifiers, ~0.2–0.4 h
-> per checkpoint-batch. Recalibrate the ceiling after Week 1's measured rates.
-
-**Weekly Kaggle budget & running total (each week ≤ 30 GPU-h ceiling):**
-
-| week | activity | GPU-h | ≤30? | cumulative |
-|---|---|---:|:---:|---:|
-| 1 | pipeline validation + baseline + timing calibration | ~5 | ✅ | ~5 |
-| 2 | convergence + LR tuning (`kl_tree` vs `forward_kl`) | ~12 | ✅ | ~17 |
-| 3 | loss ablation batch 1 (core 7 losses) | ~27 | ✅ | ~44 |
-| 4 | loss ablation batch 2 (extended ~6 losses) | ~27 | ✅ | ~71 |
-| 5 | verifier × loss interaction (eval-only) | ~10 | ✅ | ~81 |
-| 6 | K/T direction pre-check + crash buffer + A100 prep | ≤20 | ✅ | ~101 |
-
-**≈ 101 Kaggle GPU-h across 6 weeks, no single week > 30** → fits free Kaggle
-quota with per-week headroom for one crashed session. **A100 spend is separate:
-~$22 of the $30 Modal credit, once, after Week 6** (D.cost). Total paid GPU =
-**one** confirmation run.
-
-### Week 1 — Pipeline validation + baseline sanity (Kaggle P100) · budget ≈ 5 GPU-h
-- **Objective:** clean end-to-end run; confirm the untrained-baseline BE is sane;
-  **measure real P100 s/step and eval-per-cell time** to calibrate all later weeks.
-- **Runs:** `experiment.py --config laptop --smoke` (local/throwaway) then on
-  P100 `--config kaggle` baseline-only (no training) on GSM8K **n=50**, modes
-  `bv,gbv,traversal,specinfer,naive`, **K=3**, T=1.0, `--skip_existing`.
-- **Inspect:** `[run_tag] block_eff=…`, `peak_vram_mb` (must stay < 16 GB),
-  PPL/task_score guards, wall-time per cell; W&B `eval/block_eff`.
-- **Sanity targets:** K=3 **theoretical max BE = L+1 = 9** (`L=8`); SOTA
-  Qwen-class drafts ≈ **3** at K=3; untrained 0.6B→8B baseline ~1.5–2.5;
-  traversal ≥ bv ≈ gbv should roughly hold.
-- **EXIT:** end-to-end completes, no OOM on a single 16 GB GPU, baseline BE finite
-  in ~[1.3, 3.0], results in `results.db`, **per-step and per-cell timings
-  recorded** for budgeting.
-
-### Week 2 — PRIORITY 1: flat `forward_kl` baseline + LR tuning (Kaggle P100) · budget ≈ 12 GPU-h
-- **Objective:** establish the **trusted flat baseline first** (priority step 1,
-  Kaggle-direction version); prove training works; pick LR/warmup/grad_accum.
-- **Runs:** train **`forward_kl` (the baseline)**, 1 seed, 1000 steps, kaggle
-  config (grad_accum 16, warmup 100, lr 3e-5) ≈ ~1.3 h; then `kl_tree` (first tree
-  loss) ≈ ~1.3 h; if curves look off, **one** LR-variant retrain (~1.3 h). Eval
-  both on GSM8K n=50, modes `bv,naive` (+`gbv`) K=3 (~1 h). Padding covers a crash.
-- **Inspect:** `forward_kl` train/val curves (`train_curves`, `split`); the
-  **plateau seen earlier at best≈0.3766**; any val bounce after ~step 150 (why
-  warmup was added); is the `forward_kl` baseline BE in the expected band?
-- **Tune:** val bounce → lower LR / lengthen warmup; train flat → raise LR /
-  reduce grad_accum; val ≫ train → add LoRA dropout.
-- **EXIT (gates priority step 2):** `forward_kl` baseline trains cleanly, val-loss
-  plateaus, and its BE is sane/plausible. **Do not interpret any tree-loss number
-  until this flat baseline is established.** Frozen LR/warmup carried forward.
-
-### Weeks 3–4 — Loss-function ablation, batched (Kaggle P100) · budget ≈ 27 + 27 GPU-h
-- **Objective:** rank all 13 losses by BE direction vs `forward_kl`; kill losers.
-- **Why two weeks:** training 13 losses × ~1.3 h ≈ 17 h train + ~5 h eval ≈ 22 h
-  would *just* fit one week, but with no crash margin. **Split the loss list
-  across two weekly quotas** (~7 losses/week) so one lost session never costs the
-  whole ablation.
-  - **Week 3 batch:** `forward_kl` (control), `kl_tree`, `bv_tree`, `gbv_tree`,
-    `traversal_tree`, `specinfer_tree`, `nss_tree` (the core set, B.4).
-  - **Week 4 batch:** `rev_kl_tree`, `jsd_tree`, `naive_tree`, `spectr_tree`
-    (approx), `khisti_tree` (approx), `ebe`, `ebe_tree` (extended set).
-- **Runs/week:** ~7 losses × 1 seed × 1000 steps (~17 h) + eval each GSM8K n=50,
-  matched verifier + `bv`/`naive`, K=3 (~5 h). `--skip_existing` throughout.
-- **Inspect:** BE-improvement bar chart (Δ vs `forward_kl`); drop on sight any
-  loss that NaNs, collapses `task_score`, or fails to beat control direction.
-- **EXIT (end of Week 4):** a ranked list; **top ≤4 losses** that beat
-  `forward_kl` direction at n=50 carried forward. Kill the rest (B.6.7).
-
-### Week 5 — PRIORITY 3: verifier × loss interaction incl. GBV (Kaggle P100, eval-only) · budget ≈ 10 GPU-h
-- **Objective:** find the best loss×verifier pairing (RQ4 direction), incl.
-  whether `gbv` beats `bv` — pick the **1–2 pairings** to confirm on A100.
-- **Runs:** **no new training** — reuse the top ≤4 Week-3/4 checkpoints; eval all
-  available verifiers (`naive,bv,nss,specinfer,traversal,gbv`; add
-  `spectr,khisti` if time), K=3, T=1.0, GSM8K n=50. ~4 ckpt × batched verifiers ≈
-  8–10 h.
-- **Inspect:** loss×verifier BE heatmap; does the diagonal (V-aligned loss best
-  under V, RQ4) appear? Does `gbv` > `bv` for the best tree-loss draft? Note
-  `spectr_tree`/`khisti_tree` (approximate) behaviour.
-- **EXIT:** **the 1–2 best loss×verifier pairings selected** (plus `forward_kl`
-  as control) — this is the entire input to the A100 confirmation.
-
-### Week 6 — Buffer / robustness pre-check + A100 prep (Kaggle P100) · budget ≤ 20 GPU-h
-- **Objective:** absorb slippage; sanity-check K/T direction cheaply before
-  spending the irreplaceable A100 credit; freeze the confirmation spec.
-- **Runs:** for the 1–2 finalists, a cheap K-direction peek on P100 (K=3 vs a
-  single K=5 cell, n=50) and T=0.6 vs T=1.0 ranking check (~10 h). Reserve the
-  rest as crash buffer for Weeks 2–5 overrun.
-- **Inspect:** does ranking survive a K and T change (RQ6/RQ7 direction)? If a
-  finalist only wins at one T, note it.
-- **EXIT:** confirmation spec frozen (which 1–2 pairings, which verifier each);
-  Modal account created and the run scripted with `--skip_existing` + backup.
-
-### A100 confirmation — staged Modal $30 spend, **in locked priority order**
-The single $30 Modal credit is spent **once, last, and strictly in priority
-order**. The credit is consumed stage-by-stage; **each stage gates the next**, so
-if the baseline is wrong no novel-method credit is wasted. These are the **only
-paper numbers** (3 seeds, full GSM8K, the Section C stats apply).
+### A100 confirmation — staged spend, **in locked priority order**
+The A100 credit is spent **once, last, and strictly in priority order**. The
+credit is consumed stage-by-stage; **each stage gates the next**, so if the
+baseline is wrong no novel-method credit is wasted. These are the **only paper
+numbers** (3 seeds, full GSM8K, the Section C stats apply).
 
 - **Stage A — PRIORITY 1: flat `forward_kl` baseline (spend this FIRST).**
   Train `forward_kl`, **3 seeds** (42/123/7), 2000 steps, a100 config; eval **full
@@ -588,37 +387,7 @@ paper numbers** (3 seeds, full GSM8K, the Section C stats apply).
   Stage D to a follow-up **Lightning-credit** month so the Modal credit is never
   blocked on the lowest-priority work.
 
-**$30 fit (see D.cost):** Stages A+B at **3 seeds, K=3, matched + `naive`/`bv`
-ref** are the **Trimmed-B** spec (~$22, ~10.5 A100-h) and **fit**. Stage C is a
-cheap eval-only add-on on existing checkpoints (~$3–5). **K=5, a second pairing,
-and Stage D do NOT fit the $30** — defer them to Lightning credits. Spend order is
-A → B → C, stopping the moment the credit is exhausted (the baseline + the single
-headline tree-loss result are the non-negotiable minimum).
-
-### D.cost — does the A100 confirmation fit in $30?
-
-**Assumptions:** Modal **A100-40 GB ≈ $2.10/hr** (Qwen3-8B bf16 fits 40 GB; an
-80 GB card ≈ $2.50/hr is unnecessary). $30 ⟹ **~12–14 A100-hours**. A100 train
-≈ 0.3–0.6 s/step → ~0.4–0.7 h per 2000-step checkpoint (tree losses higher end).
-GSM8K **n=1319** BE eval ≈ ~0.4–0.8 h per (checkpoint × verifier × K) batch
-(≈26× the n=50 Kaggle cell; traversal/gbv slowest).
-
-| spec | checkpoints | train h | eval cells | eval h | total h | ≈ cost | fits $30? |
-|---|---|---|---|---|---|---|---|
-| **Full** (2 pairings + control, 3 seeds, K∈{3,5}, matched + bv + naive) | 9 | ~5.5 | 9 × 3 verif × 2 K = 54 | ~25 | **~30 h** | **~$63** | **No** |
-| **Trimmed-A** (2 pairings + control, **2 seeds**, K=3, matched + naive) | 6 | ~3.5 | 6 × 2 × 1 = 12 | ~7 | ~10.5 | ~$22 | **Yes** |
-| **Trimmed-B (recommended)** (1 pairing + control, **3 seeds**, K=3, matched + naive) | 6 | ~3.5 | 6 × 2 × 1 = 12 | ~7 | ~10.5 | ~$22 | **Yes** |
-
-**Verdict:** the full multi-seed × K∈{3,5} × 2-pairing spec **does NOT fit $30**
-(~$63, ~30 A100-h). **It fits only after cutting one dimension.** Recommended cut:
-**Trimmed-B** — keep **3 seeds** (preserves the across-seed CI, the core
-rigor claim) and the strongest **single** pairing, drop **K=5** (K=3 is the
-config default and the headline number) and drop the second pairing. That lands
-≈ **$22**, leaving ~$8 (~4 A100-h) of credit for **one** retry or a single K=5
-add-on cell on the winner. If two pairings must both be confirmed, use
-**Trimmed-A** (2 seeds) instead — but 3 seeds is the better rigor trade.
-Lightning's ~15–22 monthly credits are the fallback to add K=5 or the second
-pairing in a follow-up month without touching the spent Modal credit.
+**Spend order is A → B → C**, stopping the moment the credit is exhausted. The `forward_kl` baseline + the single headline tree-loss result are the non-negotiable minimum. Stages A+B at 3 seeds, K=3, matched + naive/bv reference fit within a typical $30 free credit. For the full cost breakdown (Trimmed-A / Trimmed-B spec analysis), see `docs/COMPUTE.md`.
 
 ### After the confirmation — write-up & reproducibility (no GPU)
 - Run `analyze_results.py` (after the C.6 stats upgrades) → Markdown tables;
@@ -671,14 +440,14 @@ pairing in a follow-up month without touching the spent Modal credit.
 
 | risk | evidence in code | mitigation |
 |---|---|---|
-| **OOM on T4** loading 8B teacher | kaggle config uses 4-bit NF4; `colab.yaml` drops to 4B because NF4's CPU-RAM spike SIGKILLs Colab's 12 GB | use `kaggle` (29 GB RAM) for 8B-NF4; `colab` (4B bf16) otherwise; the OOM→CPU retry in `run_alpha`/`run_be` is a slow fallback, not a fix — prefer the right config |
+| **OOM on T4** loading 8B teacher | `kaggle.yaml`/Modal T4 use 4-bit NF4 (Kaggle 29 GB system RAM handles the CPU intermediates); `colab.yaml` drops to Qwen3-4B BF16 (Colab 12 GB RAM cannot absorb the 8B NF4 CPU spike) | use `kaggle` or Modal T4 for 8B-NF4; `colab.yaml` for Colab (4B bf16); the OOM→CPU retry in `run_alpha`/`run_be` is a slow fallback, not a fix — prefer the right config |
 | **Orphaned eval subprocesses** exhausting VRAM on re-run | `run_be_batch` kills stray `runner.py` via psutil; `expandable_segments:True` | keep psutil installed; one BE subprocess per dataset (already batched) |
 | **T4 timeouts**, esp. traversal K=5 | `run_be`/`run_be_batch` have 30 min / 2 h timeouts; partial results are recovered and `--skip_existing` resumes | on T4 cap K=3 for traversal/gbv; push K=5 to A100; rely on partial-recovery + resume |
 | **Kaggle checkpoint loss** (ephemeral `/kaggle/working`) | configs set `storage_root`; trainer writes `ckpt_latest`/`ckpt_best` + `training_state.json` for crash-safe resume | always pass `--storage_root`; mirror to Drive/persistent volume; `save_every=25` on T4 |
 | **Small-sample noise** | T4 n=10–100; BE has no CI today | rank on T4, *decide* only on A100 n=1319 with ≥3 seeds + paired bootstrap (Section C) |
-| **Teacher-model appropriateness** (0.6B draft vs 8B teacher; laptop's 0.5B↔0.6B is pure code-check) | laptop.yaml warns its numbers are "meaningless" | never interpret laptop/colab_lite numbers as findings; publish only 8B-teacher (kaggle/a100) results |
+| **Teacher-model appropriateness** (0.6B draft vs 8B teacher; laptop's 0.5B↔0.6B is pure code-check) | laptop config warns its numbers are "meaningless" | never interpret laptop/small-teacher numbers as findings; publish only 8B-teacher (Tier 2+) results |
 | **Approximate losses misread as exact** | `spectr_tree` (ρ detached), `khisti_tree` (LP-free) are documented surrogates | label both "approximate" in every table; if either underperforms its aligned verifier, attribute to the surrogate, not the alignment hypothesis (per their docstrings) |
 | **Stats invalid by construction** | single seed, no BE variance, approximate p-values (Section 0.6) | implement the Section C.6 checklist *before* the A100 confirmation; Kaggle 1-seed numbers are direction-only, never published |
-| **Wasted weekly quota** (lost session) | `/kaggle/working` ephemeral; T4 x2 burns 2× → ~15 effective h/wk (B.5) | Always T4 x2 (only working GPU); Cell-2b backup every session; `--skip_existing`; ≤1 session/week so one crash ≤ quota |
+| **Wasted weekly quota** (lost session) | `/kaggle/working` ephemeral; T4 x2 burns 2× → ~15 effective h/wk | Always T4 x2 (only working Kaggle GPU); checkpoint backup every session; `--skip_existing`; ≤1 session/week so one crash ≤ quota — see `deploy/PROGRESSION.md` |
 | **Burning the $30 Modal credit early or twice** | one-time, irreplaceable | spend ONCE, last, on the Trimmed-B spec only after Kaggle narrows to ≤2 pairings; keep ~$8 buffer for one retry; Lightning credits for any extension |
 | **gbv numerical instability at K>4** | `compute_skew` docstring: "not recommended … K>4" | restrict gbv/gbv_tree to K≤4; footnote |

@@ -386,6 +386,13 @@ def _load_config_yaml(config_name: str) -> dict:
         # natural matched verifier from _LOSS_LIGHT_VERIFIER automatically.
         if "light_eval_verifier" in experiment_cfg:
             out["light_eval_verifier"] = str(experiment_cfg["light_eval_verifier"])
+        # dataset section — val_dataset is a filename (not a full path) that
+        # is resolved to a full path by _data() in _train_hargs.
+        # Without this, trainer.py falls back to val_split=0.1 (10% of train set
+        # = 672 prompts = 23 min/check on T4).  gsm8k_10.jsonl → ~3 min/check.
+        dataset_cfg = data.get("dataset", {})
+        if dataset_cfg.get("val_dataset"):
+            out["val_dataset"] = dataset_cfg["val_dataset"]
         # models.draft / models.target — present only when the YAML sets them.
         # Consumed by main() when the config is a YAML-based profile (not a
         # legacy CONFIGS preset) so we know which model pair to load.

@@ -55,15 +55,14 @@ Use these **only** once candidates are publication-worthy (≤2 survivors).
 ### Research-valid compute tiers
 
 > **Key principle: always use 8B teacher for any research decision.**
-> The 1.7B→0.6B gap (~3×) is too small — loss rankings can reverse vs 8B→0.6B (~13×).
-> Colab (4B teacher) and colab_lite (1.7B teacher) are **crash-check only**, NOT research tiers.
-> Quantized 8B NF4 (Kaggle) gives the same loss rankings as full 8B BF16 (A100).
+> The 4B→0.6B gap (~7×) is insufficient — loss rankings from a 4B teacher do not reliably predict 8B→0.6B (~13×) behaviour.
+> Laptop (0.6B teacher) and Colab (4B teacher) configs are **crash-check / code-path only**, NOT research tiers.
+> Quantized 8B NF4 (Kaggle T4x2 / Modal T4) gives the same loss rankings as full 8B BF16 (A100).
 
 | Tier | Platform | Teacher | Purpose | Research-valid? |
 |---|---|---|---|---|
-| Crash check | Laptop | any | code doesn't crash | No |
-| Crash check | Colab_lite (1.7B) | 1.7B BF16 | code path verification, cheap | **No** — 1.7B→0.6B gap (~3×) too small; rankings unreliable |
-| Crash check / fallback | Colab (4B) | 4B BF16 | quota-exhausted fallback only | **No** — 4B teacher ≠ paper setting (8B); rankings not transferable |
+| Crash check | Laptop (`laptop.yaml`) | Qwen3-0.6B | code doesn't crash | No — 0.6B teacher ≈ draft capacity; distillation signal is near-zero |
+| Crash check / fallback | Colab free (`colab.yaml`) | Qwen3-4B BF16 | quota-exhausted fallback only | **No** — 4B teacher ≠ paper setting (8B); rankings not transferable |
 | **Exploration** | **Kaggle T4 x2 + Modal T4** | **8B NF4** | rank losses, tune LR, kill losers — interchangeable, use whichever has quota remaining | **✓ Yes** |
 | **Confirmation** | **A100** | **8B BF16** | paper numbers, multi-seed | **✓ Yes** |
 
@@ -82,11 +81,10 @@ Use these **only** once candidates are publication-worthy (≤2 survivors).
   Uses the same 8B teacher as the A100 confirmation; loss rankings established here
   transfer reliably to the full 8B BF16 run. Run batches in **parallel** across
   additional free T4 pools (Modal, Lightning) as needed.
-- **Colab (4B teacher) and colab_lite (1.7B teacher) = crash check only.** The
-  4B teacher differs from the paper setting; the 1.7B→0.6B gap (~3×) is too small
-  to produce reliable loss rankings vs the 8B→0.6B gap (~13×). **Never use these
-  configs for research direction.** Colab is a quota-exhausted fallback, not a
-  research tier.
+- **Colab (`colab.yaml`, 4B teacher) = crash check / quota fallback only.** The
+  4B teacher differs from the paper setting. Rankings established with a 4B teacher
+  are **not** transferable to the 8B→0.6B (~13×) gap. **Never use this config for
+  research direction.** Colab is a quota-exhausted fallback, not a research tier.
 - **A100 = PUBLICATION confirmation ONLY**, after Kaggle exploration narrows to **≤2**
   candidate loss×verifier pairings.
 - **Always use the cheapest adequate GPU for each job.** Never use an A100 for
@@ -100,7 +98,7 @@ Tied to the **locked algo priority** in [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md)
 **(1) flat baseline `forward_kl` FIRST → (2) tree-loss training → (3) GBV verifier →
 (4) online variants LAST.**
 
-> **Smoke ALWAYS first** (any free pool, ~5 min) before any real run.
+> **Smoke ALWAYS first** (Tier 1 laptop, ~30-40 min) before any real run.
 
 | Phase | Work | Resource | Config |
 |---|---|---|---|
@@ -123,16 +121,14 @@ Tied to the **locked algo priority** in [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md)
 
 ### Engineer checklist (ordered)
 
-1. **Smoke** on a free pool (`--smoke`) — confirm every loss + verifier runs.
-2. **Phase 1:** `forward_kl` flat baseline on a free pool using `--config profiles/train_one_loss`
-   (`--light_eval` / YAML `experiment.light_eval: true`). Each session = train + `val_loss` curves
-   + a light BE sanity (n=100, K=3, matched verifier, GSM8K only). **Defer** the heavy full eval.
-3. **Phase 2:** launch tree-loss ablation batches **in parallel** across Kaggle/Modal/Lightning using
-   `--config profiles/tree_variant_week` (same `--light_eval` tiered design); rank and keep survivors.
+1. **Smoke** on a free pool — confirm every loss + verifier runs without error.
+2. **Phase 1:** `forward_kl` flat baseline on a free pool. Each session = train + `val_loss` curves + a light BE sanity (n≈100, K=3, matched verifier, GSM8K only). Defer the heavy full eval.
+3. **Phase 2:** launch tree-loss ablation batches **in parallel** across Kaggle/Modal/Lightning; rank and keep survivors.
 4. **Phase 3:** GBV verifier runs on free pools.
 5. **Phase 4:** online variants last, on free pools / Lightning.
-6. **Confirmation:** take the surviving **≤2** candidates to the **IITH A100** — full
-   GSM8K (n=1319), ≥3 seeds, paired-bootstrap + Holm–Bonferroni. These are the paper numbers.
+6. **Confirmation:** take the surviving **≤2** candidates to the A100 (IITH primary) — full GSM8K (n=1319), ≥3 seeds, paired-bootstrap + Holm–Bonferroni. These are the paper numbers.
+
+> For exact run commands, YAML config names, and session protocol, see `deploy/PROGRESSION.md`.
 
 ---
 
