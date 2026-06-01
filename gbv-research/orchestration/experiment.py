@@ -3549,7 +3549,7 @@ def main():
             continue
         _steps_after_skip.append(step)
     if _smoke_skipped:
-        _skip_reason = ("smoke mode" if smoke else "laptop tier (0.6B teacher — no signal)")
+        _skip_reason = ("smoke mode" if args.smoke else "laptop tier (0.6B teacher — no signal)")
         print(f"  [skip] Skipping {len(_smoke_skipped)} Phase 4 multi-dataset eval step(s) "
               f"({_skip_reason}; humaneval/math500/mtbench/alpaca run on T4/A100 only)")
 
