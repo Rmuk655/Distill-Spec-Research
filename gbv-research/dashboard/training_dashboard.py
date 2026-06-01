@@ -517,21 +517,39 @@ def api_log_tail():
 
 @app.route("/api/gpu_status")
 def api_gpu_status():
-    """Return current GPU VRAM usage (reads live from NVML/PyTorch)."""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info(0)
-            used = total - free
-            return jsonify({
-                "name": torch.cuda.get_device_name(0),
-                "free_gb":  round(free  / 1024**3, 2),
-                "total_gb": round(total / 1024**3, 2),
-                "used_gb":  round(used  / 1024**3, 2),
-                "pct_used": round(used  / total * 100, 1),
-            })
-    except Exception:
-        pass
+    """Return current GPU VRAM usage.
+
+    Reads via `nvidia-smi` (NVML) NOT torch.cuda — importing torch and calling
+    torch.cuda.* initializes a CUDA *context* inside this long-lived dashboard
+    process. On a small laptop GPU (4 GB) that resident context competes with
+    the training/eval process and can trigger native CUDA crashes there
+    (Windows exit code 0xC000013A). nvidia-smi queries NVML without ever
+    creating a CUDA context, so the dashboard stays entirely off the GPU.
+    """
+    import shutil
+    import subprocess
+    smi = shutil.which("nvidia-smi")
+    if smi:
+        try:
+            out = subprocess.run(
+                [smi, "--query-gpu=name,memory.free,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            line = out.stdout.strip().splitlines()[0] if out.stdout.strip() else ""
+            if out.returncode == 0 and line:
+                name, free_s, total_s = [x.strip() for x in line.split(",")]
+                free_mb, total_mb = float(free_s), float(total_s)
+                used_mb = total_mb - free_mb
+                return jsonify({
+                    "name": name,
+                    "free_gb":  round(free_mb  / 1024, 2),
+                    "total_gb": round(total_mb / 1024, 2),
+                    "used_gb":  round(used_mb  / 1024, 2),
+                    "pct_used": round(used_mb  / total_mb * 100, 1) if total_mb else None,
+                })
+        except Exception:
+            pass
     return jsonify({"name": "CPU-only", "free_gb": None, "total_gb": None,
                     "used_gb": None, "pct_used": None})
 
