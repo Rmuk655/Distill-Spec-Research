@@ -69,9 +69,12 @@ training:
   jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
 
 dataset:
-  # Paths are for reference only — pipeline hardcodes core/datasets/raw/ via _data().
   train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_30.jsonl
+  eval:  core/datasets/raw/gsm8k_10.jsonl
+  # val_dataset: filename passed to trainer.py --val_dataset to bound validation cost.
+  # Without this, trainer uses val_split=0.1 → 10% of 6726 = 672 prompts → ~23 min/check.
+  # gsm8k_10.jsonl → ~3 min/check; gsm8k_30.jsonl → ~23 min/check.
+  val_dataset: gsm8k_10.jsonl
 
 checkpointing:
   save_every: 25                # save every 25 steps (~1-2 min on T4)
@@ -89,8 +92,9 @@ logging:
   run_label: "8B-kaggle"
 
 health:
-  val_every: 50
-  ppl_check_every: 100
+  val_every: 200          # 5 val checks over 1000 steps (was 50 → 20 checks, ~7.7 h wasted)
+                          # Each val check costs ~20-25 min on T4 with 4-bit 8B teacher
+  ppl_check_every: 200
   ppl_threshold: 1.25
   nan_action: skip              # skip NaN batches (Kaggle sessions are precious)
   early_stop_patience: 5

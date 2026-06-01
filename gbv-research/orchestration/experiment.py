@@ -827,6 +827,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # ── Newly wired trainer hyperparams ───────────────────────────────────
         "--seed",            str(_h.get("seed", 42)),
         "--val_every",       str(_h.get("val_every", 50)),
+        # val_dataset: if YAML dataset.eval is set, pass it as --val_dataset so
+        # the trainer does NOT fall back to val_split=0.1 (10% of 6726 = 672 prompts
+        # = 23 min per val check).  A small dedicated val file (gsm8k_10.jsonl → ~3 min,
+        # gsm8k_30.jsonl → ~23 min) gives a reliable signal without killing T4 sessions.
+        *( ["--val_dataset", _data(_h["val_dataset"])]
+           if _h.get("val_dataset") else [] ),
         "--grad_clip",       str(_h.get("grad_clip", 1.0)),
         "--lora_dropout",    str(_h.get("lora_dropout", 0.05)),
         "--ebe_kl_weight",   str(_h.get("ebe_kl_weight", 0.1)),
@@ -3187,6 +3193,11 @@ def main():
         "ppl_threshold":        _yaml_cfg.get("ppl_threshold", 1.25),
         "log_every":            _yaml_cfg.get("log_every", 10),
         "no_lora":              _yaml_cfg.get("no_lora", False),
+        # val_dataset: filename (not full path) from YAML dataset.eval.
+        # Resolved to a full path in _train_hargs via _data().
+        # E.g. "gsm8k_10.jsonl" → ~3 min/val, "gsm8k_30.jsonl" → ~23 min/val.
+        # When absent, trainer falls back to val_split=0.1 (10% of train set = very slow).
+        "val_dataset":          _yaml_cfg.get("val_dataset"),
     }
     # Profiles honour their YAML `evaluation:` block (modes / K_values / temperatures
     # / n_prompts / n_prompts_gsm8k / max_tokens). build_steps reads these off
@@ -3487,6 +3498,7 @@ def main():
     # ── Pass 1: apply skip_until and smoke_skip (order-dependent) ────────────
     skip_until = start_id
     _steps_after_skip = []
+    _smoke_skipped = []   # collect silently; print ONE summary line, not N noisy lines
     for step in STEPS:
         sid = step["id"]
         if skip_until:
@@ -3494,12 +3506,16 @@ def main():
                 skip_until = None
             else:
                 continue
-        # In smoke mode, Phase 2/3/4 steps carry smoke_skip=True.
+        # In smoke mode, Phase 4 multi-dataset eval steps carry smoke_skip=True.
+        # Collect them quietly — printing one line per step produces 20+ skip messages
+        # that look like errors even though everything is fine.
         if step.get("smoke_skip"):
-            print(f"  [smoke] {sid} — skipped "
-                  f"(training / post-train eval; run without --smoke for full pipeline)")
+            _smoke_skipped.append(sid)
             continue
         _steps_after_skip.append(step)
+    if _smoke_skipped:
+        print(f"  [smoke] Skipping {len(_smoke_skipped)} Phase 4 multi-dataset eval step(s) "
+              f"(humaneval/math500/mtbench/alpaca — add --no_smoke / run without --smoke for full pipeline)")
 
     # ── Pass 2: group by parallel_group ──────────────────────────────────────
     _by_group: dict = {}
