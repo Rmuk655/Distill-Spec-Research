@@ -106,8 +106,8 @@ What `--smoke` exercises:
 - 10 forward + backward passes per loss function (confirms grad flow, no NaN)
 - Dataset loading + tokenization (20 prompts — ~0.3s vs ~2min for full 6726)
 - One checkpoint save + one validation pass (3 fixed prompts from `gsm8k_5.jsonl`)
-- Eval: alpha (inline fallback), bv, gbv, naive — 4 modes × 3 prompts each (~30s total)
-- Skips traversal and specinfer in smoke (tree-decoding: ~4s and ~8s per prompt on laptop)
+- Eval: all 6 verifier modes (alpha, bv, gbv, traversal, specinfer, naive) × 3 prompts each
+  (traversal ~4s/prompt, specinfer ~8s/prompt on laptop — kept because smoke must exercise every code path)
 
 **Gate**: no exceptions, loss values are finite numbers.
 **If this fails**: fix the code. Do not proceed to 1b until 1a passes.

@@ -758,14 +758,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _max_tok       = 30    if smoke else 50
     _Ks            = "3"   # safe default; yaml always overrides
     _temps         = "1.0" # T=1.0 paper standard; yaml always overrides
-    # Smoke: 4 modes — alpha (inline path), bv (fast non-OT), gbv (fast non-OT), naive (fast OT).
-    # Drops traversal (~4s/prompt) and specinfer (~8s/prompt) — tree-decoding modes that
-    # dominate wall time on laptop.  All distinct code paths still exercised:
-    #   alpha = acceptance-rate inline path
-    #   bv/gbv = non-OT block verifiers
-    #   naive = OT single-path verifier
-    # Full run uses all 6 verifiers as configured in YAML.
-    _modes = "alpha,bv,gbv,naive" if smoke else "alpha,bv,gbv,traversal,specinfer,naive"
+    # All 6 verifier modes always run — smoke is a code-path exerciser and must catch
+    # bugs in traversal and specinfer too.  n=3 prompts keeps each mode fast enough.
+    _modes = "alpha,bv,gbv,traversal,specinfer,naive"
 
     # Alpha evaluation requires both draft (0.6B BF16) and teacher (8B) in the
     # same evaluate.py process simultaneously.  On Colab (load_in_4bit=True) this
