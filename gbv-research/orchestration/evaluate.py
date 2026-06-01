@@ -230,6 +230,54 @@ def _pick_device():
     return "cpu", torch.float32
 
 
+# Conservative free-VRAM floor (MB) for keeping BOTH student + teacher resident
+# on the GPU for alpha eval.  The bf16/fp16 Qwen 0.6B+0.5B pair is ~2.2 GB of
+# weights; with the alpha KV cache, activations, and allocator fragmentation a
+# 6000 MB floor is a safe minimum.  A 4 GB laptop card (≈3.2 GB free) never
+# clears this, which is exactly the case that hard-crashes.
+_ALPHA_VRAM_FLOOR_MB = 6000
+
+
+def _alpha_device_guard(default_device, default_dtype):
+    """Proactively pick the device for loading BOTH alpha-eval models.
+
+    On Windows under severe VRAM pressure the CUDA driver HARD-ABORTS the whole
+    process (native access violation → Windows exit code 3221225786 / 0xC000013A)
+    BEFORE PyTorch can raise the catchable torch.cuda.OutOfMemoryError.  When that
+    happens the reactive `except torch.cuda.OutOfMemoryError` CPU fallback never
+    runs and the pipeline step dies hard.  This guard avoids ever *attempting*
+    the GPU load that triggers the native crash.
+
+    Rules:
+      * hw_tier == "laptop": load on CPU unconditionally.  The 0.6B + 0.5B pair
+        plus KV cache + activations needs more headroom than a ~4 GB laptop card
+        has alongside the driver/desktop/other allocations.  Alpha eval on laptop
+        is a correctness / code-path check (not a perf measurement), so CPU is
+        acceptable — ~20x slower but it won't crash.
+      * any other tier on cuda: require a conservative free-VRAM floor
+        (_ALPHA_VRAM_FLOOR_MB) before the load; fall back to CPU otherwise.
+
+    Returns (device, dtype).  Pass-through unchanged when default_device != cuda.
+    """
+    import torch
+    tier = getattr(args, "hw_tier", None) if args is not None else None
+    if default_device != "cuda" or not torch.cuda.is_available():
+        return default_device, default_dtype
+    free_mb = torch.cuda.mem_get_info(0)[0] // 1024**2
+    if tier == "laptop":
+        print(f"  [alpha preload] hw_tier=laptop / free VRAM={free_mb} MB -> "
+              f"loading alpha-eval models on CPU to avoid 4GB GPU hard-crash (0xC000013A)")
+        return "cpu", torch.float32
+    if free_mb < _ALPHA_VRAM_FLOOR_MB:
+        print(f"  [alpha preload] hw_tier={tier} / free VRAM={free_mb} MB < "
+              f"{_ALPHA_VRAM_FLOOR_MB} MB floor -> loading alpha-eval models on CPU "
+              f"to avoid GPU OOM / native hard-crash (0xC000013A)")
+        return "cpu", torch.float32
+    print(f"  [alpha preload] hw_tier={tier} / free VRAM={free_mb} MB >= "
+          f"{_ALPHA_VRAM_FLOOR_MB} MB floor -> loading alpha-eval models on GPU (cuda)")
+    return "cuda", default_dtype
+
+
 def _pick_attn_impl() -> str:
     """
     Returns the fastest attention backend available on this machine:
@@ -515,6 +563,11 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         device, dtype, tokenizer, student_model, teacher_model, same = preloaded
     else:
         device, dtype = _pick_device()
+        # Same PROACTIVE VRAM guard as the alpha pre-load path.  In practice the
+        # pre-load path (main()) handles laptop alpha eval, so this branch with
+        # preloaded=None is rarely hit on laptop — but guard it too so a direct /
+        # standalone run_alpha() call can't trigger the 0xC000013A native crash.
+        device, dtype = _alpha_device_guard(device, dtype)
 
         tokenizer = AutoTokenizer.from_pretrained(teacher_path, use_fast=False)
         if tokenizer.pad_token_id is None:
@@ -1517,10 +1570,25 @@ def main():
             n_c = len(modes_list) * len(Ks_list) * len(Ts_list)
             print(f"  {ds}: {len(modes_list)} mode(s) × {len(Ks_list)} K × "
                   f"{len(Ts_list)} temp(s) = {n_c} combo(s)")
+            # PROACTIVE VRAM guard for the BE subprocess.  Same 0xC000013A native
+            # crash as alpha: a single mode loads fine on the 4 GB laptop GPU
+            # (preflight gbv + the batch's first mode succeed), but running
+            # several modes back-to-back in ONE subprocess accumulates allocator
+            # fragmentation / KV-cache residue that hard-aborts the driver mid-run
+            # (see step_eval_baseline_gsm8k_error.log: died after mode=bv, only
+            # 1/5 results returned).  The subprocess's reactive CPU retry only
+            # fires on a catchable "out of memory" string — a native abort skips
+            # it.  So on laptop we run the whole BE batch on CPU up front (slower
+            # but correct); other tiers keep the GPU path.
+            _be_device = "cpu" if getattr(args, "hw_tier", None) == "laptop" else "cuda"
+            if _be_device == "cpu":
+                print(f"  [BE batch] hw_tier=laptop -> running BE subprocess on CPU "
+                      f"to avoid 4GB GPU native hard-crash (0xC000013A) across modes")
             batch_res = run_be_batch(
                 args.student, args.teacher, data_path,
                 modes_list, Ks_list, Ts_list,
                 args.L, args.max_tokens,
+                _device=_be_device,
                 load_in_4bit=getattr(args, "load_in_4bit", False),
             )
             for (m, k, t), be in batch_res.items():
@@ -1540,6 +1608,10 @@ def main():
         # (see _patch_config_json_serialization() at top of this file)
         _patch_config_json_serialization()   # no-op if already applied
         _device, _dtype = _pick_device()
+        # PROACTIVE VRAM guard: never attempt the dual-model GPU load when it
+        # would hard-crash the process (Windows 0xC000013A) before OOM can raise.
+        # On laptop this forces CPU; on other tiers it enforces a free-VRAM floor.
+        _device, _dtype = _alpha_device_guard(_device, _dtype)
         _load_4bit_pre = getattr(args, "load_in_4bit", False)
         print(f"\n-- Pre-loading models for alpha eval (1 load shared across all datasets) --")
         _tok = _ATok.from_pretrained(args.teacher, use_fast=False)
