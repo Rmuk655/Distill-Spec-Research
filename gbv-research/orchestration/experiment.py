@@ -733,8 +733,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         Phase 3 — GSM8K Eval   (smoke: n=5 · full: n=10, all 6 verifier modes)
             eval every trained model + baseline on gsm8k
 
-        Phase 4 — Multi-dataset   (always skipped in smoke; slow)
+        Phase 4 — Multi-dataset   (skipped in smoke AND on laptop; no signal from 0.6B teacher)
             eval top models on humaneval, math500, mtbench, alpaca
+            runs only on T4/A100 where the real teacher produces actionable numbers
 
     smoke=True:   10 steps/training · 20 train prompts (cap) · n=3 eval prompts ·
                   max_tokens=30 · K=3 · 4 verifier modes (alpha,bv,gbv,naive) · temp=1.0.
@@ -756,6 +757,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _online_steps  = 10    if smoke else 500
     _n             = 3     if smoke else 10     # 3 prompts = enough to confirm code path, fast (~2-3s each)
     _max_tok       = 30    if smoke else 50
+    # Phase 4 (multi-dataset eval: humaneval, math500, mtbench, alpaca) is skipped
+    # for both smoke AND laptop tier.  On laptop the teacher is 0.6B (same scale as
+    # draft) so multi-dataset eval produces no meaningful signal and only wastes time.
+    # Phase 4 runs only on T4/A100 where a real teacher produces actionable numbers.
+    _skip_phase4   = smoke or (hw_tier == "laptop")
     _Ks            = "3"   # safe default; yaml always overrides
     _temps         = "1.0" # T=1.0 paper standard; yaml always overrides
     # All 6 verifier modes always run — smoke is a code-path exerciser and must catch
@@ -1986,7 +1992,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(draft, "baseline",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
         },
         {
             "id": "eval_kl_all",
@@ -1995,7 +2001,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("kl-gsm8k"), "kl",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("kl-gsm8k"), "config.json"),
         },
         {
@@ -2005,7 +2011,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("ebe-gsm8k"), "ebe",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
         {
@@ -2015,7 +2021,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
         },
         {
@@ -2025,7 +2031,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("jsd-gsm8k"), "jsd",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("jsd-gsm8k"), "config.json"),
         },
         {
@@ -2035,7 +2041,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("l1-gsm8k"), "l1",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("l1-gsm8k"), "config.json"),
         },
         {
@@ -2045,7 +2051,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("online-gsm8k"), "online",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-gsm8k"), "config.json"),
         },
         {
@@ -2055,7 +2061,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
         },
         {
@@ -2065,7 +2071,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
         },
         {
@@ -2075,7 +2081,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
 
@@ -2090,7 +2096,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
         },
         {
@@ -2101,7 +2107,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
         },
         {
@@ -2112,7 +2118,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
         },
         {
@@ -2123,7 +2129,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
         },
         {
@@ -2134,7 +2140,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
         },
         {
@@ -2145,7 +2151,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
         },
         {
@@ -2156,7 +2162,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
         },
         # -------------------------------------------------------------------
@@ -2170,7 +2176,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("naive_tree-gsm8k"), "config.json"),
         },
         {
@@ -2181,7 +2187,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("nss_tree-gsm8k"), "config.json"),
         },
         {
@@ -2192,7 +2198,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("si_tree-gsm8k"), "config.json"),
         },
         {
@@ -2203,7 +2209,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("st_tree-gsm8k"), "config.json"),
         },
         {
@@ -2214,7 +2220,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("khisti_tree-gsm8k"), "config.json"),
         },
         {
@@ -2224,7 +2230,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("online-kl-tree-gsm8k"), "online_kl_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
         },
         {
@@ -2234,7 +2240,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "cmd": _ec(_merged("online-ebe-tree-gsm8k"), "online_ebe_tree",
                        datasets="humaneval,math500,mtbench,alpaca", task_score=True),
             "done_check": None,
-            "smoke_skip": smoke,
+            "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
         },
 
@@ -3536,8 +3542,9 @@ def main():
             continue
         _steps_after_skip.append(step)
     if _smoke_skipped:
-        print(f"  [smoke] Skipping {len(_smoke_skipped)} Phase 4 multi-dataset eval step(s) "
-              f"(humaneval/math500/mtbench/alpaca — add --no_smoke / run without --smoke for full pipeline)")
+        _skip_reason = ("smoke mode" if smoke else "laptop tier (0.6B teacher — no signal)")
+        print(f"  [skip] Skipping {len(_smoke_skipped)} Phase 4 multi-dataset eval step(s) "
+              f"({_skip_reason}; humaneval/math500/mtbench/alpaca run on T4/A100 only)")
 
     # ── Pass 2: group by parallel_group ──────────────────────────────────────
     _by_group: dict = {}
