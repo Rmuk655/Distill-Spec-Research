@@ -117,6 +117,12 @@ sys.path.insert(0, os.path.join(_PARENT, "db"))
 # Module-level flag: specInfer fallback warning is shown at most once per process.
 _SPECINFER_FALLBACK_WARNED: bool = False
 
+
+def _now_tag() -> str:
+    """Return a compact UTC timestamp string, e.g. '20260601_1041'."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+
 # ---------------------------------------------------------------------------
 # Transformers 4.55.x dtype-serialization bug-fix (applied once at import time)
 #
@@ -1310,7 +1316,7 @@ def main():
             _wandb_mod.init(
                 project=args.wandb_project,
                 entity=getattr(args, "wandb_entity", None),
-                name=f"eval_{student_label}_{args.hw_tier}",
+                name=f"eval_{student_label}_{args.hw_tier}_{_now_tag()}",
                 tags=[student_label, "eval", "phase1", args.hw_tier],
                 group=args.experiment_tag,
                 dir=_wandb_dir,   # store run files under db/wandb/, not orchestration/wandb/
