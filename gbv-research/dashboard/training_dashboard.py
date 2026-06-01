@@ -1546,10 +1546,12 @@ function togglePhase(pi) {
   _activePhaseIdx = pi;
 
   const statusMap = window._pipelineStatusMap || {};
+  const isSmoke = !!window._pipelineSmoke;
   const ph = PHASE_GROUPS[pi];
   const badges = ph.steps.map(sid => {
     const st  = statusMap[sid] || 'pending';
-    const col = STATUS_COLOR[st] || '#888';
+    // In smoke mode, the green "done" color becomes amber (other statuses unchanged).
+    const col = (isSmoke && st === 'done') ? '#d97706' : (STATUS_COLOR[st] || '#888');
     const dot = st === 'running'
       ? '<span style="animation:pulse 1s infinite;display:inline-block;margin-right:2px">&#9679;</span>' : '';
     const icon = st === 'done' ? '&#10003;&nbsp;' : st === 'failed' ? '&#10005;&nbsp;'
@@ -3438,9 +3440,10 @@ async function updatePipelineStatus() {
 
       // SMOKE badge — config label ends in/contains "_smoke" when the active state
       // file is pipeline_state_<config>_smoke.json (see api_pipeline_status, ~line 458).
+      const isSmoke = typeof ps.config === 'string' && ps.config.includes('_smoke');
+      window._pipelineSmoke = isSmoke;   // shared with togglePhase() step-chip colors
       const smokeBadge = document.getElementById('bar-smoke-badge');
       if (smokeBadge) {
-        const isSmoke = typeof ps.config === 'string' && ps.config.includes('_smoke');
         smokeBadge.style.display = isSmoke ? 'inline-block' : 'none';
       }
       if (running.length) {
@@ -3505,8 +3508,11 @@ async function updatePipelineStatus() {
         const phDone    = ph.steps.filter(s => ['done','stopped'].includes(statusMap[s])).length;
         const phRunning = ph.steps.some(s => statusMap[s] === 'running');
         const phFailed  = ph.steps.some(s => statusMap[s] === 'failed');
+        // In smoke mode the "done" (normally green) color becomes amber so the whole
+        // bar reads as a code-path test. Running/failed/pending colors are unchanged.
+        const doneColor = isSmoke ? '#d97706' : '#198754';
         const col = phRunning ? '#ffc107' : phFailed ? '#dc3545'
-                  : phDone === ph.steps.length ? '#198754' : '#6c757d';
+                  : phDone === ph.steps.length ? doneColor : '#6c757d';
         const icon = phRunning ? '&#9679;&nbsp;' : phFailed ? '&#10005;&nbsp;'
                    : phDone === ph.steps.length ? '&#10003;&nbsp;' : '';
         return `<button onclick="togglePhase(${pi})" data-pi="${pi}"
