@@ -709,6 +709,7 @@ def main() -> None:
             _wandb = _w.init(
                 project=args.wandb_project, entity=args.wandb_entity,
                 group=args.wandb_group or None,
+                job_type="train",
                 name=_run_name,
                 tags=[args.loss, "train", "phase1",
                       getattr(args, "hw_tier", "unknown")],

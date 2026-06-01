@@ -1317,6 +1317,7 @@ def main():
                 project=args.wandb_project,
                 entity=getattr(args, "wandb_entity", None),
                 name=f"eval_{student_label}_{args.hw_tier}_{_now_tag()}",
+                job_type="eval",
                 tags=[student_label, "eval", "phase1", args.hw_tier],
                 group=args.experiment_tag,
                 dir=_wandb_dir,   # store run files under db/wandb/, not orchestration/wandb/
