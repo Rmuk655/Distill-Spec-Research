@@ -114,6 +114,9 @@ sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))
 # which is where the dashboard reads from.
 sys.path.insert(0, os.path.join(_PARENT, "db"))
 
+# Module-level flag: specInfer fallback warning is shown at most once per process.
+_SPECINFER_FALLBACK_WARNED: bool = False
+
 # ---------------------------------------------------------------------------
 # Transformers 4.55.x dtype-serialization bug-fix (applied once at import time)
 #
@@ -499,7 +502,6 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         # Fix: run  git submodule update --init --recursive  from the repo root.
         # Alpha measurements will use the inline fallback (greedy draft) which
         # gives slightly different alpha values than the real specInfer generator.
-        _SPECINFER_FALLBACK_WARNED = False  # warn only once per session
 
     _owns_models = (preloaded is None)   # True → we loaded, we must free
 
