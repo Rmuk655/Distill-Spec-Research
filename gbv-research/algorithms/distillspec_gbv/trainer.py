@@ -233,6 +233,10 @@ def parse_args() -> argparse.Namespace:
                    help="Load teacher in 4-bit NF4 (QLoRA). Saves VRAM for 8B teachers.")
     p.add_argument("--compile", action="store_true",
                    help="torch.compile() the draft model (PyTorch 2.0+).")
+    p.add_argument("--hw_tier", default="laptop",
+                   choices=["laptop", "colab_lite", "colab", "a100"],
+                   help="Hardware tier (default: laptop). Controls PPL sample size and "
+                        "other tier-specific optimisations. Set automatically by experiment.py.")
 
     return p.parse_args()
 
@@ -818,7 +822,10 @@ def main() -> None:
     _ema_state: dict = {}
 
     if args.ppl_check_every > 0:
-        _ppl_sample  = val_prompts[:5] if val_prompts else prompts[:5]
+        # Use 1 prompt on laptop (small teacher, value is meaningless — just exercises the code path).
+        # Use 5 prompts on T4/A100 where the PPL signal is actionable.
+        _ppl_n       = 1 if getattr(args, "hw_tier", "laptop") == "laptop" else 5
+        _ppl_sample  = (val_prompts[:_ppl_n] if val_prompts else prompts[:_ppl_n])
         print("Computing pre-training baseline PPL...")
         _baseline_ppl = _compute_ppl(
             draft_model, _ppl_sample, _tok_cache, tokenizer, device, family)

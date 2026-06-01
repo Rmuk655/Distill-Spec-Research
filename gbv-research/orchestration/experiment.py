@@ -866,6 +866,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--jsd_alpha",       str(_h.get("jsd_alpha", 0.5)),
         "--ppl_threshold",   str(_h.get("ppl_threshold", 1.25)),
         "--log_every",       str(_h.get("log_every", 10)),
+        "--hw_tier",         hw_tier,   # controls PPL sample size (1 on laptop, 5 on T4/A100)
         # early_stop_patience: only forward when non-zero so that the hardcoded
         # "--early_stop_patience 3" safety-net in unstable-loss commands (ebe,
         # rev_kl, jsd, l1) is preserved when no YAML value is set (default 0).
