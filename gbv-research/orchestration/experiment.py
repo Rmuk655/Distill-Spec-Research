@@ -726,7 +726,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         Phase 1 — Baseline
             eval_baseline_gsm8k   (always first; establishes the untrained reference)
 
-        Phase 2 — Training   (smoke: 50 steps · full: 1000 steps)
+        Phase 2 — Training   (smoke: 10 steps · full: 100 steps on laptop / 1000 steps on server)
             forward_kl · ebe · reverse_kl · jsd · l1 · online · online_ebe
             Each loss: train → merge (sequential pairs)
 
@@ -931,6 +931,15 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _ckpt   = globals()["_ckpt"]    # noqa: E731 — module-level default
         _merged = globals()["_merged"]  # noqa: E731
 
+    # Smoke runs must never collide with full-run checkpoints.
+    # Full:  db/checkpoints/kl-gsm8k/
+    # Smoke: db/checkpoints/smoke/kl-gsm8k/
+    if smoke:
+        _ckpt_full   = _ckpt
+        _merged_full = _merged
+        _ckpt   = lambda n, _f=_ckpt_full:   _f(os.path.join("smoke", n))   # noqa: E731
+        _merged = lambda n, _f=_merged_full: _f(os.path.join("smoke", n))   # noqa: E731
+
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
 
@@ -1065,7 +1074,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # -------------------------------------------------------------------
         # Phase 2 — Training
         #
-        # smoke: 50 steps each — just enough to hit the first checkpoint,
+        # smoke: 10 steps each — just enough to hit the first checkpoint,
         #        trigger the health check, and verify no NaN / OOM / shape error.
         # full:  1000 steps each (~1 hr/loss on laptop, ~15 min on A100).
         #
@@ -2962,7 +2971,7 @@ def _print_header(cfg, draft, target, args):
         print(f"  Tag    : {args.experiment_tag}")
     if args.smoke:
         print(f"  Mode   : SMOKE TEST  n=5 · max_tokens=30 · K=3 · modes=all-6-verifiers · temp=0.6")
-        print(f"           (6 losses × 50 steps + 6 evals — exercises every code path; ~30-40 min)")
+        print(f"           (6 losses × 10 steps + 6 evals — exercises every code path; ~25-35 min)")
     if args.eagle:
         if args.config == "laptop":
             print(f"\n  [WARN] --eagle with --config laptop makes no sense for the paper.")
