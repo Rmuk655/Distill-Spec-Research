@@ -52,20 +52,42 @@ Use these **only** once candidates are publication-worthy (≤2 survivors).
 
 ## Section 2 — Strategy (the funnel)
 
+### Research-valid compute tiers
+
+> **Key principle: always use 8B teacher for any research decision.**
+> The 1.7B→0.6B gap (~3×) is too small — loss rankings can reverse vs 8B→0.6B (~13×).
+> Colab (4B teacher) and colab_lite (1.7B teacher) are **crash-check only**, NOT research tiers.
+> Quantized 8B NF4 (Kaggle) gives the same loss rankings as full 8B BF16 (A100).
+
+| Tier | Platform | Teacher | Purpose | Research-valid? |
+|---|---|---|---|---|
+| Crash check | Laptop | any | code doesn't crash | No |
+| Crash check | Colab_lite (1.7B) | 1.7B BF16 | code path verification, cheap | **No** — 1.7B→0.6B gap (~3×) too small; rankings unreliable |
+| Crash check / fallback | Colab (4B) | 4B BF16 | quota-exhausted fallback only | **No** — 4B teacher ≠ paper setting (8B); rankings not transferable |
+| **Exploration** | **Kaggle T4 x2** | **8B NF4** | rank losses, tune LR, kill losers | **✓ Yes** |
+| **Confirmation** | **A100** | **8B BF16** | paper numbers, multi-seed | **✓ Yes** |
+
 ```
-  free T4-class pools                               A100 (paid/institutional)
-  Kaggle T4 x2 + Modal T4 + Lightning T4       →   IITH primary · Rahul Thomas A100
-  + GCP $300 T4 (@iith.ac.in account)              · Modal A100 backup
-  ──────────────────────────────────────           ──────────────────────────────
-  ALL exploration / hypothesis work                 PUBLICATION confirmation ONLY
-  run loss batches in PARALLEL across pools         ≤2 candidate loss×verifier pairs
-  workload fits 16 GB → T4/P100 sufficient          full GSM8K, ≥3 seeds, stats
+  Kaggle T4 x2 (8B NF4 teacher)               →   A100 (8B BF16 teacher)
+  ──────────────────────────────────           ──────────────────────────────
+  Exploration: rank losses, tune LR,               PUBLICATION confirmation ONLY
+  kill losers. Same 8B teacher as A100;            ≤2 candidate loss×verifier pairs
+  loss rankings transfer to A100.                  full GSM8K, ≥3 seeds, stats
+
+  (Modal T4, Lightning T4, GCP T4                  IITH primary · Rahul Thomas A100
+   = additional parallel exploration slots)        · Modal A100 backup
 ```
 
-- **T4-class free pools = ALL exploration / hypothesis establishment.** Run
-  different loss batches **in parallel** across the three pools. Because the
-  workload fits in 16 GB, T4/P100 is sufficient — **A100 gives no benefit** here.
-- **A100 = PUBLICATION confirmation ONLY**, after exploration narrows to **≤2**
+- **Kaggle T4 x2 (8B NF4) = the minimum valid platform for research decisions.**
+  Uses the same 8B teacher as the A100 confirmation; loss rankings established here
+  transfer reliably to the full 8B BF16 run. Run batches in **parallel** across
+  additional free T4 pools (Modal, Lightning) as needed.
+- **Colab (4B teacher) and colab_lite (1.7B teacher) = crash check only.** The
+  4B teacher differs from the paper setting; the 1.7B→0.6B gap (~3×) is too small
+  to produce reliable loss rankings vs the 8B→0.6B gap (~13×). **Never use these
+  configs for research direction.** Colab is a quota-exhausted fallback, not a
+  research tier.
+- **A100 = PUBLICATION confirmation ONLY**, after Kaggle exploration narrows to **≤2**
   candidate loss×verifier pairings.
 - **Always use the cheapest adequate GPU for each job.** Never use an A100 for
   prototyping — it wastes the shared credit pools for zero benefit on a 6 GB workload.

@@ -113,6 +113,22 @@ Train `teacher_temperature = 0.8` across configs; eval `T=1.0` is the paper
 standard. T4 tiers train all 17 losses; `a100` runs the 9-verifier matrix.
 The user-facing draft↔teacher gap is **0.6B → 8B** at the top tier.
 
+> **Research-valid tiers and the teacher-gap principle:**
+>
+> | Tier | Config | Teacher | Research-valid? |
+> |---|---|---|---|
+> | Crash check | `laptop` | any | No — code-only verification |
+> | **Crash check only** | `colab_lite` | **1.7B BF16** | **No** — 1.7B→0.6B gap (~3×) too small; loss rankings can reverse vs 8B→0.6B (~13×) |
+> | **Crash check / quota fallback** | `colab` | **4B BF16** | **No** — 4B teacher ≠ paper setting (8B); trends not transferable to A100 results |
+> | **✓ Exploration** | **`kaggle`** | **8B NF4** | **Yes** — same 8B teacher as A100; quantized NF4 gives same loss rankings as full BF16 |
+> | **✓ Confirmation** | **`a100`** | **8B BF16** | **Yes** — paper numbers, ≥3 seeds, full GSM8K |
+>
+> **Key principle: always use 8B teacher for any research decision.**
+> The 1.7B→0.6B gap (~3×) is too small — loss rankings established there are not
+> reliable for predicting 8B→0.6B (~13×) behaviour. Colab/colab_lite are code
+> verification only. `kaggle` (8B NF4) is the minimum valid platform for research
+> direction; `a100` (8B BF16) is for publication confirmation.
+
 ### 0.6 Existing statistical rigor — what EXISTS vs MISSING
 
 **Exists** (`paper/analyze_results.py`):
@@ -279,10 +295,11 @@ the funnel below.
 
 | resource | budget | role | reliability |
 |---|---|---|---|
-| **Kaggle free** | **~30 GPU-h / week, resets weekly** | **ALL exploration** (rank losses, kill losers, tune LR) | the only reliable compute |
+| **Kaggle free (8B NF4 teacher)** | **~30 GPU-h / week, resets weekly** | **ALL exploration** (rank losses, kill losers, tune LR) — **minimum valid platform for research decisions** | the only reliable compute |
 | Modal | **$30 one-time signup credit** (not yet signed up) | **ONE A100 confirmation run, spent last** | one-shot, irreplaceable |
 | Lightning | ~15–22 free credits/mo | backup A100 if Modal runs short | secondary |
-| Colab free | **already exhausted** | throwaway / backup only — **never on the critical path** | unreliable |
+| Colab free (4B teacher) | **already exhausted** | **crash check / quota fallback only** — 4B teacher ≠ paper setting (8B); NOT for research direction | unreliable |
+| Colab_lite (1.7B teacher) | n/a | **crash check only** — 1.7B→0.6B gap (~3×) too small; loss rankings unreliable | unreliable |
 
 > ### ⚠️ MANDATE: on Kaggle always use **GPU T4 x2** — P100 is broken, no single T4 exists.
 > Kaggle's GPU options: **P100** (sm_60, broken with PyTorch 2.10+cu128) and **T4 x2**

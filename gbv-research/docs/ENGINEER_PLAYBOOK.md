@@ -40,15 +40,21 @@ until the previous EXIT GATE passes.
 
 | resource | budget | role |
 |---|---|---|
-| **Kaggle free** | **~30 GPU-h / week, resets weekly** | ALL exploration (rank losses, kill losers, tune LR) |
+| **Kaggle free** | **~30 GPU-h / week, resets weekly** | ALL exploration (rank losses, kill losers, tune LR) — **minimum valid platform for research decisions (8B NF4 teacher)** |
 | Modal | **$30 one-time credit** | **ONE A100 confirmation run, spent LAST** |
 | Lightning | ~15–22 free credits/mo | backup A100 / K=5 add-on in a follow-up month |
-| Colab free | exhausted | never on the critical path |
+| Colab free | exhausted | **crash check / quota fallback only** — 4B teacher ≠ paper setting (8B); NOT for research direction |
+| Colab_lite | n/a | **crash check only** — 1.7B teacher: 3× gap too small; loss rankings unreliable vs 8B→0.6B (~13×) |
 
 - **Kaggle hardware: GPU T4 x2 — the only working option.** P100 (sm_60) is broken
   with PyTorch 2.10+cu128 (requires sm_70+); Kaggle does not offer a single T4.
   Always select **"GPU T4 x2"** in Kaggle notebook settings. T4 x2 burns **2×
   quota per session-hour** → 30 GPU-h/wk becomes **~15 effective session-hours/wk**.
+- **Kaggle (8B NF4) is the MINIMUM valid platform for research decisions.** Colab
+  (4B teacher) and colab_lite (1.7B teacher) are crash-check only — the 1.7B→0.6B
+  gap (~3×) is too small to produce reliable loss rankings; the 4B teacher differs
+  from the paper setting (8B). Never interpret colab/colab_lite numbers as research
+  direction. Loss rankings from Kaggle (8B NF4) transfer reliably to A100 (8B BF16).
 - **Check the quota counter** at <https://www.kaggle.com/me/quota> at the start
   of every session. Budget each week as **≤27 GPU-h** (~13-14 effective session-hours;
   safety buffer under 30 for one crashed session). One ~9-hour session ≈ 18 quota-h.
