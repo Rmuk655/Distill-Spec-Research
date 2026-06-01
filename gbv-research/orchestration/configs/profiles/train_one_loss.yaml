@@ -96,6 +96,12 @@ training:
   max_new_tokens: 96
   teacher_temperature: 0.8
   seed: 42                       # 1 seed for free-tier exploration (direction only)
+  # Regularization
+  grad_clip: 1.0                 # gradient clipping max norm
+  lora_dropout: 0.05             # LoRA dropout (0 = no dropout)
+  # Loss-specific hyperparameters (only used when the named loss is active)
+  ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
+  jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
 
 dataset:
   train: core/datasets/raw/gsm8k_train.jsonl

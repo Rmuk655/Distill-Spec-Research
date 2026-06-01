@@ -42,6 +42,12 @@ training:
   max_new_tokens: 128           # plenty of headroom with 1.7B teacher
   teacher_temperature: 0.8
   seed: 42
+  # Regularization
+  grad_clip: 1.0                 # gradient clipping max norm
+  lora_dropout: 0.05             # LoRA dropout (0 = no dropout)
+  # Loss-specific hyperparameters (only used when the named loss is active)
+  ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
+  jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
 
 dataset:
   train: core/datasets/raw/gsm8k_train.jsonl
@@ -77,6 +83,10 @@ evaluation:
   temperatures: [1.0]           # T=1.0: paper standard; training teacher_temperature=0.8 is separate
   L: 8
   n_prompts: 20                 # 20 prompts — quick trend check direction
+
+tree_training:
+  tree_K: 4                     # draft candidates per node (branching factor)
+  tree_L: 8                     # draft block depth (max speculative tokens per path)
 
 experiment:
   # colab_lite is for checking loss ranking direction only.

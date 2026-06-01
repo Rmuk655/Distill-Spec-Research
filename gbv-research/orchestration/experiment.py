@@ -282,6 +282,21 @@ def _load_config_yaml(config_name: str) -> dict:
             #   "1.7B-T4-lite-kl_qwen_300steps"  vs  "4B-T4-kl_qwen_500steps"  etc.
             # Falls back to config_name if not set in YAML.
             "run_label":            logging_cfg.get("run_label", config_name),
+            # Health / validation cadence — forwarded so YAML controls how often
+            # we run validation and the perplexity health check during training.
+            "val_every":            health.get("val_every", 50),
+            "ppl_threshold":        health.get("ppl_threshold", 1.25),
+            # Logging cadence — how often trainer.py logs train metrics to W&B.
+            "log_every":            logging_cfg.get("log_every", 10),
+            # Regularization: grad clip + LoRA dropout.
+            "grad_clip":            training.get("grad_clip", 1.0),
+            "lora_dropout":         training.get("lora_dropout", 0.05),
+            # Loss-specific hyperparameters — only consumed when the named loss
+            # is active; trainer.py silently ignores them for other losses.
+            "ebe_kl_weight":        training.get("ebe_kl_weight", 0.1),
+            "jsd_alpha":            training.get("jsd_alpha", 0.5),
+            # no_lora: disable LoRA entirely (full fine-tune).  False by default.
+            "no_lora":              training.get("no_lora", False),
         }
         # training.steps → train_steps (server=5000, colab=500, laptop=1000).
         # No default — None lets build_steps() apply the smoke/full default.
@@ -804,6 +819,23 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--wandb_project",   str(_h.get("wandb_project", "distillspec")),
         "--wandb_group",     str(_h.get("wandb_group", "")),
         "--run_label",       str(_h.get("run_label", "")),
+        # ── Newly wired trainer hyperparams ───────────────────────────────────
+        "--seed",            str(_h.get("seed", 42)),
+        "--val_every",       str(_h.get("val_every", 50)),
+        "--grad_clip",       str(_h.get("grad_clip", 1.0)),
+        "--lora_dropout",    str(_h.get("lora_dropout", 0.05)),
+        "--ebe_kl_weight",   str(_h.get("ebe_kl_weight", 0.1)),
+        "--jsd_alpha",       str(_h.get("jsd_alpha", 0.5)),
+        "--ppl_threshold",   str(_h.get("ppl_threshold", 1.25)),
+        "--log_every",       str(_h.get("log_every", 10)),
+        # early_stop_patience: only forward when non-zero so that the hardcoded
+        # "--early_stop_patience 3" safety-net in unstable-loss commands (ebe,
+        # rev_kl, jsd, l1) is preserved when no YAML value is set (default 0).
+        # When YAML explicitly sets a non-zero value, it overrides the hardcoded 3.
+        *( ["--early_stop_patience", str(_h.get("early_stop_patience", 0))]
+           if _h.get("early_stop_patience", 0) != 0 else [] ),
+        # no_lora: boolean flag — only pass when True (no value).
+        *( ["--no_lora"] if _h.get("no_lora") else [] ),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.
@@ -3130,6 +3162,22 @@ def main():
         # online_lr because EBE's cumprod gradient is more volatile.  Defaults to
         # 1e-4 (3x lower than online_lr).  Set in laptop/server/colab YAML if needed.
         "online_ebe_lr":  _yaml_cfg.get("online_ebe_lr", 1e-4),
+        # ── Newly wired trainer hyperparams ───────────────────────────────────
+        # These were previously always trainer.py defaults; now each platform YAML
+        # can override them.  All 12 are forwarded to every trainer.py invocation
+        # via _train_hargs in build_steps().
+        "seed":                 _yaml_cfg.get("seed", 42),
+        "val_every":            _yaml_cfg.get("val_every", 50),
+        "grad_clip":            _yaml_cfg.get("grad_clip", 1.0),
+        "lora_dropout":         _yaml_cfg.get("lora_dropout", 0.05),
+        "ebe_kl_weight":        _yaml_cfg.get("ebe_kl_weight", 0.1),
+        "jsd_alpha":            _yaml_cfg.get("jsd_alpha", 0.5),
+        "early_stop_patience":  _yaml_cfg.get("early_stop_patience", 0),
+        "tree_K":               _yaml_cfg.get("tree_K", 4),
+        "tree_L":               _yaml_cfg.get("tree_L", 8),
+        "ppl_threshold":        _yaml_cfg.get("ppl_threshold", 1.25),
+        "log_every":            _yaml_cfg.get("log_every", 10),
+        "no_lora":              _yaml_cfg.get("no_lora", False),
     }
     # Profiles honour their YAML `evaluation:` block (modes / K_values / temperatures
     # / n_prompts / n_prompts_gsm8k / max_tokens). build_steps reads these off

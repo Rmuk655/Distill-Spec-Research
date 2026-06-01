@@ -44,6 +44,12 @@ training:
   max_new_tokens: 128           # longer sequences; A100 handles the KV cache easily
   teacher_temperature: 0.8
   seed: 42
+  # Regularization
+  grad_clip: 1.0                 # gradient clipping max norm
+  lora_dropout: 0.05             # LoRA dropout (0 = no dropout)
+  # Loss-specific hyperparameters (only used when the named loss is active)
+  ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
+  jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
 
 dataset:
   # These paths are for reference only -- pipeline hardcodes core/datasets/raw/ via _data().
@@ -88,6 +94,10 @@ evaluation:
   #   humaneval — code generation, all 164 prompts (filtered to ≤100 for budget)
   #   mtbench  — multi-turn chat, 80 prompts (the entire MT-Bench)
   eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
+
+tree_training:
+  tree_K: 4                     # draft candidates per node (branching factor)
+  tree_L: 8                     # draft block depth (max speculative tokens per path)
 
 experiment:
   # Loss family — covers the full 8×8 cross-pair matrix in Phase 3:
