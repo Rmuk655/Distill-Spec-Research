@@ -398,7 +398,12 @@ def api_pipeline_status():
     n_running = [s["id"] for s in all_steps if s["status"] == "running"]
     n_failed  = [s["id"] for s in all_steps if s["status"] == "failed"]
     n_stopped = [s["id"] for s in all_steps if s["status"] == "stopped"]
-    total     = len(STEP_ORDER)
+    n_skipped = sum(1 for s in all_steps if s["status"] == "skipped")
+    # Skipped steps are terminal (tier-gated / excluded losses / EAGLE) — they
+    # never run in this config.  Exclude them from the denominator so the
+    # progress bar reflects only steps that actually run on this tier, instead
+    # of sitting at e.g. "52/97" forever.
+    total     = max(1, len(STEP_ORDER) - n_skipped)
 
     # Most recent DB entry (gives a sense of what just finished)
     try:
@@ -1589,7 +1594,7 @@ function togglePhase(pi) {
     const dot = st === 'running'
       ? '<span style="animation:pulse 1s infinite;display:inline-block;margin-right:2px">&#9679;</span>' : '';
     const icon = st === 'done' ? '&#10003;&nbsp;' : st === 'failed' ? '&#10005;&nbsp;'
-               : st === 'stopped' ? '&#9646;&nbsp;' : '';
+               : st === 'stopped' ? '&#9646;&nbsp;' : st === 'skipped' ? '&#8212;&nbsp;' : '';
     const desc = STEP_DESC[sid] || sid;
     return `<span title="${desc}"
       style="padding:2px 8px;border-radius:8px;cursor:default;
@@ -3472,7 +3477,8 @@ document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
 // ---- Pipeline status bar ----
 const STATUS_COLOR = {
   done: '#198754', running: '#ffc107', failed: '#dc3545',
-  stopped: '#e67e22', pending: '#6c757d'
+  stopped: '#e67e22', pending: '#6c757d',
+  skipped: '#adb5bd'   // muted grey — tier-gated/excluded, never runs in this config
 };
 
 async function updatePipelineStatus() {
@@ -3560,19 +3566,30 @@ async function updatePipelineStatus() {
         const phDone    = ph.steps.filter(s => ['done','stopped'].includes(statusMap[s])).length;
         const phRunning = ph.steps.some(s => statusMap[s] === 'running');
         const phFailed  = ph.steps.some(s => statusMap[s] === 'failed');
+        // Skipped steps (tier-gated / excluded / EAGLE) are terminal and never
+        // run in this config — exclude them from the phase denominator so a
+        // phase reads e.g. "11/11" (complete) instead of "11/14" (stuck), and a
+        // fully-skipped phase reads as skipped rather than "0/N".
+        const phSkipped  = ph.steps.filter(s => statusMap[s] === 'skipped').length;
+        const phRunnable = ph.steps.length - phSkipped;
+        const phAllSkipped = phRunnable === 0;
+        const phComplete = phAllSkipped || phDone === phRunnable;
         // In smoke mode the "done" (normally green) color becomes amber so the whole
         // bar reads as a code-path test. Running/failed/pending colors are unchanged.
         const doneColor = isSmoke ? '#d97706' : '#198754';
-        const col = phRunning ? '#ffc107' : phFailed ? '#dc3545'
-                  : phDone === ph.steps.length ? doneColor : '#6c757d';
-        const icon = phRunning ? '&#9679;&nbsp;' : phFailed ? '&#10005;&nbsp;'
-                   : phDone === ph.steps.length ? '&#10003;&nbsp;' : '';
+        const col = phAllSkipped ? '#adb5bd'
+                  : phRunning ? '#ffc107' : phFailed ? '#dc3545'
+                  : phComplete ? doneColor : '#6c757d';
+        const icon = phAllSkipped ? '&#8212;&nbsp;'
+                   : phRunning ? '&#9679;&nbsp;' : phFailed ? '&#10005;&nbsp;'
+                   : phComplete ? '&#10003;&nbsp;' : '';
+        const countTxt = phAllSkipped ? 'skipped' : `${phDone}/${phRunnable}`;
         return `<button onclick="togglePhase(${pi})" data-pi="${pi}"
           style="cursor:pointer;padding:2px 9px;border-radius:12px;
                  border:1px solid ${col}66;background:${col}1a;color:${col};
                  font-size:10px;font-weight:700;white-space:nowrap;
                  margin:1px 3px 1px 0;outline:none"
-        >${icon}${ph.label}&nbsp;<span style="opacity:.7">${phDone}/${ph.steps.length}</span></button>`;
+        >${icon}${ph.label}&nbsp;<span style="opacity:.7">${countTxt}</span></button>`;
       }).join('');
 
       panel.innerHTML =

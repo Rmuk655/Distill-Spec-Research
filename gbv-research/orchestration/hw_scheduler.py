@@ -92,18 +92,47 @@ class HWProfile:
         train_slots: list = []
         eval_slots:  list = []
 
-        for i, props in gpus:
-            vram    = props.total_memory / (1024 ** 3)
-            gpu_name = f"{props.name} #{i}"
+        # ── Small multi-GPU (T4/V100-class, <20 GB each) → ONE spanning slot ──
+        # A large teacher (e.g. Qwen3-8B) loaded in 4-bit NF4 has a transient
+        # BF16 materialization spike (~16 GB) that does NOT fit a single 15 GB
+        # T4 — it must spread across BOTH GPUs via device_map="auto".  Making
+        # one slot per GPU (the default below) pins each parallel job to a
+        # single T4 (CUDA_VISIBLE_DEVICES=i), so device_map sees only 15 GB and
+        # OOMs at ~85% during materialization.  For small multi-GPU we therefore
+        # build ONE slot covering ALL devices: jobs run sequentially, but each
+        # uses both T4s (CUDA_VISIBLE_DEVICES="0,1") and the 8B load fits across
+        # the combined ~30 GB.  A100-class GPUs (≥20 GB) each hold the full
+        # model, so they keep the per-GPU parallel slots.
+        _vrams = [props.total_memory / (1024 ** 3) for _, props in gpus]
+        _small_multi = len(gpus) > 1 and all(v < 20 for v in _vrams)
 
-            n_train = max(1, min(MAX_SLOTS_PER_GPU, floor(vram / TRAIN_VRAM_GB)))
-            n_eval  = max(1, min(MAX_SLOTS_PER_GPU, floor(vram / EVAL_VRAM_GB)))
+        if _small_multi:
+            _all_ids   = [i for i, _ in gpus]
+            _total_vram = sum(_vrams)
+            _span_name = "+".join(f"{props.name}#{i}" for i, props in gpus)
+            for i, props in gpus:
+                all_slots.append(GPUSlot(device_ids=[i],
+                                         vram_gb=props.total_memory / (1024 ** 3),
+                                         name=f"{props.name} #{i}"))
+            # One spanning slot each for train and eval — both load the large
+            # teacher and both need the combined VRAM for the load spike.
+            train_slots.append(GPUSlot(device_ids=_all_ids, vram_gb=_total_vram,
+                                       name=_span_name))
+            eval_slots.append(GPUSlot(device_ids=_all_ids, vram_gb=_total_vram,
+                                      name=_span_name))
+        else:
+            for i, props in gpus:
+                vram    = props.total_memory / (1024 ** 3)
+                gpu_name = f"{props.name} #{i}"
 
-            all_slots.append(GPUSlot(device_ids=[i], vram_gb=vram, name=gpu_name))
-            for _ in range(n_train):
-                train_slots.append(GPUSlot(device_ids=[i], vram_gb=vram, name=gpu_name))
-            for _ in range(n_eval):
-                eval_slots.append(GPUSlot(device_ids=[i], vram_gb=vram, name=gpu_name))
+                n_train = max(1, min(MAX_SLOTS_PER_GPU, floor(vram / TRAIN_VRAM_GB)))
+                n_eval  = max(1, min(MAX_SLOTS_PER_GPU, floor(vram / EVAL_VRAM_GB)))
+
+                all_slots.append(GPUSlot(device_ids=[i], vram_gb=vram, name=gpu_name))
+                for _ in range(n_train):
+                    train_slots.append(GPUSlot(device_ids=[i], vram_gb=vram, name=gpu_name))
+                for _ in range(n_eval):
+                    eval_slots.append(GPUSlot(device_ids=[i], vram_gb=vram, name=gpu_name))
 
         profile_name = cls._detect_profile_name(gpus)
         return cls(

@@ -277,7 +277,20 @@ def distinct_model_pairs() -> list:
           'google/gemma-2-2b'              → 'Gemma-2B'
           'distilgpt2'                     → 'DistilGPT-2'
           'gpt2-medium'                    → 'GPT-2-M'
+          'C:/.../db/checkpoints/bv_tree-gsm8k_merged' → 'bv_tree (trained)'
         """
+        # Trained models are stored as local checkpoint dirs, not HF ids —
+        # e.g. '.../db/checkpoints/bv_tree-gsm8k_merged'. Don't print the full
+        # Windows/Unix path in the dashboard chip; reduce it to the loss name.
+        _raw = path.replace("\\", "/")
+        if ("checkpoints/" in _raw) or _raw.rstrip("/").endswith("_merged"):
+            base = _raw.rstrip("/").split("/")[-1]      # 'bv_tree-gsm8k_merged'
+            base = base.replace("_merged", "")          # 'bv_tree-gsm8k'
+            # strip a trailing dataset tag like '-gsm8k', '-gsm8k_train'
+            import re as _re
+            base = _re.sub(r"-(gsm8k|alpaca|humaneval|math500|mtbench)(_train)?$", "", base)
+            return f"{base} (trained)" if base else "trained"
+
         name = path.split("/")[-1].lower()  # strip org prefix, lowercase for matching
 
         # Exact-match friendly names (models without a size suffix)

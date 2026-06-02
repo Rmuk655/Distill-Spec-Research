@@ -3766,12 +3766,35 @@ def main():
         # that look like errors even though everything is fine.
         if step.get("smoke_skip"):
             _smoke_skipped.append(sid)
+            # Mark tier-skipped steps as "skipped" (not left dangling as "pending")
+            # so the dashboard reads cleanly done instead of showing them as
+            # outstanding work that never runs on this tier.
+            mark_step(state, sid, "skipped",
+                      "not run on this tier (multi-dataset eval — T4/A100 only)")
             continue
         _steps_after_skip.append(step)
     if _smoke_skipped:
         _skip_reason = ("smoke mode" if args.smoke else "laptop tier (0.6B teacher — no signal)")
         print(f"  [skip] Skipping {len(_smoke_skipped)} Phase 4 multi-dataset eval step(s) "
               f"({_skip_reason}; humaneval/math500/mtbench/alpaca run on T4/A100 only)")
+
+    # Mark any state step that is still 'pending' but NOT in this run's runnable
+    # set as 'skipped'.  These are excluded losses (online_*), EAGLE steps (need
+    # --eagle), or other tier-gated steps that will never run in this config.
+    # Leaving them 'pending' made the dashboard read 52/97 forever and look
+    # unfinished; 'skipped' is terminal so the run reads cleanly done.
+    # (A step that becomes runnable in a later invocation re-enters _steps_after_skip
+    #  and is executed normally — 'skipped' does not permanently block it.)
+    _runnable_ids = {s["id"] for s in _steps_after_skip}
+    _n_marked_skipped = 0
+    for _sid, _sv in list(state.get("steps", {}).items()):
+        if _sv.get("status") == "pending" and _sid not in _runnable_ids:
+            mark_step(state, _sid, "skipped",
+                      "not part of this run (excluded loss / disabled / EAGLE / other tier)")
+            _n_marked_skipped += 1
+    if _n_marked_skipped:
+        print(f"  [skip] Marked {_n_marked_skipped} non-runnable step(s) as 'skipped' "
+              f"(excluded/disabled/EAGLE — will not run in this config).")
 
     # ── Pass 2: group by parallel_group ──────────────────────────────────────
     _by_group: dict = {}
