@@ -1644,30 +1644,30 @@ def main():
                 # retry that specific mode on CPU so the pipeline still completes.
                 print(f"  [BE batch] hw_tier=laptop -> one GPU subprocess per mode "
                       f"(serial isolation; VRAM-wait between modes; CPU fallback if OOM)")
-                for _mode in modes_list:
-                    # Wait for VRAM to be released by the previous subprocess before
-                    # starting the next one.  On Windows, the GPU driver can take 1-3
-                    # seconds to reclaim VRAM after a subprocess exits; launching the
-                    # next subprocess immediately causes OOM (0xC000013A native crash)
-                    # for modes that run after bv/gbv/traversal.  specinfer/naive
-                    # require clean VRAM and fail if traversal's ~2.2 GB hasn't been
-                    # released yet.  Poll until ≥ 2 GB is free before each launch.
+                # Local helper: poll until enough VRAM is free (or give up after
+                # `timeout_s`).  On Windows the GPU driver takes 1-3 s to reclaim
+                # VRAM after a subprocess exits; launching the next one too early
+                # causes a native 0xC000013A abort.  2700 MB headroom matches the
+                # validated alpha floor for the 0.5B+0.6B pair (2000 was too tight —
+                # naive still crashed deep in the pipeline once fragmentation built up).
+                def _wait_for_vram(mode_name, need_mb=2700, timeout_s=30):
                     try:
-                        import torch as _t
-                        if _t.cuda.is_available():
-                            import time as _time
-                            _need_mb = 2000   # Qwen 0.5B+0.6B pair needs ~2.2 GB
-                            for _attempt in range(30):   # wait up to 30 s
-                                _free_mb = _t.cuda.mem_get_info(0)[0] // 1024**2
-                                if _free_mb >= _need_mb:
-                                    break
-                                _t.cuda.empty_cache()
-                                _time.sleep(1)
-                            else:
-                                print(f"  [BE batch] mode={_mode}: VRAM still low "
-                                      f"({_free_mb} MB) after 30 s wait — trying anyway")
+                        import torch as _t, time as _time
+                        if not _t.cuda.is_available():
+                            return
+                        for _ in range(timeout_s):
+                            _t.cuda.empty_cache()
+                            if _t.cuda.mem_get_info(0)[0] // 1024**2 >= need_mb:
+                                return
+                            _time.sleep(1)
+                        _free = _t.cuda.mem_get_info(0)[0] // 1024**2
+                        print(f"  [BE batch] mode={mode_name}: VRAM still low "
+                              f"({_free} MB < {need_mb}) after {timeout_s}s — trying anyway")
                     except Exception:
                         pass
+
+                for _mode in modes_list:
+                    _wait_for_vram(_mode)
                     _mode_res = run_be_batch(
                         args.student, args.teacher, data_path,
                         [_mode], Ks_list, Ts_list,
@@ -1676,10 +1676,26 @@ def main():
                         load_in_4bit=getattr(args, "load_in_4bit", False),
                     )
                     if not _mode_res:
-                        # GPU subprocess returned no results — OOM or driver crash.
-                        # Retry this mode alone on CPU (slow but correct).
+                        # GPU subprocess produced no results — almost always a
+                        # transient native VRAM abort (0xC000013A) from fragmentation
+                        # accumulated deep in the pipeline.  Before the 30x-slower CPU
+                        # path, give the GPU ONE more chance with fully-cleared VRAM
+                        # and a longer settle — this recovers most transient crashes
+                        # at ~6 s/prompt instead of ~340 s/prompt.
                         print(f"  [BE batch] mode={_mode}: GPU subprocess failed "
-                              f"-> retrying on CPU (only this mode)")
+                              f"-> clearing VRAM and retrying ONCE on GPU")
+                        _wait_for_vram(_mode, need_mb=2700, timeout_s=20)
+                        _mode_res = run_be_batch(
+                            args.student, args.teacher, data_path,
+                            [_mode], Ks_list, Ts_list,
+                            args.L, args.max_tokens,
+                            _device="cuda",
+                            load_in_4bit=getattr(args, "load_in_4bit", False),
+                        )
+                    if not _mode_res:
+                        # GPU retry also failed — fall back to CPU (slow but correct).
+                        print(f"  [BE batch] mode={_mode}: GPU retry failed "
+                              f"-> retrying on CPU (only this mode, ~30x slower)")
                         _mode_res = run_be_batch(
                             args.student, args.teacher, data_path,
                             [_mode], Ks_list, Ts_list,
