@@ -3797,16 +3797,29 @@ def main():
             print(f"  Steps: {[s['id'] for s in _runnable]}")
             print(f"{'='*65}")
 
-            _results = _scheduler.run_parallel(_runnable, job_type=_job_type)
-
+            # on_complete: called immediately per step so the dashboard turns
+            # chips green as each training/eval job finishes, not only after
+            # the entire parallel group completes.
             _failed_ids = []
-            for step in _runnable:
-                sid = step["id"]
-                rc  = _results.get(sid, 1)
+
+            def _on_step_complete(sid: str, rc: int):
                 if rc == 0:
-                    mark_step(state, sid, "done", f"parallel {_job_type} complete")
+                    mark_step(state, sid, "done",
+                              f"parallel {_job_type} complete")
                 else:
                     mark_step(state, sid, "failed", f"rc={rc}")
+                    _failed_ids.append(sid)
+
+            _results = _scheduler.run_parallel(
+                _runnable, job_type=_job_type,
+                on_complete=_on_step_complete,
+            )
+
+            # Catch any steps that the callback missed (e.g. future exception path).
+            for step in _runnable:
+                sid = step["id"]
+                if sid not in _results:
+                    mark_step(state, sid, "failed", "no result from scheduler")
                     _failed_ids.append(sid)
             n_run += _n_steps
 

@@ -170,7 +170,8 @@ class HWScheduler:
     # Public API
     # ------------------------------------------------------------------
 
-    def run_parallel(self, steps: list, job_type: str = "eval") -> dict:
+    def run_parallel(self, steps: list, job_type: str = "eval",
+                     on_complete=None) -> dict:
         """
         Run all steps in parallel across available GPU slots.
 
@@ -186,6 +187,12 @@ class HWScheduler:
 
         job_type : "train" | "eval"
             Selects which slot pool to use (train_slots vs eval_slots).
+
+        on_complete : callable(step_id: str, rc: int) | None
+            If provided, called immediately when each step finishes (before all
+            steps complete).  Use this to update pipeline state incrementally so
+            the dashboard shows green chips as each step finishes rather than
+            waiting for the entire parallel group.
 
         Returns
         -------
@@ -222,10 +229,20 @@ class HWScheduler:
                     results[step_id] = rc
                 except Exception as exc:
                     step = futures[fut]
-                    sid = step.get("id") or step.get("name", "unknown")
+                    step_id = step.get("id") or step.get("name", "unknown")
                     with _stdout_lock:
-                        print(f"  [scheduler] ERROR in {sid}: {exc}", flush=True)
-                    results[sid] = 1
+                        print(f"  [scheduler] ERROR in {step_id}: {exc}", flush=True)
+                    rc = 1
+                    results[step_id] = rc
+                # Fire per-step callback immediately so state updates incrementally
+                # and the dashboard shows green chips as each step finishes.
+                if on_complete is not None:
+                    try:
+                        on_complete(step_id, rc)
+                    except Exception as _cb_err:
+                        with _stdout_lock:
+                            print(f"  [scheduler] on_complete error for {step_id}: {_cb_err}",
+                                  flush=True)
 
         return results
 
