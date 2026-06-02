@@ -51,6 +51,20 @@ if not _hf_offline_was_set and os.environ.get("TRANSFORMERS_OFFLINE") == "1":
 # Reduce CUDA allocator fragmentation on small GPUs.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
+# Silence one specific, benign PEFT warning that fires on every adapter save:
+#   "Could not find a config file in Qwen/Qwen2.5-0.5B - will assume that the
+#    vocabulary was not modified."
+# PEFT looks up the base-model config by its HF id to check vocab alignment; in
+# offline mode it can't resolve the id to a local dir, so it warns and (correctly)
+# assumes the vocab is unchanged — which is true for LoRA (we never touch the
+# embedding/vocab). The warning is harmless but fires 17x/run and clutters logs.
+# Filter ONLY this exact message — all other PEFT/transformers warnings still show.
+import warnings as _warnings
+_warnings.filterwarnings(
+    "ignore",
+    message=r".*Could not find a config file.*will assume that the vocabulary was not modified.*",
+)
+
 import torch
 import torch.nn.functional as F
 import transformers
@@ -301,7 +315,7 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
 
     print(f"Loading base: {draft_model_id}")
     base = transformers.AutoModelForCausalLM.from_pretrained(
-        draft_model_id, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
+        draft_model_id, dtype=torch.bfloat16, low_cpu_mem_usage=True)
 
     print(f"Loading LoRA: {adapter_dir}")
     # On Windows + OneDrive, PEFT's _get_peft_type calls os.path.isfile on
@@ -604,7 +618,7 @@ def main() -> None:
             if _t.cuda.is_available() else None
         )
         target_model = transformers.AutoModelForCausalLM.from_pretrained(
-            args.target, torch_dtype=torch.bfloat16,
+            args.target, dtype=torch.bfloat16,
             device_map="auto",
             max_memory=_max_mem_bf16,
             low_cpu_mem_usage=True,
@@ -619,7 +633,7 @@ def main() -> None:
     # ── Load draft ────────────────────────────────────────────────────────────
     print("Loading draft...")
     draft_base = transformers.AutoModelForCausalLM.from_pretrained(
-        args.draft, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
+        args.draft, dtype=torch.bfloat16, low_cpu_mem_usage=True,
         attn_implementation=_ATTN_IMPL).to(device)
     if args.no_lora:
         draft_model = draft_base
@@ -1055,13 +1069,25 @@ def main() -> None:
                     try:
                         _cur_step = step + 1
                         if _gn > 10.0:
+                            # _gn is the PRE-clip norm.  When --grad_clip > 0 the actual
+                            # step is already clipped to that value, so a high pre-clip
+                            # norm is informational (the optimizer step is bounded), not
+                            # an explosion.  Make the message reflect whether clipping is
+                            # active so "lower --grad_clip" isn't suggested when it's
+                            # already doing its job.
+                            _clip_active = args.grad_clip > 0
+                            _clip_note = (f"(pre-clip; step clipped to {args.grad_clip})"
+                                          if _clip_active else "(no clipping active)")
+                            _action = ("reduce --lr — pre-clip grads are persistently large"
+                                       if _clip_active
+                                       else "reduce --lr or set --grad_clip")
                             _wandb.alert(
-                                title="Gradient explosion",
-                                text=f"grad_norm={_gn:.2f} at step {_cur_step}. "
-                                     f"ACTION: reduce --lr or lower --grad_clip.",
+                                title="Large pre-clip gradient norm",
+                                text=f"grad_norm={_gn:.2f} {_clip_note} at step {_cur_step}. "
+                                     f"ACTION: {_action}.",
                                 level="WARN",
                             )
-                            print(f"  [ALERT] grad_norm={_gn:.2f} > 10 — consider reducing LR")
+                            print(f"  [ALERT] grad_norm={_gn:.2f} > 10 {_clip_note} — {_action}")
                     except Exception:
                         pass
                 _wandb.log(_wlog)
@@ -1101,7 +1127,13 @@ def main() -> None:
                 tokenizer, args, device, family, max_prompts=100,
             )
             _val_loss_history.append(v_loss)
-            print(f"Step {step+1:4d}/{args.steps} | val_loss: {v_loss:.4f}")
+            # Tree losses validate with a forward_kl PROXY (see _compute_val_loss):
+            # the tree objective needs an expensive K-path tree per prompt, so val
+            # uses forward_kl as a language-quality guard instead.  Label it clearly
+            # so the printed value is never mistaken for the tree objective itself.
+            _val_is_proxy = args.loss in TREE_LOSS_NAMES
+            _val_tag = "val_loss(fkl-proxy)" if _val_is_proxy else "val_loss"
+            print(f"Step {step+1:4d}/{args.steps} | {_val_tag}: {v_loss:.4f}")
 
             if v_loss < _best_val_loss:
                 _best_val_loss = v_loss
@@ -1142,7 +1174,13 @@ def main() -> None:
                 # ── Automated alerts for convergence decisions ─────────────────
                 try:
                     _cur_step = step + 1
-                    if _val_gap > 0.5:
+                    # val_train_gap is only meaningful when train and val measure the
+                    # SAME quantity.  For tree losses, val_loss is a forward_kl proxy
+                    # (range ~2) while train_ema is the tree objective (range ~0 or
+                    # negative) — their difference is structural, not overfitting, and
+                    # would fire a guaranteed false "overfitting" alert every check.
+                    # Skip the gap alert for tree losses (metrics are incommensurable).
+                    if _val_gap > 0.5 and not _val_is_proxy:
                         _wandb.alert(
                             title="Overfitting detected",
                             text=f"val_train_gap={_val_gap:.4f} at step {_cur_step} "

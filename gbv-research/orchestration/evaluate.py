@@ -774,6 +774,11 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         draft_latency_ms=(sum(draft_times)/len(draft_times)*1000) if draft_times else None,
         verify_latency_ms=(sum(verify_times)/len(verify_times)*1000) if verify_times else None,
         per_prompt=per_prompt_rows,
+        # Which acceptance-measurement path produced these alphas.  When specInfer
+        # is incompatible with the installed transformers version, alpha is computed
+        # by the inline draft-propose/target-verify fallback — a DIFFERENT algorithm.
+        # Recorded so alpha rows are never silently misattributed to "true specInfer".
+        alpha_method=("specinfer" if _SPECINFER_AVAILABLE else "inline_fallback"),
     )
 
 
@@ -1138,6 +1143,14 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
                "ms_per_tok": res["ms_per_tok"], "peak_vram_mb": res["peak_vram_mb"],
                "draft_latency_ms": res.get("draft_latency_ms"),
                "verify_latency_ms": res.get("verify_latency_ms")}
+        # Record the alpha measurement path in notes so inline-fallback alpha is
+        # never mistaken for true specInfer alpha (see run_alpha alpha_method).
+        _amethod = res.get("alpha_method", "specinfer")
+        row["notes"] = (f"alpha_method={_amethod}"
+                        + (f"; {row['notes']}" if row.get("notes") else ""))
+        if _amethod != "specinfer":
+            print(f"  [alpha] measured via {_amethod} (NOT true specInfer) — "
+                  f"tagged in DB notes")
 
         # Task accuracy (GSM8K / HumanEval only)
         if task_score and dataset in ("gsm8k", "humaneval"):
