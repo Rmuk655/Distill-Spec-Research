@@ -30,3 +30,22 @@
 **Disabled in**: `online`, `online_ebe`, `online_ebe_single`, `online_kl_tree`, `online_ebe_tree` (all free-tier configs).
 
 **Investigation pointer**: Check [`orchestration/experiment.py`](../orchestration/experiment.py) `online_adapt` section and [`algorithms/online_serve.py`](../algorithms/online_serve.py) — confirm LR schedule, reward normalization, and KL mask at reject positions.
+
+---
+
+## 3. GPT-2 BE Eval Not Supported (alpha only)
+
+**Symptom**: All BE modes (bv, gbv, traversal, specinfer, naive) crash with `AttributeError: 'GPT2LMHeadModel' object has no attribute 'model'` followed by cache format errors.
+
+**Root cause**: The verifier code (`verifiers/draft_generator.py`, `verifiers/utils.py`) is built on two Qwen3-specific interfaces:
+1. **Custom KV cache** — `.layers[i].keys/.values` accessed by `slice_cache()`, `expand_cache()`, and `target_tree_pass()`. GPT-2 returns a legacy tuple `((k1,v1), (k2,v2), ...)` which has no `.layers` attribute.
+2. **Custom tree attention mask** — `attention_mask={"full_attention": tensor}` passed in `target_tree_pass()`. GPT-2 expects a standard 4D tensor, not a dict.
+
+**Impact**: GPT-2 configs (`laptop_gpt2.yaml`, `server_gpt2.yaml`) evaluate with `modes: [alpha]` only. Alpha (token acceptance rate) is sufficient for convergence trend detection.
+
+**Alpha already works** — `alpha=0.1658` for untrained baseline, and improves with training. For proving "our loss > forward_kl", alpha curves across training steps are sufficient.
+
+**To fix later** (for publishable BE results on GPT-2):
+- Refactor `slice_cache()` and `expand_cache()` in `verifiers/utils.py` to handle both tuple and DynamicCache formats
+- Update `target_tree_pass()` to use architecture-specific attention mask format
+- Alternatively: require GPT-2 to use `config.use_cache=True` with explicit DynamicCache conversion

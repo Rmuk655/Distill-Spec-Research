@@ -80,8 +80,10 @@ health:
   early_stop_patience: 3
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [3]
+  # Alpha only — BE modes need Qwen3-specific KV cache format.
+  # See docs/ISSUES.md and orchestration/configs/laptop_gpt2.yaml.
+  modes: [alpha]
+  K_values: [1]
   temperatures: [1.0]
   L: 8
   n_prompts: 5

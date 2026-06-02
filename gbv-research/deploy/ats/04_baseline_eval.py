@@ -29,8 +29,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=5,
                     help="Prompts per eval mode (default: 5, ~2-3 hr).")
-    ap.add_argument("--modes", default="alpha,bv,gbv,traversal,specinfer,naive",
-                    help="Verifier modes (default: all 6).")
+    ap.add_argument("--modes", default="alpha",
+                    help="Verifier modes (default: alpha only — BE needs Qwen3 KV cache format, see docs/ISSUES.md #3).")
     ap.add_argument("--dry_run", action="store_true")
     args = ap.parse_args()
 
