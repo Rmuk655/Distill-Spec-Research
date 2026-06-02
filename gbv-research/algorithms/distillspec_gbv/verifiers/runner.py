@@ -283,8 +283,10 @@ if __name__ == "__main__":
     # Repo root must be on sys.path; run_be_batch sets cwd=gbv-research/.
     try:
         import sys as _sys, os as _os
-        _repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(
-            _os.path.abspath(__file__))))
+        # runner.py is at: gbv-research/algorithms/distillspec_gbv/verifiers/runner.py
+        # 4× dirname: verifiers/ → distillspec_gbv/ → algorithms/ → gbv-research/
+        _repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+            _os.path.abspath(__file__)))))
         if _repo_root not in _sys.path:
             _sys.path.insert(0, _repo_root)
         from core.model_families import get_family as _get_family

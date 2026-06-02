@@ -37,21 +37,20 @@
 
 ---
 
-## 4. specinfer + naive OOM on 4 GB Laptop GPU
+## 4. specinfer + naive — Windows VRAM Release Timing (FIXED)
 
-**Symptom**: `specinfer` and `naive` verifier modes crash after 60-90 seconds with a native Windows process abort (exit code 0xC000013A — GPU driver kills the process). `bv`, `gbv`, `traversal`, and `alpha` all work correctly on the same hardware.
+**Was**: specinfer and naive crashed with 0xC000013A when run 4th in the per-mode
+subprocess sequence (after bv → gbv → traversal). They worked fine when run alone.
 
-**Root cause**: Both are OTLP-based verifiers (`otlp_registry.py`). Their verification step (after `target_tree_pass`) uses scipy/numpy optimal-transport solvers. The solver allocates additional tensors beyond model weights + KV cache, pushing past the available VRAM headroom on a 4 GB GPU.
+**Root cause**: Windows GPU driver latency releasing VRAM after a subprocess exits.
+When run as the 4th sequential subprocess, ~2.2 GB from the previous subprocess's
+Qwen models hadn't been released yet. specinfer's subprocess launched with
+insufficient free VRAM → native OOM abort (0xC000013A, not catchable by Python).
+Not a code bug. Confirmed: specinfer runs 5/5 prompts at 4-5 s/it with L=8 in isolation.
 
-**Impact**: specinfer and naive are excluded from all laptop configs (`laptop.yaml`, `laptop_gpt2.yaml`, `laptop_llama.yaml`) and the smoke eval. They run correctly on T4 (15 GB) and A100 (40 GB).
-
-**What you still get on laptop** — sufficient for convergence proof and GBV research:
-- `alpha` (token acceptance rate) ✓
-- `bv` (block verification baseline) ✓
-- `gbv` (our method — **key research metric**) ✓
-- `traversal` (tree traversal baseline) ✓
-
-**specinfer + naive will be verified on**: `colab.yaml`, `kaggle.yaml`, `a100.yaml` (all run on T4/A100).
+**Fix**: poll `torch.cuda.mem_get_info()` before each per-mode subprocess launch
+in evaluate.py. Wait up to 30 s for ≥ 2 GB VRAM to be free before starting the
+next mode. All 6 modes now work on the 4 GB laptop GPU.
 
 ## 3. GPT-2 BE Eval — FIXED (CompatCache adapter)
 

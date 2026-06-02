@@ -1630,8 +1630,31 @@ def main():
                 # If a mode's GPU subprocess produces no results (OOM or crash),
                 # retry that specific mode on CPU so the pipeline still completes.
                 print(f"  [BE batch] hw_tier=laptop -> one GPU subprocess per mode "
-                      f"(serial isolation; per-mode CPU fallback if GPU OOMs)")
+                      f"(serial isolation; VRAM-wait between modes; CPU fallback if OOM)")
                 for _mode in modes_list:
+                    # Wait for VRAM to be released by the previous subprocess before
+                    # starting the next one.  On Windows, the GPU driver can take 1-3
+                    # seconds to reclaim VRAM after a subprocess exits; launching the
+                    # next subprocess immediately causes OOM (0xC000013A native crash)
+                    # for modes that run after bv/gbv/traversal.  specinfer/naive
+                    # require clean VRAM and fail if traversal's ~2.2 GB hasn't been
+                    # released yet.  Poll until ≥ 2 GB is free before each launch.
+                    try:
+                        import torch as _t
+                        if _t.cuda.is_available():
+                            import time as _time
+                            _need_mb = 2000   # Qwen 0.5B+0.6B pair needs ~2.2 GB
+                            for _attempt in range(30):   # wait up to 30 s
+                                _free_mb = _t.cuda.mem_get_info(0)[0] // 1024**2
+                                if _free_mb >= _need_mb:
+                                    break
+                                _t.cuda.empty_cache()
+                                _time.sleep(1)
+                            else:
+                                print(f"  [BE batch] mode={_mode}: VRAM still low "
+                                      f"({_free_mb} MB) after 30 s wait — trying anyway")
+                    except Exception:
+                        pass
                     _mode_res = run_be_batch(
                         args.student, args.teacher, data_path,
                         [_mode], Ks_list, Ts_list,

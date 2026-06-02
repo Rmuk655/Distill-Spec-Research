@@ -71,8 +71,7 @@ health:
   early_stop_patience: 3
 
 evaluation:
-  # specinfer/naive: OTLP-based, OOM on 4 GB GPU. T4/A100 only. See docs/ISSUES.md §4.
-  modes: [alpha, bv, gbv, traversal]
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
   temperatures: [1.0]
   L: 8

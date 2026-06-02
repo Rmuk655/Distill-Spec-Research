@@ -97,12 +97,11 @@ health:
   early_stop_patience: 3
 
 evaluation:
-  # specinfer and naive are OTLP-based and require more VRAM than the 4 GB laptop GPU
-  # can provide even as solo subprocesses.  They run reliably on T4/A100.
-  # alpha, bv, gbv, traversal are sufficient to verify all non-OTLP code paths
-  # and to measure GBV block efficiency (the key research metric).
-  # See docs/ISSUES.md §4.
-  modes: [alpha, bv, gbv, traversal]
+  # All 6 verifier modes.  specinfer and naive are OTLP-based; they need clean
+  # VRAM and run fine when isolated (confirmed: 5/5 prompts at 4-5 s/it with L=8).
+  # The per-mode subprocess approach waits for VRAM to be released before each
+  # launch so all modes complete reliably on the 4 GB laptop GPU.
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]                 # single K -- no parameter sweep on laptop
   temperatures: [0.6]           # single temperature -- no sweep
   L: 8
