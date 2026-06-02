@@ -277,6 +277,12 @@ def _alpha_device_guard(default_device, default_dtype):
     tier = getattr(args, "hw_tier", None) if args is not None else None
     if default_device != "cuda" or not torch.cuda.is_available():
         return default_device, default_dtype
+    # hw_tier=cpu means the machine IS a CPU-only server (ATS/AIP).  Return CPU
+    # directly — no VRAM floor logic, no device mismatch risk.  (On a true CPU
+    # server CUDA is not available, so we would have returned above; this branch
+    # guards the edge case where hw_tier=cpu but CUDA is accidentally present.)
+    if tier == "cpu":
+        return "cpu", torch.float32
     free_mb = torch.cuda.mem_get_info(0)[0] // 1024**2
     # Use a tier-specific VRAM floor instead of unconditionally forcing CPU on laptop.
     # The CPU path causes a device mismatch (cpu/cuda:0) when specInfer or the
@@ -1661,12 +1667,14 @@ def main():
             # Better fix: one GPU subprocess PER MODE.  Each subprocess exits
             # cleanly, releasing all VRAM and cache before the next mode starts.
             # This matches pre-batching speed (~13 s/prompt on GPU) with no crash.
-            if _FORCED_DEVICE == "cpu":
-                # Forced CPU (--device cpu): run the whole BE batch on CPU. This is
-                # the CPU-path smoke test — exercises exactly what runs on the
-                # CPU-only ATS/AIP server, on the laptop, before the long run.
-                print(f"  [BE batch] --device cpu -> running BE on CPU "
-                      f"(CPU-path smoke test)")
+            _hw = getattr(args, "hw_tier", "laptop")
+            if _FORCED_DEVICE == "cpu" or _hw == "cpu":
+                # CPU batch path: either forced via --device cpu (laptop smoke test)
+                # or hw_tier=cpu (ATS/AIP CPU-only server where no GPU exists).
+                # Runs all modes in ONE CPU subprocess — no VRAM isolation needed.
+                _reason = "--device cpu (CPU-path smoke test)" if _FORCED_DEVICE == "cpu" \
+                          else "hw_tier=cpu (CPU-only server)"
+                print(f"  [BE batch] {_reason} -> running BE on CPU")
                 batch_res = run_be_batch(
                     args.student, args.teacher, data_path,
                     modes_list, Ks_list, Ts_list,
@@ -1676,7 +1684,7 @@ def main():
                 )
                 for (m, k, t), be in batch_res.items():
                     _be_cache[(ds, m, k, t)] = be
-            elif getattr(args, "hw_tier", None) == "laptop":
+            elif _hw == "laptop":
                 # Run one GPU subprocess per mode so each exits cleanly (releasing
                 # VRAM) before the next starts — prevents allocator fragmentation
                 # that hard-crashes the GPU driver (0xC000013A) mid-batch.

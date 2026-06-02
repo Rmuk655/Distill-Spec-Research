@@ -2709,6 +2709,20 @@ def _scan_log_anomalies(log_path: str, tail_lines: int = 300) -> list[tuple[str,
     results: list[tuple[str, str, str]] = []
     for raw in tail:
         lo = raw.lower().strip()
+
+        # Skip lines that are known-false-positive sources.  These contain OOM/error
+        # keywords as part of their DESCRIPTION of what they guard against, not as
+        # actual events (e.g. "[BE batch]...CPU fallback if OOM" is a help string).
+        _FALSE_POSITIVE_FRAGMENTS = (
+            "cpu fallback if oom",          # BE batch description text
+            "retrying on cpu (only this",   # per-mode cpu fallback description
+            "will retry on cpu automatically",  # alpha eval description
+            "gpu would oom / hard-crash",   # alpha preload guard description
+            "specdist_allow_oom_fallback",  # env-var guard description
+        )
+        if any(fp in lo for fp in _FALSE_POSITIVE_FRAGMENTS):
+            continue
+
         for pattern, severity, label in _ANOMALY_PATTERNS:
             if label in seen_labels:
                 continue
