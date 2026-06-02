@@ -80,7 +80,9 @@ health:
   early_stop_patience: 3
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  # specinfer/naive: OTLP-based, need more memory than typical CPU server RAM budget
+  # when running many parallel jobs. Run separately if needed. See docs/ISSUES.md §4.
+  modes: [alpha, bv, gbv, traversal]
   K_values: [3]
   temperatures: [1.0]
   L: 8

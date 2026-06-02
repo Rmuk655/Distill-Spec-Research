@@ -35,6 +35,26 @@
 
 ## 3. GPT-2 BE Eval — FIXED (CompatCache adapter)
 
+---
+
+## 4. specinfer + naive OOM on 4 GB Laptop GPU
+
+**Symptom**: `specinfer` and `naive` verifier modes crash after 60-90 seconds with a native Windows process abort (exit code 0xC000013A — GPU driver kills the process). `bv`, `gbv`, `traversal`, and `alpha` all work correctly on the same hardware.
+
+**Root cause**: Both are OTLP-based verifiers (`otlp_registry.py`). Their verification step (after `target_tree_pass`) uses scipy/numpy optimal-transport solvers. The solver allocates additional tensors beyond model weights + KV cache, pushing past the available VRAM headroom on a 4 GB GPU.
+
+**Impact**: specinfer and naive are excluded from all laptop configs (`laptop.yaml`, `laptop_gpt2.yaml`, `laptop_llama.yaml`) and the smoke eval. They run correctly on T4 (15 GB) and A100 (40 GB).
+
+**What you still get on laptop** — sufficient for convergence proof and GBV research:
+- `alpha` (token acceptance rate) ✓
+- `bv` (block verification baseline) ✓
+- `gbv` (our method — **key research metric**) ✓
+- `traversal` (tree traversal baseline) ✓
+
+**specinfer + naive will be verified on**: `colab.yaml`, `kaggle.yaml`, `a100.yaml` (all run on T4/A100).
+
+## 3. GPT-2 BE Eval — FIXED (CompatCache adapter)
+
 **Was**: All BE modes crashed because the verifier assumed Qwen3-specific interfaces:
 1. KV cache: `.layers[i].keys/.values` — GPT-2 returns a legacy tuple
 2. Attention mask: `{"full_attention": tensor}` dict — GPT-2 needs raw 4D tensor
