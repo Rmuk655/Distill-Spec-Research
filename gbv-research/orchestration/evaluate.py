@@ -895,16 +895,33 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         # Output is teed to BOTH be_progress.log (for Dashboard / tail) AND our own
         # stdout (which pipeline.py redirects to pipeline_output.log), so eval progress
         # is visible in the main pipeline log without opening a second file.
-        # Kill any orphaned runner.py processes from a previous interrupted run.
+        # Kill truly orphaned runner.py processes from a previous interrupted run.
         # Without this, a restarted evaluate.py (e.g. after Kaggle cell re-run)
         # launches a second BE subprocess while the first one is still loading
         # models, exhausting GPU VRAM.
+        #
+        # SAFE on multi-GPU servers: we only kill runner.py processes whose
+        # PARENT process is dead (i.e. genuinely orphaned — their evaluate.py
+        # was killed but they kept running).  We never kill runner.py processes
+        # that are alive children of another active evaluate.py (a different GPU
+        # slot on the same machine).  Killing all runner.py system-wide would
+        # terminate another GPU's eval mid-run.
         try:
             import psutil
-            for p in psutil.process_iter(["pid", "cmdline"]):
+            for p in psutil.process_iter(["pid", "ppid", "cmdline"]):
                 try:
                     cmdline = " ".join(p.info["cmdline"] or [])
-                    if "runner.py" in cmdline and p.pid != os.getpid():
+                    if "runner.py" not in cmdline or p.pid == os.getpid():
+                        continue
+                    # Check if this runner.py is truly orphaned:
+                    # its parent process no longer exists or is not running.
+                    ppid = p.info.get("ppid", 0)
+                    try:
+                        parent = psutil.Process(ppid)
+                        parent_alive = parent.is_running()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        parent_alive = False
+                    if not parent_alive:
                         p.kill()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass

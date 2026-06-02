@@ -105,7 +105,7 @@ def _load_wandb_config():
 #      so Unicode characters in evaluate.py output never crash on Windows cp1252.
 # ---------------------------------------------------------------------------
 
-_LOCK_FILE    = os.path.join(HERE, ".pipeline_lock")          # runtime artifact — stays in orchestration/
+_LOCK_FILE    = os.path.join(HERE, ".pipeline_lock")          # overridden to be config-specific in main()
 _GBV_RESEARCH_ROOT = os.path.dirname(HERE)                   # gbv-research/
 _DB_LOGS      = os.path.join(_GBV_RESEARCH_ROOT, "db", "logs")
 _PIPELINE_LOG = os.path.join(_DB_LOGS, "pipeline_output.log")  # live log visible in dashboard Logs panel
@@ -3433,6 +3433,17 @@ def main():
 
     # Acquire lock: kills any previously orphaned pipeline + child processes
     # before we load models, preventing GPU VRAM conflicts and duplicate runs.
+    #
+    # Lock file is CONFIG-SPECIFIC so parallel runs on different configs
+    # (e.g. two GPU slots on a server each running a different profile) never
+    # kill each other.  Two runs of the SAME config still conflict, which is
+    # correct — you don't want two "laptop" pipelines racing on the same GPU.
+    #
+    # Naming: .pipeline_lock_laptop, .pipeline_lock_a100, .pipeline_lock_profiles_kl
+    # Slashes in profile names are replaced with underscores.
+    global _LOCK_FILE
+    _config_slug = args.config.replace("/", "_").replace("\\", "_")
+    _LOCK_FILE = os.path.join(HERE, f".pipeline_lock_{_config_slug}")
     os.makedirs(_DB_LOGS, exist_ok=True)   # ensure db/logs/ exists before first log write
     _acquire_lock()
 
