@@ -26,6 +26,7 @@
 
 hardware:
   device: cuda
+  hw_tier: colab_lite           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: false           # 1.7B fits T4 in bfloat16 with 9+ GB to spare
   compile: false                # torch.compile not reliable in Colab environment
 

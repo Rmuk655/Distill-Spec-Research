@@ -42,6 +42,7 @@
 
 hardware:
   device: cuda
+  hw_tier: colab           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: true            # 8B NF4 — works on Kaggle (29 GB RAM), not on Colab (12 GB RAM)
   compile: false                # torch.compile not reliable in Kaggle/Colab kernel environments
 

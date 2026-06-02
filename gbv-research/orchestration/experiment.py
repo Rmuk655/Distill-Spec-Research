@@ -412,6 +412,16 @@ def _load_config_yaml(config_name: str) -> dict:
         # Every YAML config should set this; falls back to "qwen" in _train_hargs.
         if models_cfg.get("family"):
             out["model_family"] = models_cfg["family"]
+        # hardware.hw_tier — the CANONICAL source of truth for hw_tier.
+        # hw_tier describes the HARDWARE, not the notebook platform:
+        #   laptop     = laptop GPU (4 GB, Qwen 0.5B→0.6B, code verification)
+        #   cpu        = CPU-only server (ATS Cloud / AIP, GPT-2, convergence only)
+        #   colab_lite = T4 GPU + small teacher (1.7B)
+        #   colab      = T4 GPU + 8B NF4 teacher (Kaggle, Colab free, Modal T4)
+        #   a100       = A100 GPU + 8B BF16 teacher (paper results)
+        # When set in YAML, this overrides _hw_tier_from_config() heuristics entirely.
+        if "hw_tier" in hardware:
+            out["hw_tier"] = hardware["hw_tier"]
         # hardware.load_in_4bit — forwarded so YAML profiles control 4-bit loading.
         if "load_in_4bit" in hardware:
             out["load_in_4bit"] = hardware["load_in_4bit"]
@@ -577,35 +587,28 @@ def _models_ready_for_offline(draft: str, target: str) -> tuple:
 
 
 def _hw_tier_from_config(config_slug: str) -> str:
-    """Derive the DB hw_tier tag from the config name.
+    """Fallback hw_tier derivation for the three legacy CONFIGS dict presets
+    (laptop / server / colab) that don't have a YAML file with hardware.hw_tier.
 
-    hw_tier tags describe the HARDWARE, not the notebook platform:
-      'laptop'     — laptop GPU (4 GB VRAM, small teacher)
-      'colab_lite' — T4 GPU with 1.7B teacher
-      'colab'      — T4 GPU with 8B teacher (4-bit NF4)
-      'a100'       — A100 GPU with 8B teacher (BF16)
+    All YAML-based configs should set hardware.hw_tier explicitly — that value
+    is read by _load_config_yaml() and takes precedence over this function.
+    This fallback only exists so the three hardcoded CONFIGS presets still work
+    without a YAML file.
 
-    Platform → hardware mapping:
-      Kaggle (T4 x2)   → 'colab'      (same T4 hardware as Colab free tier)
-      Colab free (T4)  → 'colab'
-      Colab Pro (A100) → 'a100'
-      Modal (T4)       → 'colab'
-      Modal (A100)     → 'a100'
-      AIP (A100)       → 'a100'
-
-    Mapping (order matters — colab_lite must be checked before colab):
-      *colab_lite*         → 'colab_lite'
-      *a100* or *aip*      → 'a100'
-      *colab* or *kaggle*  → 'colab'  (Kaggle=T4, same tier as Colab)
-      anything else        → 'laptop'
+    hw_tier = HARDWARE, not the notebook platform:
+      laptop     — 4 GB laptop GPU   (code verification, small teacher)
+      cpu        — CPU-only server    (ATS Cloud / AIP, GPT-2 only, convergence)
+      colab_lite — T4 + 1.7B teacher
+      colab      — T4 + 8B NF4       (Kaggle, Colab free, Modal T4)
+      a100       — A100 + 8B BF16    (paper results)
     """
     s = config_slug.lower()
     if "colab_lite" in s:
         return "colab_lite"
-    if "a100" in s or "aip" in s:
+    if "a100" in s:
         return "a100"
     if "colab" in s or "kaggle" in s:
-        return "colab"   # Kaggle runs on T4 — same hardware tier as Colab
+        return "colab"
     return "laptop"
 
 
@@ -3531,7 +3534,9 @@ def main():
                         ckpt_root=_effective_ckpt_root,  # was args.ckpt_root — ignored --storage_root
                         train_hparams=train_hparams,
                         losses_to_run=_losses_to_run,
-                        hw_tier=_hw_tier_from_config(args.config),
+                        # YAML hardware.hw_tier takes precedence; _hw_tier_from_config
+                        # is the fallback for legacy hardcoded CONFIGS dict presets.
+                        hw_tier=_yaml_cfg.get("hw_tier") or _hw_tier_from_config(args.config),
                         _light_eval_verifier_override=_light_verifier_override)
 
     if _eval_only:

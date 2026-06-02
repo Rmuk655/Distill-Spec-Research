@@ -22,6 +22,7 @@
 
 hardware:
   device: cuda
+  hw_tier: a100           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: false           # A100 40 GB fits Qwen3-8B in bfloat16 easily
   compile: true                 # torch.compile is reliable on A100 (Linux); ~10-30% speedup
 

@@ -727,11 +727,13 @@ _HTML = r"""<!DOCTYPE html>
     <label style="color:#718096">HW Tier <small>(annotation only)</small></label>
     <div id="f-hw_tier">
       <span class="chip hw-tier-chip active" data-tier="laptop"
-            style="border-color:#a0aec0" onclick="toggleTierChip(this)" title="smoke tests">laptop</span>
+            style="border-color:#a0aec0" onclick="toggleTierChip(this)" title="4GB GPU, Qwen 0.5B→0.6B, code verification">laptop</span>
+      <span class="chip hw-tier-chip active" data-tier="cpu"
+            style="border-color:#68d391" onclick="toggleTierChip(this)" title="CPU-only server (ATS/AIP), GPT-2, convergence analysis only">cpu</span>
       <span class="chip hw-tier-chip active" data-tier="colab_lite"
-            style="border-color:#9f7aea" onclick="toggleTierChip(this)" title="trend detection, T4">colab_lite</span>
+            style="border-color:#9f7aea" onclick="toggleTierChip(this)" title="T4 GPU, 1.7B teacher, trend detection">colab_lite</span>
       <span class="chip hw-tier-chip active" data-tier="colab"
-            style="border-color:#ed8936" onclick="toggleTierChip(this)" title="publishable results, T4">colab</span>
+            style="border-color:#ed8936" onclick="toggleTierChip(this)" title="T4 GPU, 8B NF4, Kaggle or Colab">colab</span>
       <span class="chip hw-tier-chip active" data-tier="a100"
             style="border-color:#48bb78" onclick="toggleTierChip(this)" title="paper quality, A100">a100</span>
     </div>
@@ -1339,7 +1341,7 @@ let _stepPanelOpen = false;
 let _logPanelOpen  = false;
 
 // HW_TIER_FILTER: Set of selected tiers. Default = all four selected.
-let HW_TIER_FILTER = new Set(['laptop', 'colab_lite', 'colab', 'a100']);
+let HW_TIER_FILTER = new Set(['laptop', 'cpu', 'colab_lite', 'colab', 'a100']);
 
 // SHOW_SMOKE: when false, smoke runs (0 < train_steps <= 10) are hidden everywhere.
 // Default true = show all. Composes with HW_TIER_FILTER (both filters apply).

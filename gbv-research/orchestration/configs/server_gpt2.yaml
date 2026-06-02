@@ -32,6 +32,7 @@
 
 hardware:
   device: cpu
+  hw_tier: cpu           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: false
   compile: false
 

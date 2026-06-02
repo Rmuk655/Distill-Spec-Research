@@ -1359,11 +1359,11 @@ def main():
                         "Requires: pip install bitsandbytes. "
                         "The student (draft) model is always loaded in bfloat16.")
     p.add_argument("--hw_tier", default="laptop",
-                   choices=["laptop", "colab_lite", "colab", "a100"],
+                   choices=["laptop", "cpu", "colab_lite", "colab", "a100"],
                    help="Hardware tier tag stored in DB (default: laptop). "
-                        "Set automatically by experiment.py from the config name. "
-                        "Reflects hardware, not notebook platform: "
-                        "laptop=4GB GPU, colab=T4 (Colab or Kaggle), a100=A100.")
+                        "Set by experiment.py from YAML hardware.hw_tier. "
+                        "laptop=4GB GPU; cpu=CPU-only server (ATS/AIP, GPT-2 convergence); "
+                        "colab=T4 (Kaggle or Colab); a100=A100 (paper results).")
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable W&B logging for this eval run.")
     p.add_argument("--wandb_project", default="distillspec",

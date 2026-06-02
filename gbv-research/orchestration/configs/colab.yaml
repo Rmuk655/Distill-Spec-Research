@@ -23,6 +23,7 @@
 
 hardware:
   device: cuda
+  hw_tier: colab           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: false           # not needed -- 4B teacher fits T4 in bfloat16
   compile: false                # torch.compile not reliable in Colab environment
 

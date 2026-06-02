@@ -44,6 +44,7 @@
 
 hardware:
   device: cuda
+  hw_tier: laptop           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: false
   compile: false               # torch.compile has limited support on Windows
 

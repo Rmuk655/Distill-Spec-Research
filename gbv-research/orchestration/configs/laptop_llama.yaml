@@ -30,6 +30,7 @@
 
 hardware:
   device: cuda
+  hw_tier: laptop           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: true             # target (3B) loaded in NF4 4-bit; draft stays BF16
   compile: false                 # torch.compile not reliable on Windows
 

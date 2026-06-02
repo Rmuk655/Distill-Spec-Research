@@ -5,6 +5,7 @@
 
 hardware:
   device: cuda
+  hw_tier: a100           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
   load_in_4bit: false          # set true for T4 (15 GB) to fit 8B teacher
   compile: true                # torch.compile gives 10-30% speedup on Linux
 
