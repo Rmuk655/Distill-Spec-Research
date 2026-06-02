@@ -15,12 +15,14 @@ To add a new family:
 """
 
 from .base import ModelFamily
+from .gpt2 import FAMILY as _gpt2
 from .qwen import FAMILY as _qwen
 from .gemma import FAMILY as _gemma
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 # Keys must match the --model_family CLI argument value.
 FAMILY_REGISTRY: dict[str, ModelFamily] = {
+    "gpt2":  _gpt2,
     "qwen":  _qwen,
     "gemma": _gemma,
 }

@@ -67,6 +67,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # LoRA target modules differ per model architecture.
 # Add a new family here — no other file needs changing.
 _LORA_MODULES: dict[str, list[str]] = {
+    "gpt2":    ["c_attn", "c_proj"],   # Conv1D naming (combined QKV + output)
     "qwen":    ["q_proj", "v_proj"],
     "gemma":   ["q_proj", "k_proj", "v_proj", "o_proj"],
     "llama":   ["q_proj", "v_proj"],
