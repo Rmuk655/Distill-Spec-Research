@@ -846,9 +846,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _train_hargs = [
         # model_family: drives LoRA target modules, temperature recovery, log-prob
         # clamping, and chat-template selection in trainer.py.  Comes from
-        # YAML models.family (via _yaml_cfg["model_family"]) or CONFIGS preset.
-        # Fall back to "qwen" so legacy runs without a YAML models.family are safe.
-        "--model_family",    str(_h.get("model_family", cfg.get("model_family", "qwen"))),
+        # YAML models.family (via _yaml_cfg["model_family"]) or "qwen" default.
+        # cfg is only in main() scope — do not reference it here.
+        # All YAML configs set models.family; legacy CONFIGS presets also set it now.
+        "--model_family",    str(_h.get("model_family", "qwen")),
         "--lr",              str(_h.get("lr", 3e-5)),
         "--lora_r",          str(_h.get("lora_r", 8)),
         "--lora_alpha",      str(_h.get("lora_alpha", 16)),
