@@ -86,8 +86,8 @@ logging:
   log_every: 10
   wandb_project: distillspec
   wandb_group: laptop-gsm8k
-  # run_label: laptop uses 0.6B as both draft and teacher (sanity/debug only)
   run_label: "0.6B-laptop"
+  no_wandb: true        # laptop runs are code verification only — no W&B overhead
 
 health:
   val_every: 50                 # fires 4x in 200 steps -- exercises validation path

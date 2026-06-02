@@ -280,6 +280,9 @@ def _load_config_yaml(config_name: str) -> dict:
             # run lands in the right W&B project and group.
             "wandb_project":        logging_cfg.get("wandb_project", "distillspec"),
             "wandb_group":          logging_cfg.get("wandb_group", config_name),
+            # logging.no_wandb: true -> disable W&B for all subprocesses via
+            # WANDB_MODE=disabled (set in main() after _load_wandb_config()).
+            "no_wandb":             bool(logging_cfg.get("no_wandb", False)),
             # run_label: short tag embedded in every W&B run name so runs from
             # different configs are distinguishable at a glance:
             #   "1.7B-T4-lite-kl_qwen_300steps"  vs  "4B-T4-kl_qwen_500steps"  etc.
@@ -3416,6 +3419,17 @@ def main():
     # Load per-user WandB config (sets WANDB_API_KEY / WANDB_ENTITY / WANDB_PROJECT
     # env vars so all subprocesses inherit them; falls back to wandb login if absent).
     _load_wandb_config()
+
+    # Disable W&B for smoke runs or when YAML sets logging.no_wandb: true.
+    # Setting WANDB_MODE=disabled is inherited by ALL child processes (trainer.py,
+    # evaluate.py, any nested calls) so we don't need to thread --no_wandb through
+    # every command line.  Smoke is always disabled — it's a crash test, not a
+    # measurement; laptop runs can opt in via no_wandb: true in the YAML.
+    _no_wandb = args.smoke or bool(_yaml_cfg.get("no_wandb", False))
+    if _no_wandb:
+        os.environ["WANDB_MODE"] = "disabled"
+        reason = "smoke mode" if args.smoke else "no_wandb: true in config"
+        print(f"  [wandb] W&B disabled ({reason}) — no runs will be created")
 
     # Acquire lock: kills any previously orphaned pipeline + child processes
     # before we load models, preventing GPU VRAM conflicts and duplicate runs.

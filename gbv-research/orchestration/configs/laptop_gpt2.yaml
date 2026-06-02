@@ -61,6 +61,7 @@ logging:
   wandb_project: distillspec
   wandb_group: laptop-gpt2-gsm8k
   run_label: "gpt2-laptop"
+  no_wandb: true        # CPU convergence runs — no W&B overhead
 
 health:
   val_every: 100

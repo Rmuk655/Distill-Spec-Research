@@ -68,6 +68,7 @@ logging:
   wandb_project: distillspec
   wandb_group: laptop-llama-gsm8k
   run_label: "llama-1B-3B-laptop"
+  no_wandb: true        # laptop convergence runs — no W&B overhead
 
 health:
   val_every: 100
