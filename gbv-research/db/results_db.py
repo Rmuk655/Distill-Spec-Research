@@ -268,9 +268,19 @@ def distinct_model_pairs() -> list:
     conn.close()
 
     def _short(path: str) -> str:
-        """'Qwen/Qwen3-0.6B' → '0.6B', '/path/to/Qwen3-8B' → '8B'"""
+        """'Qwen/Qwen3-0.6B' → '0.6B', 'distilgpt2' → 'DistilGPT-2'"""
         name = path.split("/")[-1]          # strip org or dir prefix
-        # keep everything after the last dash that looks like a size (e.g. 0.6B, 8B)
+        # Well-known friendly names for models without size tokens
+        _FRIENDLY = {
+            "distilgpt2":         "DistilGPT-2",
+            "gpt2":               "GPT-2",
+            "gpt2-medium":        "GPT-2-M",
+            "gpt2-large":         "GPT-2-L",
+            "gpt2-xl":            "GPT-2-XL",
+        }
+        if name.lower() in _FRIENDLY:
+            return _FRIENDLY[name.lower()]
+        # Generic: keep the size token if present (e.g. "0.6B", "8B", "1B")
         import re
         m = re.search(r"(\d[\d.]*[BbMm])", name)
         return m.group(1).upper() if m else name
