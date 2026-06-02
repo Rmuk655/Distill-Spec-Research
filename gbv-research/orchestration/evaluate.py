@@ -869,10 +869,20 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         cmd.append("--load_in_4bit")   # GBV/main.py loads teacher in 4-bit NF4 on Colab T4
     # PYTHONUNBUFFERED=1 forces line-by-line flushing inside the subprocess so
     # be_progress.log updates in real time rather than in large chunks.
+    #
+    # TRANSFORMERS_OFFLINE / HF_HUB_OFFLINE: explicitly pass experiment.py's
+    # decision through to the subprocess.  The OSD module sets
+    # TRANSFORMERS_OFFLINE=1 at import time (its "offline by default" policy),
+    # which overrides experiment.py's choice to stay online for first-time
+    # model downloads.  By pinning these to whatever experiment.py decided
+    # (or "0" if it left them unset = online), we prevent OSD from blocking
+    # downloads of models that aren't cached yet (e.g. distilgpt2, gpt2-medium).
     _sub_env = {
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1",
+        "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE", "0"),
+        "HF_HUB_OFFLINE":       os.environ.get("HF_HUB_OFFLINE",       "0"),
     }
     if sys.platform != "win32":   # expandable_segments is Linux-only
         _sub_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
