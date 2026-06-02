@@ -699,7 +699,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
               experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
-              loss_name=None,
+              loss_name=None, model_family="qwen",
               force_rerun=False):
     """Eval command.
 
@@ -732,6 +732,10 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         "--max_tokens", str(max_tokens),
         "--skip_fetch",
         "--hw_tier", hw_tier,
+        # Forward the model family so the BE verifier subprocess uses the right
+        # tree-attention-mask format (Qwen=dict, GPT-2/LLaMA=raw tensor).  Without
+        # this, eval defaults to qwen and GPT-2 crashes ('dict' has no 'ndim').
+        "--model_family", model_family,
     ]
     if not force_rerun:
         cmd.append("--skip_existing")
@@ -1138,6 +1142,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         train_steps=ts,
                         loss_name=label,
                         hw_tier=hw_tier,
+                        model_family=_h.get("model_family", "qwen"),
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),
                         force_rerun=smoke)  # smoke: run even if result already in DB

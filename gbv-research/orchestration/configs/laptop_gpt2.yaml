@@ -22,8 +22,10 @@
 # NOTE: ebe and online losses are excluded (see docs/ISSUES.md).
 
 hardware:
-  device: cuda                   # RTX 500 Ada (6 GB VRAM) — both GPT-2 models fit easily
-  hw_tier: cpu           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
+  device: cuda                   # RTX 500 Ada (4 GB VRAM) — both GPT-2 models fit easily
+  hw_tier: laptop                # laptop GPU tier — drives per-mode GPU isolation + 2700 MB
+                                 # alpha floor. (Use server_gpt2.yaml with hw_tier: cpu for
+                                 # the CPU-only ATS server — this config runs on the laptop GPU.)
   load_in_4bit: false
   compile: false                 # torch.compile not reliable on Windows
 

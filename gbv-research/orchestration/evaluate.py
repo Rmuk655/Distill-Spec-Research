@@ -1377,6 +1377,13 @@ def main():
                         "Set by experiment.py from YAML hardware.hw_tier. "
                         "laptop=4GB GPU; cpu=CPU-only server (ATS/AIP, GPT-2 convergence); "
                         "colab=T4 (Kaggle or Colab); a100=A100 (paper results).")
+    p.add_argument("--model_family", default="qwen",
+                   help="Model family key (qwen/gpt2/llama/gemma).  Forwarded to the "
+                        "BE verifier subprocess (runner.py) so it uses the correct "
+                        "tree_attn_mask format: Qwen3 expects a {'full_attention': tensor} "
+                        "dict; GPT-2/LLaMA/Gemma expect a raw 4D tensor.  Without this, "
+                        "the verifier defaults to qwen and GPT-2 crashes with "
+                        "\"'dict' object has no attribute 'ndim'\".")
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable W&B logging for this eval run.")
     p.add_argument("--wandb_project", default="distillspec",
