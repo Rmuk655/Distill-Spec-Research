@@ -66,6 +66,19 @@ class QwenFamily(ModelFamily):
         """
         return log_probs.clamp(min=-100.0)
 
+    # ── Tree attention mask (verifier) ───────────────────────────────────────
+
+    def tree_attn_mask(self, mask_4d: torch.Tensor):
+        """
+        Qwen3 uses a custom dict-based attention mask for its tree verification
+        pass.  Its forward() dispatches on the "full_attention" key to bypass
+        the model's normal causal mask construction and use the supplied tree
+        attention mask directly.
+
+        All other families inherit the base default (raw 4D tensor).
+        """
+        return {"full_attention": mask_4d}
+
     # ── Chat template ─────────────────────────────────────────────────────────
 
     def format_prompt(self, prompt: str, tokenizer) -> str:

@@ -31,7 +31,8 @@ def iid_draft(
     q_model: AutoModelForCausalLM,
     q_cache: DynamicCache,
     context_pending: torch.Tensor,
-    K: int = 4, L: int = 8, q_temp: float = 1.0
+    K: int = 4, L: int = 8, q_temp: float = 1.0,
+    family=None,   # ModelFamily instance — reserved for future per-family draft logic
 ) -> Tuple[List[List[int]], DynamicCache, Dict[str, torch.Tensor]]:
     q_probs_dict = {}
 
@@ -94,7 +95,8 @@ def target_tree_pass(
     p_model: AutoModelForCausalLM,
     p_cache: DynamicCache,
     q_paths: List[List[int]],
-    K: int = 4, L: int = 8, p_temp: float = 1.0
+    K: int = 4, L: int = 8, p_temp: float = 1.0,
+    family=None,   # ModelFamily instance — provides tree_attn_mask()
 ) -> Tuple[List[str], torch.LongTensor, DynamicCache, Dict[str, torch.Tensor]]:
     device = p_model.device
     dtype = p_model.dtype
@@ -127,15 +129,17 @@ def target_tree_pass(
     mask = mask.unsqueeze(0).unsqueeze(0)
 
     # Perform the batched target model forward pass with the tree attn mask, updating the target KV-cache.
-    # _attn_mask_for_model() selects the right format:
-    #   Qwen3: {"full_attention": tensor}  (custom dict with named key)
-    #   GPT-2 / LLaMA / others: raw 4D tensor (standard additive bias mask)
+    # family.tree_attn_mask() returns the right format for this architecture:
+    #   Qwen3:  {"full_attention": tensor}  — custom dict (QwenFamily.tree_attn_mask)
+    #   Others: raw 4D tensor              — standard additive bias (base default)
+    # If no family is supplied fall back to the raw tensor (safe for most models).
+    _attn = family.tree_attn_mask(mask) if family is not None else mask
     p_out = p_model(
         q_tokens,
         use_cache=True,
         return_dict=True,
-        past_key_values=p_cache.to_model_format(),       # ← model-native format
-        attention_mask=_attn_mask_for_model(p_model, mask),  # ← architecture-aware
+        past_key_values=p_cache.to_model_format(),   # ← model-native cache format
+        attention_mask=_attn,                         # ← family-specific mask format
     )
     p_cache = CompatCache(p_out.past_key_values)         # ← wrap result
 

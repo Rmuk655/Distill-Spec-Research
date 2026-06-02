@@ -864,6 +864,9 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         "--data",     data_path,
         "--device",   _device,
         "--dtype",    "bf16",      # explicit bf16 — avoids silent fp32 fallback on CUDA GPUs
+        # model_family → runner.py uses family.tree_attn_mask() so the verifier
+        # never inspects model architecture directly (separation of concerns).
+        "--model_family", getattr(args, "model_family", "qwen") or "qwen",
     ]
     if load_in_4bit:
         cmd.append("--load_in_4bit")   # GBV/main.py loads teacher in 4-bit NF4 on Colab T4

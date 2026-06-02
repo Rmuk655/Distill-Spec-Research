@@ -125,6 +125,34 @@ class ModelFamily(ABC):
             For base (non-chat) models simply return prompt unchanged.
         """
 
+    # ── Verifier / tree-attention mask ───────────────────────────────────────
+
+    def tree_attn_mask(self, mask_4d: torch.Tensor):
+        """
+        Return the attention mask in the format this model's forward() expects
+        during the batched tree verification pass in target_tree_pass().
+
+        The verifier builds a 4D additive bias tensor of shape
+        (1, 1, n_tree_nodes, cached_len + n_tree_nodes) that encodes
+        which tree nodes may attend to which ancestors.
+
+        Default (most architectures): return the raw 4D tensor.
+          Works for GPT-2, LLaMA, Gemma, Mistral, Phi, and any standard
+          HuggingFace causal LM that accepts additive 4D attention bias.
+
+        Override for Qwen3: return {"full_attention": mask_4d}
+          Qwen3's custom attention kernel expects a named-key dict so it can
+          bypass its own internal mask construction and use the supplied one.
+
+        Args:
+            mask_4d: Float tensor of shape (1, 1, n, seq_len) with 0.0 for
+                     allowed positions and finfo.min for blocked positions.
+
+        Returns:
+            The mask in whatever format model.forward(attention_mask=...) needs.
+        """
+        return mask_4d  # standard: raw 4D additive bias tensor
+
     # ── Default model IDs (can be overridden by CLI) ─────────────────────────
 
     @property

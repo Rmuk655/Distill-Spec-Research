@@ -65,6 +65,7 @@ def speculative_decoding_loop(
     prompt: str,
     verification_algo: str,
     eos_token_id : int = None, max_new_tokens: int = 128, K: int = 4, L: int = 8, p_temp: float = 1.0, q_temp: float = 1.0,
+    family=None,   # ModelFamily — provides tree_attn_mask(); None = Qwen3 default
 ):
     # Profiling init of per-run stats and timer
     if not hasattr(p_model, "_spec_profile"):
@@ -112,6 +113,7 @@ def speculative_decoding_loop(
             context_pending,
             verification_algo,
             K=K, L=L, p_temp=p_temp, q_temp=q_temp,
+            family=family,
         )
         full_seq = torch.cat([context_cached, context_pending], dim=-1)
         target_calls += 1
@@ -165,7 +167,8 @@ def speculative_decoding_iter(
     context_cached: torch.Tensor,
     context_pending: torch.Tensor,
     verification_algo: str,
-    K: int = 4, L: int = 8, p_temp: float = 1.0, q_temp: float = 1.0, 
+    K: int = 4, L: int = 8, p_temp: float = 1.0, q_temp: float = 1.0,
+    family=None,   # ModelFamily — threaded from speculative_decoding_loop
 ):
     # Start profiling
     _run_stats = getattr(p_model, "_spec_run_stats", None)
@@ -174,7 +177,7 @@ def speculative_decoding_iter(
     if _run_stats is not None:
         torch.cuda.synchronize()
         _t_draft = time.perf_counter()
-    q_paths, q_cache, q_probs_dict = iid_draft(q_model, q_cache, context_pending, K=K, L=L, q_temp=q_temp)
+    q_paths, q_cache, q_probs_dict = iid_draft(q_model, q_cache, context_pending, K=K, L=L, q_temp=q_temp, family=family)
     if _run_stats is not None:
         torch.cuda.synchronize()
         _run_stats["time_draft"] += time.perf_counter() - _t_draft
@@ -183,7 +186,7 @@ def speculative_decoding_iter(
     if _run_stats is not None:
         torch.cuda.synchronize()
         _t_target = time.perf_counter()
-    q_prefixes, q_tokens, p_cache, p_probs_dict = target_tree_pass(p_model, p_cache, q_paths, K=K, L=L, p_temp=p_temp)
+    q_prefixes, q_tokens, p_cache, p_probs_dict = target_tree_pass(p_model, p_cache, q_paths, K=K, L=L, p_temp=p_temp, family=family)
     if _run_stats is not None:
         torch.cuda.synchronize()
         _run_stats["time_target"] += time.perf_counter() - _t_target
@@ -261,6 +264,12 @@ def parse_args():
                     help="Load the TARGET (p_model) in 4-bit NF4 via bitsandbytes. "
                          "Use on Colab free T4 (15 GB VRAM) with Qwen3-8B. "
                          "Requires: pip install bitsandbytes.")
+    ap.add_argument("--model_family", type=str, default="qwen",
+                    help="Model family key (e.g. 'qwen', 'gpt2', 'llama', 'gemma'). "
+                         "Determines the tree attention mask format: Qwen3 uses a "
+                         "custom dict {'full_attention': tensor}; all other families "
+                         "use a standard 4D additive bias tensor. "
+                         "Must match a key registered in core/model_families/FAMILY_REGISTRY.")
     args = ap.parse_args()
     return args
 
@@ -268,6 +277,25 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     set_seed(args.seed)
+
+    # Resolve model family — provides tree_attn_mask() so the verifier doesn't
+    # need to sniff the model architecture itself (separation of concerns).
+    # Repo root must be on sys.path; run_be_batch sets cwd=gbv-research/.
+    try:
+        import sys as _sys, os as _os
+        _repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+            _os.path.abspath(__file__))))
+        if _repo_root not in _sys.path:
+            _sys.path.insert(0, _repo_root)
+        from core.model_families import get_family as _get_family
+        _family = _get_family(args.model_family)
+    except Exception as _e:
+        # Graceful fallback: default to Qwen3 behaviour so legacy calls work.
+        print(f"[runner] WARNING: could not load family '{args.model_family}': {_e}. "
+              f"Defaulting to Qwen3 tree_attn_mask (dict format).")
+        class _FallbackFamily:
+            def tree_attn_mask(self, m): return {"full_attention": m}
+        _family = _FallbackFamily()
 
     # Resolve batch vs single-value args.
     # --modes / --Ks / --p_temps (comma-separated) override --mode / --K / --p_temp.
@@ -299,6 +327,7 @@ if __name__ == "__main__":
                 prompt=prompt, verification_algo=mode,
                 eos_token_id=None, max_new_tokens=args.max_new_tokens,
                 K=K, L=args.L, p_temp=p_temp, q_temp=args.q_temp,
+                family=_family,
             )
 
         # Collect aggregate profiling metrics for this combo.

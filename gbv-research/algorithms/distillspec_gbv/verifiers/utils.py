@@ -250,18 +250,6 @@ class CompatCache:
         return iter((l.keys, l.values) for l in self.layers)
 
 
-def _attn_mask_for_model(model, mask_4d: torch.Tensor):
-    """Return the attention mask in the format model.forward() expects.
-
-    Qwen3:  attention_mask={"full_attention": tensor}  (custom dict)
-    Others: attention_mask=tensor  (standard 4D additive bias)
-    """
-    inner  = getattr(model, "model", None) or getattr(model, "transformer", None)
-    layers = getattr(inner, "layers", None) or getattr(inner, "h", None)
-    if layers and hasattr(layers[0], "attention_type"):
-        return {"full_attention": mask_4d}
-    return mask_4d
-
 
 """
 Takes in:

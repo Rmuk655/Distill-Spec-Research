@@ -133,6 +133,25 @@ def test_qwen_format_prompt_wraps_in_chat_template():
         "Qwen format_prompt must include or extend the original prompt"
 
 
+def test_qwen_tree_attn_mask_returns_dict():
+    """Qwen3 must return {'full_attention': tensor} for the custom tree pass."""
+    mask = torch.zeros(1, 1, 4, 10)
+    result = get_family("qwen").tree_attn_mask(mask)
+    assert isinstance(result, dict), "Qwen tree_attn_mask must return a dict"
+    assert "full_attention" in result, "Dict must have 'full_attention' key"
+    assert result["full_attention"] is mask
+
+
+def test_non_qwen_tree_attn_mask_returns_tensor():
+    """Non-Qwen families must return the raw 4D tensor (standard HF format)."""
+    mask = torch.zeros(1, 1, 4, 10)
+    for name in ["gpt2", "llama", "gemma"]:
+        result = get_family(name).tree_attn_mask(mask)
+        assert isinstance(result, torch.Tensor), \
+            f"{name}.tree_attn_mask() must return Tensor, got {type(result)}"
+        assert result is mask, f"{name}.tree_attn_mask() should be identity"
+
+
 def test_gpt2_lora_modules_use_conv1d_names():
     """GPT-2 uses Conv1D naming — must not contain q_proj / v_proj."""
     mods = get_family("gpt2").lora_target_modules()
