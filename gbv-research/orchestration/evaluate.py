@@ -1564,29 +1564,37 @@ def main():
             n_c = len(modes_list) * len(Ks_list) * len(Ts_list)
             print(f"  {ds}: {len(modes_list)} mode(s) × {len(Ks_list)} K × "
                   f"{len(Ts_list)} temp(s) = {n_c} combo(s)")
-            # PROACTIVE VRAM guard for the BE subprocess.  Same 0xC000013A native
-            # crash as alpha: a single mode loads fine on the 4 GB laptop GPU
-            # (preflight gbv + the batch's first mode succeed), but running
-            # several modes back-to-back in ONE subprocess accumulates allocator
-            # fragmentation / KV-cache residue that hard-aborts the driver mid-run
-            # (see step_eval_baseline_gsm8k_error.log: died after mode=bv, only
-            # 1/5 results returned).  The subprocess's reactive CPU retry only
-            # fires on a catchable "out of memory" string — a native abort skips
-            # it.  So on laptop we run the whole BE batch on CPU up front (slower
-            # but correct); other tiers keep the GPU path.
-            _be_device = "cpu" if getattr(args, "hw_tier", None) == "laptop" else "cuda"
-            if _be_device == "cpu":
-                print(f"  [BE batch] hw_tier=laptop -> running BE subprocess on CPU "
-                      f"to avoid 4GB GPU native hard-crash (0xC000013A) across modes")
-            batch_res = run_be_batch(
-                args.student, args.teacher, data_path,
-                modes_list, Ks_list, Ts_list,
-                args.L, args.max_tokens,
-                _device=_be_device,
-                load_in_4bit=getattr(args, "load_in_4bit", False),
-            )
-            for (m, k, t), be in batch_res.items():
-                _be_cache[(ds, m, k, t)] = be
+            # VRAM strategy for the BE subprocess on laptop (4 GB GPU):
+            # Running all modes in ONE subprocess causes allocator fragmentation /
+            # KV-cache residue that hard-aborts the GPU driver (0xC000013A native
+            # crash — not catchable by PyTorch OOM handler).
+            # Previous fix: whole batch on CPU → correct but 29× slower.
+            # Better fix: one GPU subprocess PER MODE.  Each subprocess exits
+            # cleanly, releasing all VRAM and cache before the next mode starts.
+            # This matches pre-batching speed (~13 s/prompt on GPU) with no crash.
+            if getattr(args, "hw_tier", None) == "laptop":
+                print(f"  [BE batch] hw_tier=laptop -> one GPU subprocess per mode "
+                      f"(serial isolation avoids VRAM fragmentation / 0xC000013A)")
+                for _mode in modes_list:
+                    _mode_res = run_be_batch(
+                        args.student, args.teacher, data_path,
+                        [_mode], Ks_list, Ts_list,
+                        args.L, args.max_tokens,
+                        _device="cuda",
+                        load_in_4bit=getattr(args, "load_in_4bit", False),
+                    )
+                    for (m, k, t), be in _mode_res.items():
+                        _be_cache[(ds, m, k, t)] = be
+            else:
+                batch_res = run_be_batch(
+                    args.student, args.teacher, data_path,
+                    modes_list, Ks_list, Ts_list,
+                    args.L, args.max_tokens,
+                    _device="cuda",
+                    load_in_4bit=getattr(args, "load_in_4bit", False),
+                )
+                for (m, k, t), be in batch_res.items():
+                    _be_cache[(ds, m, k, t)] = be
         print(f"  BE pre-batch done: {len(_be_cache)} result(s) cached.\n")
 
     # ── Pre-load models for alpha evaluation (shared across all datasets) ───
