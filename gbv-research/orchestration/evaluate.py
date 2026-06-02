@@ -230,12 +230,18 @@ def _pick_device():
     return "cpu", torch.float32
 
 
-# Conservative free-VRAM floor (MB) for keeping BOTH student + teacher resident
-# on the GPU for alpha eval.  The bf16/fp16 Qwen 0.6B+0.5B pair is ~2.2 GB of
-# weights; with the alpha KV cache, activations, and allocator fragmentation a
-# 6000 MB floor is a safe minimum.  A 4 GB laptop card (≈3.2 GB free) never
-# clears this, which is exactly the case that hard-crashes.
-_ALPHA_VRAM_FLOOR_MB = 6000
+# Free-VRAM floor (MB) for keeping BOTH student + teacher resident on GPU for
+# alpha eval.  Two separate floors:
+#
+# Laptop (4 GB card, 0.5B+0.6B fp16 pair):
+#   Weights: ~2.2 GB.  KV cache + activations + fragmentation: ~0.5 GB.
+#   Total: ~2.7 GB.  With 3.2 GB typically free after BE subprocess exits,
+#   that leaves ~0.5 GB headroom — tight but safe.  Use 2700 MB floor.
+#
+# T4 / A100 (larger models, 8B teacher in NF4 + 0.6B student):
+#   Weights alone ~6 GB.  Use 6000 MB floor.
+_ALPHA_VRAM_FLOOR_MB        = 6000   # T4 / A100 / server
+_ALPHA_VRAM_FLOOR_MB_LAPTOP = 2700   # 4 GB laptop (0.5B+0.6B fp16)
 
 
 def _alpha_device_guard(default_device, default_dtype):
@@ -264,17 +270,20 @@ def _alpha_device_guard(default_device, default_dtype):
     if default_device != "cuda" or not torch.cuda.is_available():
         return default_device, default_dtype
     free_mb = torch.cuda.mem_get_info(0)[0] // 1024**2
-    if tier == "laptop":
-        print(f"  [alpha preload] hw_tier=laptop / free VRAM={free_mb} MB -> "
-              f"loading alpha-eval models on CPU to avoid 4GB GPU hard-crash (0xC000013A)")
-        return "cpu", torch.float32
-    if free_mb < _ALPHA_VRAM_FLOOR_MB:
+    # Use a tier-specific VRAM floor instead of unconditionally forcing CPU on laptop.
+    # The CPU path causes a device mismatch (cpu/cuda:0) when specInfer or the
+    # KV-cache machinery creates CUDA tensors independently of the model device.
+    # Using GPU avoids the mismatch and is ~20x faster.  The floor is calibrated
+    # to the actual model sizes: 0.5B+0.6B fp16 (~2.7 GB) on laptop vs large
+    # NF4 teacher on T4/A100 (~6 GB).
+    floor_mb = _ALPHA_VRAM_FLOOR_MB_LAPTOP if tier == "laptop" else _ALPHA_VRAM_FLOOR_MB
+    if free_mb < floor_mb:
         print(f"  [alpha preload] hw_tier={tier} / free VRAM={free_mb} MB < "
-              f"{_ALPHA_VRAM_FLOOR_MB} MB floor -> loading alpha-eval models on CPU "
-              f"to avoid GPU OOM / native hard-crash (0xC000013A)")
+              f"{floor_mb} MB floor -> loading alpha-eval models on CPU "
+              f"(device-mismatch risk accepted; GPU would OOM / hard-crash)")
         return "cpu", torch.float32
     print(f"  [alpha preload] hw_tier={tier} / free VRAM={free_mb} MB >= "
-          f"{_ALPHA_VRAM_FLOOR_MB} MB floor -> loading alpha-eval models on GPU (cuda)")
+          f"{floor_mb} MB floor -> loading alpha-eval models on GPU (cuda)")
     return "cuda", default_dtype
 
 
@@ -1573,8 +1582,13 @@ def main():
             # cleanly, releasing all VRAM and cache before the next mode starts.
             # This matches pre-batching speed (~13 s/prompt on GPU) with no crash.
             if getattr(args, "hw_tier", None) == "laptop":
+                # Run one GPU subprocess per mode so each exits cleanly (releasing
+                # VRAM) before the next starts — prevents allocator fragmentation
+                # that hard-crashes the GPU driver (0xC000013A) mid-batch.
+                # If a mode's GPU subprocess produces no results (OOM or crash),
+                # retry that specific mode on CPU so the pipeline still completes.
                 print(f"  [BE batch] hw_tier=laptop -> one GPU subprocess per mode "
-                      f"(serial isolation avoids VRAM fragmentation / 0xC000013A)")
+                      f"(serial isolation; per-mode CPU fallback if GPU OOMs)")
                 for _mode in modes_list:
                     _mode_res = run_be_batch(
                         args.student, args.teacher, data_path,
@@ -1583,6 +1597,18 @@ def main():
                         _device="cuda",
                         load_in_4bit=getattr(args, "load_in_4bit", False),
                     )
+                    if not _mode_res:
+                        # GPU subprocess returned no results — OOM or driver crash.
+                        # Retry this mode alone on CPU (slow but correct).
+                        print(f"  [BE batch] mode={_mode}: GPU subprocess failed "
+                              f"-> retrying on CPU (only this mode)")
+                        _mode_res = run_be_batch(
+                            args.student, args.teacher, data_path,
+                            [_mode], Ks_list, Ts_list,
+                            args.L, args.max_tokens,
+                            _device="cpu",
+                            load_in_4bit=getattr(args, "load_in_4bit", False),
+                        )
                     for (m, k, t), be in _mode_res.items():
                         _be_cache[(ds, m, k, t)] = be
             else:
