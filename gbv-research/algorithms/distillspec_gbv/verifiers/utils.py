@@ -137,15 +137,21 @@ def load_models(
 
     # Validate custom attention mask compatibility BEFORE compile so we can still
     # inspect the underlying model's layer attributes (compile wraps the module).
-    # Qwen3DecoderLayer (and some other architectures) do not expose attention_type;
-    # they use standard causal attention which is fully compatible with custom masks.
-    # Only check when the attribute is present to avoid AttributeError on Qwen3.
-    if hasattr(p_model.model.layers[0], "attention_type"):
-        assert p_model.model.layers[0].attention_type == "full_attention", \
-            "Custom attention mask not compatible with this HF Model"
-    if hasattr(q_model.model.layers[0], "attention_type"):
-        assert q_model.model.layers[0].attention_type == "full_attention", \
-            "Custom attention mask not compatible with this HF Model"
+    # Architecture-agnostic: different model families expose layers differently:
+    #   Qwen / LLaMA / Gemma : model.model.layers[0]
+    #   GPT-2               : model.transformer.h[0]
+    # Use _first_layer() to handle all cases without AttributeError.
+    def _first_layer(m):
+        """Return the first decoder layer regardless of architecture, or None."""
+        inner  = getattr(m, "model", None) or getattr(m, "transformer", None)
+        layers = getattr(inner, "layers", None) or getattr(inner, "h", None)
+        return layers[0] if layers else None
+
+    for _m in (p_model, q_model):
+        _layer0 = _first_layer(_m)
+        if _layer0 is not None and hasattr(_layer0, "attention_type"):
+            assert _layer0.attention_type == "full_attention", \
+                f"Custom attention mask not compatible with {type(_m).__name__}"
 
     # Optionally compile the draft model to reduce Python→CUDA dispatch overhead.
     # dynamic=True handles the varying KV-cache length across autoregressive steps.

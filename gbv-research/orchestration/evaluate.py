@@ -1534,11 +1534,16 @@ def main():
                     notes=f"perplexity={ppl_res['perplexity']:.4f}",
                 )
                 results_db.insert_run(ppl_row, hw_tier=args.hw_tier)
-                # Quality guard: warn if this model's PPL is much worse than any baseline on record
+                # Quality guard: warn if this model's PPL is much worse than the
+                # baseline FOR THE SAME MODEL PAIR (same draft_path + target_path).
+                # Filter by draft_path to avoid cross-family false alarms, e.g.
+                # GPT-2 PPL=51 flagged against Qwen baseline PPL=15.
                 import math as _math
                 _baseline_ppls = [
-                    r["perplexity"] for r in results_db.query_runs({"draft_label": "baseline", "dataset": ds, "mode": "perplexity"})
+                    r["perplexity"] for r in results_db.query_runs(
+                        {"draft_label": "baseline", "dataset": ds, "mode": "perplexity"})
                     if r.get("perplexity") is not None
+                    and r.get("draft_path") == args.student   # same model family only
                 ]
                 if _baseline_ppls:
                     _ref_ppl = min(_baseline_ppls)
