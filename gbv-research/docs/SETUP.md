@@ -15,11 +15,18 @@ pip install -r requirements.txt
 
 GPU requirements:
 
-| Config | Models | VRAM needed | Notes |
-|--------|--------|-------------|-------|
-| `laptop` | Qwen2.5-0.5B → Qwen3-0.6B | 4 GB | RTX 500 / any modern laptop GPU |
+| Config | Models | VRAM / Device | Notes |
+|--------|--------|--------------|-------|
+| `laptop_gpt2` | distilgpt2 → gpt2-medium | **CPU only** | No GPU needed. Proves convergence cheaply. |
+| `laptop` | Qwen2.5-0.5B → Qwen3-0.6B | 4 GB VRAM | RTX 500 / any modern laptop GPU |
+| `laptop_llama` | Llama-3.2-1B → 3B (4-bit target) | 4 GB VRAM | Research-grade pair (3× size gap vs 1.2× for `laptop`) |
 | `colab`  | Qwen3-0.6B → Qwen3-8B (4-bit) | 9 GB | Free Colab T4 (15 GB) — teacher in 4-bit NF4 |
 | `server` | Qwen3-0.6B → Qwen3-8B (bf16) | 24 GB | A10G / A100 / 3090 — full precision |
+
+**Which laptop config to use?**
+- `laptop_gpt2` — out of GPU credits, just need convergence evidence, or testing on CPU server
+- `laptop` — Qwen pair, standard code exerciser; teacher barely bigger than student → weak signal
+- `laptop_llama` — best laptop option for research claims: 1B → 3B-NF4 (3× gap), real distillation signal; needs HF gated access (`huggingface-cli login`)
 
 **Colab / Kaggle T4 note**: Qwen3-8B in bfloat16 = ~16 GB → OOM on T4 (15 GB).
 The `colab` and `kaggle` configs automatically load the frozen teacher in
@@ -102,15 +109,51 @@ work without any file.
 
 ---
 
-## 4. Smoke test (verify everything works, ~30-40 min)
+## 4. Model weights — first-time download
+
+Model weights download automatically the first time the pipeline runs.
+**No manual step required.** `experiment.py` detects uncached models and
+downloads them before starting subprocesses, then switches to offline mode
+for all subsequent runs.
+
+For gated models (LLaMA 3.2), accept the licence on HuggingFace first:
+```bash
+huggingface-cli login   # one-time, stores token in ~/.cache/huggingface/
+```
+Then run the pipeline normally — the download happens automatically.
+
+---
+
+## 5. Smoke test (verify everything works)
 
 Run this on any new machine before the overnight full run.
-It exercises every loss function and every verifier at reduced scale
-(10 steps instead of 100, 3 eval prompts instead of 5).
 
+### Option A — Full Qwen smoke (~30-40 min, needs GPU)
 ```bash
-# From gbv-research/
 python orchestration/experiment.py --config laptop --smoke --yes
+```
+Exercises every loss function and every verifier at reduced scale.
+
+### Option B — GPT-2 CPU smoke (~15-20 min, no GPU needed)
+```bash
+python orchestration/experiment.py --config laptop_gpt2 --smoke --yes
+```
+Useful when GPU is occupied or unavailable. ebe/online losses are excluded
+(see `docs/ISSUES.md`).
+
+### Option C — LLaMA smoke (~20-30 min, GPU, research-grade pair)
+```bash
+python orchestration/experiment.py --config laptop_llama --smoke --yes
+```
+Requires `huggingface-cli login` first. Gives research-meaningful signal
+(1B → 3B-NF4 = 3× size gap).
+
+### Option D — Single-family quick check (fastest, any family)
+```bash
+# No experiment.py overhead — just trainer.py, 5 steps
+python scripts/smoke_family.py --family gpt2            # CPU, ~2 min
+python scripts/smoke_family.py --family llama           # GPU, ~5 min
+python scripts/smoke_family.py --family gpt2 --all_losses   # all losses, ~15 min
 ```
 
 What it runs:
@@ -147,7 +190,7 @@ python dashboard/training_dashboard.py   # http://127.0.0.1:5000
 
 ---
 
-## 5. Unit tests (run before smoke — < 60 s)
+## 6. Unit tests (run before smoke — < 60 s)
 
 **Required on every new machine before first commit.**  
 `pytest` must be installed (it is in `requirements.txt`) or the pre-commit hook
@@ -162,8 +205,13 @@ python -m pytest tests/unit/ -q     # full suite (~60 s on CPU, no GPU needed)
 ```
 
 The suite exercises every loss function, every verifier, all cache operations,
-pipeline step generation, data loading, and trainer correctness — all on CPU
-with no model downloads.  **182 tests**, expected output: `182 passed`.
+pipeline step generation, data loading, trainer correctness, and all four model
+families — all on CPU with no model downloads.  **216 tests** (182 core +
+34 model-family), expected output: `216 passed`.
+
+The model-family tests (`tests/test_model_families.py`) cover all four registered
+families (gpt2, llama, qwen, gemma): temperature recovery, LoRA module names,
+log-prob clamping, chat template, and registry integrity.
 
 **Pre-commit hook** — the hook script is committed at `hooks/pre-commit` and
 must be installed once per machine:
@@ -201,7 +249,7 @@ Test coverage:
 
 ---
 
-## 6. Full pipeline run (after smoke passes)
+## 7. Full pipeline run (after smoke passes)
 
 ```bash
 python orchestration/experiment.py --config laptop --yes
@@ -219,7 +267,7 @@ with a 0.6B teacher — its numbers are meaningless; real trends come from T4/A1
 
 ---
 
-## 7. Dashboard
+## 8. Dashboard
 
 The dashboard reads results directly from `db/results.db` — no W&B dependency.
 
@@ -241,7 +289,7 @@ What it shows:
 
 ---
 
-## 8. Clean restart
+## 9. Clean restart
 
 If the pipeline gets into a bad state (stale checkpoints, corrupted state file):
 
@@ -259,7 +307,7 @@ Both `pipeline_state_laptop.json` and `pipeline_state_laptop_smoke.json` are res
 
 ---
 
-## 9. Ephemeral compute — Colab, Kaggle, Modal (pointers)
+## 10. Ephemeral compute — Colab, Kaggle, Modal (pointers)
 
 Colab, Kaggle, and Modal all wipe local `/content` or `/tmp` disk when the
 session ends, so each platform persists checkpoints to Drive or a Modal Volume.
@@ -316,7 +364,7 @@ modal run deploy/modal_app.py --config profiles/tree_variant_week --losses kl_tr
 
 ---
 
-## 10. MLOps — hyperparameter overrides, loss filtering, and W&B sweeps
+## 11. MLOps — hyperparameter overrides, loss filtering, and W&B sweeps
 
 ### 10a. No-code experiment variation
 

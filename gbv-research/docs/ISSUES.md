@@ -1,5 +1,12 @@
 # Known Issues
 
+> **Disabled losses** are excluded from all free-tier configs (`kaggle.yaml`, `colab.yaml`, `a100.yaml`,
+> `laptop.yaml`, `laptop_gpt2.yaml`, `laptop_llama.yaml`) via `exclude_losses:` in the YAML.
+> Re-enable once the root cause is fixed.
+>
+> **W&B note:** laptop and smoke runs have `logging.no_wandb: true` — no W&B runs are
+> created. This is intentional (code exerciser only). Kaggle/Colab/A100 configs still log to W&B.
+
 ## 1. EBE Loss Broken
 
 **Symptom**: BE delta -0.202 vs baseline on laptop (bv/K=3: 2.846 vs baseline 3.048).

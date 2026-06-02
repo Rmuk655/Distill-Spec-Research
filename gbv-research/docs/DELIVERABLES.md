@@ -273,6 +273,67 @@ Current status: training loss convergence confirmed. Block efficiency directiona
 
 ---
 
+## 4b. Infrastructure Additions (post Phase 1)
+
+The following were added after the Phase 1 results above were recorded.
+
+### Multi-Family Model Support
+
+Four model families are now registered in `core/model_families/FAMILY_REGISTRY`:
+
+| Family | Draft | Target | Config | Device | Purpose |
+|---|---|---|---|---|---|
+| `qwen` | Qwen2.5-0.5B | Qwen3-0.6B / 8B | `laptop` / `colab` / `a100` | GPU | Primary research |
+| `gpt2` | distilgpt2 (82M) | gpt2-medium (355M) | `laptop_gpt2` | **CPU or GPU** | Convergence proof when credits exhausted |
+| `llama` | Llama-3.2-1B-Instruct | Llama-3.2-3B-Instruct | `laptop_llama` | GPU (4-bit target) | Research-grade laptop pair (3× size gap) |
+| `gemma` | gemma-2-2b | gemma-2-9b | — | GPU | Registered stub, not yet in pipeline |
+
+Each family is implemented as a `ModelFamily` subclass in `core/model_families/` that
+encapsulates: LoRA target module names, temperature pre-scaling recovery, log-prob
+clamping, and chat template application. Adding a new family is ~70 min
+(see `docs/ADDING_A_MODEL_FAMILY.md`).
+
+### GPT-2 Convergence Config (`laptop_gpt2.yaml`)
+
+**Purpose:** prove convergence trends on a CPU-only machine without GPU credits.
+
+- **Pair:** distilgpt2 (82M) → gpt2-medium (355M) — 4.3× size gap, real distillation signal
+- **Device:** CPU (or GPU if available)
+- **Steps:** 500, ~2-4 hr on CPU
+- **W&B:** disabled (`no_wandb: true`) — no overhead
+- **Why meaningful:** Unlike the Qwen laptop pair (0.5B→0.6B = 1.2× gap), GPT-2 has
+  genuine teacher-student signal. Convergence curves here are research-valid at small scale.
+
+### LLaMA 3.2 Convergence Config (`laptop_llama.yaml`)
+
+**Purpose:** generate research-grade convergence evidence on the laptop GPU.
+
+- **Pair:** Llama-3.2-1B-Instruct → Llama-3.2-3B-Instruct — 3× size gap
+- **Device:** GPU (3B target in 4-bit NF4, ~3.5 GB total)
+- **Steps:** 500, ~4-8 hr on laptop GPU
+- **Why better than Qwen laptop:** LLaMA architecture is used in most SD papers;
+  1B→3B gap is the smallest that gives meaningful distillation signal on laptop VRAM.
+
+### New Tests — Model Family Unit Tests
+
+`tests/test_model_families.py`: 34 parametrized tests covering all four families.
+- No model downloads required (synthetic tensors only)
+- Covers: LoRA module names, temperature recovery identity/scaling, -inf clamp guard,
+  format_prompt return type, default model IDs, registry lookup errors
+- Runs in 0.12 s on CPU as part of the 216-test suite
+
+### Pipeline Reliability Fixes
+
+| Fix | Impact |
+|---|---|
+| W&B disabled on laptop/smoke (`WANDB_MODE=disabled`) | Removes 5–25% of smoke runtime |
+| Auto-download of missing models in experiment.py | No manual model download step needed |
+| Config-specific lock files (`.pipeline_lock_{config}`) | Parallel runs with different configs don't kill each other |
+| Per-mode GPU subprocess for BE eval | Eliminates VRAM fragmentation crash; GPU eval speed restored (13 s/prompt vs 380 s/prompt on CPU) |
+| Orphan-only psutil kill in run_be_batch | Safe on multi-GPU servers — only kills truly dead-parent runner.py processes |
+
+---
+
 ## 5. Evaluation Plan (per Scope Spec)
 
 ### 5.1 Datasets

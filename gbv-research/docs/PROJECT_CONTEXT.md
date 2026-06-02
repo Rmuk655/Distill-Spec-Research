@@ -74,7 +74,7 @@ codebases. All active research code lives in `gbv-research/`.
     │   └── clean_restart.py  ← wipe db/ + reset state
     ├── core/
     │   ├── datasets/raw/     ← JSONL eval + training sets
-    │   └── model_families/   ← Qwen/Gemma tokenizer helpers
+    │   └── model_families/   ← Family registry: gpt2, llama, qwen, gemma (LoRA targets, temp recovery, chat templates)
     ├── dashboard/
     │   └── training_dashboard.py  ← web UI; reads db/results.db
     └── db/                   ← all generated outputs (gitignored)
@@ -101,32 +101,69 @@ revert `GBV/` to the unmodified reference repo.
 
 ## Models
 
+### Primary research pair (Qwen)
+
 | Role | Model | Notes |
 |---|---|---|
 | Draft (base) | Qwen2.5-0.5B | Pre-trained; LoRA fine-tuned during KD |
-| Target (laptop) | Qwen3-0.6B | Fits in 6GB VRAM |
+| Target (laptop) | Qwen3-0.6B | Fits in 4 GB VRAM |
 | Target (server) | Qwen3-8B | Requires A10G / A100 / 3090 |
 | Shared tokenizer | Qwen3 tokenizer | vocab_size = 151936 — SD requirement |
 
 Architecture mismatch (0.5B Qwen2.5 vs 0.6B Qwen3) is fine — SD only requires shared vocabulary.
 
-**Dependency**: `transformers >= 4.51` required for Qwen3 support. Both codebases confirmed working after this upgrade.
+### Registered model families (multi-family support)
+
+Four families are registered in `core/model_families/FAMILY_REGISTRY`:
+
+| Family key | Draft | Target | Use case | Device |
+|---|---|---|---|---|
+| `qwen` | Qwen2.5-0.5B | Qwen3-0.6B / 8B | Primary research | GPU |
+| `gpt2` | distilgpt2 (82M) | gpt2-medium (355M) | CPU convergence proof, no credits needed | CPU or GPU |
+| `llama` | Llama-3.2-1B-Instruct | Llama-3.2-3B-Instruct | Research-grade laptop pair (3× gap) | GPU + 4-bit target |
+| `gemma` | gemma-2-2b | gemma-2-9b | Registered stub, not yet validated | GPU |
+
+**Which pair to use when:**
+- Out of GPU credits → `gpt2` (CPU, any machine, ATS Cloud bare-metal)
+- Laptop convergence for paper claims → `llama` (3× size gap = real signal)
+- Production research → `qwen` (primary research direction)
+
+**Dependency**: `transformers >= 4.51` required for Qwen3 support.
 
 ---
 
 ## Hardware Environments
 
-### Laptop (Krishnan R's machine — RTX 500, 6GB VRAM)
-- Fits: Qwen3-0.6B target + Qwen2.5-0.5B draft simultaneously (~2.4GB)
-- Does NOT fit: Qwen3-8B (~16GB)
-- Use for: Phase 1 smoke tests, fast iteration, pipeline verification
-- Recommended config: batch_size=1, grad_accum=4, steps=200, fp16=true
+### Laptop (Mukund's machine)
+- CPU: Intel, ~2.39 GHz
+- RAM: 64 GB DDR5 5600 MT/s (both slots)
+- GPU 0: NVIDIA RTX 500 Ada Generation, **4 GB VRAM** (not 6 GB)
+- GPU 1: Intel Arc Pro Graphics (iGPU — ignored)
+- NPU: Intel AI Boost (unused)
+- Storage: NVMe SSD
+
+**What fits:**
+- Qwen 0.5B + 0.6B in BF16 (~2.4 GB) ✓
+- GPT-2 (distilgpt2 + gpt2-medium, ~1.4 GB total) ✓ CPU or GPU
+- LLaMA 3.2 1B + 3B-NF4 (~3.5 GB) ✓ (tight but safe)
+- Qwen3-8B: NO (~16 GB BF16 → OOM)
+
+**Configs:**
+- `laptop` — Qwen, GPU, code exerciser (weak signal: 0.5B→0.6B)
+- `laptop_gpt2` — GPT-2, CPU, convergence proof (no GPU credits needed)
+- `laptop_llama` — LLaMA 1B→3B, GPU, research-grade signal
+
+### ATS Cloud (Adobe internal — CPU only, free)
+- 128 GB RAM, 2-socket CPU, no GPU
+- Use for: parallel GPT-2 training seeds (8 parallel jobs, ~1-2 hr for all losses)
+- NOT for: LLaMA/Qwen training (needs GPU)
+- Config: `laptop_gpt2` with `device: cpu`
 
 ### Server (to be provisioned — A10G / A100 / 3090)
 - Use for: Phase 2 full runs with Qwen3-8B target
 - Recommended config: batch_size=4, grad_accum=1, steps=1000, bf16=true
 
-**Promotion criteria (laptop → server)**: training runs 200 steps without crash + BE improves vs baseline (even slightly) + W&B logging confirmed + no NaN losses.
+**Promotion criteria (laptop → server)**: training runs 200 steps without crash + BE improves vs baseline (even slightly) + no NaN losses.
 
 ---
 
