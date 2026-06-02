@@ -844,6 +844,17 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     if load_in_4bit:
         _modes = "bv,gbv,traversal,specinfer,naive"
 
+    # Model-family BE eval restriction — some families don't support the
+    # Qwen3-specific KV cache interface (.layers[i].keys/.values) or the
+    # custom tree attention mask ({"full_attention": tensor}) that the BE
+    # verifier requires.  For these families, eval is alpha-only even in
+    # smoke mode — running BE would always fail, adding noise not signal.
+    # See docs/ISSUES.md §3 for the root cause and fix path.
+    _h_early = train_hparams or {}
+    _BE_UNSUPPORTED_FAMILIES = {"gpt2"}   # add others here when confirmed
+    if _h_early.get("model_family", "qwen") in _BE_UNSUPPORTED_FAMILIES:
+        _modes = "alpha"
+
     # ── YAML eval overrides (applied for BOTH smoke and non-smoke runs) ─────────
     # K_values, temperatures, n_prompts, and eval_max_tokens are always read from
     # YAML so platform configs fully control eval cost without editing this file.
