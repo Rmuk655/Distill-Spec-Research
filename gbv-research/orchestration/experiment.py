@@ -474,6 +474,50 @@ def _data(name): return os.path.join(_GBV_RESEARCH, "core", "datasets", "raw", n
 def _merged(name): return _ckpt(name + "_merged")
 
 
+def _auto_download_models(*model_ids: str) -> None:
+    """Download models that are not yet in the HuggingFace cache.
+
+    Called automatically when experiment.py detects missing models.
+    No manual steps required — the pipeline handles first-time downloads.
+
+    Skips:
+      - Local filesystem paths (already on disk).
+      - Models already in the HF cache (try_to_load_from_cache returns a path).
+    Warns but does NOT abort on auth errors (e.g. gated LLaMA models that
+    require huggingface-cli login) — the pipeline will fail later with a
+    clear HF auth message rather than crashing here.
+    """
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+    except ImportError:
+        print("  [download] transformers/huggingface_hub not available — skipping auto-download.")
+        return
+
+    for model_id in dict.fromkeys(model_ids):   # deduplicate, preserve order
+        # Skip local paths
+        if os.path.isabs(model_id) and os.path.exists(model_id):
+            continue
+        if os.path.exists(model_id):
+            continue
+        # Skip if already cached
+        cached = try_to_load_from_cache(repo_id=model_id, filename="config.json")
+        if cached is not None:
+            continue
+        print(f"  [download] {model_id} not in cache — downloading (one-time)...")
+        try:
+            AutoTokenizer.from_pretrained(model_id)
+            AutoModelForCausalLM.from_pretrained(model_id)
+            print(f"  [download] {model_id} cached successfully.")
+        except Exception as exc:
+            # Gated model (LLaMA etc.) or no internet — warn and continue.
+            # The pipeline will fail later with a descriptive error.
+            print(f"  [download] WARNING: could not download {model_id}: {exc}")
+            print(f"  [download] If this is a gated model (e.g. LLaMA), run:")
+            print(f"  [download]   huggingface-cli login")
+            print(f"  [download] then restart the pipeline.")
+
+
 def _models_ready_for_offline(draft: str, target: str) -> tuple:
     """Decide whether HF offline mode is safe for this run.
 
@@ -3178,6 +3222,8 @@ def main():
     # update), set SPECDIST_FORCE_ONLINE=1.
     if os.environ.get("SPECDIST_FORCE_ONLINE", "").strip() not in ("", "0", "false"):
         print("[hf] SPECDIST_FORCE_ONLINE set — leaving HF online checks enabled.")
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        os.environ["HF_HUB_OFFLINE"]       = "0"
     else:
         _ok, _why = _models_ready_for_offline(draft, target)
         if _ok:
@@ -3186,7 +3232,17 @@ def main():
             print(f"[hf] {_why} — subprocess HF etag pings disabled "
                   f"(set SPECDIST_FORCE_ONLINE=1 to override).")
         else:
-            print(f"[hf] {_why} — leaving HF online (initial downloads may be needed).")
+            # Models not cached yet.  Auto-download in the main process now,
+            # before any subprocesses start.  This is a one-time operation;
+            # after caching, all subsequent runs use offline mode automatically.
+            # We explicitly set TRANSFORMERS_OFFLINE=0 so it propagates to ALL
+            # child processes (evaluate.py, trainer.py, runner.py) — without this
+            # evaluate.py's module-level code sees the var as unset and overrides
+            # it to "1", blocking downloads inside the BE subprocess.
+            os.environ["TRANSFORMERS_OFFLINE"] = "0"
+            os.environ["HF_HUB_OFFLINE"]       = "0"
+            print(f"[hf] {_why} — downloading models now (one-time, then offline mode).")
+            _auto_download_models(draft, target)
 
     # ── Storage root — single source of truth for all persistent paths ────────
     # --storage_root moves checkpoints, DB, logs, and state file to one directory

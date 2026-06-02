@@ -881,8 +881,15 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1",
-        "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE", "0"),
-        "HF_HUB_OFFLINE":       os.environ.get("HF_HUB_OFFLINE",       "0"),
+        # Propagate the HF offline decision from experiment.py explicitly.
+        # evaluate.py's module-level code sets TRANSFORMERS_OFFLINE=1 for
+        # non-cloud runs; but experiment.py may have set it to "0" for first-
+        # time downloads. os.environ at this point reflects experiment.py's
+        # decision, so {**os.environ} already carries the right value.
+        # Explicit keys here guard against any future module-level override
+        # between subprocess creation and this dict being built.
+        "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE", "1"),
+        "HF_HUB_OFFLINE":       os.environ.get("HF_HUB_OFFLINE",       "1"),
     }
     if sys.platform != "win32":   # expandable_segments is Linux-only
         _sub_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
