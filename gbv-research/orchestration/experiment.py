@@ -633,6 +633,67 @@ def _check_gpu_compatibility():
         pass   # if torch not importable yet, skip — will fail later with a clear error
 
 
+def _estimate_bf16_gb(model_id: str) -> float:
+    """Rough BF16 weight size (GB) parsed from a model id's size token.
+
+    'Qwen/Qwen3-8B' → 8B params × 2 bytes ≈ 16 GB.
+    Returns 0.0 if no size token is found (skip the guard rather than guess).
+    """
+    import re
+    name = (model_id or "").split("/")[-1]
+    m = re.search(r"(\d+\.?\d*)\s*([BbMm])", name)
+    if not m:
+        return 0.0
+    val = float(m.group(1))
+    params_b = val if m.group(2).lower() == "b" else val / 1000.0   # M → B
+    return params_b * 2.0   # 2 bytes/param in BF16
+
+
+def _check_teacher_fits_vram(target: str, load_in_4bit: bool, args) -> None:
+    """Fail fast when a large teacher can't fit in BF16 on this GPU and 4-bit is off.
+
+    Prevents the silent OOM→CPU fallback (≈340 s/prompt) that wastes hours when a
+    big teacher is pointed at a non-4bit config on a small GPU — e.g. the 8B teacher
+    with --config colab (4B/BF16 design) instead of --config kaggle (8B/4bit).
+    """
+    if load_in_4bit:
+        return   # 4-bit NF4 (~quarter size) — guard not needed
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return   # CPU run — no VRAM ceiling to hit (slow but won't OOM-crash)
+        teacher_gb = _estimate_bf16_gb(target)
+        if teacher_gb <= 0:
+            return   # couldn't parse size — don't block
+        total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        # Need teacher + draft (~1.5 GB) + KV cache & activations (~2 GB headroom).
+        needed_gb = teacher_gb + 3.5
+        if needed_gb > total_gb:
+            name = torch.cuda.get_device_name(0)
+            print(
+                f"\n  [FATAL] Teacher '{target}' needs ~{teacher_gb:.0f} GB in BF16 "
+                f"(+~3.5 GB draft/KV) but {name} has only {total_gb:.1f} GB, "
+                f"and load_in_4bit is False.\n"
+                f"  This would OOM and silently fall back to CPU (~340 s/prompt — hours wasted).\n"
+                f"\n  FIX — pick ONE:\n"
+                f"    • Use a config that loads the teacher in 4-bit NF4 on a T4:\n"
+                f"        python orchestration/experiment.py --config kaggle ...\n"
+                f"    • Or use a smaller teacher (e.g. --config colab uses Qwen3-4B BF16).\n"
+                f"    • Or run on an A100 (--config a100, 8B BF16 fits 40 GB).\n"
+                f"  To override this guard (e.g. you intend the CPU fallback), set "
+                f"SPECDIST_ALLOW_OOM_FALLBACK=1.\n",
+                file=sys.stderr,
+            )
+            if os.environ.get("SPECDIST_ALLOW_OOM_FALLBACK", "").strip() in ("", "0", "false"):
+                sys.exit(1)
+            print("  [guard] SPECDIST_ALLOW_OOM_FALLBACK set — proceeding despite VRAM shortfall.",
+                  file=sys.stderr)
+    except SystemExit:
+        raise
+    except Exception:
+        pass   # never let the guard itself crash the pipeline
+
+
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               modes="alpha,specinfer,gbv,traversal",
               Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
@@ -3457,6 +3518,14 @@ def main():
     # --status and --dry_run are read-only: build steps + print plan, then exit.
     # Do NOT acquire the lock (that kills any running pipeline process!).
     _load_4bit = cfg.get("load_in_4bit", False)
+
+    # ── Teacher-fits-VRAM guard (fail fast instead of silent OOM→CPU) ─────────
+    # A common, costly misconfiguration: pointing a large teacher (e.g. Qwen3-8B,
+    # ~16 GB BF16) at a config with load_in_4bit=False on a ≤16 GB GPU (T4).  The
+    # teacher load then OOMs and the eval silently falls back to CPU at ~340 s/
+    # prompt — wasting hours.  Catch it here, before any subprocess launches.
+    # (e.g. running the 8B teacher with --config colab instead of --config kaggle.)
+    _check_teacher_fits_vram(target, _load_4bit, args)
     if args.status or args.dry_run:
         STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                             smoke=args.smoke, eagle=args.eagle,
