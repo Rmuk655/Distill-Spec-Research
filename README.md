@@ -52,7 +52,7 @@ A draft model that is merely close to the target in KL sense need not produce ac
 | Component | Choice |
 |---|---|
 | Models | Qwen3-0.6B (draft) → Qwen3-8B (target, frozen) |
-| GPU | P100/T4 16 GB for exploration (Kaggle free tier); A100 40 GB for paper confirmation only |
+| GPU | T4 x2 (Kaggle free tier, 8B NF4) for exploration; A100 40 GB for paper confirmation only. P100 (sm_60) is broken with PyTorch 2.10+. CPU server (ATS Cloud) for GPT-2 convergence analysis only. |
 | Distillation losses | forward KL · reverse KL · JSD · L1 · EBE · online KL · online EBE |
 | Verification algorithms | GBV · Traversal · SpecInfer · BV · α-sampling · naive |
 | Datasets | GSM8K · HumanEval · MATH500 · MTBench · Alpaca |
