@@ -1359,11 +1359,11 @@ def main():
                         "Requires: pip install bitsandbytes. "
                         "The student (draft) model is always loaded in bfloat16.")
     p.add_argument("--hw_tier", default="laptop",
-                   choices=["laptop", "colab_lite", "colab", "a100"],
+                   choices=["laptop", "colab_lite", "colab", "kaggle", "a100"],
                    help="Hardware tier tag stored in DB (default: laptop). "
                         "Set automatically by experiment.py from the config name. "
                         "Filters runs by teacher model scale in the dashboard: "
-                        "laptop=0.6B, colab_lite=1.7B, colab=8B, a100=8B.")
+                        "laptop=0.6B, colab_lite=1.7B, colab/kaggle=8B NF4, a100=8B bf16.")
     p.add_argument("--no_wandb", action="store_true",
                    help="Disable W&B logging for this eval run.")
     p.add_argument("--wandb_project", default="distillspec",

@@ -356,6 +356,34 @@ to no-op if missing (W&B runs offline, git clone uses HTTPS without auth).
 Settings → Accelerator must be set **before** starting the session. Changing it mid-session
 requires a restart (all in-progress work is lost). Always set GPU before running any cell.
 
+### `--hw_tier kaggle: invalid choice` error (RC=2 in all training steps)
+
+**Symptom:** Every training step exits immediately with RC=2 and prints:
+```
+trainer.py: error: argument --hw_tier: invalid choice: 'kaggle'
+             (choose from laptop, colab_lite, colab, a100)
+```
+
+**Cause:** The `--hw_tier` argparse choice list in `trainer.py` / `evaluate.py` was missing
+`'kaggle'`. Fixed in commit: add `'kaggle'` to the choices tuple.
+
+**Fix:** Pull the latest code (Cell 0 or Cell 1 auto-pulls) and re-run. If you
+already have the old code checked out, `git pull` inside the notebook or use `SMOKE=True`
+first to confirm the fix is present before a full run.
+
+---
+
+### `Skipping import of cpp extensions … torch >= 2.11.0 (found 2.10.0)` warning
+
+**Severity: WARNING only — training still works.** This message comes from a library
+(typically PEFT or a flash-attention variant) that has optional C++ optimisations compiled
+for PyTorch ≥ 2.11. The Kaggle base image ships with PyTorch 2.10. The C++ extensions are
+skipped but pure-Python fallbacks run instead — slightly slower but functionally identical.
+You do NOT need to upgrade PyTorch. Do NOT add `!pip install --upgrade torch` to the
+notebook; it can break bitsandbytes compatibility.
+
+---
+
 ### P100 crashes immediately (sm_60 incompatible — switch to T4 x2)
 
 P100 = CUDA sm_60. PyTorch 2.10+cu128 requires sm_70+ and will crash with `ops.cu` symbol

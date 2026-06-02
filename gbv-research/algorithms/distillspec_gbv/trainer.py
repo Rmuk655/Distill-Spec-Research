@@ -234,9 +234,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--compile", action="store_true",
                    help="torch.compile() the draft model (PyTorch 2.0+).")
     p.add_argument("--hw_tier", default="laptop",
-                   choices=["laptop", "colab_lite", "colab", "a100"],
+                   choices=["laptop", "colab_lite", "colab", "kaggle", "a100"],
                    help="Hardware tier (default: laptop). Controls PPL sample size and "
-                        "other tier-specific optimisations. Set automatically by experiment.py.")
+                        "other tier-specific optimisations. Set automatically by experiment.py. "
+                        "'kaggle' = free T4 (treated identically to 'colab' for training).")
 
     return p.parse_args()
 
