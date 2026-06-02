@@ -422,6 +422,11 @@ def _load_config_yaml(config_name: str) -> dict:
         # When set in YAML, this overrides _hw_tier_from_config() heuristics entirely.
         if "hw_tier" in hardware:
             out["hw_tier"] = hardware["hw_tier"]
+        # hardware.device → forwarded to trainer/eval as --device so a config can
+        # force CPU (e.g. server_gpt2 on the ATS CPU server) or let it auto-detect.
+        # 'cpu' here also lets a GPU laptop smoke-test the CPU code path locally.
+        if "device" in hardware:
+            out["device"] = hardware["device"]
         # hardware.load_in_4bit — forwarded so YAML profiles control 4-bit loading.
         if "load_in_4bit" in hardware:
             out["load_in_4bit"] = hardware["load_in_4bit"]
@@ -699,7 +704,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
               experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
-              loss_name=None, model_family="qwen",
+              loss_name=None, model_family="qwen", device="auto",
               force_rerun=False):
     """Eval command.
 
@@ -736,6 +741,8 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         # tree-attention-mask format (Qwen=dict, GPT-2/LLaMA=raw tensor).  Without
         # this, eval defaults to qwen and GPT-2 crashes ('dict' has no 'ndim').
         "--model_family", model_family,
+        # Force device (cpu for CPU server / laptop CPU smoke test); 'auto' = detect.
+        "--device", device,
     ]
     if not force_rerun:
         cmd.append("--skip_existing")
@@ -987,6 +994,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # cfg is only in main() scope — do not reference it here.
         # All YAML configs set models.family; legacy CONFIGS presets also set it now.
         "--model_family",    str(_h.get("model_family", "qwen")),
+        # device: 'auto' (cuda if available) | 'cpu' (force CPU — CPU server, or
+        # GPU-laptop CPU-path smoke test) | 'cuda'.  From YAML hardware.device or --device.
+        "--device",          str(_h.get("device", "auto")),
         "--lr",              str(_h.get("lr", 3e-5)),
         "--lora_r",          str(_h.get("lora_r", 8)),
         "--lora_alpha",      str(_h.get("lora_alpha", 16)),
@@ -1143,6 +1153,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         loss_name=label,
                         hw_tier=hw_tier,
                         model_family=_h.get("model_family", "qwen"),
+                        device=_h.get("device", "auto"),
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),
                         force_rerun=smoke)  # smoke: run even if result already in DB
@@ -3209,6 +3220,12 @@ def main():
                         "instead when you also want DB and logs on persistent storage. "
                         "Kept for backward compatibility.")
     # ── MLOps / sweep overrides ───────────────────────────────────────────────
+    p.add_argument("--device", default=None, choices=["auto", "cuda", "cpu"],
+                   help="Force compute device for train + eval (overrides YAML "
+                        "hardware.device). Use '--device cpu' on a GPU laptop to "
+                        "smoke-test the exact CPU code path before running on the "
+                        "CPU-only ATS/AIP server:  "
+                        "python orchestration/experiment.py --config server_gpt2 --smoke --device cpu")
     p.add_argument("--losses", default=None,
                    help="Comma-separated subset of losses to train/eval. "
                         "Default: run all (kl,ebe,ebe_single,rev_kl,jsd,l1,online,online_ebe,online_ebe_single). "
@@ -3425,6 +3442,15 @@ def main():
         # E.g. "gsm8k_10.jsonl" → ~3 min/val, "gsm8k_30.jsonl" → ~23 min/val.
         # When absent, trainer falls back to val_split=0.1 (10% of train set = very slow).
         "val_dataset":          _yaml_cfg.get("val_dataset"),
+        # model_family: MUST be in train_hparams (=_h) so _train_hargs and the eval
+        # run_cell both forward the correct --model_family.  Without this _h.get(
+        # "model_family") fell back to "qwen", making GPT-2 train/eval use the Qwen
+        # tree-attn-mask dict → "'dict' object has no attribute 'ndim'" crash.
+        "model_family":         _yaml_cfg.get("model_family", "qwen"),
+        # device: CLI --device wins over YAML hardware.device, else "auto".
+        # 'cpu' forces the CPU code path (CPU-only server, or laptop CPU smoke test).
+        "device":               (getattr(args, "device", None)
+                                  or _yaml_cfg.get("device", "auto")),
     }
     # Wire YAML `evaluation:` block (modes / K_values / temperatures / n_prompts /
     # n_prompts_gsm8k / max_tokens) for ALL configs — profiles AND top-level YAMLs.

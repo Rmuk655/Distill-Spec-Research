@@ -216,9 +216,17 @@ def _gpu_info() -> str:
     return "CPU-only"
 
 
+# Forced device override, set from --device in main().  None = auto-detect.
+# 'cpu' forces CPU even on a GPU machine so a laptop can smoke-test the exact
+# CPU code path that runs on the CPU-only ATS/AIP server.
+_FORCED_DEVICE: str | None = None
+
+
 def _pick_device():
-    """Return (device, dtype), warn if VRAM is tight."""
+    """Return (device, dtype), honouring the --device override, warn if VRAM tight."""
     import torch
+    if _FORCED_DEVICE == "cpu":
+        return "cpu", torch.float32
     if torch.cuda.is_available():
         free, total = torch.cuda.mem_get_info(0)
         free_gb = free / 1024**3
@@ -1397,8 +1405,18 @@ def main():
                         "(e.g. 'laptop-gsm8k', 'colab-lite') so training and eval runs from "
                         "the same tier appear together in W&B. Forwarded from YAML by "
                         "experiment.py. Falls back to experiment_tag when not set.")
+    p.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"],
+                   help="Compute device (default: auto). '--device cpu' forces CPU "
+                        "for alpha + BE eval even on a GPU machine — lets a GPU laptop "
+                        "smoke-test the exact CPU path that runs on the ATS/AIP server.")
     global args
     args = p.parse_args()
+
+    # Honour the forced device for all eval paths (alpha preload, perplexity, BE).
+    global _FORCED_DEVICE
+    if getattr(args, "device", "auto") == "cpu":
+        _FORCED_DEVICE = "cpu"
+        print("  [device] --device cpu — forcing CPU for all eval (CPU-path smoke test)")
 
     # Default experiment_tag: {hostname}-{YYYYMMDD_HHMM}-v{n}
     # The version number auto-increments per machine per calendar day so
@@ -1643,7 +1661,22 @@ def main():
             # Better fix: one GPU subprocess PER MODE.  Each subprocess exits
             # cleanly, releasing all VRAM and cache before the next mode starts.
             # This matches pre-batching speed (~13 s/prompt on GPU) with no crash.
-            if getattr(args, "hw_tier", None) == "laptop":
+            if _FORCED_DEVICE == "cpu":
+                # Forced CPU (--device cpu): run the whole BE batch on CPU. This is
+                # the CPU-path smoke test — exercises exactly what runs on the
+                # CPU-only ATS/AIP server, on the laptop, before the long run.
+                print(f"  [BE batch] --device cpu -> running BE on CPU "
+                      f"(CPU-path smoke test)")
+                batch_res = run_be_batch(
+                    args.student, args.teacher, data_path,
+                    modes_list, Ks_list, Ts_list,
+                    args.L, args.max_tokens,
+                    _device="cpu",
+                    load_in_4bit=False,   # 4-bit requires CUDA; CPU uses full precision
+                )
+                for (m, k, t), be in batch_res.items():
+                    _be_cache[(ds, m, k, t)] = be
+            elif getattr(args, "hw_tier", None) == "laptop":
                 # Run one GPU subprocess per mode so each exits cleanly (releasing
                 # VRAM) before the next starts — prevents allocator fragmentation
                 # that hard-crashes the GPU driver (0xC000013A) mid-batch.

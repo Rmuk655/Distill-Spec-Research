@@ -253,6 +253,12 @@ def parse_args() -> argparse.Namespace:
                         "Set by experiment.py from YAML hardware.hw_tier. "
                         "laptop=4GB GPU; cpu=CPU-only server (ATS/AIP, GPT-2 convergence); "
                         "colab=T4 GPU (Kaggle or Colab); a100=A100 (paper results).")
+    p.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"],
+                   help="Compute device (default: auto = cuda if available else cpu). "
+                        "Set '--device cpu' to force CPU even on a GPU machine — lets a "
+                        "GPU laptop smoke-test the exact CPU code path before running on "
+                        "the CPU-only ATS/AIP server. Set by experiment.py from YAML "
+                        "hardware.device, or override on the CLI.")
 
     return p.parse_args()
 
@@ -569,8 +575,24 @@ def main() -> None:
         merge_lora_and_save(args.draft, args.adapter)
         return
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Device        : {device}")
+    # Device selection honours --device so a GPU laptop can still smoke-test the
+    # CPU code path before shipping long runs to the CPU-only ATS/AIP server.
+    #   auto (default): cuda if available else cpu  (original behaviour)
+    #   cpu           : force CPU even when CUDA is present (CPU-path smoke test)
+    #   cuda          : require CUDA (errors clearly if unavailable)
+    _dev_arg = getattr(args, "device", "auto")
+    if _dev_arg == "cpu":
+        device = "cpu"
+    elif _dev_arg == "cuda":
+        if not torch.cuda.is_available():
+            print("[FATAL] --device cuda requested but no CUDA GPU is available.",
+                  file=sys.stderr)
+            sys.exit(1)
+        device = "cuda"
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device        : {device}" + ("  (--device cpu: forced CPU path)"
+          if _dev_arg == "cpu" and torch.cuda.is_available() else ""))
     print(f"Model family  : {family.name}")
     print(f"Draft         : {args.draft}  ({'full SFT' if args.no_lora else f'LoRA r={args.lora_r}'})")
     print(f"Target        : {args.target}  (frozen bfloat16)")
@@ -610,6 +632,14 @@ def main() -> None:
             max_memory=_max_mem,
             low_cpu_mem_usage=True,   # load to CPU first → quantize → move to GPU
             attn_implementation=_ATTN_IMPL)
+    elif device == "cpu":
+        # Forced-CPU path (--device cpu): load the teacher on CPU even when a GPU
+        # is present, so a GPU laptop can smoke-test the exact CPU code path that
+        # runs on the ATS/AIP server.  No device_map="auto" (that would grab the GPU).
+        target_model = transformers.AutoModelForCausalLM.from_pretrained(
+            args.target, dtype=torch.float32,   # fp32 on CPU (bf16 CPU matmul is slow/unsupported)
+            low_cpu_mem_usage=True,
+            attn_implementation=_ATTN_IMPL).to("cpu")
     else:
         import torch as _t
         _max_mem_bf16 = (
@@ -628,12 +658,17 @@ def main() -> None:
         p.requires_grad_(False)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    print(f"  VRAM after teacher: {torch.cuda.memory_allocated() / 1024**2:.0f} MB")
+    if device == "cuda":
+        print(f"  VRAM after teacher: {torch.cuda.memory_allocated() / 1024**2:.0f} MB")
+    else:
+        print(f"  Teacher loaded on CPU")
 
     # ── Load draft ────────────────────────────────────────────────────────────
     print("Loading draft...")
+    # fp32 on CPU (bf16 CPU matmul is slow/partially-unsupported), bf16 on GPU.
+    _draft_dtype = torch.float32 if device == "cpu" else torch.bfloat16
     draft_base = transformers.AutoModelForCausalLM.from_pretrained(
-        args.draft, dtype=torch.bfloat16, low_cpu_mem_usage=True,
+        args.draft, dtype=_draft_dtype, low_cpu_mem_usage=True,
         attn_implementation=_ATTN_IMPL).to(device)
     if args.no_lora:
         draft_model = draft_base
@@ -651,7 +686,10 @@ def main() -> None:
         )
         draft_model = get_peft_model(draft_base, lora_cfg)
         draft_model.print_trainable_parameters()
-    print(f"  VRAM (both): {torch.cuda.memory_allocated() / 1024**2:.0f} MB\n")
+    if device == "cuda":
+        print(f"  VRAM (both): {torch.cuda.memory_allocated() / 1024**2:.0f} MB\n")
+    else:
+        print(f"  Draft + teacher loaded on CPU\n")
 
     optimizer = AdamW(
         [p for p in draft_model.parameters() if p.requires_grad], lr=args.lr)
