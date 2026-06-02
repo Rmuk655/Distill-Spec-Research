@@ -268,22 +268,47 @@ def distinct_model_pairs() -> list:
     conn.close()
 
     def _short(path: str) -> str:
-        """'Qwen/Qwen3-0.6B' → '0.6B', 'distilgpt2' → 'DistilGPT-2'"""
-        name = path.split("/")[-1]          # strip org or dir prefix
-        # Well-known friendly names for models without size tokens
-        _FRIENDLY = {
-            "distilgpt2":         "DistilGPT-2",
-            "gpt2":               "GPT-2",
-            "gpt2-medium":        "GPT-2-M",
-            "gpt2-large":         "GPT-2-L",
-            "gpt2-xl":            "GPT-2-XL",
+        """Return a short human-readable label for a model path.
+
+        Examples:
+          'Qwen/Qwen3-0.6B'                → 'Qwen-0.6B'
+          'Qwen/Qwen2.5-0.5B'              → 'Qwen-0.5B'
+          'meta-llama/Llama-3.2-1B-Instruct' → 'LLaMA-1B'
+          'google/gemma-2-2b'              → 'Gemma-2B'
+          'distilgpt2'                     → 'DistilGPT-2'
+          'gpt2-medium'                    → 'GPT-2-M'
+        """
+        name = path.split("/")[-1].lower()  # strip org prefix, lowercase for matching
+
+        # Exact-match friendly names (models without a size suffix)
+        _EXACT = {
+            "distilgpt2": "DistilGPT-2",
+            "gpt2":       "GPT-2",
+            "gpt2-medium":"GPT-2-M",
+            "gpt2-large": "GPT-2-L",
+            "gpt2-xl":    "GPT-2-XL",
         }
-        if name.lower() in _FRIENDLY:
-            return _FRIENDLY[name.lower()]
-        # Generic: keep the size token if present (e.g. "0.6B", "8B", "1B")
+        if name in _EXACT:
+            return _EXACT[name]
+
+        # Family prefix detection — prepend the architecture name to the size token
         import re
-        m = re.search(r"(\d[\d.]*[BbMm])", name)
-        return m.group(1).upper() if m else name
+        _FAMILIES = [
+            ("llama",   "LLaMA"),
+            ("qwen",    "Qwen"),
+            ("gemma",   "Gemma"),
+            ("mistral", "Mistral"),
+            ("phi",     "Phi"),
+            ("falcon",  "Falcon"),
+        ]
+        m_size = re.search(r"(\d[\d.]*[BbMm])", name)
+        size = m_size.group(1).upper() if m_size else None
+        for keyword, label in _FAMILIES:
+            if keyword in name and size:
+                return f"{label}-{size}"
+
+        # Fallback: size token only, or raw name
+        return size if size else path.split("/")[-1]
 
     return [
         {"draft": r[0], "target": r[1],
