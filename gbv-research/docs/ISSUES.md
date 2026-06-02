@@ -33,19 +33,15 @@
 
 ---
 
-## 3. GPT-2 BE Eval Not Supported (alpha only)
+## 3. GPT-2 BE Eval — FIXED (CompatCache adapter)
 
-**Symptom**: All BE modes (bv, gbv, traversal, specinfer, naive) crash with `AttributeError: 'GPT2LMHeadModel' object has no attribute 'model'` followed by cache format errors.
+**Was**: All BE modes crashed because the verifier assumed Qwen3-specific interfaces:
+1. KV cache: `.layers[i].keys/.values` — GPT-2 returns a legacy tuple
+2. Attention mask: `{"full_attention": tensor}` dict — GPT-2 needs raw 4D tensor
 
-**Root cause**: The verifier code (`verifiers/draft_generator.py`, `verifiers/utils.py`) is built on two Qwen3-specific interfaces:
-1. **Custom KV cache** — `.layers[i].keys/.values` accessed by `slice_cache()`, `expand_cache()`, and `target_tree_pass()`. GPT-2 returns a legacy tuple `((k1,v1), (k2,v2), ...)` which has no `.layers` attribute.
-2. **Custom tree attention mask** — `attention_mask={"full_attention": tensor}` passed in `target_tree_pass()`. GPT-2 expects a standard 4D tensor, not a dict.
+**Fix applied** (see commit history): Added `CompatCache` adapter class in `verifiers/utils.py`
+that normalises any model's `past_key_values` to `.layers[i].keys/.values` and reconstructs
+the model-native format for each forward call. Added `_attn_mask_for_model()` to detect
+whether the model expects a dict or tensor. GPT-2, LLaMA, Gemma and Qwen3 all supported.
 
-**Impact**: GPT-2 configs (`laptop_gpt2.yaml`, `server_gpt2.yaml`) evaluate with `modes: [alpha]` only. Alpha (token acceptance rate) is sufficient for convergence trend detection.
-
-**Alpha already works** — `alpha=0.1658` for untrained baseline, and improves with training. For proving "our loss > forward_kl", alpha curves across training steps are sufficient.
-
-**To fix later** (for publishable BE results on GPT-2):
-- Refactor `slice_cache()` and `expand_cache()` in `verifiers/utils.py` to handle both tuple and DynamicCache formats
-- Update `target_tree_pass()` to use architecture-specific attention mask format
-- Alternatively: require GPT-2 to use `config.use_cache=True` with explicit DynamicCache conversion
+**All 6 verifier modes now work for all model families.**

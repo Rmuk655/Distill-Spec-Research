@@ -71,13 +71,8 @@ health:
   early_stop_patience: 3
 
 evaluation:
-  # GPT-2 eval: alpha only.  BE modes (bv, gbv, traversal, specinfer, naive)
-  # require Qwen3's custom KV cache interface (.layers[i].keys/.values) and
-  # custom tree attention mask ({"full_attention": tensor}), neither of which
-  # GPT-2 supports.  Alpha measures token acceptance rate and is sufficient
-  # for convergence trend detection.  See docs/ISSUES.md for details.
-  modes: [alpha]
-  K_values: [1]
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3]
   temperatures: [1.0]
   L: 8
   n_prompts: 5

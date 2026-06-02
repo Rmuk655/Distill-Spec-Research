@@ -170,13 +170,106 @@ def load_models(
     return tok, p_model, q_model
 
 
+# ---------------------------------------------------------------------------
+# Architecture-agnostic KV-cache adapter
+# ---------------------------------------------------------------------------
+
+class _CacheLayer:
+    """Single-layer (key, value) pair with named attributes."""
+    __slots__ = ("keys", "values")
+    def __init__(self, k, v):
+        self.keys   = k
+        self.values = v
+
+
+class CompatCache:
+    """Wraps any model's past_key_values into a uniform .layers[i].keys/.values
+    interface so the verifier works with GPT-2, LLaMA, Gemma, etc. in addition
+    to Qwen3's native custom cache.
+
+    Input formats handled
+    ─────────────────────
+    • Qwen3 native cache  — already has .layers[i].keys/.values  → pass-through
+    • Legacy tuple         — ((k0,v0),(k1,v1),…) from GPT-2 etc. → wrapped
+    • HF DynamicCache      — .key_cache[i] / .value_cache[i]      → wrapped
+
+    After slice_cache() / expand_cache() modify .layers[i].keys in place,
+    call .to_model_format() to reconstruct the format the model expects before
+    the next forward() call.
+    """
+    def __init__(self, raw):
+        if isinstance(raw, CompatCache):
+            # Already wrapped — share layers (no copy)
+            self.layers = raw.layers
+            self._raw   = raw._raw
+            self._style = raw._style
+        elif hasattr(raw, "layers"):
+            # Qwen3-style native cache with .layers[i].keys/.values
+            self.layers = raw.layers
+            self._raw   = raw
+            self._style = "native"
+        elif isinstance(raw, (tuple, list)):
+            # Legacy tuple ((k0,v0),(k1,v1),…) — GPT-2, older HF models
+            self.layers = [_CacheLayer(k, v) for k, v in raw]
+            self._raw   = raw
+            self._style = "tuple"
+        elif hasattr(raw, "key_cache"):
+            # HuggingFace DynamicCache (.key_cache / .value_cache lists)
+            n = len(raw.key_cache)
+            self.layers = [_CacheLayer(raw.key_cache[i], raw.value_cache[i])
+                           for i in range(n)]
+            self._raw   = raw
+            self._style = "hf_dc"
+        else:
+            raise TypeError(f"CompatCache: unrecognised past_key_values type {type(raw)}")
+
+    def to_model_format(self):
+        """Reconstruct the format the model's forward() expects.
+
+        For native Qwen3 caches: returns the original object (the verifier
+        modifies .layers[i] in-place, so it stays consistent).
+        For tuple/HF caches: reconstructs from the (possibly modified) layers.
+        """
+        if self._style == "native":
+            return self._raw
+        if self._style == "tuple":
+            return tuple((l.keys, l.values) for l in self.layers)
+        # hf_dc: rebuild DynamicCache
+        try:
+            from transformers import DynamicCache as _DC
+            dc = _DC()
+            for l in self.layers:
+                dc.key_cache.append(l.keys)
+                dc.value_cache.append(l.values)
+            return dc
+        except Exception:
+            return tuple((l.keys, l.values) for l in self.layers)
+
+    def __iter__(self):
+        """Iterate as (keys, values) pairs per layer (for profiling code)."""
+        return iter((l.keys, l.values) for l in self.layers)
+
+
+def _attn_mask_for_model(model, mask_4d: torch.Tensor):
+    """Return the attention mask in the format model.forward() expects.
+
+    Qwen3:  attention_mask={"full_attention": tensor}  (custom dict)
+    Others: attention_mask=tensor  (standard 4D additive bias)
+    """
+    inner  = getattr(model, "model", None) or getattr(model, "transformer", None)
+    layers = getattr(inner, "layers", None) or getattr(inner, "h", None)
+    if layers and hasattr(layers[0], "attention_type"):
+        return {"full_attention": mask_4d}
+    return mask_4d
+
+
 """
 Takes in:
-    - cache: model KV-cache (DynamicCache), each KV tensor has shape (batch_sz, num_heads, context_len, head_dim)
+    - cache: model KV-cache (CompatCache), each KV tensor has shape (batch_sz, num_heads, context_len, head_dim)
     - batch_idx: list of indices to slice the batch_sz dimension along
     - token_idx: list of indices to slice the context_len dimension along
 Returns:
-    - cache: model KV-cache (DynamicCache), each KV tensor has shape (|batch_idx|, num_heads, |token_idx|, head_dim)
+    - cache: model KV-cache (CompatCache), each KV tensor has shape (|batch_idx|, num_heads, |token_idx|, head_dim)
 """
 def slice_cache(cache, batch_idx, token_idx):
     for layer_cache in cache.layers:

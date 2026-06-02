@@ -88,11 +88,13 @@ def speculative_decoding_loop(
     context_cached = context_cached.unsqueeze(0)
     context_init_len = context_cached.shape[-1]
 
-    # During the prefill phase, intialize target and draft KV caches.
+    # During the prefill phase, initialise target and draft KV caches.
+    # Wrap in CompatCache immediately so the verifier loop works with any
+    # architecture (Qwen3 native cache, GPT-2 tuple, HF DynamicCache).
     p_out = p_model(context_cached, use_cache=True, return_dict=True)
     q_out = q_model(context_cached, use_cache=True, return_dict=True)
-    p_cache = p_out.past_key_values
-    q_cache = q_out.past_key_values
+    p_cache = CompatCache(p_out.past_key_values)
+    q_cache = CompatCache(q_out.past_key_values)
 
     # Sample first pending token from the last target distribution.
     p_probs_last = F.softmax(p_out.logits[:, -1, :] / p_temp, dim=-1)

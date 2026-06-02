@@ -844,14 +844,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     if load_in_4bit:
         _modes = "bv,gbv,traversal,specinfer,naive"
 
-    # Model-family BE eval restriction — some families don't support the
-    # Qwen3-specific KV cache interface (.layers[i].keys/.values) or the
-    # custom tree attention mask ({"full_attention": tensor}) that the BE
-    # verifier requires.  For these families, eval is alpha-only even in
-    # smoke mode — running BE would always fail, adding noise not signal.
-    # See docs/ISSUES.md §3 for the root cause and fix path.
+    # All families now support BE eval via CompatCache + _attn_mask_for_model().
+    # (The previous per-family restriction was removed once the adapter was implemented.)
+    # If a new family's BE eval is confirmed broken, add it to _BE_UNSUPPORTED_FAMILIES:
+    _BE_UNSUPPORTED_FAMILIES: set = set()   # currently empty — all families supported
     _h_early = train_hparams or {}
-    _BE_UNSUPPORTED_FAMILIES = {"gpt2"}   # add others here when confirmed
     if _h_early.get("model_family", "qwen") in _BE_UNSUPPORTED_FAMILIES:
         _modes = "alpha"
 

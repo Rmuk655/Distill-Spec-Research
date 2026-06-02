@@ -38,6 +38,9 @@ def iid_draft(
     # Initialize paths to start at pending token.
     q_paths = [[context_pending[0, 0].item()] for _ in range(K)]
 
+    # Wrap cache in CompatCache so slice_cache/expand_cache work regardless of
+    # whether this is a Qwen3 native cache, a GPT-2 tuple, or an HF DynamicCache.
+    q_cache = CompatCache(q_cache)
     # Expand cache and tokens to batch size K for batched decoding.
     q_cache = expand_cache(q_cache, K)
     next_tokens = context_pending.expand(K, 1)
@@ -48,9 +51,9 @@ def iid_draft(
             next_tokens,
             use_cache=True,
             return_dict=True,
-            past_key_values=q_cache,
+            past_key_values=q_cache.to_model_format(),   # ← model-native format
         )
-        q_cache = q_out.past_key_values
+        q_cache = CompatCache(q_out.past_key_values)     # ← wrap result
         q_probs = F.softmax(q_out.logits[:, -1, :] / q_temp, dim=-1)
         next_tokens = torch.multinomial(q_probs, num_samples=1)
 
@@ -65,9 +68,9 @@ def iid_draft(
         next_tokens,
         use_cache=True,
         return_dict=True,
-        past_key_values=q_cache,
+        past_key_values=q_cache.to_model_format(),       # ← model-native format
     )
-    q_cache = q_out.past_key_values
+    q_cache = CompatCache(q_out.past_key_values)         # ← wrap result
     return q_paths, q_cache, q_probs_dict
 
 
@@ -107,6 +110,9 @@ def target_tree_pass(
                 q_tokens.append(q_token)
     q_tokens = torch.LongTensor(q_tokens).to(device).unsqueeze(0)
 
+    # Wrap cache so .layers[i].keys/.values is available regardless of architecture.
+    p_cache = CompatCache(p_cache)
+
     # Form attn mask to perform the forward pass on draft tree prefixes. Initially, draft tree nodes attend to only the cached tokens.
     cached_len = p_cache.layers[0].keys.shape[-2]
     added_len = q_tokens.shape[-1]
@@ -121,14 +127,17 @@ def target_tree_pass(
     mask = mask.unsqueeze(0).unsqueeze(0)
 
     # Perform the batched target model forward pass with the tree attn mask, updating the target KV-cache.
+    # _attn_mask_for_model() selects the right format:
+    #   Qwen3: {"full_attention": tensor}  (custom dict with named key)
+    #   GPT-2 / LLaMA / others: raw 4D tensor (standard additive bias mask)
     p_out = p_model(
         q_tokens,
         use_cache=True,
         return_dict=True,
-        past_key_values=p_cache,
-        attention_mask={"full_attention": mask},
+        past_key_values=p_cache.to_model_format(),       # ← model-native format
+        attention_mask=_attn_mask_for_model(p_model, mask),  # ← architecture-aware
     )
-    p_cache = p_out.past_key_values
+    p_cache = CompatCache(p_out.past_key_values)         # ← wrap result
 
     # Update the target probability info.
     p_probs = F.softmax(p_out.logits / p_temp, dim=-1)
