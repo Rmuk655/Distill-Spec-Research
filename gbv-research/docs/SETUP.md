@@ -134,12 +134,29 @@ python orchestration/experiment.py --config laptop --smoke --yes
 ```
 Exercises every loss function and every verifier at reduced scale.
 
-### Option B — GPT-2 CPU smoke (~15-20 min, no GPU needed)
+### Option B — GPT-2 GPU smoke (~15-20 min, laptop GPU)
 ```bash
 python orchestration/experiment.py --config laptop_gpt2 --smoke --yes
 ```
-Useful when GPU is occupied or unavailable. ebe/online losses are excluded
-(see `docs/ISSUES.md`).
+Runs distilgpt2 → gpt2-medium on the laptop GPU. Fast, validates the GPT-2
+code path. ebe/online losses are excluded (see `docs/ISSUES.md`).
+
+### Option B2 — GPT-2 CPU-path smoke (~30-45 min, forces CPU on any machine)
+```bash
+python orchestration/experiment.py --config server_gpt2 --smoke --yes --device cpu
+```
+**The right smoke before running the ATS/AIP CPU server.** Forces CPU even
+when a GPU is present (`--device cpu`), so you exercise the **exact same code
+path** that runs on the CPU-only ATS server. Run this on your laptop first.
+
+Config names map to hardware+device, not platforms:
+| Config | device | hw_tier | Intended for |
+|--------|--------|---------|-------------|
+| `laptop_gpt2` | cuda | laptop | Laptop GPU — fast GPT-2 development |
+| `server_gpt2` | cpu | cpu | ATS/AIP CPU server (and local CPU smoke) |
+
+`--device` can override any config: `--device cpu` forces CPU, `--device cuda`
+forces GPU, `--device auto` (default) detects automatically.
 
 ### Option C — LLaMA smoke (~20-30 min, GPU, research-grade pair)
 ```bash

@@ -292,11 +292,18 @@ if __name__ == "__main__":
         from core.model_families import get_family as _get_family
         _family = _get_family(args.model_family)
     except Exception as _e:
-        # Graceful fallback: default to Qwen3 behaviour so legacy calls work.
-        print(f"[runner] WARNING: could not load family '{args.model_family}': {_e}. "
-              f"Defaulting to Qwen3 tree_attn_mask (dict format).")
+        # Graceful fallback when core.model_families can't be imported.
+        # CRITICAL: the mask format MUST match the family — the old hardcoded
+        # {"full_attention": m} fallback always used Qwen3's dict format, which
+        # crashes non-Qwen models ("'dict' object has no attribute 'ndim'").
+        # Now: only Qwen needs the dict; everything else gets the raw 4D tensor.
+        _req_family = (args.model_family or "").lower()
+        _needs_dict  = "qwen" in _req_family   # Qwen3 needs {"full_attention": tensor}
+        print(f"[runner] WARNING: could not load family '{args.model_family}' ({_e}). "
+              f"Using {'dict' if _needs_dict else 'raw-tensor'} tree_attn_mask fallback.")
         class _FallbackFamily:
-            def tree_attn_mask(self, m): return {"full_attention": m}
+            def tree_attn_mask(self, m):
+                return {"full_attention": m} if _needs_dict else m
         _family = _FallbackFamily()
 
     # Resolve batch vs single-value args.
