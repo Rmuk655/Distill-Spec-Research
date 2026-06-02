@@ -579,21 +579,33 @@ def _models_ready_for_offline(draft: str, target: str) -> tuple:
 def _hw_tier_from_config(config_slug: str) -> str:
     """Derive the DB hw_tier tag from the config name.
 
+    hw_tier tags describe the HARDWARE, not the notebook platform:
+      'laptop'     — laptop GPU (4 GB VRAM, small teacher)
+      'colab_lite' — T4 GPU with 1.7B teacher
+      'colab'      — T4 GPU with 8B teacher (4-bit NF4)
+      'a100'       — A100 GPU with 8B teacher (BF16)
+
+    Platform → hardware mapping:
+      Kaggle (T4 x2)   → 'colab'      (same T4 hardware as Colab free tier)
+      Colab free (T4)  → 'colab'
+      Colab Pro (A100) → 'a100'
+      Modal (T4)       → 'colab'
+      Modal (A100)     → 'a100'
+      AIP (A100)       → 'a100'
+
     Mapping (order matters — colab_lite must be checked before colab):
-      *colab_lite* → 'colab_lite'  (1.7B teacher)
-      *a100*       → 'a100'        (8B teacher, BF16)
-      *colab*      → 'colab'       (8B teacher, 4-bit)
-      anything else→ 'laptop'      (small teacher, smoke tests)
+      *colab_lite*         → 'colab_lite'
+      *a100* or *aip*      → 'a100'
+      *colab* or *kaggle*  → 'colab'  (Kaggle=T4, same tier as Colab)
+      anything else        → 'laptop'
     """
     s = config_slug.lower()
     if "colab_lite" in s:
         return "colab_lite"
-    if "a100" in s:
+    if "a100" in s or "aip" in s:
         return "a100"
-    if "colab" in s:
-        return "colab"
-    if "kaggle" in s:
-        return "kaggle"
+    if "colab" in s or "kaggle" in s:
+        return "colab"   # Kaggle runs on T4 — same hardware tier as Colab
     return "laptop"
 
 

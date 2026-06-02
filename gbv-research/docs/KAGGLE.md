@@ -364,12 +364,21 @@ trainer.py: error: argument --hw_tier: invalid choice: 'kaggle'
              (choose from laptop, colab_lite, colab, a100)
 ```
 
-**Cause:** The `--hw_tier` argparse choice list in `trainer.py` / `evaluate.py` was missing
-`'kaggle'`. Fixed in commit: add `'kaggle'` to the choices tuple.
+**Cause:** `_hw_tier_from_config()` in `experiment.py` was incorrectly mapping the Kaggle
+config name → `"kaggle"` as the hw_tier. But `hw_tier` describes **hardware**, not the
+notebook platform — Kaggle runs on T4 hardware, which is the same as `"colab"`.
 
-**Fix:** Pull the latest code (Cell 0 or Cell 1 auto-pulls) and re-run. If you
-already have the old code checked out, `git pull` inside the notebook or use `SMOKE=True`
-first to confirm the fix is present before a full run.
+**Fix:** Pull the latest code (Cell 0 or Cell 1 auto-pulls from `origin/main`). The mapping
+now correctly maps `kaggle` config → `colab` hw_tier (T4 hardware). No trainer.py changes
+needed — `kaggle` was never a valid hw_tier and should not be one.
+
+**hw_tier is hardware, not platform:**
+| hw_tier | Hardware | Used by |
+|---------|----------|---------|
+| `laptop` | 4 GB laptop GPU | Local dev |
+| `colab_lite` | T4, small teacher | Quick checks |
+| `colab` | T4, 8B NF4 teacher | **Kaggle** and Colab free |
+| `a100` | A100, 8B BF16 teacher | Colab Pro, AIP, server |
 
 ---
 
