@@ -2941,7 +2941,9 @@ async function loadTrainingCurves() {
       <p class="text-muted small mb-0">Training loss curves appear during Phase 2
       (train_kl_gsm8k and train_ebe_gsm8k steps).
       Train=solid line · Val=dashed line.
-      If val rises while train falls → overfitting red flag.</p></div>`;
+      If val rises while train falls → overfitting red flag (flat losses only).
+      Tree losses (*_tree) show train=tree objective vs val=forward_kl PROXY —
+      different metrics, so they are exempt from overfitting/divergence flags.</p></div>`;
     return;
   }
 
@@ -2976,11 +2978,24 @@ async function loadTrainingCurves() {
 
     if (!trainRows.length) return;
 
-    // Overfitting detection for this label
+    // Tree losses get NEITHER overfitting nor divergence flags. Two reasons
+    // (both mirror the trainer-side guard):
+    //   1. Their val_loss is a forward_kl PROXY, not the tree objective — so
+    //      "val rising while train falls" compares two different metrics on
+    //      different scales (train ~ -0.8, val ~ 2.2) and is meaningless.
+    //   2. The tree/EBE objective is bounded and NEGATIVE and oscillates
+    //      step-to-step (e.g. bv_tree: -1.0, -0.67, -1.59, -0.36, ...), so a
+    //      naive first-vs-last comparison reads pure noise as "+24% diverging".
+    // Flagging them produced a guaranteed-false "Overfitting detected" banner
+    // for every tree loss. Skip the flags; the curves still render.
+    const isProxyVal = /_tree/i.test(label);
+
+    // Overfitting detection for this label (flat losses only — same metric on
+    // train and val, monotonic, so a rising val genuinely means overfitting).
     const labelMaxTsMs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
     const isCurrentRun  = labelMaxTsMs >= globalMaxTsMs - 2000;
     let overfit = false;
-    if (valRows.length >= 2 && isCurrentRun) {
+    if (!isProxyVal && valRows.length >= 2 && isCurrentRun) {
       const minVal  = Math.min(...valRows.map(r => r.loss));
       const lastVal = valRows[valRows.length - 1].loss;
       if (lastVal > minVal + 0.10 * Math.abs(minVal)) {
@@ -2989,14 +3004,17 @@ async function loadTrainingCurves() {
       }
     }
 
-    // Divergence / convergence trend over training
-    // All losses should go DOWN (lower = better for KL/JSD/L1/rev_kl;
-    // more negative = better for EBE). If final > initial: diverging.
+    // Divergence / convergence trend over training (flat losses only).
+    // Uses a robust mean-of-first-third vs mean-of-last-third instead of single
+    // noisy endpoints so a one-off spike does not read as a trend.
     let trendBadge = '';
-    if (trainRows.length >= 5) {
-      const firstLoss = trainRows[0].loss;
-      const lastLoss  = trainRows[trainRows.length - 1].loss;
-      const pctChange = (lastLoss - firstLoss) / Math.abs(firstLoss) * 100;
+    if (!isProxyVal && trainRows.length >= 6) {
+      const n = trainRows.length;
+      const k = Math.max(1, Math.floor(n / 3));
+      const mean = arr => arr.reduce((s, r) => s + r.loss, 0) / arr.length;
+      const firstMean = mean(trainRows.slice(0, k));
+      const lastMean  = mean(trainRows.slice(n - k));
+      const pctChange = (lastMean - firstMean) / Math.abs(firstMean) * 100;
       if (pctChange > 5) {
         trendBadge = `<span class="badge bg-danger ms-2" style="font-size:0.7em">▲ diverging +${pctChange.toFixed(1)}%</span>`;
         redFlagLabels.push(label + ' (diverging)');
