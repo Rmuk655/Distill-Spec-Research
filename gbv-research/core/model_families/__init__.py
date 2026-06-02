@@ -16,6 +16,7 @@ To add a new family:
 
 from .base import ModelFamily
 from .gpt2 import FAMILY as _gpt2
+from .llama import FAMILY as _llama
 from .qwen import FAMILY as _qwen
 from .gemma import FAMILY as _gemma
 
@@ -23,6 +24,7 @@ from .gemma import FAMILY as _gemma
 # Keys must match the --model_family CLI argument value.
 FAMILY_REGISTRY: dict[str, ModelFamily] = {
     "gpt2":  _gpt2,
+    "llama": _llama,
     "qwen":  _qwen,
     "gemma": _gemma,
 }

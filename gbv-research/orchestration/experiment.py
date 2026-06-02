@@ -205,20 +205,23 @@ def _acquire_lock():
 
 CONFIGS = {
     "laptop": {
-        "draft":  "Qwen/Qwen2.5-0.5B",
-        "target": "Qwen/Qwen3-0.6B",
-        "desc":   "Laptop/low-VRAM: Qwen2.5-0.5B draft -> Qwen3-0.6B target",
+        "draft":        "Qwen/Qwen2.5-0.5B",
+        "target":       "Qwen/Qwen3-0.6B",
+        "model_family": "qwen",
+        "desc":         "Laptop/low-VRAM: Qwen2.5-0.5B draft -> Qwen3-0.6B target",
     },
     "server": {
-        "draft":  "Qwen/Qwen3-0.6B",
-        "target": "Qwen/Qwen3-8B",
-        "desc":   "Server/A100: Qwen3-0.6B draft -> Qwen3-8B target",
+        "draft":        "Qwen/Qwen3-0.6B",
+        "target":       "Qwen/Qwen3-8B",
+        "model_family": "qwen",
+        "desc":         "Server/A100: Qwen3-0.6B draft -> Qwen3-8B target",
         # A100/3090 (24 GB+): 8B in bfloat16 fits fine — no quantisation needed.
     },
     "colab": {
-        "draft":  "Qwen/Qwen3-0.6B",
-        "target": "Qwen/Qwen3-8B",
-        "desc":   "Google Colab free T4 (15 GB): 8B teacher in 4-bit NF4 + 0.6B draft in bfloat16",
+        "draft":        "Qwen/Qwen3-0.6B",
+        "target":       "Qwen/Qwen3-8B",
+        "model_family": "qwen",
+        "desc":         "Google Colab free T4 (15 GB): 8B teacher in 4-bit NF4 + 0.6B draft in bfloat16",
         # Free Colab T4 has 15 GB VRAM.  Qwen3-8B in bfloat16 = ~16 GB → OOM.
         # Loading the frozen teacher in 4-bit NF4 (bitsandbytes QLoRA) reduces it
         # to ~5 GB; total with draft + activations ≈ 8–9 GB → comfortable T4 fit.
@@ -400,6 +403,12 @@ def _load_config_yaml(config_name: str) -> dict:
             out["draft"] = models_cfg["draft"]
         if models_cfg.get("target"):
             out["target"] = models_cfg["target"]
+        # models.family → model_family: which ModelFamily subclass to use for LoRA
+        # targets, temperature recovery, log-prob clamping, and chat templates.
+        # Must match a key in core/model_families/FAMILY_REGISTRY.
+        # Every YAML config should set this; falls back to "qwen" in _train_hargs.
+        if models_cfg.get("family"):
+            out["model_family"] = models_cfg["family"]
         # hardware.load_in_4bit — forwarded so YAML profiles control 4-bit loading.
         if "load_in_4bit" in hardware:
             out["load_in_4bit"] = hardware["load_in_4bit"]
@@ -835,6 +844,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # in _kl_at_positions) so the main remaining constraint is the KV cache.
     _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
     _train_hargs = [
+        # model_family: drives LoRA target modules, temperature recovery, log-prob
+        # clamping, and chat-template selection in trainer.py.  Comes from
+        # YAML models.family (via _yaml_cfg["model_family"]) or CONFIGS preset.
+        # Fall back to "qwen" so legacy runs without a YAML models.family are safe.
+        "--model_family",    str(_h.get("model_family", cfg.get("model_family", "qwen"))),
         "--lr",              str(_h.get("lr", 3e-5)),
         "--lora_r",          str(_h.get("lora_r", 8)),
         "--lora_alpha",      str(_h.get("lora_alpha", 16)),

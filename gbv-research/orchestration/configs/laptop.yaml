@@ -1,5 +1,13 @@
 # Laptop configuration — code verification only (no trend detection)
-# Hardware: RTX 500 Ada, 6 GB VRAM
+#
+# Hardware (Mukund's machine):
+#   CPU:  Intel (2.39 GHz observed, ~26% at idle)
+#   RAM:  64 GB DDR5 5600 MT/s SODIMM (2/2 slots used)
+#   GPU0: NVIDIA RTX 500 Ada Generation, 6 GB VRAM
+#   GPU1: Intel Arc Pro Graphics (iGPU — ignored by training scripts)
+#   NPU:  Intel AI Boost (not used)
+#   SSD:  NVMe (Disk 0)
+#
 # Draft: Qwen2.5-0.5B (0.5B, ~1 GB BF16)   Teacher: Qwen3-0.6B (0.6B, ~1.2 GB BF16)
 # Total VRAM: ~3 GB.  No 4-bit quantization needed.
 #
