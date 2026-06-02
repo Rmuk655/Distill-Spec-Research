@@ -105,6 +105,22 @@ tree_training:
   tree_L: 8                     # draft block depth (max speculative tokens per path)
 
 experiment:
+  # Pipeline ordering — controls how training, merging, and evaluation are sequenced.
+  #
+  # parallel_groups (default, laptop/kaggle):
+  #   ALL training → ALL merges → ALL evals
+  #   Good for: code exercisers (laptop), Kaggle (use --losses to pick one loss per session)
+  #
+  # per_loss (A100/persistent servers):
+  #   For each loss: train → merge → eval GSM8K → [eval multi-DS]
+  #   Results appear after each loss, not after all losses complete.
+  #   On a persistent server, you can see kl_tree results before bv_tree trains.
+  #   Use: python experiment.py --config a100 --losses kl_tree → results appear,
+  #        python experiment.py --config a100 --losses bv_tree → next, etc.
+  #   NOTE: true per_loss sequential mode requires --losses one at a time for now.
+  #         A single run without --losses still does parallel_groups ordering.
+  pipeline_ordering: per_loss   # per_loss recommended for A100 / persistent servers
+
   # Loss family — covers the full 8×8 cross-pair matrix in Phase 3:
   #
   # Flat (token-level, off-policy):

@@ -103,7 +103,25 @@ verify_latency_ms, notes, experiment_tag, hw_tier, seed, git_sha, wandb_url`.
 
 > For hardware tier configs, step-by-step run commands, and W&B group structure, see `deploy/PROGRESSION.md`. For compute costs and tier selection, see `docs/COMPUTE.md`.
 
-**Key principle: always use 8B teacher for any research decision.** The 1.7B→0.6B gap (~3×) is too small — loss rankings established there are not reliable for predicting 8B→0.6B (~13×) behaviour. Only T4-class hardware with the 8B NF4 teacher (Kaggle T4x2 or Modal T4) is the minimum valid platform for research direction; an A100 with 8B BF16 is required for publication confirmation.
+**Key principle: always use 8B teacher for any research decision.**
+
+| hw_tier | Config | Hardware | Teacher | Research-valid? | Purpose |
+|---|---|---|---|---|---|
+| `laptop` | `laptop.yaml` | RTX 500 Ada 4GB | Qwen3-0.6B | **No** — teacher ≈ draft | Crash-check: every code path runs |
+| `cpu` | `server_gpt2.yaml` | 128GB RAM, CPU-only (ATS Cloud) | GPT-2-M (355M) | **No** — too small | Convergence proof on GPT-2; shows method works in principle |
+| `colab` | `kaggle.yaml` | T4 x2 (Kaggle/Modal/Lightning) | Qwen3-8B NF4 | **✓ Yes** | Exploration: rank losses, tune LR, kill losers |
+| `a100` | `a100.yaml` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes** | Publication confirmation only |
+
+**Per-loss iteration** (works on all persistent platforms):
+```bash
+# Run one loss at a time — baseline runs once, --skip_existing resumes:
+python orchestration/experiment.py --config a100 --losses kl --yes
+python orchestration/experiment.py --config a100 --losses bv_tree --yes
+# Each invocation: train → merge → eval for that loss only
+```
+
+**Kaggle constraint:** T4 x2 burns 2× quota (~15 effective h/wk) → 1 loss per session practical.
+Use `LOSSES = "kl"` in Cell 0, change each session. See `docs/KAGGLE.md`.
 
 ### 0.6 Existing statistical rigor — what EXISTS vs MISSING
 
