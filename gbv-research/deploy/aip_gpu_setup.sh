@@ -65,9 +65,20 @@ fi
 echo "[1/5] Pulling latest code..."
 git -C "${REPO_DIR}" pull --ff-only 2>/dev/null || echo "      (already up to date or skip)"
 
-# ── Install Python dependencies ───────────────────────────────────────────────
-echo "[2/5] Installing dependencies..."
+# ── Python environment ────────────────────────────────────────────────────────
+# Use a virtual environment to avoid permission issues with system Python.
+# The venv lives at $STORAGE/venv so it persists across restarts.
+VENV_DIR="${STORAGE}/venv"
+if [ ! -d "${VENV_DIR}" ]; then
+    echo "[2/5] Creating virtual environment at ${VENV_DIR}..."
+    python3 -m venv "${VENV_DIR}"
+else
+    echo "[2/5] Using existing venv at ${VENV_DIR}"
+fi
+source "${VENV_DIR}/bin/activate"
+echo "      Python: $(python --version)  ($(which python))"
 
+# Install Python dependencies ─────────────────────────────────────────────────
 pip install --quiet --upgrade pip
 
 pip install --quiet \
@@ -95,9 +106,10 @@ export HF_HOME="${HF_CACHE}"
 export TRANSFORMERS_CACHE="${HF_CACHE}"
 unset TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE HF_HUB_OFFLINE 2>/dev/null || true
 
-# Persist env across new terminals
+# Persist env across new terminals — includes venv activation
 ENVFILE="${HOME}/.specdist_env"
 cat > "${ENVFILE}" <<EOF
+source "${VENV_DIR}/bin/activate"
 export HF_HOME="${HF_CACHE}"
 export TRANSFORMERS_CACHE="${HF_CACHE}"
 export STORAGE_ROOT="${STORAGE}"
