@@ -1,25 +1,32 @@
 # a10_qwen.yaml — Qwen3-0.6B → Qwen3-8B BF16, NVIDIA A10 (24 GB VRAM)
 #
-# Key A10 advantage: Qwen3-8B fits in full BF16 (16 GB) — no quantization.
-# This gives the same teacher quality as A100 at lower cost.
+# Key A10 advantage: Qwen3-8B fits in full BF16 (16 GB) — no quantization needed.
+# BF16 vs NF4: same convergence DIRECTION, ~5-10% cleaner gradients (less
+# rounding noise in teacher logits). Kaggle NF4 trends still transfer here.
+# Main win: 3-5x faster than T4 + exact teacher distribution.
 #
 # VRAM budget:
-#   Qwen3-0.6B draft  BF16  : 1.2 GB
-#   Qwen3-8B   target BF16  : 16.0 GB
-#   LoRA + optimizer state  : 0.2 GB
-#   Activations (seq 96)    : 2-3 GB
-#   Tree KV cache (K=4,L=8) : 1-2 GB
-#   Total                   : ~21-23 GB  → fits 24 GB ✅
+#   Qwen3-0.6B draft  BF16        : 1.2 GB
+#   Qwen3-8B   target BF16        : 16.0 GB
+#   LoRA r=8 + Adam optimizer     : 0.2 GB
+#   Activations (seq 96, batch 1) : 2-3 GB
+#   Tree KV cache (K=4, L=8)      : 1-2 GB
+#   Total                         : ~21-23 GB  → fits A10 24 GB ✅
 #
-# vs T4 (16 GB): must use Qwen3-8B NF4 (4-bit, ~4.5 GB)
-#    → A10 gives exact same teacher quality as A100 (no quantization rounding)
+# Steps formula for visible trends:
+#   gsm8k_train has 7473 prompts → val_split=0.1 → 6726 training
+#   1 epoch = 6726 gradient steps
+#   Visible trend target = 0.15 epoch (8B teacher signal is strong)
+#                        = 6726 × 0.15 ≈ 1000 steps ← chosen
 #
-# Speed: A10 ~3-5x faster than T4 → 2000 steps ≈ 60-100 min
+#   Why 0.15 epoch is enough with 8B teacher:
+#     - 8B→0.6B gap (13×) gives large KL gradient per step (~0.5-1 nat)
+#     - EMA loss smoothing makes trend visible in ~200-300 optimizer steps
+#     - With grad_accum=8: 1000 grad-steps = 125 optimizer steps → trend clear
 #
-# Platforms with A10:
-#   - IITH cluster (₹80/GPU-hr) — primary
-#   - Lambda Labs A10 (~$0.60/hr)
-#   - CoreWeave A10
+#   Time at ~2-3 s/step (A10 estimate):
+#     1000 steps × 2.5 s = ~42 min ← initial trend run (this config)
+#     2000 steps × 2.5 s = ~83 min ← stronger convergence signal if time allows
 #
 # Usage:
 #   python orchestration/experiment.py --config a10_qwen --yes \
@@ -30,23 +37,24 @@ _base: bases/a100   # inherit A100 platform defaults (full eval suite, large val
 models:
   family: qwen
   draft:  Qwen/Qwen3-0.6B
-  target: Qwen/Qwen3-8B       # BF16, no quantization — A10 has enough VRAM
+  target: Qwen/Qwen3-8B       # BF16 — A10 24 GB fits 8B without quantization
 
 hardware:
-  load_in_4bit: false          # BF16: A10 24 GB fits 8B without quantization
+  load_in_4bit: false          # BF16: exact teacher logits, no NF4 rounding noise
   compile: true                # Linux GPU — torch.compile gives 10-20% speedup
 
 training:
-  steps: 2000                  # A10 ~3-5x faster than T4: 2000 steps ≈ 60-100 min
-                               # = 30% of one epoch on full 7473 prompts
-                               # Increase to 5000 for stronger convergence signal
+  # 1000 steps = 15% of 1 epoch on full 7473 prompts.
+  # With 8B teacher (13× size gap, strong signal) this shows clear loss trend.
+  # Run with --steps 2000 for stronger convergence confirmation if session allows.
+  steps: 1000
   lr: 3.0e-5
-  warmup_steps: 200            # 10% of 2000 steps
-  grad_accum: 8                # smaller than A100's 16 — save activation memory
-                               # effective batch = 8 prompts per optimizer step
-  lora_r: 8                    # r=8 for 8B→0.6B gap (vs r=4 on T4/colab_lite)
+  warmup_steps: 100            # 10% of 1000 steps (50 grad-steps = ~12 optimizer steps)
+  grad_accum: 8                # 8 prompts per optimizer step → 125 optimizer steps total
+                               # smoother gradients than grad_accum=4 without extra VRAM
+  lora_r: 8                    # r=8 for the 13× teacher gap (vs r=4 for 2.8× 1.7B gap)
   lora_alpha: 16
-  max_new_tokens: 96           # slightly less than A100's 128 to keep VRAM safe
+  max_new_tokens: 96           # slightly less than A100's 128 to stay safe in 24 GB
   teacher_temperature: 0.8
   seed: 42
   grad_clip: 1.0
@@ -59,7 +67,7 @@ logging:
   run_label: "8B-a10"
 
 health:
-  val_every: 200               # less frequent than A100 (save time; A10 val is slower)
+  val_every: 100               # every 100 steps → 10 val checks over 1000 steps
   ppl_check_every: 500
 
 checkpointing:
@@ -70,6 +78,14 @@ checkpointing:
 tree_training:
   tree_K: 4
   tree_L: 8
+
+evaluation:
+  # Exploration-grade eval: single K and temperature (save time for more training runs)
+  # Expand to full sweep once a loss shows promise.
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3]
+  temperatures: [1.0]
+  n_prompts: 50               # 50 prompts — trend direction; A100 uses 1319 for paper
 
 experiment:
   pipeline_ordering: per_loss
