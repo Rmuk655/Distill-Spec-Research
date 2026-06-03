@@ -79,8 +79,12 @@ codebases. All active research code lives in `gbv-research/`.
     │   └── training_dashboard.py  ← web UI; reads db/results.db
     └── db/                   ← all generated outputs (gitignored)
         ├── checkpoints/      ← LoRA adapters + merged models
+        │   └── kl-gsm8k-{pair_tag}/   ← e.g. kl-gsm8k-dg2-g2m/ or kl-gsm8k-q0.6b-q8b/
         ├── results.db        ← SQLite eval results
-        └── logs/             ← pipeline_output.log, be_progress.log
+        └── logs/
+            └── {config}-{pair_tag}/   ← e.g. laptop_gpt2-dg2-g2m/
+                ├── pipeline_output.log  ← ALL output (startup + steps + eval)
+                └── be_progress.log      ← BE eval tqdm detail
 ```
 
 **Integration pattern**: `experiment.py` launches `algorithms/distillspec_gbv/trainer.py`
@@ -149,9 +153,10 @@ Four families are registered in `core/model_families/FAMILY_REGISTRY`:
 - Qwen3-8B: NO (~16 GB BF16 → OOM)
 
 **Configs:**
-- `laptop` — Qwen, GPU, code exerciser (weak signal: 0.5B→0.6B)
-- `laptop_gpt2` — GPT-2, CPU, convergence proof (no GPU credits needed)
-- `laptop_llama` — LLaMA 1B→3B, GPU, research-grade signal
+- `laptop_qwen` — Qwen 0.5B→0.6B, GPU, crash-test only (teacher ≈ draft → no signal)
+- `laptop_gpt2` — GPT-2, GPU or CPU, convergence proof (4.3× size gap, real signal)
+- `laptop_llama` — LLaMA 1B→3B, GPU, research-grade signal (3× gap, HF gated)
+- `server_gpt2` — GPT-2, CPU-only, ATS Cloud convergence run (no GPU needed)
 
 ### ATS Cloud (Adobe internal — CPU only, free)
 - 128 GB RAM, 2-socket CPU, no GPU

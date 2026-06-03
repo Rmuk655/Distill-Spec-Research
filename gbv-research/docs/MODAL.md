@@ -1,9 +1,15 @@
 # Modal Setup Guide — SpecDist on T4 (Phase-1 exploration)
 
-[Modal](https://modal.com) gives every account **$30 / month of free compute credit**.
-This guide runs the SpecDist **Phase-1 exploration** pipeline on an **on-demand T4**
-that you pay for only while it runs (per-second billing) — ideal for short, bursty
-research iterations (~50 T4-hours on the $30 credit).
+> **⚠️ CREDIT WARNING (June 2026): Modal now offers only $1 free credit**, not the $30
+> previously advertised. The $1 credit covers approximately **1–2 minutes of T4 time**.
+> Modal is **not viable for full research runs**. Use it only for a single targeted
+> smoke test or short ablation. For primary compute:
+> - **Tier 2 exploration (T4)**: use Kaggle (free quota) or Lightning AI (free credits)
+> - **A100 confirmation**: use **IITH cluster at ₹80/GPU-hr** (~$0.94/hr) — best value
+
+[Modal](https://modal.com) gives every new account a small free compute credit.
+This guide documents the SpecDist pipeline on an **on-demand T4** that you pay for
+only while it runs (per-second billing).
 
 It uses `deploy/modal_app.py`, a **pure launcher** that builds a GPU image, mounts a
 persistent Volume, clones the repo, and invokes the **same CLI** the Kaggle bootstrap
@@ -19,19 +25,25 @@ exactly like the Kaggle bootstrap.
 
 ---
 
-## Cost — budget against your $30 credit
+## Cost — real credit situation (June 2026)
 
-| GPU (Modal) | ~Price / hour | What it's for |
-|---|---|---|
-| **T4 (16 GB)** | **≈ $0.59 / h** | Phase-1 exploration (default) — `profiles/train_one_loss`, `profiles/tree_variant_week` |
-| A100 (40 GB) | ≈ $5.30 / h | Not used on Modal — use IITH cluster for A100 confirmation runs |
-| A100-80GB | ≈ $7+ / h | Not used on Modal — use IITH cluster |
+| GPU (Modal) | ~Price / hour | Effective free budget | Use it for |
+|---|---|---|---|
+| **T4 (16 GB)** | **≈ $0.59 / h** | **~1–2 min on $1 credit** | One smoke test only |
+| A100 (40 GB) | ≈ $5.30 / h | **~10 min on $1 credit** | Not viable — use IITH |
+| A100-80GB | ≈ $7+ / h | ~8 min | Not viable — use IITH |
 
 Billing is **per second** and you are charged **only while the function runs** (image
-build is free, idle time is free). T4 at $0.59/h means the **$30 credit ≈ 50 T4-hours**.
+build is free, idle time is free). **With $1 free credit, any non-trivial run requires
+a payment method on file.**
 
-> **Always run `--smoke` first.** It costs a few minutes of T4 time and catches
-> setup/config errors before you commit hours of credit to a full run.
+**Better alternatives for actual research:**
+- **Kaggle T4 x2**: free, ~30 GPU-hr/week (burns 2× quota, so ~15 effective hr)
+- **Lightning AI**: free monthly credits, T4 available
+- **IITH A100**: ₹80/GPU-hr (~$0.94/hr) — use for all A100 confirmation runs
+- **GCP $300 trial**: T4 available after GPU quota request
+
+> **Always run `--smoke` first.** Catches setup errors before you commit paid time.
 
 ---
 

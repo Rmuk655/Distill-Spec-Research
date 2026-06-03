@@ -30,7 +30,7 @@ The novel contribution is the EBE loss + tree verification combined.
 
 DistillSpec was implemented by **simplifying the OSD codebase** (https://github.com/LiuXiaoxuanPKU/OSD) per the scope spec instructions. AdaSpec was reviewed as an additional reference.
 
-The implementation was initially in `train_qwen3.py` and has since been migrated to `algorithms/distillspec_gbv/trainer.py` (model-family-agnostic). It is substantially simpler than OSD:
+The implementation was initially in `train_qwen3.py` and has since been migrated to `algorithms/distillspec_gbv/trainer.py` (model-family-agnostic, supports Qwen, GPT-2, LLaMA, Gemma). It is substantially simpler than OSD:
 
 | OSD component | Our implementation | Kept / Removed |
 |---|---|---|

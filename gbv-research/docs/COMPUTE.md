@@ -6,7 +6,7 @@
 This doc is the **what-to-run-where-and-when** plan. Setup instructions are in the linked guides:
 
 - [`KAGGLE.md`](./KAGGLE.md) — Kaggle free-tier setup (T4 x2 only; P100 broken; 4-bit NF4 config).
-- [`MODAL.md`](./MODAL.md) — Modal on-demand A100/T4 setup ($30/mo credit).
+- [`MODAL.md`](./MODAL.md) — Modal on-demand T4 setup (⚠️ only $1 free credit as of June 2026; use Kaggle/IITH instead).
 - [`RESEARCH_PLAN.md`](./RESEARCH_PLAN.md) — research/ablation plan + locked algo priority.
 - [`ENGINEER_PLAYBOOK.md`](./ENGINEER_PLAYBOOK.md) — dependency-aware sequenced run plan with exact commands.
 
@@ -32,15 +32,22 @@ hw_tier tag: `cpu`
 
 ---
 
-### hw_tier: `laptop` — Code verification (free)
+### hw_tier: `laptop` — Code verification + small-scale convergence (free)
 
 | Source | Specs | Purpose |
 |---|---|---|
-| **Mukund's laptop** | RTX 500 Ada, 4 GB VRAM, 64 GB RAM | Smoke tests, crash-check every loss |
+| **Mukund's laptop** | RTX 500 Ada, 4 GB VRAM, 64 GB RAM | Smoke tests + convergence verification |
 
-**What runs here:** Qwen 0.5B→0.6B pair (`laptop` config). The 0.6B teacher is ~same capacity
-as the 0.5B student — distillation signal is noise. **Never interpret laptop numbers as research
-findings.** Purpose: verify every code path runs without crash before promoting to T4.
+**Configs and what they do:**
+
+| Config | Models | Signal | Use when |
+|---|---|---|---|
+| `laptop_qwen` | Qwen2.5-0.5B → Qwen3-0.6B | None (teacher ≈ draft) | Crash-check all losses (~25 min smoke, ~2-3 hr full) |
+| `laptop_gpt2` | distilgpt2 → gpt2-medium | Limited (4.3× gap) | GPU-based convergence check for GPT-2 family |
+| `laptop_llama` | LLaMA-3.2-1B → 3B NF4 | Good (3× gap) | Research-grade laptop convergence (requires HF login) |
+
+**Never interpret `laptop_qwen` numbers as research findings** (teacher ≈ draft → no signal).
+`laptop_gpt2` and `laptop_llama` do have real distillation signal but are too small for paper results.
 
 hw_tier tag: `laptop`
 
@@ -51,12 +58,12 @@ hw_tier tag: `laptop`
 | Pool | Free allowance | GPU | Effective T4-h | Notes |
 |---|---|---|---|---|
 | **Kaggle** | ~30 GPU-h/week | **GPU T4 x2** (only working option) | **~15 h/wk effective** | T4 x2 burns 2× quota. P100 (sm_60) is **broken** with PyTorch 2.10+cu128 (requires sm_70+). ~1 loss per session before credits run low. |
-| **Modal** | **$30/mo** credit | T4 ≈ $0.59/hr | ~50 T4-h/mo | Per-second billing. |
+| **Modal** | ⚠️ **$1 free only** | T4 ≈ $0.59/hr | **~1–2 min** | Per-second billing. **Was $30, now $1 as of June 2026. Not viable for full runs.** Pay-per-use from first run. |
 | **Lightning AI** | 15 credits/mo | T4 ≈ $0.60/hr | ~25 T4-h/mo | Same 15-credit pool for all GPUs — use T4 not pricier options. |
 | **Google Cloud** | $300 trial, 90 days | T4 (after quota grant) | ~850 T4-h | Card for verification only; quota grant needed (request T4 first). |
 | **Colab free** | unreliable | T4 | n/a | Aggressive disconnects — backup only. Nothing persists. |
 
-> **Combined free T4-class capacity ≈ ~190+ T4-class hours/month** (Kaggle + Modal + Lightning).
+> **Combined free T4-class capacity ≈ ~140+ T4-class hours/month** (Kaggle + Lightning; Modal no longer contributes).
 
 **What runs here:** Qwen3-0.6B draft → Qwen3-8B teacher NF4 (`kaggle` config).
 This is the **minimum valid research platform** — same 8B teacher as A100; loss rankings transfer.
@@ -76,10 +83,11 @@ Use **only** once ≤2 candidates are publication-worthy.
 
 | Source | ~Price | When |
 |---|---|---|
-| **IITH cluster prepaid** | ₹80/GPU-hr (~$0.96/hr) | **PRIMARY A100** |
+| **IITH cluster** (Hyderabad) | ₹80/GPU-hr (~$0.94/hr) | **PRIMARY A100** — best value, use for all confirmation runs |
 | **Rahul Thomas (researcher)** | access TBD | Confirm hours before scheduling |
-| **Modal A100** | ~$2–5/hr | Backup; $30/mo credit covers trimmed run |
-| **GCP A100** | ~$3–4/hr | Last resort backup |
+| **Lightning AI A100** | free monthly credits | Good second option if IITH unavailable |
+| **Modal A100** | ~$5.30/hr pay-per-use | Last resort; $1 free covers ~10 min only |
+| **GCP A100** | ~$3–4/hr | Last resort if GCP trial credits remain |
 
 **What runs here:** Qwen3-0.6B draft → Qwen3-8B teacher BF16 (full precision), full GSM8K
 n=1319, ≥3 seeds, paired-bootstrap + Holm–Bonferroni. **The only numbers that go in the paper.**
@@ -97,10 +105,11 @@ hw_tier tag: `a100`
 
 | Tier | hw_tier | Config | Teacher | Purpose | Research-valid? |
 |---|---|---|---|---|---|
-| Crash check | `laptop` | `laptop.yaml` | Qwen3-0.6B | Code doesn't crash | No — teacher ≈ draft capacity |
-| Convergence (small scale) | `cpu` | `server_gpt2` | GPT-2-M (355M) | Prove loss objectives converge | No — too small, CPU-only |
-| **Exploration** | **`colab`** | **`kaggle.yaml`** | **Qwen3-8B NF4** | **Rank losses, tune LR, kill losers** | **✓ Yes** |
-| **Confirmation** | **`a100`** | **`a100.yaml`** | **Qwen3-8B BF16** | **Paper numbers, multi-seed** | **✓ Yes** |
+| Crash check | `laptop` | `laptop_qwen` | Qwen3-0.6B | Code doesn't crash | No — teacher ≈ draft capacity |
+| Convergence (CPU) | `cpu` | `server_gpt2` | GPT-2-M (355M) | Prove convergence when no GPU credits | No — too small, CPU-only |
+| Convergence (GPU) | `laptop` | `laptop_gpt2` / `laptop_llama` | GPT-2-M / LLaMA-3B | Small-scale convergence on GPU | Limited — different family |
+| **Exploration** | **`colab`** | **`kaggle`** | **Qwen3-8B NF4** | **Rank losses, tune LR, kill losers** | **✓ Yes** |
+| **Confirmation** | **`a100`** | **`a100_qwen`** | **Qwen3-8B BF16** | **Paper numbers, multi-seed** | **✓ Yes** |
 
 ---
 
@@ -108,7 +117,7 @@ hw_tier tag: `a100`
 
 ### Laptop (smoke / crash-check)
 
-One-shot: `python orchestration/experiment.py --config laptop --smoke --yes`
+One-shot: `python orchestration/experiment.py --config laptop_qwen --smoke --yes`
 
 Exercises every code path. Not iterated. Move to T4 once smoke passes.
 
@@ -152,12 +161,12 @@ Backup checkpoints after each session — see `KAGGLE.md` → "Persisting checkp
 
 ```bash
 # Train + eval one loss at a time (--skip_existing resumes correctly):
-python orchestration/experiment.py --config a100 --losses kl --yes
-python orchestration/experiment.py --config a100 --losses bv_tree --yes
-python orchestration/experiment.py --config a100 --losses gbv_tree --yes
+python orchestration/experiment.py --config a100_qwen --losses kl --yes
+python orchestration/experiment.py --config a100_qwen --losses bv_tree --yes
+python orchestration/experiment.py --config a100_qwen --losses gbv_tree --yes
 
 # Or run all in one unattended shot:
-python orchestration/experiment.py --config a100 --yes
+python orchestration/experiment.py --config a100_qwen --yes
 ```
 
 The `--losses <name>` flag does: baseline (once) → train → merge → eval for that loss only.

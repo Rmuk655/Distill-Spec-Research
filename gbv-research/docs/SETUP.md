@@ -17,16 +17,20 @@ GPU requirements:
 
 | Config | Models | VRAM / Device | Notes |
 |--------|--------|--------------|-------|
-| `laptop_gpt2` | distilgpt2 → gpt2-medium | **CPU only** | No GPU needed. Proves convergence cheaply. |
-| `laptop` | Qwen2.5-0.5B → Qwen3-0.6B | 4 GB VRAM | RTX 500 / any modern laptop GPU |
-| `laptop_llama` | Llama-3.2-1B → 3B (4-bit target) | 4 GB VRAM | Research-grade pair (3× size gap vs 1.2× for `laptop`) |
-| `colab`  | Qwen3-0.6B → Qwen3-8B (4-bit) | 9 GB | Free Colab T4 (15 GB) — teacher in 4-bit NF4 |
-| `server` | Qwen3-0.6B → Qwen3-8B (bf16) | 24 GB | A10G / A100 / 3090 — full precision |
+| `laptop_qwen` | Qwen2.5-0.5B → Qwen3-0.6B | 4 GB VRAM | Crash-test all losses; teacher ≈ draft → no research signal |
+| `laptop_gpt2` | distilgpt2 → gpt2-medium | GPU or CPU | 4.3× size gap → real distillation signal; CPU-capable |
+| `laptop_llama` | Llama-3.2-1B → 3B (4-bit target) | 4 GB VRAM | Best laptop pair (3× gap, real signal); needs HF gated access |
+| `server_gpt2` | distilgpt2 → gpt2-medium | CPU-only | ATS Cloud / any CPU server; no GPU needed |
+| `colab`  | Qwen3-0.6B → Qwen3-4B (bf16) | 9 GB | Free Colab T4 (15 GB) — 4B teacher in full BF16 |
+| `kaggle` | Qwen3-0.6B → Qwen3-8B (4-bit NF4) | 9 GB | Kaggle T4 x2 (29 GB RAM) — 8B teacher in 4-bit NF4 |
+| `a100_qwen` | Qwen3-0.6B → Qwen3-8B (bf16) | 20 GB | A100 / IITH cluster (₹80/GPU-hr) — full precision, paper results |
 
-**Which laptop config to use?**
-- `laptop_gpt2` — out of GPU credits, just need convergence evidence, or testing on CPU server
-- `laptop` — Qwen pair, standard code exerciser; teacher barely bigger than student → weak signal
-- `laptop_llama` — best laptop option for research claims: 1B → 3B-NF4 (3× gap), real distillation signal; needs HF gated access (`huggingface-cli login`)
+**Which config to use?**
+- No GPU credits → `server_gpt2` on ATS Cloud or `laptop_gpt2` on any CPU
+- Laptop crash-test → `laptop_qwen` (fastest smoke)
+- Laptop convergence evidence → `laptop_gpt2` (GPU) or `laptop_llama` (best signal)
+- T4 exploration → `kaggle` (8B teacher = real signal; use Kaggle T4 x2)
+- Paper confirmation → `a100_qwen` on IITH A100
 
 **Colab / Kaggle T4 note**: Qwen3-8B in bfloat16 = ~16 GB → OOM on T4 (15 GB).
 The `colab` and `kaggle` configs automatically load the frozen teacher in

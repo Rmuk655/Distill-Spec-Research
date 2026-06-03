@@ -43,7 +43,7 @@ paths are cited inline so claims are checkable. Hypothetical names are avoided.
 | `specinfer_tree` | verifier-aligned (OT) | novel | exact K-iteration α from `specinfer_otlp_accept` |
 | `spectr_tree` | verifier-aligned (OT) | novel — **approximate** | ρ is **detached** (first-order surrogate, see `_alpha_spectr` docstring) |
 | `khisti_tree` | verifier-aligned (OT) | novel — **approximate** | **LP-free softmax surrogate**, not the true LB (see `_alpha_khisti`) |
-| `ebe_tree` | on-policy ablation | novel | on-policy EBE; excluded from `a100.yaml` (superseded) |
+| `ebe_tree` | on-policy ablation | novel | on-policy EBE; excluded from `a100_qwen.yaml` (superseded by verifier-aligned OT losses) |
 
 Tree losses are dispatched by `compute_tree_loss(name, …)` and are *not* in
 `LOSS_REGISTRY`; the trainer (`trainer.py`) branches on `args.loss in
