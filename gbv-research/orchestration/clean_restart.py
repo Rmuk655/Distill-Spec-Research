@@ -211,56 +211,63 @@ def _wipe_results_db_rows(pair_tag: str, draft_model: str = "", dry_run=False):
         with sqlite3.connect(db_path) as conn:
             cur = conn.cursor()
 
-            # Count rows to delete
-            cur.execute(
-                "SELECT COUNT(*) FROM runs WHERE draft_path LIKE ?",
-                (f"%{pair_tag}%",)
-            )
+            # ── Count rows to delete ──────────────────────────────────────────
+            # 1. Trained model eval rows (pair tag in checkpoint path)
+            cur.execute("SELECT COUNT(*) FROM runs WHERE draft_path LIKE ?",
+                        (f"%{pair_tag}%",))
             n_trained = cur.fetchone()[0]
 
+            # 2. Baseline eval rows (draft_path == raw HF model ID, no pair tag)
             n_baseline = 0
             if draft_model:
-                cur.execute(
-                    "SELECT COUNT(*) FROM runs WHERE draft_path = ?",
-                    (draft_model,)
-                )
+                cur.execute("SELECT COUNT(*) FROM runs WHERE draft_path = ?",
+                            (draft_model,))
                 n_baseline = cur.fetchone()[0]
 
-            n_total = n_trained + n_baseline
+            # 3. Training curves (label contains pair tag, e.g. "jsd-gsm8k-dg2-g2m")
+            n_curves = 0
+            try:
+                cur.execute("SELECT COUNT(*) FROM train_curves WHERE label LIKE ?",
+                            (f"%{pair_tag}%",))
+                n_curves = cur.fetchone()[0]
+            except sqlite3.OperationalError:
+                pass   # table may not exist in old DBs
+
+            n_total = n_trained + n_baseline + n_curves
             if n_total == 0:
-                print(f"  [skip] db/results.db — no rows for pair '{pair_tag}' or baseline '{draft_model}'")
+                print(f"  [skip] db/results.db — no rows for pair '{pair_tag}'")
                 return
 
             if dry_run:
-                print(f"  [dry_run] Would delete {n_trained} trained + "
-                      f"{n_baseline} baseline row(s) from results.db")
+                print(f"  [dry_run] Would delete: {n_trained} trained eval, "
+                      f"{n_baseline} baseline eval, {n_curves} training curve row(s)")
                 return
 
-            # Delete trained model rows (pair tag in path)
-            if n_trained > 0:
+            # ── Delete ────────────────────────────────────────────────────────
+            if n_trained:
                 cur.execute("DELETE FROM runs WHERE draft_path LIKE ?",
                             (f"%{pair_tag}%",))
-
-            # Delete baseline rows (exact draft model ID match)
-            if n_baseline > 0:
+            if n_baseline and draft_model:
                 cur.execute("DELETE FROM runs WHERE draft_path = ?",
                             (draft_model,))
+            if n_curves:
+                cur.execute("DELETE FROM train_curves WHERE label LIKE ?",
+                            (f"%{pair_tag}%",))
 
-            # Also clean per_prompt table if it exists
+            # Remove orphaned per_prompt rows
             try:
-                cur.execute(
-                    "DELETE FROM per_prompt WHERE run_tag NOT IN "
-                    "(SELECT run_tag FROM runs)"
-                )
+                cur.execute("DELETE FROM per_prompt WHERE run_id NOT IN "
+                            "(SELECT id FROM runs)")
             except sqlite3.OperationalError:
                 pass
 
             conn.commit()
 
         msg_parts = []
-        if n_trained:  msg_parts.append(f"{n_trained} trained")
-        if n_baseline: msg_parts.append(f"{n_baseline} baseline (draft_path='{draft_model}')")
-        print(f"  [clear] db/results.db — deleted {' + '.join(msg_parts)} row(s) [ok]")
+        if n_trained:  msg_parts.append(f"{n_trained} eval (trained)")
+        if n_baseline: msg_parts.append(f"{n_baseline} eval (baseline '{draft_model}')")
+        if n_curves:   msg_parts.append(f"{n_curves} training curves")
+        print(f"  [clear] db/results.db — deleted {' + '.join(msg_parts)} [ok]")
     except Exception as e:
         print(f"  [warn] Could not clear results.db rows: {e}")
 
