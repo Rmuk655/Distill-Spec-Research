@@ -2985,7 +2985,7 @@ def _cleanup_tmp(path):
         pass
 
 
-def run_smoke_preflight(draft, target):
+def run_smoke_preflight(draft, target, model_family="qwen"):
     """
     Run 2 gsm8k prompts through GBV/main.py directly — NO evaluate.py, NO DB writes.
 
@@ -3040,6 +3040,7 @@ def run_smoke_preflight(draft, target):
         "--p_temps",        "0.6",
         "--max_new_tokens", "30",
         "--dtype",          "bf16",
+        "--model_family",   model_family,   # MUST match the draft/target pair
     ]
 
     print(f"\n{'='*65}")
@@ -3962,7 +3963,8 @@ def main():
             and not args.no_smoke_first
             and not args.smoke
             and _has_pending_eval):
-        if not run_smoke_preflight(draft, target):
+        _preflight_family = train_hparams.get("model_family", "qwen") if train_hparams else "qwen"
+        if not run_smoke_preflight(draft, target, model_family=_preflight_family):
             sys.exit(1)
 
     # ── Hardware-aware parallel scheduler ────────────────────────────────────
