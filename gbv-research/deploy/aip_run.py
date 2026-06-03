@@ -147,36 +147,6 @@ def _auth():
         print("HF     : HF_TOKEN not set (not needed for Qwen3)")
 
 
-def _smoke_already_done(config: str, storage_root: str) -> bool:
-    """Return True if the smoke state file exists and all steps are 'done'.
-
-    If smoke was completed in a previous session, we skip it automatically
-    so the user doesn't have to pass --no_smoke or --resume manually.
-    The smoke state file is named:
-      pipeline_state_{config_slug}-{pair_tag}_smoke.json
-    and lives in the orchestration/ dir or storage_root/.
-    """
-    import glob as _glob, json as _json
-    slug = config.replace("/", "_").replace("\\", "_")
-    search_dirs = [
-        os.path.join(_GBV_DIR, "orchestration"),
-        storage_root,
-    ]
-    for d in search_dirs:
-        if not os.path.isdir(d):
-            continue
-        for path in _glob.glob(os.path.join(d, f"pipeline_state_{slug}*_smoke.json")):
-            try:
-                with open(path) as f:
-                    state = _json.load(f)
-                steps = state.get("steps", {})
-                if steps and all(s.get("status") == "done" for s in steps.values()):
-                    return True
-            except Exception:
-                pass
-    return False
-
-
 def _resolve_storage_root(args):
     """Determine storage root: CLI arg > env var > repo/db/."""
     if args.storage_root:
@@ -260,14 +230,6 @@ def main():
         cmd += ["--experiment_tag", args.experiment_tag]
 
     no_smoke = args.no_smoke or args.resume
-
-    # Auto-detect if smoke was already completed: if the smoke state file exists
-    # and all steps are 'done', skip smoke automatically.
-    if not no_smoke:
-        no_smoke = _smoke_already_done(args.config, storage_root)
-        if no_smoke:
-            print("\nSmoke already completed (all smoke steps done) — skipping.")
-
     if not no_smoke:
         cmd.append("--smoke")
         print("\nRunning smoke test first...")
