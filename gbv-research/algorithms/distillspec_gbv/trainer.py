@@ -61,8 +61,14 @@ if not _hf_offline_was_set and os.environ.get("TRANSFORMERS_OFFLINE") == "1":
         "Set TRANSFORMERS_OFFLINE=0 for first-time model downloads."
     )
 
-# Reduce CUDA allocator fragmentation on small GPUs.
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+# CUDA allocator settings.  expandable_segments is Linux-only and avoids the
+# OOM that transformers >= 4.46 caching_allocator_warmup() triggers on A100-40GB
+# when multiple jobs run in parallel (each warmup tries to pre-allocate ~15 GB).
+# max_split_size_mb=128 reduces fragmentation on small GPUs (T4, laptop).
+if sys.platform != "win32":
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+else:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
 # Silence one specific, benign PEFT warning that fires on every adapter save:
 #   "Could not find a config file in Qwen/Qwen2.5-0.5B - will assume that the

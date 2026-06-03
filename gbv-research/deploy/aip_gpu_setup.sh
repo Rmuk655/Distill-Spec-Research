@@ -155,11 +155,30 @@ fi
 echo "[4/5] Checking training data..."
 DATA_FILE="${GBV_DIR}/core/datasets/raw/gsm8k_train.jsonl"
 if [ ! -f "${DATA_FILE}" ]; then
-    python "${GBV_DIR}/core/datasets/downloader.py" 2>/dev/null || \
-        echo "      (experiment.py will download on first run)"
+    echo "      Downloading gsm8k_train.jsonl (7473 prompts, ~3 MB)..."
+    python - <<'PYEOF'
+import sys, os, json
+sys.path.insert(0, os.environ.get("GBV_DIR", "."))
+try:
+    from datasets import load_dataset
+    ds = load_dataset("gsm8k", "main", split="train")
+    path = os.path.join(os.environ.get("GBV_DIR", "."),
+                        "core/datasets/raw/gsm8k_train.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for item in ds:
+            f.write(json.dumps({"prompt": item["question"]}) + "\n")
+    print(f"      gsm8k_train.jsonl: {len(ds)} prompts saved")
+except Exception as e:
+    print(f"      WARNING: could not download gsm8k_train.jsonl: {e}")
+    print("      Training will fail without this file.")
+    print("      Fix: pip install datasets && python -c \"from datasets import load_dataset; ...\"")
+PYEOF
+    # Also fetch other eval sets
+    python "${GBV_DIR}/core/datasets/downloader.py" 2>/dev/null || true
 else
     LINES=$(wc -l < "${DATA_FILE}")
-    echo "      gsm8k_train.jsonl: ${LINES} prompts"
+    echo "      gsm8k_train.jsonl: ${LINES} prompts (already present)"
 fi
 
 # ── GPU check ─────────────────────────────────────────────────────────────────
