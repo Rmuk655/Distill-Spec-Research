@@ -1478,6 +1478,40 @@ def main():
                 args.student = _osd_path
     # ----------------------------------------
 
+    # ── Merged-model existence guard ─────────────────────────────────────────
+    # Validate the student (draft) path BEFORE spending time on W&B / model
+    # loading.  A missing merged model means either:
+    #   a) Training hasn't been merged yet → run the merge step first.
+    #   b) Training ran on a different model family and left a stale checkpoint
+    #      from a different family under the same name (e.g. Qwen kl-gsm8k
+    #      blocking GPT-2 kl-gsm8k — now fixed by family-scoped naming).
+    #   c) Training hasn't run at all yet.
+    # Without this guard, from_pretrained() raises confusing deep errors
+    # (IndexError in embedding, shape mismatch, FileNotFoundError) that look
+    # like code bugs rather than missing prerequisites.
+    _student_is_local = (os.sep in args.student or "/" in args.student
+                         or args.student.startswith("."))
+    if _student_is_local and not os.path.isdir(args.student):
+        # Try to give a helpful hint about WHICH training step to run
+        _student_base = os.path.basename(args.student.rstrip("/\\"))
+        # kl-gsm8k_merged-gpt2 → kl-gsm8k-gpt2 (the adapter dir before merge)
+        _adapter_hint = _student_base.replace("_merged", "")
+        print(
+            f"\n  [FATAL] Student model not found: {args.student}\n"
+            f"\n  The merged checkpoint '{_student_base}' does not exist.\n"
+            f"  This means one of:\n"
+            f"    (a) Training + merge haven't run yet for this loss / model family.\n"
+            f"        Run:  python orchestration/experiment.py --config <config> --losses "
+            f"{_adapter_hint.split('-')[0]} --yes\n"
+            f"    (b) The checkpoint was built for a different model family and the old\n"
+            f"        name clashed (fixed by the family-suffix naming scheme).\n"
+            f"        Run:  python orchestration/clean_restart.py --config <config> --yes\n"
+            f"    (c) The checkpoint was wiped by a previous clean_restart.\n"
+            f"        Re-run training.\n",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     student_label = args.student_label or infer_label(args.student)
     print(f"\nSpecDist Evaluation Pipeline")
     print(f"  Student : {args.student}  [{student_label}]")
