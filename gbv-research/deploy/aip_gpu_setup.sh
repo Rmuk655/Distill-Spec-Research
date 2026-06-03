@@ -174,6 +174,10 @@ echo "[4/5] Checking training data..."
 DATA_FILE="${GBV_DIR}/core/datasets/raw/gsm8k_train.jsonl"
 if [ ! -f "${DATA_FILE}" ]; then
     echo "      Downloading gsm8k_train.jsonl (7473 prompts, ~3 MB)..."
+    # Temporarily disable offline mode for this download — the env file already
+    # set HF_DATASETS_OFFLINE=1 (from step 3 source), but we need online access
+    # to download the training data for the first time.
+    env -u HF_DATASETS_OFFLINE -u HF_HUB_OFFLINE -u TRANSFORMERS_OFFLINE \
     python - <<'PYEOF'
 import sys, os, json
 sys.path.insert(0, os.environ.get("GBV_DIR", "."))
@@ -190,9 +194,14 @@ try:
 except Exception as e:
     print(f"      WARNING: could not download gsm8k_train.jsonl: {e}")
     print("      Training will fail without this file.")
-    print("      Fix: pip install datasets && python -c \"from datasets import load_dataset; ...\"")
+    print("      Run manually with offline mode disabled:")
+    print("        unset HF_DATASETS_OFFLINE HF_HUB_OFFLINE")
+    print("        python -c \"from datasets import load_dataset; import json")
+    print("        ds=load_dataset('gsm8k','main',split='train')")
+    print("        [open('core/datasets/raw/gsm8k_train.jsonl','w').write(json.dumps({'prompt':i['question']})+chr(10)) for i in ds]\"")
 PYEOF
-    # Also fetch other eval sets
+    # Also fetch other eval sets (already offline-safe since they use custom downloader)
+    env -u HF_DATASETS_OFFLINE -u HF_HUB_OFFLINE \
     python "${GBV_DIR}/core/datasets/downloader.py" 2>/dev/null || true
 else
     LINES=$(wc -l < "${DATA_FILE}")
