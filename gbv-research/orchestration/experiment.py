@@ -578,33 +578,35 @@ def _merged(name): return _ckpt(name + "_merged")
 #   tag = _short(draft) + "-" + _short(target) + optional "nf4"
 #   e.g.  q0.6b-q8bnf4  /  q0.6b-q4b  /  dg2-g2m  /  l1b-l3bnf4
 #
-#   The default laptop pair (Qwen2.5-0.5B → Qwen3-0.6B, no 4bit) returns ""
-#   so existing checkpoints keep their plain names (backward compat).
+#   Every pair always gets a tag — no special cases or backward-compat exemptions.
+#   Rerun from scratch when switching combos; old checkpoints are simply stale.
 #
-#   State files and eval DB are already per-(config, student_path), so they don't
-#   need this tag — only checkpoint dirs do.
+#   The tag is also used in pipeline state file names so the state correctly
+#   tracks whether a (config, draft, target, quantization) combo has been run:
+#     pipeline_state_laptop_qwen-q0.5b-q0.6b.json
+#     pipeline_state_kaggle-q0.6b-q8bnf4.json
+#     pipeline_state_laptop_gpt2-dg2-g2m.json
 #
-_DEFAULT_DRAFT  = "Qwen/Qwen2.5-0.5B"
-_DEFAULT_TARGET = "Qwen/Qwen3-0.6B"
+#   Eval DB is already scoped by student_path which contains the pair tag.
 
 def _run_tag(draft: str, target: str, load_in_4bit: bool) -> str:
     """Return a short human-readable tag for a (draft, target, quantization) triple.
 
-    Used to suffix checkpoint directory names so different model pairs never
-    collide when run on the same machine.
+    Used to suffix:
+      • checkpoint directory names  (kl-gsm8k-{tag}/)
+      • pipeline state file names   (pipeline_state_{config}-{tag}.json)
+
+    Every pair always gets a unique tag — no special cases.
 
     Examples
     --------
-    Qwen2.5-0.5B → Qwen3-0.6B   no-4bit  → ""          (default pair; backward compat)
+    Qwen2.5-0.5B → Qwen3-0.6B   no-4bit  → "q0.5b-q0.6b"
     Qwen3-0.6B   → Qwen3-8B     nf4      → "q0.6b-q8bnf4"
     Qwen3-0.6B   → Qwen3-4B     no-4bit  → "q0.6b-q4b"
     Qwen3-0.6B   → Qwen3-8B     no-4bit  → "q0.6b-q8b"
     distilgpt2   → gpt2-medium  no-4bit  → "dg2-g2m"
     Llama-3.2-1B → Llama-3.2-3B nf4     → "l1b-l3bnf4"
     """
-    if draft == _DEFAULT_DRAFT and target == _DEFAULT_TARGET and not load_in_4bit:
-        return ""  # keep legacy plain names for the original laptop Qwen pair
-
     import re as _re
 
     _FAM_PREFIX = [
@@ -3688,15 +3690,26 @@ def main():
         print(f"  [pipeline] Loss filter ({_src}): {_losses_to_run}")
         print(f"             Skipping: {[l for l in ALL_LOSSES if l not in _losses_to_run]}")
 
-    # State file: config-scoped so laptop and server runs don't mix.
+    # State file: scoped to (config, model-pair) so the pipeline detects correctly
+    # when a new (draft, target, quantization) combo has never been run before.
+    # Without the pair tag, two configs with the same name but different teachers
+    # would share one state file and the second run would see all steps as "done".
+    #
+    # Format: pipeline_state_{config_slug}-{pair_tag}{_smoke}.json
+    #   pipeline_state_laptop_qwen-q0.5b-q0.6b.json
+    #   pipeline_state_kaggle-q0.6b-q8bnf4.json
+    #   pipeline_state_laptop_gpt2-dg2-g2m_smoke.json
+    #
     # Smoke gets its OWN state file so smoke "done" marks never block the real run.
     # When --storage_root is set, state file lives there (survives cloud restarts).
     _smoke_tag = "_smoke" if args.smoke else ""
     # Sanitise config name: "profiles/colab_tree_losses" → "profiles_colab_tree_losses"
     # so the state file is a flat filename with no subdirectory components.
     _config_slug = args.config.replace("/", "_").replace(os.sep, "_")
+    _state_pair_tag = _run_tag(draft, target, cfg.get("load_in_4bit", False))
     STATE_FILE = os.path.join(
-        _effective_state_dir, f"pipeline_state_{_config_slug}{_smoke_tag}.json"
+        _effective_state_dir,
+        f"pipeline_state_{_config_slug}-{_state_pair_tag}{_smoke_tag}.json"
     )
 
     # Run-mode resolution. The three modes are mutually exclusive:

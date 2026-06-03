@@ -187,49 +187,63 @@ def _wipe(dry_run=False):
 
 # ── Reset pipeline state ───────────────────────────────────────────────────
 
-def _state_path(config_slug: str) -> str:
-    """Return the state file path for any config slug.
+def _state_glob(config_slug: str):
+    """Return all state file paths matching this config slug.
+
+    State files now encode the model-pair tag in their name:
+        pipeline_state_{slug}-{pair_tag}.json
+        pipeline_state_{slug}-{pair_tag}_smoke.json
+
+    We don't require the caller to know the pair tag — glob for any
+    file that starts with  pipeline_state_{slug}-  (or the legacy
+    pipeline_state_{slug}.json format from before the pair-tag change).
 
     Config slugs with slashes (e.g. 'profiles/kl_only') are flattened
-    to underscores so the filename stays valid on all platforms.
+    to underscores so the glob pattern is a flat filename pattern.
     """
+    import glob as _glob
     slug = config_slug.replace("/", "_").replace("\\", "_")
-    return os.path.join(_HERE, f"pipeline_state_{slug}.json")
+    # Match both new format (has pair tag) and legacy format (no pair tag)
+    pattern_new    = os.path.join(_HERE, f"pipeline_state_{slug}-*.json")
+    pattern_legacy = os.path.join(_HERE, f"pipeline_state_{slug}.json")
+    return sorted(_glob.glob(pattern_new) + _glob.glob(pattern_legacy))
 
 
 def _reset_state(config_slug: str, dry_run=False):
-    """Reset a state file to all-pending.
+    """Reset all state files for this config slug to all-pending.
 
-    If the state file already exists, reads its step IDs and resets them
-    all to 'pending'.  If it doesn't exist, deletes nothing — experiment.py
-    will create it fresh on the next run.
+    Finds every pipeline_state_{slug}*.json file (including pair-tag and
+    smoke variants) and resets them.  experiment.py will re-create any
+    missing files on the next run.
     """
-    path = _state_path(config_slug)
-    if dry_run:
-        print(f"  [dry_run] Would reset {os.path.basename(path)} -> all steps pending")
-        return
-    if not os.path.exists(path):
-        print(f"  [skip] {os.path.basename(path)} not found — will be created by experiment.py")
+    paths = _state_glob(config_slug)
+    if not paths:
+        slug = config_slug.replace("/", "_").replace("\\", "_")
+        print(f"  [skip] pipeline_state_{slug}*.json not found — will be created by experiment.py")
         return
 
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        step_ids = list(data.get("steps", {}).keys())
-        fresh = {
-            "version": data.get("version", 1),
-            "config": config_slug,
-            "steps": {sid: {"status": "pending"} for sid in step_ids},
-        }
-    except Exception:
-        # Corrupted state file — just remove it
-        os.remove(path)
-        print(f"  [del]   {os.path.basename(path)} (corrupted) -> will be recreated [ok]")
-        return
-
-    with open(path, "w") as f:
-        json.dump(fresh, f, indent=2)
-    print(f"  [reset] {os.path.basename(path)} -> all steps pending [ok]")
+    for path in paths:
+        fname = os.path.basename(path)
+        if dry_run:
+            print(f"  [dry_run] Would reset {fname} -> all steps pending")
+            continue
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            step_ids = list(data.get("steps", {}).keys())
+            fresh = {
+                "version": data.get("version", 1),
+                "config":  config_slug,
+                "steps":   {sid: {"status": "pending"} for sid in step_ids},
+            }
+        except Exception:
+            # Corrupted state file — remove it; experiment.py recreates
+            os.remove(path)
+            print(f"  [del]   {fname} (corrupted) -> will be recreated [ok]")
+            continue
+        with open(path, "w") as f:
+            json.dump(fresh, f, indent=2)
+        print(f"  [reset] {fname} -> all steps pending [ok]")
 
 
 # ── Launch pipeline ────────────────────────────────────────────────────────
@@ -307,8 +321,9 @@ Examples:
     _wipe(dry_run=dry)
 
     print("\n3. Resetting pipeline state...")
+    # _reset_state globs for pipeline_state_{slug}*.json so it catches both
+    # pair-tag variants and smoke variants in a single call.
     _reset_state(args.config, dry_run=dry)
-    _reset_state(f"{args.config}_smoke", dry_run=dry)
 
     if not args.no_restart:
         print("\n4. Launching pipeline...")
