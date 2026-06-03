@@ -3,7 +3,7 @@
 **System**: Qwen2.5-0.5B draft → Qwen3-0.6B target (laptop smoke) | Qwen3-0.6B → Qwen3-8B (T4/A100)  
 **Goal**: Train the draft model with a novel block-level EBE loss so it gets accepted more often by the target, speeding up generation without changing what the target produces.
 
-> **Doc status — June 2026**: updated for multi-family config naming (`laptop_qwen`, `laptop_gpt2`, `a100_qwen`), IITH A100 pricing, Modal credit change, and GPT-2 CPU convergence path.
+> **Doc status — June 2026**: updated for multi-family configs, `max_train_prompts` epoch-based training budget, A10 as Stage 1.5 exploration tier, BF16 vs NF4 convergence clarification, IITH A100 pricing, Modal credit change, W&B loss curve interpretation.
 
 ---
 
@@ -124,7 +124,33 @@ python orchestration/experiment.py --config colab --yes    # Colab
 python orchestration/experiment.py --config kaggle --yes   # Kaggle
 ```
 
-**Decision gate**: if EBE shows higher alpha/BE than forward_kl consistently across gsm8k and ≥1 secondary domain at n=30, proceed to Stage 2.
+**Decision gate**: if EBE shows higher alpha/BE than forward_kl consistently across gsm8k and ≥1 secondary domain at n=30, proceed to Stage 1.5 or Stage 2.
+
+---
+
+### Stage 1.5 — A10 (stronger convergence, free access)
+
+**Hardware**: NVIDIA A10 (24 GB VRAM) — free access where available.  
+**Config**: `a10_qwen` (Qwen3-0.6B → Qwen3-8B **BF16**, no quantization).  
+**Key advantage over T4**: A10's 24 GB fits Qwen3-8B in full BF16 — no NF4 quantization.
+
+> **BF16 vs NF4 (NF4 = Kaggle T4 config):** Same convergence direction and loss rankings. BF16 gives ~5-10% cleaner gradients (less rounding noise in teacher logits), so trends appear slightly faster. NF4 Kaggle results reliably predict BF16 A10/A100 results — they are directionally interchangeable.
+
+| Parameter | Value |
+|---|---|
+| Train steps | 2000 |
+| max_train_prompts | 1000 — 2 full epochs, clear convergence |
+| Teacher | Qwen3-8B **BF16** (exact, no quantization) |
+| LoRA rank | r=8 (vs r=4 on colab_lite) |
+| Speed | ~2-3 s/step → 2000 steps ≈ 80-100 min |
+| Eval prompts | n=50 (trend direction) |
+
+```bash
+python orchestration/experiment.py --config a10_qwen --yes \
+  --storage_root /path/to/storage --losses kl_tree
+```
+
+**Decision gate**: 2 epochs over 1000 prompts with 8B BF16 teacher should show clear monotonic loss decrease and loss ranking (e.g. `kl_tree` < `forward_kl` LoRA loss). If ranking is stable, promote to Stage 2 for paper numbers.
 
 ---
 
@@ -894,6 +920,49 @@ Full table of every evaluation row in the database. Supports sorting and can be 
 
 ## 8. How to Run
 
+### Training budget — how many steps do I need?
+
+The key insight: you need enough **epochs** (passes over the training set), not raw step count.
+
+```
+epochs = steps / max_train_prompts
+
+Visible trend   → 2 epochs minimum (with strong teacher signal)
+Clear convergence → 5 epochs
+Paper quality   → full dataset, no cap (diversity matters more than epochs)
+```
+
+Without `max_train_prompts`, most configs only see a fraction of one epoch:
+
+| Without cap | With cap (default) |
+|---|---|
+| 500 steps / 7473 prompts = **6.7%** of 1 epoch | 500 steps / 250 prompts = **2.0 epochs** |
+| Loss curve: flat/noisy, no visible trend | Loss curve: clear monotonic decrease |
+
+**Per-config values (set in YAML, propagated automatically):**
+
+| Config | Steps | max_train_prompts | Epochs | Purpose |
+|---|---|---|---|---|
+| `laptop_qwen` | 100 | 50 | 2 | crash-test: code runs without crash |
+| `laptop_gpt2` | 500 | 100 | 5 | convergence proof: GPT-2 distillation works |
+| `laptop_llama` | 500 | 100 | 5 | convergence proof: LLaMA 1B→3B works |
+| `server_gpt2` | 1000 | 200 | 5 | CPU convergence proof |
+| `colab` | 500 | 250 | 2 | T4 trend: 4B teacher, 2 epochs shows direction |
+| `kaggle` | 1000 | 500 | 2 | T4 trend: 8B NF4 teacher, reliable ranking |
+| `a10_qwen` | 2000 | 1000 | 2 | A10 convergence: 8B BF16, liberal epochs |
+| `a100_qwen` | 2000 | none | 0.27 | paper: full 7473-prompt diversity, no cap |
+
+**Why the A100 has no cap**: paper results need the model to have seen the full diversity of 7473 training prompts. With an 8B teacher, 27% of one epoch still produces a strong enough signal for the loss rankings to be reliable.
+
+**Override on CLI** (e.g. to run a quick convergence check):
+```bash
+# 300 steps with max 100 prompts = 3 epochs — convergence check in ~5 min on A10
+python orchestration/experiment.py --config a10_qwen --losses kl --train_steps 300 --yes
+```
+(The `max_train_prompts` from YAML still applies unless you change it.)
+
+---
+
 ### Laptop smoke test (verify setup, ~25 min)
 ```bash
 python orchestration/experiment.py --config laptop_qwen --smoke --yes
@@ -920,6 +989,35 @@ python orchestration/experiment.py --config laptop_qwen --losses kl,jsd --yes
 # Via profile YAML — set experiment: losses: [kl, jsd] in the config
 python orchestration/experiment.py --config profiles/online_only_laptop --yes
 ```
+
+### A10 exploration runs (Stage 1.5)
+
+A10 runs one loss at a time for fast iteration. Each run is ~80-100 min:
+
+```bash
+# One loss at a time — baseline runs once, --skip_existing resumes:
+python orchestration/experiment.py --config a10_qwen --losses kl --yes \
+  --storage_root /path/to/storage
+python orchestration/experiment.py --config a10_qwen --losses kl_tree --yes \
+  --storage_root /path/to/storage
+
+# Smoke first (always):
+python orchestration/experiment.py --config a10_qwen --smoke --yes
+```
+
+**Config `a10_qwen` key settings** (see `orchestration/configs/a10_qwen.yaml`):
+- `steps: 2000`, `max_train_prompts: 1000` → 2 epochs with 8B BF16 teacher
+- `load_in_4bit: false` → exact teacher distribution (vs Kaggle NF4)
+- `lora_r: 8` → more capacity than T4 configs (r=4)
+- `compile: true` → torch.compile on Linux GPU (~10-20% speedup)
+
+**Reading W&B loss curves (what good looks like):**
+- `train/loss_ema`: should decrease monotonically. Spiky raw `train/loss` is normal (high per-prompt KL variance); the EMA trend is the signal.
+- `train/val_loss`: for tree losses (`kl_tree` etc.) this uses forward-KL as a proxy, NOT the tree objective — slight increase is expected and not alarming.
+- `train/grad_norm`: initial spike then settling to 1-3 is healthy. Sustained >10 = LR too high.
+- `gradients/lora_B_norm_mean`: should be small and stable (~0.03-0.08). Large spike + recovery is normal early-training behavior.
+
+---
 
 ### A100 paper runs — 3-tier profile system
 

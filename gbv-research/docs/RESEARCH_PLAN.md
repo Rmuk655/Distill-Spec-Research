@@ -6,8 +6,9 @@ This plan is grounded in an audit of the actual codebase (May/June 2026). Every 
 verifier, metric, dataset, and config name below is taken from source — file
 paths are cited inline so claims are checkable. Hypothetical names are avoided.
 
-> **Doc status — June 2026**: Updated for multi-family config naming, IITH A100 pricing
-> (₹80/GPU-hr), Modal credit reality ($1 free, not $30), and GPT-2 CPU convergence path.
+> **Doc status — June 2026**: Updated for multi-family configs, `max_train_prompts` epoch-based
+> training budget per tier, A10 24 GB as Stage 1.5 exploration (free, BF16 8B teacher),
+> BF16 vs NF4 equivalence note, IITH A100 pricing (₹80/GPU-hr), Modal credit ($1 only).
 
 ---
 
@@ -108,33 +109,45 @@ verify_latency_ms, notes, experiment_tag, hw_tier, seed, git_sha, wandb_url`.
 
 **Key principle: always use 8B teacher for any research decision.**
 
-| hw_tier | Config | Hardware | Teacher | Research-valid? | Purpose |
-|---|---|---|---|---|---|
-| `laptop` | `laptop_qwen.yaml` | RTX 500 Ada 4 GB | Qwen3-0.6B | **No** — teacher ≈ draft | Crash-check: every code path runs without OOM |
-| `laptop` | `laptop_gpt2.yaml` | RTX 500 Ada 4 GB (CUDA) | GPT-2-medium 355M | **Limited** — 4.3× gap, small | Convergence check on GPU with real distillation signal; faster than server |
-| `laptop` | `laptop_llama.yaml` | RTX 500 Ada 4 GB (CUDA) | LLaMA-3.2-3B NF4 | **✓ Directional** — 3× gap | Research-relevant family; results generalize beyond Qwen |
-| `cpu` | `server_gpt2.yaml` | 128 GB RAM, CPU-only (ATS Cloud) | GPT-2-medium 355M | **No** — too small, CPU | T4-alternative: proves convergence when GPU credits exhausted. Not paper-quality but validates algorithm before T4 run. ~1-2 day job. |
-| `colab` | `colab.yaml` | Colab T4 15 GB | Qwen3-4B BF16 | **✓ Yes** | Exploration: rank losses, tune LR |
-| `colab` | `kaggle.yaml` | Kaggle T4 x2 (29 GB RAM) | Qwen3-8B NF4 | **✓ Yes** | Exploration: 8B teacher = same signal as A100; use when Kaggle quota available |
-| `a100` | `a100_qwen.yaml` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes** | Publication confirmation only |
+| hw_tier | Config | Hardware | Teacher | Research-valid? | max_train_prompts | Purpose |
+|---|---|---|---|---|---|---|
+| `laptop` | `laptop_qwen` | RTX 500 Ada 4 GB | Qwen3-0.6B | **No** — teacher ≈ draft | 50 (2 epochs) | Crash-check: every code path runs without OOM |
+| `laptop` | `laptop_gpt2` | RTX 500 Ada 4 GB (CUDA) | GPT-2-M 355M | **Limited** — 4.3× gap | 100 (5 epochs) | Convergence check on GPU with real distillation signal |
+| `laptop` | `laptop_llama` | RTX 500 Ada 4 GB (CUDA) | LLaMA-3B NF4 | **✓ Directional** — 3× gap | 100 (5 epochs) | Research-relevant family; results generalize beyond Qwen |
+| `cpu` | `server_gpt2` | 128 GB RAM, CPU-only | GPT-2-M 355M | **No** — too small, CPU | 200 (5 epochs) | T4-alternative: proves convergence without GPU credits |
+| `colab` | `colab` | Colab T4 15 GB | Qwen3-4B BF16 | **✓ Yes** | 250 (2 epochs) | Exploration: rank losses, tune LR |
+| `colab` | `kaggle` | Kaggle T4 x2 (29 GB RAM) | Qwen3-8B NF4 | **✓ Yes** | 500 (2 epochs) | Exploration: 8B teacher = same signal quality as A100 |
+| `a100` | `a10_qwen` | A10 24 GB (free access) | Qwen3-8B **BF16** | **✓ Yes** | 1000 (2 epochs) | Stage 1.5: stronger convergence; 8B BF16 no quantization |
+| `a100` | `a100_qwen` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes** | none (0.27 epochs) | Publication confirmation only; full data diversity |
+
+**Training budget formula (applies to all tiers):**
+```
+epochs = steps / max_train_prompts
+
+2 epochs  = minimum to see trend direction with 8B teacher
+5 epochs  = clear convergence proof with weaker teacher (GPT-2, CPU)
+no cap    = paper runs — diversity of full 7473 prompts matters more than epochs
+```
+
+> **BF16 vs NF4 note:** Kaggle (NF4) and A10 (BF16) give the same loss rankings. BF16 has ~5-10% cleaner gradients (less rounding noise in teacher logits). NF4 Kaggle results reliably predict BF16 A100 results — they are directionally interchangeable for research decisions.
 
 **GPU credit priority order** (use the cheapest that fits):
-1. **IITH A100** — ₹80/GPU-hr (~$0.94). Best value; use for all A100 confirmation runs.
-2. **Lightning AI** — monthly free credits; good for sustained Tier 2 exploration.
-3. **Kaggle T4 x2** — free, 30 GPU-hr/week. Burns 2× quota → ~15 effective hr/wk.
-4. **Colab free T4** — limited session time; use when Kaggle is exhausted.
-5. **Modal A100** — ⚠️ **$1 free credit only** (was $30; no longer viable for full runs). Use only for a single targeted smoke/ablation. ~$3–4 per 1000-step run.
+1. **A10 (free access)** — 24 GB, BF16 8B teacher, ~80-100 min/run. Best for exploration.
+2. **IITH A100** — ₹80/GPU-hr (~$0.94). Best value for confirmation runs.
+3. **Lightning AI** — monthly free credits; good for sustained Tier 2 exploration.
+4. **Kaggle T4 x2** — free, 30 GPU-hr/week. Burns 2× quota → ~15 effective hr/wk.
+5. **Colab free T4** — limited session time; use when Kaggle is exhausted.
+6. **Modal A100** — ⚠️ **$1 free credit only** (was $30; no longer viable for full runs).
 
 **Per-loss iteration** (works on all persistent platforms):
 ```bash
 # Run one loss at a time — baseline runs once, --skip_existing resumes:
-python orchestration/experiment.py --config a100 --losses kl --yes
-python orchestration/experiment.py --config a100 --losses bv_tree --yes
-# Each invocation: train → merge → eval for that loss only
+python orchestration/experiment.py --config a10_qwen --losses kl --yes
+python orchestration/experiment.py --config a10_qwen --losses kl_tree --yes
+python orchestration/experiment.py --config a100_qwen --losses kl --yes   # confirmation
 ```
 
 **Kaggle constraint:** T4 x2 burns 2× quota (~15 effective h/wk) → 1 loss per session practical.
-Use `LOSSES = "kl"` in Cell 0, change each session. See `docs/KAGGLE.md`.
 
 ### 0.6 Existing statistical rigor — what EXISTS vs MISSING
 
