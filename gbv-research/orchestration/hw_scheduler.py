@@ -45,16 +45,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 _GBV_ROOT = os.path.dirname(HERE)   # gbv-research/
 
 # VRAM budgets for slot calculation:
+#
 #   TRAIN_VRAM_GB: peak VRAM per training job (model load + caching_allocator_warmup).
 #     transformers >= 4.46 introduced caching_allocator_warmup() which pre-allocates
-#     ~half the model size in FP16 during from_pretrained() to warm up the CUDA
-#     allocator caches.  For Qwen3-8B BF16 (16 GB model) this is +15.26 GB peak:
-#       teacher 15.6 GB + draft 1.2 GB + warmup 15.26 GB + overhead ≈ 34-36 GB peak.
-#     Set to 20 GB so floor(39.5 / 20) = 1 slot on A100-40GB (safe, no OOM).
-#     On A100-80GB: floor(79 / 20) = 3 slots (correct, 3 × 8B jobs fit).
-#     On T4 (16 GB): floor(16 / 20) = 0 → clamped to 1 (one job at a time, uses both T4s).
+#     ~half the model size in FP16 during from_pretrained() to warn up CUDA caches.
+#     For Qwen3-8B BF16 (16 GB model): teacher 15.6 + draft 1.2 + warmup 15.26 ≈ 34-36 GB.
+#     Set to 20 GB so floor(39.5 / 20) = 1 slot on A100-40GB (safe).
+#     A100-80GB: floor(79 / 20) = 3 slots.  T4 (16 GB): floor(16/20)=0 → clamped to 1.
+#
+#   EVAL_VRAM_GB: peak VRAM per eval job.
+#     Each eval subprocess independently loads BOTH teacher AND draft into VRAM:
+#       Qwen3-8B teacher BF16 : 15.6 GB
+#       Qwen3-0.6B draft BF16 :  1.2 GB
+#       KV cache + activations :  2-3 GB
+#       Total peak             : ~19-20 GB
+#     With EVAL_VRAM_GB=6.5 the scheduler gave 3 eval slots on A100-40GB:
+#       3 × 19 GB = 57 GB > 39.5 GB → models pushed to CPU → 1000+ s/prompt.
+#     Set to 20 GB so floor(39.5 / 20) = 1 eval slot on A100-40GB (safe).
+#     A100-80GB: floor(79 / 20) = 3 eval slots (3 × 8B evals fit, correct).
 TRAIN_VRAM_GB = 20.0   # peak VRAM per training job (model + transformers warmup buffer)
-EVAL_VRAM_GB  = 6.5    # estimated VRAM per eval job
+EVAL_VRAM_GB  = 20.0   # peak VRAM per eval job (8B teacher + draft + KV cache)
 MAX_SLOTS_PER_GPU = 3  # safety cap: never run more than 3 jobs per GPU
 
 _stdout_lock = threading.Lock()
