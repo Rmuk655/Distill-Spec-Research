@@ -138,7 +138,20 @@ export HF_DATASETS_OFFLINE=1
 # blocks instead of one giant contiguous allocation — avoids OOM spikes.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 EOF
-echo "      Env saved to ${ENVFILE}  (source it in new terminals)"
+# Auto-source in every new shell by adding to ~/.bashrc (idempotent — only adds once).
+BASHRC="${HOME}/.bashrc"
+MARKER="# specdist env"
+if ! grep -q "${MARKER}" "${BASHRC}" 2>/dev/null; then
+    echo "" >> "${BASHRC}"
+    echo "${MARKER}" >> "${BASHRC}"
+    echo "[ -f '${ENVFILE}' ] && source '${ENVFILE}'" >> "${BASHRC}"
+    echo "      Added to ${BASHRC} — env loads automatically in new shells"
+else
+    echo "      Already in ${BASHRC} — no change needed"
+fi
+# Source now so current session picks it up without needing a new terminal.
+source "${ENVFILE}"
+echo "      Env sourced in current shell (TRANSFORMERS_OFFLINE=1, venv active)"
 
 # W&B auth
 WANDB_KEY="${WANDB_API_KEY:-}"

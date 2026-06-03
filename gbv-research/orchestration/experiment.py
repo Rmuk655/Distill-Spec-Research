@@ -356,6 +356,11 @@ def _load_config_yaml(config_name: str) -> dict:
             # run lands in the right W&B project and group.
             "wandb_project":        logging_cfg.get("wandb_project", "distillspec"),
             "wandb_group":          logging_cfg.get("wandb_group", config_name),
+            # experiment_tag: human-readable session identifier in results.db.
+            # Set in YAML logging.experiment_tag (e.g. "krishnanr_iith") so
+            # all eval rows from this machine are easily identifiable.
+            # CLI --experiment_tag overrides this (handled in main()).
+            "yaml_experiment_tag":  logging_cfg.get("experiment_tag", None),
             # logging.no_wandb: true -> disable W&B for all subprocesses via
             # WANDB_MODE=disabled (set in main() after _load_wandb_config()).
             "no_wandb":             bool(logging_cfg.get("no_wandb", False)),
@@ -3559,6 +3564,12 @@ def main():
 
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
+
+    # experiment_tag: CLI wins, then YAML logging.experiment_tag, then auto-generate.
+    # This allows a machine-specific tag (e.g. "krishnanr_iith") to be set once
+    # in the YAML so all eval rows from that machine are identifiable in the dashboard.
+    if not args.experiment_tag and _yaml_cfg.get("yaml_experiment_tag"):
+        args.experiment_tag = _yaml_cfg["yaml_experiment_tag"]
 
     # ── Early stdout redirect (detached mode) ────────────────────────────────
     # When experiment.py is started by clean_restart.py (or any non-interactive

@@ -55,8 +55,8 @@ logging:
   wandb_group: a100-qwen
   run_label: "8B-a100"
   # experiment_tag groups all eval cells from one session in results.db + dashboard.
-  # Uncomment and set to a human-readable name for this machine:
-  # experiment_tag: rmukundServer
+  # Override on CLI: python deploy/aip_run.py --experiment_tag my_tag
+  experiment_tag: krishnanr_iith
 
 experiment:
   pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
