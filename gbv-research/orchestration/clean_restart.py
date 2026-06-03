@@ -120,7 +120,7 @@ def _get_config_pair_tag(config_name: str) -> str:
 
 # ── Directories / files to wipe ────────────────────────────────────────────
 
-def _wipe_targets(config_slug=None, pair_tag=""):
+def _wipe_targets(config_slug=None, pair_tag="", db_root=None):
     """Return (path, keep_dir, description) tuples to wipe.
 
     Scoped by pair_tag so that restarting one model family never touches
@@ -139,7 +139,9 @@ def _wipe_targets(config_slug=None, pair_tag=""):
     WandB, and orchestration/wandb stale runs.
     """
     import glob as _glob
-    db = os.path.join(_GBV_RESEARCH, "db")
+    # Use db_root if provided (e.g. storage_root from --storage_root flag),
+    # otherwise default to gbv-research/db/
+    db = db_root or os.path.join(_GBV_RESEARCH, "db")
 
     targets = []  # built up below based on scope
 
@@ -185,7 +187,7 @@ def _wipe_targets(config_slug=None, pair_tag=""):
     return targets
 
 
-def _wipe_results_db_rows(pair_tag: str, draft_model: str = "", dry_run=False):
+def _wipe_results_db_rows(pair_tag: str, draft_model: str = "", dry_run=False, storage_root=""):
     """Delete rows from results.db for this model pair.
 
     Two types of rows are cleaned:
@@ -201,9 +203,15 @@ def _wipe_results_db_rows(pair_tag: str, draft_model: str = "", dry_run=False):
        (not the path), so old baseline rows survive a pair-tag-only DB wipe
        and cause all baseline cells to SKIP on the next run.
     """
-    db_path = os.path.join(_GBV_RESEARCH, "db", "results.db")
-    if not os.path.exists(db_path):
-        print(f"  [skip] db/results.db not found — nothing to clear")
+    # Look for results.db in storage_root first (used when --storage_root is set),
+    # then fall back to the default db/ directory inside the repo.
+    db_candidates = []
+    if storage_root and os.path.isdir(storage_root):
+        db_candidates.append(os.path.join(storage_root, "results.db"))
+    db_candidates.append(os.path.join(_GBV_RESEARCH, "db", "results.db"))
+    db_path = next((p for p in db_candidates if os.path.exists(p)), None)
+    if not db_path:
+        print(f"  [skip] results.db not found — nothing to clear")
         return
 
     try:
@@ -361,8 +369,12 @@ def _force_remove(path):
         print(f"  [warn] Could not remove {path}: {e}")
 
 
-def _wipe(config_slug=None, pair_tag="", dry_run=False):
-    for path, keep_dir, desc in _wipe_targets(config_slug=config_slug, pair_tag=pair_tag):
+def _wipe(config_slug=None, pair_tag="", dry_run=False, db_root=None):
+    """Wipe outputs for this config/pair.  db_root overrides the default db/ directory
+    (use it to wipe storage_root artifacts when --storage_root was set)."""
+    effective_db = db_root or os.path.join(_GBV_RESEARCH, "db")
+    for path, keep_dir, desc in _wipe_targets(config_slug=config_slug, pair_tag=pair_tag,
+                                               db_root=effective_db):
         if not os.path.exists(path):
             print(f"  [skip] {desc} — not found")
             continue
@@ -395,36 +407,45 @@ def _wipe(config_slug=None, pair_tag="", dry_run=False):
 
 # ── Reset pipeline state ───────────────────────────────────────────────────
 
-def _state_glob(config_slug: str):
+def _state_glob(config_slug: str, storage_root: str = ""):
     """Return all state file paths matching this config slug.
 
-    State files now encode the model-pair tag in their name:
+    Looks in two places:
+      1. orchestration/ (default, local dev)
+      2. storage_root/ (when --storage_root is set, e.g. /home/colligo/specdist)
+         experiment.py writes state files there when --storage_root is passed.
+
+    State files encode the model-pair tag:
         pipeline_state_{slug}-{pair_tag}.json
         pipeline_state_{slug}-{pair_tag}_smoke.json
-
-    We don't require the caller to know the pair tag — glob for any
-    file that starts with  pipeline_state_{slug}-  (or the legacy
-    pipeline_state_{slug}.json format from before the pair-tag change).
-
-    Config slugs with slashes (e.g. 'profiles/kl_only') are flattened
-    to underscores so the glob pattern is a flat filename pattern.
     """
     import glob as _glob
     slug = config_slug.replace("/", "_").replace("\\", "_")
-    # Match both new format (has pair tag) and legacy format (no pair tag)
-    pattern_new    = os.path.join(_HERE, f"pipeline_state_{slug}-*.json")
-    pattern_legacy = os.path.join(_HERE, f"pipeline_state_{slug}.json")
-    return sorted(_glob.glob(pattern_new) + _glob.glob(pattern_legacy))
+
+    def _patterns(directory):
+        return [
+            os.path.join(directory, f"pipeline_state_{slug}-*.json"),
+            os.path.join(directory, f"pipeline_state_{slug}.json"),
+        ]
+
+    matches = []
+    for pat in _patterns(_HERE):
+        matches.extend(_glob.glob(pat))
+    if storage_root and os.path.isdir(storage_root):
+        for pat in _patterns(storage_root):
+            matches.extend(_glob.glob(pat))
+
+    return sorted(set(matches))
 
 
-def _reset_state(config_slug: str, dry_run=False):
+def _reset_state(config_slug: str, dry_run=False, storage_root=""):
     """Reset all state files for this config slug to all-pending.
 
     Finds every pipeline_state_{slug}*.json file (including pair-tag and
     smoke variants) and resets them.  experiment.py will re-create any
     missing files on the next run.
     """
-    paths = _state_glob(config_slug)
+    paths = _state_glob(config_slug, storage_root=storage_root)
     if not paths:
         slug = config_slug.replace("/", "_").replace("\\", "_")
         print(f"  [skip] pipeline_state_{slug}*.json not found — will be created by experiment.py")
@@ -506,6 +527,12 @@ Examples:
                         "e.g. laptop_qwen, laptop_gpt2, laptop_llama, kaggle, "
                         "a100_qwen, server_gpt2, profiles/kl_only). "
                         "Default: laptop_qwen")
+    p.add_argument("--storage_root", default=None,
+                   help="Persistent storage root used when the pipeline ran "
+                        "(e.g. /home/colligo/specdist). When set, state files, "
+                        "results.db, checkpoints, and logs are looked up there "
+                        "instead of the default db/ directory inside the repo. "
+                        "Must match the --storage_root passed to experiment.py.")
     p.add_argument("--dry_run", action="store_true",
                    help="Show what would be done, make no changes")
     p.add_argument("--no_restart", action="store_true",
@@ -516,6 +543,9 @@ Examples:
     p.add_argument("--losses", default=None,
                    help="Forwarded to experiment.py (e.g. --losses kl,bv_tree)")
     args = p.parse_args()
+    # Also read STORAGE_ROOT from env (set by aip_gpu_setup.sh / ~/.specdist_env)
+    if not args.storage_root:
+        args.storage_root = os.environ.get("STORAGE_ROOT", "")
 
     dry = args.dry_run
     tag = " [DRY RUN]" if dry else ""
@@ -525,10 +555,13 @@ Examples:
     # scopes baseline rows (which have draft_path=<hf_model_id>, no pair tag).
     _config_slug = args.config.replace("/", "_").replace("\\", "_")
     _pair_tag, _draft_model = _get_config_pair_info(args.config)
+    _sr = args.storage_root or ""   # storage root (may be empty for local dev)
 
     print(f"\n{'='*60}")
     print(f"  GBV Clean Restart{tag}")
     print(f"  Config : {args.config}")
+    if _sr:
+        print(f"  Storage: {_sr}")
     if _pair_tag:
         print(f"  Pair   : {_pair_tag}  (trained rows + baseline for '{_draft_model}')")
     else:
@@ -540,17 +573,21 @@ Examples:
 
     print("\n2. Wiping outputs...")
     _wipe(config_slug=_config_slug, pair_tag=_pair_tag, dry_run=dry)
+    # If storage_root was used, also wipe there (checkpoints, logs, etc.)
+    if _sr:
+        _wipe(config_slug=_config_slug, pair_tag=_pair_tag, dry_run=dry,
+              db_root=_sr)
 
     print("\n2b. Clearing results.db rows for this model pair...")
     if _pair_tag:
-        _wipe_results_db_rows(_pair_tag, _draft_model, dry_run=dry)
+        _wipe_results_db_rows(_pair_tag, _draft_model, dry_run=dry, storage_root=_sr)
     else:
         print("  [skip] No pair tag — results.db untouched (YAML could not be read)")
 
     print("\n3. Resetting pipeline state...")
     # _reset_state globs for pipeline_state_{slug}*.json so it catches both
-    # pair-tag variants and smoke variants in a single call.
-    _reset_state(args.config, dry_run=dry)
+    # pair-tag variants and smoke variants in both HERE and storage_root.
+    _reset_state(args.config, dry_run=dry, storage_root=_sr)
 
     if not args.no_restart:
         print("\n4. Launching pipeline...")
