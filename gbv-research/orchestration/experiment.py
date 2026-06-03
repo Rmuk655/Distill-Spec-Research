@@ -1136,7 +1136,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     if _h.get("eval_n_prompts"):
         _n = _h["eval_n_prompts"]
         _n_gsm8k = _n   # stays in sync unless overridden below
-    _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n_gsm8k)
+    # eval_n_prompts_gsm8k: paper configs set this to 1319 for full test set.
+    # In smoke mode this MUST be ignored — smoke uses n=5 regardless of config.
+    # Without this guard the A100 smoke baseline eval would run 1319 × 5 modes
+    # = ~5 hours instead of the expected ~5 minutes.
+    if not smoke:
+        _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n_gsm8k)
     if _h.get("eval_max_tokens"):
         _max_tok = _h["eval_max_tokens"]
     # Laptop baseline eval: cap K at 3 (computed after YAML override so it also
