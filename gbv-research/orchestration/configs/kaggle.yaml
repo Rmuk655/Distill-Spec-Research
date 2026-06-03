@@ -68,6 +68,11 @@ training:
   # Loss-specific hyperparameters (only used when the named loss is active)
   ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
   jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
+  # T4 exploration: 2 epochs over 500 diverse prompts.
+  # 1000 steps / 500 prompts = 2 epochs with 8B NF4 teacher → clear trend.
+  # 8B teacher signal is strong enough that 2 epochs reliably ranks losses.
+  # Without this: 1000/7473 = 13% of 1 epoch → marginal trend visibility.
+  max_train_prompts: 500
 
 dataset:
   train: core/datasets/raw/gsm8k_train.jsonl

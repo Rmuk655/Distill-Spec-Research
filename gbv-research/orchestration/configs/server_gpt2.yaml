@@ -35,7 +35,7 @@ models:
   target: gpt2-medium
 
 training:
-  steps: 1000                   # 2x laptop_gpt2; clearer convergence curves
+  steps: 1000                   # 2x laptop_gpt2
   lr: 1.0e-4
   lora_r: 8
   lora_alpha: 16
@@ -47,6 +47,9 @@ training:
   lora_dropout: 0.05
   ebe_kl_weight: 0.1
   jsd_alpha: 0.5
+  max_train_prompts: 200        # 1000 steps / 200 prompts = 5 epochs
+                                # GPT-2-M teacher is weak (4.3x gap on CPU) —
+                                # needs 5 epochs to show clear convergence trend
 
 logging:
   wandb_group: server-gpt2-gsm8k

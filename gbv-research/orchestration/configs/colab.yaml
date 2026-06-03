@@ -49,6 +49,10 @@ training:
   # Loss-specific hyperparameters (only used when the named loss is active)
   ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
   jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
+  # Free-tier session budget: cap training set for 2 full epochs.
+  # 500 steps / 250 prompts = 2 epochs with 4B teacher → trend visible.
+  # Without this: 500/7473 = 6.7% of 1 epoch → barely any trend.
+  max_train_prompts: 250
 
 dataset:
   train: core/datasets/raw/gsm8k_train.jsonl

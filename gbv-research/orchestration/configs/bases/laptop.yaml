@@ -23,6 +23,13 @@ dataset:
   eval:  core/datasets/raw/gsm8k_5.jsonl
   val_dataset: gsm8k_5.jsonl    # fixed 5-prompt val — fast (~30 s), consistent signal
 
+training:
+  # Laptop default: cap training set at 50 prompts so 100 steps = 2 epochs.
+  # Without this cap: 100 steps / 7473 prompts = 1.3% of 1 epoch → no trend visible.
+  # 2 epochs is enough to catch crashes and see any convergence signal.
+  # Override in leaf configs where more epochs are needed (gpt2: 100, llama: 100).
+  max_train_prompts: 50
+
 checkpointing:
   max_checkpoints: 3
   output_root: db/checkpoints

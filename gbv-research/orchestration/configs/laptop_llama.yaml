@@ -39,6 +39,7 @@ training:
   lora_dropout: 0.05
   ebe_kl_weight: 0.1
   jsd_alpha: 0.5
+  max_train_prompts: 100        # 500 steps / 100 prompts = 5 epochs — convergence proof
 
 logging:
   wandb_group: laptop-llama-gsm8k

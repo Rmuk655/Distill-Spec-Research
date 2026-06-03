@@ -44,14 +44,15 @@ hardware:
   compile: true                # Linux GPU — torch.compile gives 10-20% speedup
 
 training:
-  # 1000 steps = 15% of 1 epoch on full 7473 prompts.
-  # With 8B teacher (13× size gap, strong signal) this shows clear loss trend.
-  # Run with --steps 2000 for stronger convergence confirmation if session allows.
-  steps: 1000
+  # 2000 steps / 1000 prompts = 2 full epochs over 1000 diverse prompts.
+  # 2 epochs with 8B BF16 teacher gives strong, stable convergence signal.
+  # Time at ~2-3 s/step: 2000 × 2.5 s = ~83 min.
+  # A10 is free and fast — be liberal with iterations vs Kaggle/Colab.
+  steps: 2000
+  max_train_prompts: 1000      # 2 epochs = clear convergence, diverse enough to generalise
   lr: 3.0e-5
-  warmup_steps: 100            # 10% of 1000 steps (50 grad-steps = ~12 optimizer steps)
-  grad_accum: 8                # 8 prompts per optimizer step → 125 optimizer steps total
-                               # smoother gradients than grad_accum=4 without extra VRAM
+  warmup_steps: 200            # 10% of 2000 steps
+  grad_accum: 8                # 8 prompts per optimizer step → 250 optimizer steps total
   lora_r: 8                    # r=8 for the 13× teacher gap (vs r=4 for 2.8× 1.7B gap)
   lora_alpha: 16
   max_new_tokens: 96           # slightly less than A100's 128 to stay safe in 24 GB
