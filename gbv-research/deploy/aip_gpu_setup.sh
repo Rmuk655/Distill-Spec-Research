@@ -106,6 +106,51 @@ pip install --quiet \
 
 echo "      Done."
 
+# ── Training data (download HERE — before offline flags are set in step 3) ────
+# This must come before sourcing ~/.specdist_env which sets HF_DATASETS_OFFLINE=1.
+# If training data is downloaded after offline flags are set, the HF datasets
+# library refuses to make network calls and the download fails.
+DATA_FILE="${GBV_DIR}/core/datasets/raw/gsm8k_train.jsonl"
+if [ ! -f "${DATA_FILE}" ]; then
+    echo "      Downloading gsm8k_train.jsonl (7473 training prompts, ~3 MB)..."
+    python - <<PYEOF
+import urllib.request, json, os, sys
+GBV = os.environ.get("GBV_DIR", ".")
+path = os.path.join(GBV, "core/datasets/raw/gsm8k_train.jsonl")
+os.makedirs(os.path.dirname(path), exist_ok=True)
+
+# Download directly from GitHub — no HF library, no auth, no offline-mode conflicts.
+# load_dataset('gsm8k') is broken in newer huggingface-hub (needs namespace 'openai/gsm8k').
+# GitHub raw source is stable and always accessible.
+url = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl"
+try:
+    prompts = []
+    with urllib.request.urlopen(url, timeout=60) as r:
+        for line in r:
+            item = json.loads(line)
+            prompts.append(json.dumps({"prompt": item["question"]}) + "\n")
+    with open(path, "w") as f:
+        f.writelines(prompts)
+    print(f"      gsm8k_train.jsonl: {len(prompts)} prompts saved (from GitHub)")
+except Exception as e:
+    # Fallback: try HF datasets library with explicit namespace
+    try:
+        from datasets import load_dataset
+        for v in ("HF_DATASETS_OFFLINE","HF_HUB_OFFLINE","TRANSFORMERS_OFFLINE"):
+            os.environ.pop(v, None)
+        ds = load_dataset("openai/gsm8k", "main", split="train")
+        with open(path, "w") as f:
+            for item in ds:
+                f.write(json.dumps({"prompt": item["question"]}) + "\n")
+        print(f"      gsm8k_train.jsonl: {len(ds)} prompts saved (from HF)")
+    except Exception as e2:
+        print(f"      WARNING: download failed: {e} / {e2}")
+        print("      Fix: python -c \"import urllib.request,json,os; [open('core/datasets/raw/gsm8k_train.jsonl','a').write(json.dumps({'prompt':json.loads(l)['question']})+chr(10)) for l in urllib.request.urlopen('https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl')]\"")
+PYEOF
+else
+    echo "      gsm8k_train.jsonl: $(wc -l < "${DATA_FILE}") prompts (already present)"
+fi
+
 # ── Environment variables ─────────────────────────────────────────────────────
 echo "[3/5] Setting environment..."
 
