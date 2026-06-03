@@ -218,9 +218,17 @@ class SmallModelKVCacheProposer(Proposer):
             total_generated_len = proposer_output.past_key_values[0].shape[-2] + 1
             proposer_key_values = crop_mqa_func(proposer_output.past_key_values,
                                                 max_len=total_generated_len - proposer_output.generated_len)
-        else:  # mha
-            total_generated_len = proposer_output.past_key_values[0][0].shape[2] + 1
-            proposer_key_values = crop_func(proposer_output.past_key_values,
+        else:  # mha — support both DynamicCache (transformers ≥4.46) and legacy tuple cache
+            pkv = proposer_output.past_key_values
+            try:
+                from transformers import DynamicCache as _DC
+                if isinstance(pkv, _DC):
+                    total_generated_len = pkv.key_cache[0].shape[-2] + 1
+                else:
+                    total_generated_len = pkv[0][0].shape[2] + 1
+            except (ImportError, AttributeError, IndexError):
+                total_generated_len = pkv[0][0].shape[2] + 1
+            proposer_key_values = crop_func(pkv,
                                             max_len=total_generated_len - proposer_output.generated_len)
 
         if self.is_encoder_decoder:

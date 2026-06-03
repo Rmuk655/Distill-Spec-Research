@@ -115,8 +115,14 @@ class Verifier:
                 verifier_output.generated_len - 1) + n_matches
             verifier_key_values = crop_mqa_past_key_values(
                 verifier_output.past_key_values, verifier_generated_len - 1)
-        else:
-            verifier_generated_len = verifier_output.past_key_values[0][0].shape[2] - (
+        else:  # mha — support both DynamicCache (transformers ≥4.46) and legacy tuple cache
+            pkv = verifier_output.past_key_values
+            try:
+                from transformers import DynamicCache as _DC
+                _seq_len = pkv.key_cache[0].shape[-2] if isinstance(pkv, _DC) else pkv[0][0].shape[2]
+            except (ImportError, AttributeError, IndexError):
+                _seq_len = pkv[0][0].shape[2]
+            verifier_generated_len = _seq_len - (
                 verifier_output.generated_len - 1) + n_matches
             if self.is_encoder_decoder:
                 verifier_key_values = crop_past_key_values_seq2seq(
