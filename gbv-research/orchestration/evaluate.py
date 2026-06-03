@@ -1457,6 +1457,30 @@ def main():
         _FORCED_DEVICE = "cpu"
         print("  [device] --device cpu — forcing CPU for all eval (CPU-path smoke test)")
 
+        # CPU speed caps — gpt2-medium tree attention on CPU runs ~400-700 s/prompt.
+        # We cap n, max_tokens, and L to values that exercise every code path
+        # in a few minutes rather than hours.  GPU runs are unaffected.
+        #
+        #   n=2, max_tokens=20, L=3  →  ~2-3 min per mode, ~12 min for all 5 modes
+        #   vs default (n=5, max_tokens=50, L=8) → 56 min for bv alone on CPU
+        #
+        _CPU_CAP_N          = 2   # prompts per mode  (enough to see tree variation)
+        _CPU_CAP_MAX_TOKENS = 20  # generation length (each token is ~5 s on CPU)
+        _CPU_CAP_L          = 3   # draft block depth (shorter tree = fewer nodes)
+        _cpu_reduced = []
+        if args.n > _CPU_CAP_N:
+            _cpu_reduced.append(f"n {args.n}→{_CPU_CAP_N}")
+            args.n = _CPU_CAP_N
+        if args.max_tokens > _CPU_CAP_MAX_TOKENS:
+            _cpu_reduced.append(f"max_tokens {args.max_tokens}→{_CPU_CAP_MAX_TOKENS}")
+            args.max_tokens = _CPU_CAP_MAX_TOKENS
+        if args.L > _CPU_CAP_L:
+            _cpu_reduced.append(f"L {args.L}→{_CPU_CAP_L}")
+            args.L = _CPU_CAP_L
+        if _cpu_reduced:
+            print(f"  [cpu-cap] Reduced for CPU speed: {', '.join(_cpu_reduced)}")
+            print(f"            (exercises all code paths; research numbers come from GPU)")
+
     # Default experiment_tag: {hostname}-{YYYYMMDD_HHMM}-v{n}
     # The version number auto-increments per machine per calendar day so
     # successive runs on the same machine are distinguishable in the dashboard.
