@@ -1,4 +1,7 @@
 # laptop_llama — convergence verification on CUDA (RTX 500 Ada, 6 GB VRAM)
+# Inherits all shared settings from laptop.yaml; overrides model pair, load_in_4bit,
+# training tuning, and health/checkpointing cadence.
+#
 # Draft:  meta-llama/Llama-3.2-1B-Instruct  (1B,  ~2.0 GB BF16)
 # Target: meta-llama/Llama-3.2-3B-Instruct  (3B,  ~1.5 GB NF4 4-bit)
 # Both share vocab_size=128256 — SD requirement satisfied.
@@ -7,32 +10,26 @@
 #   Accept licence at https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct
 #   then run:  huggingface-cli login
 #
-# PURPOSE: Research-relevant convergence evidence on a real distillation pair.
-# LLaMA 3.2 (1B → 3B) gives genuine distillation signal (3× size gap) and the
-# same architecture as most SOTA speculative decoding work.  Results here are
-# meaningful and transfer to claims about the general method, unlike the 0.5B →
-# 0.6B Qwen laptop pair.
-#
 # VRAM breakdown:
-#   1B draft  BF16   ≈ 2.0 GB
-#   3B target NF4    ≈ 1.5 GB   (load_in_4bit: true)
-#   LoRA adapter     ≈ 0.1 GB
-#   Activations      ≈ 1-2 GB   (max_new_tokens=32, lora_r=8)
-#   Total            ≈ 4.6-5.6 GB  → safe on 6 GB
+#   1B draft  BF16   ~2.0 GB
+#   3B target NF4    ~1.5 GB   (load_in_4bit: true)
+#   LoRA + activations ~1-2 GB
+#   Total ~4.6-5.6 GB  → safe on 6 GB
+#
+# PURPOSE: Research-relevant convergence evidence — 3x size gap gives genuine
+# distillation signal.  Results transfer to claims about the general method,
+# unlike the 0.5B→0.6B Qwen laptop pair.
 #
 # USAGE:
 #   python orchestration/experiment.py --config laptop_llama --smoke --yes
-#     Crash-test: 10 steps per loss, ~20-30 min.
 #   python orchestration/experiment.py --config laptop_llama --yes
-#     Full convergence run: 500 steps, ~4-8 hr.
 #
 # NOTE: ebe and online losses excluded — see docs/ISSUES.md.
 
+_base: laptop   # inherits: hardware (cuda/laptop-tier), dataset, evaluation, tree_training
+
 hardware:
-  device: cuda
-  hw_tier: laptop           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
-  load_in_4bit: true             # target (3B) loaded in NF4 4-bit; draft stays BF16
-  compile: false                 # torch.compile not reliable on Windows
+  load_in_4bit: true            # 3B target in NF4 4-bit; draft stays BF16
 
 models:
   family: llama
@@ -44,56 +41,25 @@ training:
   lr: 5.0e-5                    # slightly higher than Qwen — LLaMA adapts faster
   lora_r: 8
   lora_alpha: 16
-  max_new_tokens: 32
   teacher_temperature: 1.0      # LLaMA does NOT pre-scale logits by temperature
   online_lr: 5.0e-4
-  seed: 42
-  grad_clip: 1.0
-  lora_dropout: 0.05
-  ebe_kl_weight: 0.1
-  jsd_alpha: 0.5
-
-dataset:
-  train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_5.jsonl
-  val_dataset: gsm8k_5.jsonl
-
-checkpointing:
-  save_every: 100
-  milestone_every: 500
-  max_checkpoints: 3
-  output_root: db/checkpoints
 
 logging:
-  log_every: 25
-  wandb_project: distillspec
   wandb_group: laptop-llama-gsm8k
   run_label: "llama-1B-3B-laptop"
-  no_wandb: true        # laptop convergence runs — no W&B overhead
 
 health:
   val_every: 100
   ppl_check_every: 250
-  ppl_threshold: 1.25
-  nan_action: stop
-  early_stop_patience: 3
+
+checkpointing:
+  save_every: 100
+  milestone_every: 500
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [3]
   temperatures: [1.0]
-  L: 8
-  n_prompts: 5
-
-tree_training:
-  tree_K: 4
-  tree_L: 8
 
 experiment:
   # ebe and online excluded — see docs/ISSUES.md.
-  losses: [kl, rev_kl, jsd, l1,
-           kl_tree, rev_kl_tree, jsd_tree,
-           bv_tree, gbv_tree, traversal_tree,
-           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
   exclude_losses: [ebe, ebe_single, ebe_tree,
                    online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]

@@ -1,33 +1,24 @@
-# laptop_gpt2 — convergence verification on CPU (no GPU required)
-# Draft:  distilgpt2   (82 M, ~330 MB)
+# laptop_gpt2 — convergence verification on CUDA (RTX 500 Ada, 6 GB VRAM)
+# Inherits all shared settings from laptop.yaml; overrides model pair, training tuning,
+# and health/checkpointing cadence for a 500-step convergence run.
+#
+# Draft:  distilgpt2   (82 M,  ~330 MB)
 # Target: gpt2-medium  (355 M, ~1.4 GB)
 # Both share vocab_size=50257 — SD requirement satisfied.
 #
-# PURPOSE: Prove that distillation losses converge on a small model pair
-# that runs fully on CPU.  Use this when Kaggle/Colab credits are exhausted.
-# Results ARE meaningful (355M teacher >> 82M student, real distillation
-# signal) but absolute numbers won't transfer to Qwen at scale.
+# PURPOSE: Prove that distillation losses converge on a small model pair.
+# Results ARE meaningful: 355M teacher >> 82M student (4.3x gap), real distillation
+# signal.  Use this when Kaggle/Colab credits are exhausted.
 #
 # USAGE:
 #   python orchestration/experiment.py --config laptop_gpt2 --smoke --yes
-#     Fast crash-test: 10 steps per loss, ~15 min on CPU.
+#     Fast crash-test: 10 steps per loss, ~15 min.
 #   python orchestration/experiment.py --config laptop_gpt2 --yes
 #     Full convergence run: 500 steps, plot loss + acceptance curves.
 #
-# INTERPRETATION:
-#   acceptance rate > 0 at step 50  → speculative decoding loop works
-#   loss monotonically decreasing   → distillation signal is propagating
-#   your method beats forward_kl    → hypothesis supported at small scale
-#
-# NOTE: ebe and online losses are excluded (see docs/ISSUES.md).
+# NOTE: ebe and online losses excluded — see docs/ISSUES.md.
 
-hardware:
-  device: cuda                   # RTX 500 Ada (4 GB VRAM) — both GPT-2 models fit easily
-  hw_tier: laptop                # laptop GPU tier — drives per-mode GPU isolation + 2700 MB
-                                 # alpha floor. (Use server_gpt2.yaml with hw_tier: cpu for
-                                 # the CPU-only ATS server — this config runs on the laptop GPU.)
-  load_in_4bit: false
-  compile: false                 # torch.compile not reliable on Windows
+_base: laptop   # inherits: hardware (cuda/laptop-tier), dataset, evaluation, tree_training
 
 models:
   family: gpt2
@@ -35,61 +26,30 @@ models:
   target: gpt2-medium
 
 training:
-  steps: 500                    # enough to show convergence trend; ~2-4 hr on CPU
-  lr: 1.0e-4                    # higher than Qwen runs — smaller model, faster adaptation
+  steps: 500                    # enough to show convergence trend
+  lr: 1.0e-4                    # higher than Qwen — smaller model, faster adaptation
   lora_r: 8
   lora_alpha: 16
-  max_new_tokens: 32
-  teacher_temperature: 1.0      # GPT-2 uses temperature=1.0 by default (no pre-scaling)
+  teacher_temperature: 1.0      # GPT-2 does not pre-scale logits by temperature
   online_lr: 1.0e-3
-  seed: 42
-  grad_clip: 1.0
-  lora_dropout: 0.05
-  ebe_kl_weight: 0.1
-  jsd_alpha: 0.5
-
-dataset:
-  train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_5.jsonl
-  val_dataset: gsm8k_5.jsonl
-
-checkpointing:
-  save_every: 100
-  milestone_every: 500
-  max_checkpoints: 3
-  output_root: db/checkpoints
 
 logging:
-  log_every: 25
-  wandb_project: distillspec
   wandb_group: laptop-gpt2-gsm8k
   run_label: "gpt2-laptop"
-  no_wandb: true        # CPU convergence runs — no W&B overhead
 
 health:
   val_every: 100
   ppl_check_every: 250
   ppl_threshold: 1.5            # GPT-2 base ppl on GSM8K is high; looser threshold
-  nan_action: stop
-  early_stop_patience: 3
+
+checkpointing:
+  save_every: 100
+  milestone_every: 500
 
 evaluation:
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [3]
-  temperatures: [1.0]
-  L: 8
-  n_prompts: 5
-
-tree_training:
-  tree_K: 4
-  tree_L: 8
+  temperatures: [1.0]           # GPT-2 standard; no pre-scaling
 
 experiment:
   # ebe and online excluded — see docs/ISSUES.md.
-  # ebe_tree excluded for same reason as ebe.
-  losses: [kl, rev_kl, jsd, l1,
-           kl_tree, rev_kl_tree, jsd_tree,
-           bv_tree, gbv_tree, traversal_tree,
-           naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
   exclude_losses: [ebe, ebe_single, ebe_tree,
                    online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]

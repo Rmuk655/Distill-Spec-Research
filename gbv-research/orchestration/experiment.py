@@ -234,10 +234,80 @@ CONFIGS = {
 # YAML config loader — reads orchestration/configs/<name>.yaml for training
 # hyperparameters that the hardcoded CONFIGS dict doesn't carry.
 # Returns a flat dict; missing keys fall back to safe defaults.
+#
+# Config inheritance via _base:
+#   Any YAML may declare  _base: <parent_config_name>  as its first key.
+#   The parent is loaded recursively, then the child is deep-merged onto it:
+#     • Scalars / lists  → child wins (list replaces, not extends)
+#     • Nested dicts     → keys merged recursively (parent fills gaps)
+#   This lets a child config state only what differs from its parent.
+#
+#   Inheritance chain:
+#     laptop_gpt2.yaml  → _base: laptop
+#     laptop_llama.yaml → _base: laptop
+#     server_gpt2.yaml  → _base: laptop_gpt2  (inherits model pair; overrides hw)
 # ---------------------------------------------------------------------------
+
+def _deep_merge(parent: dict, child: dict) -> dict:
+    """Recursively merge child onto parent.
+
+    - Scalars and lists: child value replaces parent value.
+    - Dicts: keys are merged recursively (child keys override parent keys).
+    - The special '_base' key is never included in the result.
+    """
+    result = dict(parent)
+    for k, v in child.items():
+        if k == "_base":
+            continue  # directive consumed by loader, not a config key
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v  # scalar or list: child wins (lists replace, not extend)
+    return result
+
+
+def _load_raw_config(config_name: str) -> dict:
+    """Load a YAML config file and resolve _base inheritance.
+
+    Returns the raw nested dict (not flattened) after deep-merging the full
+    ancestor chain.  Never raises — returns {} on any error.
+
+    Cycle detection: config names already on the resolution stack are skipped
+    so  A→B→A  loops don't spin forever (they silently break the cycle).
+    """
+    return _load_raw_config_inner(config_name, seen=set())
+
+
+def _load_raw_config_inner(config_name: str, seen: set) -> dict:
+    if config_name in seen:
+        return {}   # cycle guard
+    seen = seen | {config_name}   # immutable copy — each branch gets its own set
+
+    # Configs whose name contains '/' are profile sub-paths:
+    #   "profiles/kl_only" → configs/profiles/kl_only.yaml
+    yaml_path = os.path.join(HERE, "configs", f"{config_name}.yaml")
+    if not os.path.exists(yaml_path):
+        return {}
+
+    try:
+        import yaml
+        with open(yaml_path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+    base_name = raw.pop("_base", None)
+    if base_name:
+        parent = _load_raw_config_inner(str(base_name), seen)
+        return _deep_merge(parent, raw)
+    return raw
+
 
 def _load_config_yaml(config_name: str) -> dict:
     """Load orchestration/configs/{config_name}.yaml and return a flat hyperparams dict.
+
+    Resolves _base inheritance before flattening, so child configs only need
+    to specify keys that differ from their parent.
 
     YAML structure (nested) is flattened to a single-level dict so callers can
     do: h.get("lr", 3e-5) without knowing the nesting.
@@ -248,9 +318,9 @@ def _load_config_yaml(config_name: str) -> dict:
     if not os.path.exists(yaml_path):
         return {}
     try:
-        import yaml
-        with open(yaml_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+        data = _load_raw_config(config_name)
+        if not data:
+            return {}
         training      = data.get("training", {})
         health        = data.get("health", {})
         checkpointing = data.get("checkpointing", {})
