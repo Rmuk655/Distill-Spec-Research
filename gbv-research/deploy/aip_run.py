@@ -58,12 +58,16 @@ Examples:
     p.add_argument("--storage_root", default=None,
                    help="Root directory for checkpoints, results.db, logs. "
                         "Defaults to STORAGE_ROOT env var or <repo>/db/")
-    p.add_argument("--no_smoke",    action="store_true",
+    p.add_argument("--no_smoke",       action="store_true",
                    help="Skip preflight smoke test")
-    p.add_argument("--resume",      action="store_true",
+    p.add_argument("--resume",         action="store_true",
                    help="Resume without smoke test (implies --no_smoke)")
-    p.add_argument("--dry_run",     action="store_true",
+    p.add_argument("--dry_run",        action="store_true",
                    help="Print the experiment.py command without running it")
+    p.add_argument("--experiment_tag", default=None,
+                   help="Human-readable tag for this session's eval results "
+                        "(default: auto-generated from hostname+timestamp). "
+                        "E.g. --experiment_tag rmukundServer")
     return p.parse_args()
 
 
@@ -189,6 +193,8 @@ def main():
     ]
     if args.losses:
         cmd += ["--losses", args.losses]
+    if args.experiment_tag:
+        cmd += ["--experiment_tag", args.experiment_tag]
 
     no_smoke = args.no_smoke or args.resume
     if not no_smoke:

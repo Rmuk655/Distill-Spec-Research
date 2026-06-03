@@ -51,6 +51,13 @@ checkpointing:
   save_every: 100
   milestone_every: 500
 
+logging:
+  wandb_group: a100-qwen
+  run_label: "8B-a100"
+  # experiment_tag groups all eval cells from one session in results.db + dashboard.
+  # Uncomment and set to a human-readable name for this machine:
+  # experiment_tag: rmukundServer
+
 experiment:
   pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
   losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
