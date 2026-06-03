@@ -16,6 +16,18 @@ except AttributeError:
 # Set automatically; override with PYTORCH_CUDA_ALLOC_CONF=<custom> in environment.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
+# Apply OMP thread count BEFORE torch is imported (for CPU server runs).
+# experiment.py passes --omp_threads from hardware.omp_threads in the YAML.
+def _apply_omp_threads():
+    import argparse as _ap
+    _p = _ap.ArgumentParser(add_help=False)
+    _p.add_argument("--omp_threads", type=int, default=0)
+    _a, _ = _p.parse_known_args()
+    if _a.omp_threads > 0:
+        os.environ.setdefault("OMP_NUM_THREADS", str(_a.omp_threads))
+        os.environ.setdefault("MKL_NUM_THREADS", str(_a.omp_threads))
+_apply_omp_threads()
+
 import torch
 import time
 from tqdm import tqdm

@@ -36,6 +36,19 @@ import time
 import random
 import shutil
 
+# Apply OMP thread count BEFORE torch is imported so the setting takes effect.
+# Set via --omp_threads CLI arg (experiment.py passes it for CPU server configs).
+# Defaults to leaving PyTorch's auto-detection in place (no override).
+def _apply_omp_threads():
+    import argparse as _ap
+    _p = _ap.ArgumentParser(add_help=False)
+    _p.add_argument("--omp_threads", type=int, default=0)
+    _a, _ = _p.parse_known_args()
+    if _a.omp_threads > 0:
+        os.environ.setdefault("OMP_NUM_THREADS", str(_a.omp_threads))
+        os.environ.setdefault("MKL_NUM_THREADS", str(_a.omp_threads))
+_apply_omp_threads()
+
 # ── Offline mode ─────────────────────────────────────────────────────────────
 # Prevents HuggingFace Hub network calls on already-cached / air-gapped setups.
 # Override with TRANSFORMERS_OFFLINE=0 before running for first-time downloads.
@@ -259,6 +272,11 @@ def parse_args() -> argparse.Namespace:
                         "GPU laptop smoke-test the exact CPU code path before running on "
                         "the CPU-only ATS/AIP server. Set by experiment.py from YAML "
                         "hardware.device, or override on the CLI.")
+    p.add_argument("--omp_threads", type=int, default=0,
+                   help="Override OMP_NUM_THREADS/MKL_NUM_THREADS for CPU inference. "
+                        "0 = let PyTorch auto-detect (default). "
+                        "Set via hardware.omp_threads in the YAML config (e.g. 16 for "
+                        "a 32-core Xeon server). Has no effect on GPU runs.")
 
     return p.parse_args()
 

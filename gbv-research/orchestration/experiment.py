@@ -506,6 +506,11 @@ def _load_config_yaml(config_name: str) -> dict:
         # hardware.load_in_4bit — forwarded so YAML profiles control 4-bit loading.
         if "load_in_4bit" in hardware:
             out["load_in_4bit"] = hardware["load_in_4bit"]
+        # hardware.omp_threads — PyTorch/OMP thread count for CPU inference.
+        # gpt2-medium is memory-bandwidth-bound; past ~16 threads more cores add
+        # synchronisation overhead without speedup.  Set in bases/server.yaml.
+        if "omp_threads" in hardware:
+            out["omp_threads"] = int(hardware["omp_threads"])
         # models.target → teacher_tag: short human-readable size label extracted from
         # the model name (e.g. "Qwen/Qwen3-4B" → "4B").  Used in run names if
         # run_label is not explicitly set.
@@ -864,7 +869,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
               loss_name=None, model_family="qwen", device="auto",
-              force_rerun=False):
+              force_rerun=False, omp_threads=0):
     """Eval command.
 
     Passes --skip_existing by default so session restarts never duplicate DB rows.
@@ -903,6 +908,8 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         # Force device (cpu for CPU server / laptop CPU smoke test); 'auto' = detect.
         "--device", device,
     ]
+    if omp_threads > 0:
+        cmd += ["--omp_threads", str(omp_threads)]
     if not force_rerun:
         cmd.append("--skip_existing")
     if train_steps:
@@ -1156,6 +1163,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # device: 'auto' (cuda if available) | 'cpu' (force CPU — CPU server, or
         # GPU-laptop CPU-path smoke test) | 'cuda'.  From YAML hardware.device or --device.
         "--device",          str(_h.get("device", "auto")),
+        *( ["--omp_threads", str(_h["omp_threads"])] if _h.get("omp_threads", 0) > 0 else [] ),
         "--lr",              str(_h.get("lr", 3e-5)),
         "--lora_r",          str(_h.get("lora_r", 8)),
         "--lora_alpha",      str(_h.get("lora_alpha", 16)),
@@ -1337,6 +1345,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         hw_tier=hw_tier,
                         model_family=_h.get("model_family", "qwen"),
                         device=_h.get("device", "auto"),
+                        omp_threads=_h.get("omp_threads", 0),
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),
                         force_rerun=smoke)  # smoke: run even if result already in DB
