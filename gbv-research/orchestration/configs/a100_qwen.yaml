@@ -56,7 +56,7 @@ logging:
   run_label: "8B-a100"
   # experiment_tag groups all eval cells from one session in results.db + dashboard.
   # Override on CLI: python deploy/aip_run.py --experiment_tag my_tag
-  experiment_tag: krishnanriithServer
+  experiment_tag: KrishnanRIITHServer
 
 experiment:
   pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
