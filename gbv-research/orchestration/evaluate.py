@@ -1777,6 +1777,26 @@ def main():
         # dtype-serialization patch already applied at module load time
         # (see _patch_config_json_serialization() at top of this file)
         _patch_config_json_serialization()   # no-op if already applied
+
+        # Wait for VRAM to be released by the last BE subprocess before checking
+        # the free VRAM for the alpha guard.  The BE per-mode subprocesses exit
+        # cleanly, but on Windows the GPU driver can take 1-3 s to reclaim their
+        # VRAM.  Without this wait the alpha guard sees stale low-VRAM and falls
+        # back to CPU, then hits a device mismatch because specInfer creates
+        # CUDA tensors regardless of the model's device.  The same settle logic
+        # is used between BE per-mode subprocesses via _wait_for_vram().
+        if _torch.cuda.is_available():
+            _alpha_floor_mb = (_ALPHA_VRAM_FLOOR_MB_LAPTOP
+                               if getattr(args, "hw_tier", "laptop") == "laptop"
+                               else _ALPHA_VRAM_FLOOR_MB)
+            import time as _time
+            for _settle_attempt in range(20):   # wait up to 20 s
+                _torch.cuda.empty_cache()
+                if _torch.cuda.mem_get_info(0)[0] // 1024**2 >= _alpha_floor_mb:
+                    break
+                _time.sleep(1)
+            # No warning here — _alpha_device_guard will print the decision.
+
         _device, _dtype = _pick_device()
         # PROACTIVE VRAM guard: never attempt the dual-model GPU load when it
         # would hard-crash the process (Windows 0xC000013A) before OOM can raise.
