@@ -442,24 +442,32 @@ def _compute_val_loss(
             prompt_ids = tok_cache[prompt].to(device)
             plen = prompt_ids.shape[1]
 
+            _val_eos = (
+                None
+                if (tokenizer.pad_token_id is not None
+                    and tokenizer.pad_token_id == tokenizer.eos_token_id)
+                else tokenizer.eos_token_id
+            )
             gen_out = target_model.generate(
                 prompt_ids,
+                attention_mask=torch.ones_like(prompt_ids),
                 max_new_tokens=args.max_new_tokens,
                 do_sample=True,
                 temperature=args.teacher_temp,
                 pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                eos_token_id=_val_eos,   # None for GPT-2 to avoid 1-token val sequences
                 return_dict_in_generate=True,
             )
-            full_ids = gen_out.sequences
-            gen_len  = full_ids.shape[1] - plen
+            full_ids  = gen_out.sequences
+            full_attn = torch.ones_like(full_ids)
+            gen_len   = full_ids.shape[1] - plen
             if gen_len == 0:
                 continue
 
             # Single parallel forward pass — raw logits, no recover_raw_logits needed.
-            t_log = target_model(full_ids).logits[0, plen - 1:-1, :].float()
+            t_log = target_model(full_ids, attention_mask=full_attn).logits[0, plen - 1:-1, :].float()
 
-            student_logits = draft_model(full_ids).logits[:, :-1, :].float()
+            student_logits = draft_model(full_ids, attention_mask=full_attn).logits[:, :-1, :].float()
             s_log   = student_logits[:, plen - 1:, :].squeeze(0)
             gen_ids = full_ids[0, plen:]
 
@@ -973,14 +981,41 @@ def main() -> None:
         # Tree losses build their own on-policy rollout inside _tree_training_step.
         s_log = t_log = gen_ids = None
         if args.loss not in TREE_LOSS_NAMES:
+            # Attention mask for the prompt — always full (no padding in single-sequence).
+            # Required when pad_token_id == eos_token_id (GPT-2 family) to suppress
+            # the "attention mask cannot be inferred" HF warning and ensure the model
+            # doesn't silently treat EOS tokens inside the sequence as padding.
+            prompt_attn = torch.ones_like(prompt_ids)
+
+            # EOS-stopping suppression for families where pad_token == eos_token.
+            #
+            # GPT-2 uses <|endoftext|> (token 50256) as both EOS and pad.
+            # When generating math continuations, GPT-2 often produces this token
+            # after 1-3 tokens (valid end-of-document signal in WebText training).
+            # With eos_token_id set, generate() stops there → gen_len=1-3 →
+            # single-token KL loss → high-variance gradient → training diverges.
+            #
+            # Fix: pass eos_token_id=None so generation always runs to max_new_tokens.
+            # The EOS token is still a normal vocabulary token in the teacher's
+            # distribution — we're only suppressing EARLY STOPPING, not the token itself.
+            # Qwen/LLaMA have distinct EOS tokens (<|im_end|>, <|eot_id|>) that never
+            # appear in the middle of math responses, so the default behavior is safe.
+            _eos_for_gen = (
+                None
+                if (tokenizer.pad_token_id is not None
+                    and tokenizer.pad_token_id == tokenizer.eos_token_id)
+                else tokenizer.eos_token_id
+            )
+
             with torch.no_grad():
                 gen_out = target_model.generate(
                     prompt_ids,
+                    attention_mask=prompt_attn,          # ← suppress pad==eos warning
                     max_new_tokens=args.max_new_tokens,
                     do_sample=True,
                     temperature=args.teacher_temp,
                     pad_token_id=tokenizer.pad_token_id,
-                    eos_token_id=tokenizer.eos_token_id,
+                    eos_token_id=_eos_for_gen,           # ← None for GPT-2; EOS for Qwen/LLaMA
                     return_dict_in_generate=True,
                     # output_scores=True is intentionally omitted: storing 80
                     # per-token score tensors in a Python list and then
@@ -992,9 +1027,10 @@ def main() -> None:
                     # dispatch overhead → significantly better GPU utilisation.
                 )
 
-            full_ids = gen_out.sequences
-            plen     = prompt_ids.shape[1]
-            gen_len  = full_ids.shape[1] - plen
+            full_ids  = gen_out.sequences
+            full_attn = torch.ones_like(full_ids)   # attend to everything (prompt + generated)
+            plen      = prompt_ids.shape[1]
+            gen_len   = full_ids.shape[1] - plen
             if gen_len == 0:
                 losses.append(float("nan"))
                 continue
@@ -1004,12 +1040,14 @@ def main() -> None:
             # logits[0, plen-1+i] == the distribution the teacher used when
             # sampling token i during generation.  Raw logits (no temperature
             # applied), so recover_raw_logits() is not needed.
+            # attention_mask=full_attn: prevents the model from treating any
+            # EOS token in the sequence as a padding boundary.
             with torch.no_grad():
-                t_log = target_model(full_ids).logits[0, plen - 1:-1, :].float()
+                t_log = target_model(full_ids, attention_mask=full_attn).logits[0, plen - 1:-1, :].float()
 
             # Draft: forward pass with gradient
             draft_model.train()
-            student_logits = draft_model(full_ids).logits[:, :-1, :].float()
+            student_logits = draft_model(full_ids, attention_mask=full_attn).logits[:, :-1, :].float()
             s_log   = student_logits[:, plen - 1:, :].squeeze(0)  # [gen_len, V]
             gen_ids = full_ids[0, plen:]                            # [gen_len]
 
