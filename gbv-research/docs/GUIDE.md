@@ -1,7 +1,9 @@
 # SpecDist Experiment — Research Guide
 
-**System**: Qwen2.5-0.5B draft → Qwen3-0.6B target (laptop smoke) | Qwen3-0.6B → Qwen3-8B (colab/a100)  
+**System**: Qwen2.5-0.5B draft → Qwen3-0.6B target (laptop smoke) | Qwen3-0.6B → Qwen3-8B (T4/A100)  
 **Goal**: Train the draft model with a novel block-level EBE loss so it gets accepted more often by the target, speeding up generation without changing what the target produces.
+
+> **Doc status — June 2026**: updated for multi-family config naming (`laptop_qwen`, `laptop_gpt2`, `a100_qwen`), IITH A100 pricing, Modal credit change, and GPT-2 CPU convergence path.
 
 ---
 
@@ -31,39 +33,77 @@
 
 ## 0. The Three-Stage Experiment Sequence
 
-The experiment runs in three hardware tiers, each with a specific purpose. **Never skip a tier**; each stage gates the next.
+The experiment runs in four hardware tiers, each with a specific purpose. **Never skip a tier**; each stage gates the next.
 
 ### Stage 0 — Laptop Smoke (code correctness)
 
-**Hardware**: Any laptop with ≥ 4 GB VRAM (or CPU).  
+**Hardware**: Any laptop with ≥ 4 GB VRAM.  
+**Config**: `laptop_qwen` (Qwen toy pair) — fastest crash-test.  
 **Models**: Qwen2.5-0.5B draft → Qwen3-0.6B target.  
-**Dataset**: diverse50.  
 **hw_tier tag in results.db**: `laptop`
 
-**Purpose**: Verify every code path runs without crash or OOM. Results are **not paper-quality** and should not appear in the paper.
+**Purpose**: Verify every code path runs without crash or OOM. Results are **not paper-quality** (teacher ≈ draft size — zero distillation signal). Do not interpret numbers.
 
 | Parameter | Value |
 |---|---|
-| Train steps | 100–200 per loss |
-| Eval prompts | 10 (n=10) |
-| Losses | ALL: forward_kl, reverse_kl, jsd, ebe, l1 |
+| Train steps | 100 per loss |
+| Eval prompts | 5 (n=5) |
+| Losses | ALL flat + tree losses |
 | Verifiers | ALL: traversal, specinfer, gbv, naive, bv |
-| LRs | 1e-5, 3e-5, 1e-4 |
-| K | 3, 5 |
-| Temperature | 0.6, 1.0 |
+| K | 3 |
+| Temperature | 0.6 |
 
 ```bash
-python experiment.py --config laptop --yes --smoke
+# Fastest crash-test (~25 min, 10 steps per loss)
+python orchestration/experiment.py --config laptop_qwen --smoke --yes
+
+# Full code-path exerciser (~2-3 hr, 100 steps per loss)
+python orchestration/experiment.py --config laptop_qwen --yes
+
+# Alternate families (same laptop hardware, more signal):
+python orchestration/experiment.py --config laptop_gpt2  --yes  # GPT-2, 4.3x size gap
+python orchestration/experiment.py --config laptop_llama --yes  # LLaMA 1B→3B, 3x gap
 ```
 
-**Decision gate**: if any step crashes or OOMs, fix it before proceeding. If all steps pass, proceed to Stage 1.
+**Decision gate**: if any step crashes or OOMs, fix it before proceeding. If all steps pass, proceed to Stage 0.5 or Stage 1.
+
+---
+
+### Stage 0.5 — CPU Convergence (GPT-2, ATS Cloud server)
+
+**Hardware**: ATS Cloud — 128 GB RAM, CPU-only, no GPU.  
+**Config**: `server_gpt2` (distilgpt2 → gpt2-medium).  
+**hw_tier tag in results.db**: `cpu`
+
+**Purpose**: Prove the distillation algorithm converges without GPU when T4 credits are exhausted. The GPT-2 family (4.3× size gap, vocab=50257) produces a real distillation signal on CPU in 1–2 days. This is **not** paper-quality (wrong family, too small) but proves the training loop and loss gradient are correct before committing GPU budget.
+
+> **When to use this tier**: Kaggle/Colab credits are spent and you cannot access T4 until the next week's quota resets. Stage 0.5 keeps the research moving.
+
+| Parameter | Value |
+|---|---|
+| Train steps | 1,000 per loss |
+| Eval prompts | 5 (n=5, CPU-capped) |
+| Losses | kl, rev_kl, jsd, l1 + all tree variants (ebe/online excluded) |
+| Verifiers | alpha, bv, gbv, traversal, specinfer, naive |
+| OMP threads | 16 (set in `bases/server.yaml`; tune to core count) |
+
+```bash
+# Sequential — experiment.py handles everything (~30-50 hr):
+python orchestration/experiment.py --config server_gpt2 --yes
+
+# Parallel — all losses at once using 128 GB RAM (~4-6 hr):
+# (See server_gpt2.yaml Option B comment for the shell loop)
+```
+
+**Decision gate**: if loss curves decrease monotonically and acceptance rate > 0 at step 100, the algorithm is working. Proceed to Stage 1 (Qwen, 8B teacher) for research-quality trends.
 
 ---
 
 ### Stage 1 — Colab/Kaggle T4 (trend formation)
 
 **Hardware**: Colab free T4 (15 GB) or Kaggle T4 (16 GB, 29 GB RAM).  
-**Models**: Qwen3-0.6B draft → Qwen3-4B target (Colab BF16) or Qwen3-8B target (Kaggle 4-bit NF4).  
+**Config**: `colab` (Qwen3-0.6B → Qwen3-4B BF16) or `kaggle` (Qwen3-0.6B → Qwen3-8B NF4).  
+**Models**: Qwen3-0.6B draft → Qwen3-4B/8B teacher — **real distillation signal** (4–13× size gap).  
 **Eval sets**: `gsm8k_30` (Phase 3 primary) + `alpaca_30`, `math500_30`, `humaneval`, `mtbench_80` (Phase 4 generalization) — all committed to repo, no download needed.  
 **hw_tier tag in results.db**: `colab` / `kaggle`
 
@@ -90,7 +130,14 @@ python orchestration/experiment.py --config kaggle --yes   # Kaggle
 
 ### Stage 2 — A100 (paper quality, bf16)
 
-**Hardware**: A100 (40/80 GB) — AIP, Colab Pro, Lightning AI, Modal, RunPod. Full bf16, no quantization.  
+**Hardware**: A100 (40/80 GB). In priority order:
+1. **IITH Hyderabad A100** — ₹80/GPU-hour (~$0.94/hr). Best value. Access via IITH compute allocation.
+2. **Colab Pro A100** — ~$10/month subscription for A100 runtime access.
+3. **Lightning AI** — free monthly credits, A100 available.
+4. **Modal.com** — ⚠️ only **$1 free credit** available (was $30 previously). Effectively unavailable for full runs; use only for smoke tests or short ablations. ~$3-4 for a single 2000-step loss + eval.
+5. **RunPod** — spot A100 at ~$1.5-2/hr; reliable but requires manual setup.
+
+**Config**: `a100_qwen`.  
 **Models**: Qwen3-0.6B draft → Qwen3-8B target, full bf16.  
 **Eval sets**: Phase 3 uses **full GSM8K test set (1,319 prompts)** — auto-downloaded on first eval run. Phase 4 uses n=100 each for alpaca, math500, humaneval, mtbench.  
 **hw_tier tag in results.db**: `a100`
@@ -108,7 +155,7 @@ python orchestration/experiment.py --config kaggle --yes   # Kaggle
 | Temperature | 0.6, 1.0 |
 
 ```bash
-python orchestration/experiment.py --config a100 --yes
+python orchestration/experiment.py --config a100_qwen --yes
 ```
 
 **IMPORTANT**: `evaluate.py --hw_tier a100` includes a guard that errors if the target model appears quantized. This prevents accidentally tagging quantized results as a100 tier.
@@ -327,10 +374,10 @@ Measured end-to-end for the speculative decoding loop. Throughput increases with
 
 ## 5. Pipeline Phases (by tier)
 
-### Laptop smoke tier (--config laptop --smoke)
+### Laptop smoke tier (--config laptop_qwen --smoke)
 
 ```bash
-python experiment.py --config laptop --yes --smoke
+python orchestration/experiment.py --config laptop_qwen --yes --smoke
 ```
 
 Phase 0: Merge pre-existing LoRA adapters.  
@@ -341,10 +388,11 @@ Phase 5: Laptop smoke — ALL verifiers (traversal, specinfer, gbv, naive, bv) +
 
 ---
 
-### Colab tier (--config colab)
+### Colab tier (--config colab or kaggle)
 
 ```bash
-python experiment.py --config colab --yes
+python orchestration/experiment.py --config colab --yes    # T4, Qwen3-4B BF16
+python orchestration/experiment.py --config kaggle --yes   # T4 x2, Qwen3-8B NF4
 ```
 
 Phase 0–1: same structure as laptop.  
@@ -358,10 +406,10 @@ All results tagged `hw_tier=colab` in results.db. Alpha and BE are directionally
 
 ---
 
-### A100 tier (--config a100)
+### A100 tier (--config a100_qwen)
 
 ```bash
-python orchestration/experiment.py --config a100 --yes
+python orchestration/experiment.py --config a100_qwen --yes
 ```
 
 Same phases as T4, but:
@@ -846,20 +894,28 @@ Full table of every evaluation row in the database. Supports sorting and can be 
 
 ## 8. How to Run
 
-### Laptop smoke test (verify setup, ~5 min)
+### Laptop smoke test (verify setup, ~25 min)
 ```bash
-python orchestration/experiment.py --config laptop --smoke --yes
+python orchestration/experiment.py --config laptop_qwen --smoke --yes
 ```
 
-### Full laptop code-path run (~15-20 min)
+### Full laptop code-path run (~2-3 hr)
 ```bash
-python orchestration/experiment.py --config laptop --yes
+python orchestration/experiment.py --config laptop_qwen --yes
+# GPT-2 alternative (meaningful convergence signal on CPU):
+python orchestration/experiment.py --config laptop_gpt2  --yes
+python orchestration/experiment.py --config laptop_llama --yes  # requires HF login
+```
+
+### CPU server convergence run (ATS Cloud, no GPU needed)
+```bash
+python orchestration/experiment.py --config server_gpt2 --yes   # ~16-27 hr total
 ```
 
 ### Run only specific losses (no config file change needed)
 ```bash
 # CLI flag — runs only kl and jsd, skips everything else:
-python orchestration/experiment.py --config laptop --losses kl,jsd --yes
+python orchestration/experiment.py --config laptop_qwen --losses kl,jsd --yes
 
 # Via profile YAML — set experiment: losses: [kl, jsd] in the config
 python orchestration/experiment.py --config profiles/online_only_laptop --yes
@@ -1052,7 +1108,11 @@ modal run modal_train.py::run --loss ebe --steps 2000 --lr 1e-4
 modal volume get specdist-vol /checkpoints ./local_checkpoints
 ```
 
-**Cost reference** (A100-80GB): 1000 steps × ~30 s/step ≈ 8–9 hours ≈ $8–12 USD on Modal.
+**Cost reference**:
+- **IITH A100** (preferred): ₹80/GPU-hour (~$0.94/hr). A full 2000-step pipeline (train + eval) ≈ 4–6 hr ≈ ₹320–480 (~$4–6). Best value.
+- **Modal A100-80GB**: ~$3–4 per 1000-step run. ⚠️ **Only $1 free credit available** (no longer $30). Effectively pay-per-use from the first run. Reserve for a single targeted ablation, not a full pipeline.
+- **Lightning AI**: monthly free credits (A100 available); good for sustained exploration.
+- **RunPod spot A100**: ~$1.5–2/hr; requires manual checkpoint management.
 
 ---
 
@@ -1141,10 +1201,10 @@ The EAGLE head trains on the **target** model's hidden states. The paper's targe
 
 ```bash
 # Run full pipeline + EAGLE baseline — use --config server or colab (never laptop)
-python orchestration/experiment.py --config a100 --yes --eagle
+python orchestration/experiment.py --config a100_qwen --yes --eagle
 
 # Run EAGLE phases only (Phases 0–4 already done)
-python orchestration/experiment.py --config a100 --yes --eagle --from eagle_gen
+python orchestration/experiment.py --config a100_qwen --yes --eagle --from eagle_gen
 ```
 
 ---
@@ -1281,7 +1341,7 @@ DistillSpec (Zhou et al. 2023) Section 3.1 explicitly uses **forward KL** — KL
 **How to run all variants:**
 The pipeline runs all three KL variants as Phase 2b steps:
 ```bash
-python orchestration/experiment.py --config a100 --yes --from train_rev_kl_gsm8k
+python orchestration/experiment.py --config a100_qwen --yes --from train_rev_kl_gsm8k
 ```
 
 Results appear in the dashboard's Training Curves and Key Results tabs, color-coded:

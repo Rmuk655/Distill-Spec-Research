@@ -2,9 +2,12 @@
 
 *Speculative-decoding draft-model distillation with tree-aligned loss functions.*
 
-This plan is grounded in an audit of the actual codebase (May 2026). Every loss,
+This plan is grounded in an audit of the actual codebase (May/June 2026). Every loss,
 verifier, metric, dataset, and config name below is taken from source — file
 paths are cited inline so claims are checkable. Hypothetical names are avoided.
+
+> **Doc status — June 2026**: Updated for multi-family config naming, IITH A100 pricing
+> (₹80/GPU-hr), Modal credit reality ($1 free, not $30), and GPT-2 CPU convergence path.
 
 ---
 
@@ -107,10 +110,20 @@ verify_latency_ms, notes, experiment_tag, hw_tier, seed, git_sha, wandb_url`.
 
 | hw_tier | Config | Hardware | Teacher | Research-valid? | Purpose |
 |---|---|---|---|---|---|
-| `laptop` | `laptop.yaml` | RTX 500 Ada 4GB | Qwen3-0.6B | **No** — teacher ≈ draft | Crash-check: every code path runs |
-| `cpu` | `server_gpt2.yaml` | 128GB RAM, CPU-only (ATS Cloud) | GPT-2-M (355M) | **No** — too small | Convergence proof on GPT-2; shows method works in principle |
-| `colab` | `kaggle.yaml` | T4 x2 (Kaggle/Modal/Lightning) | Qwen3-8B NF4 | **✓ Yes** | Exploration: rank losses, tune LR, kill losers |
-| `a100` | `a100.yaml` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes** | Publication confirmation only |
+| `laptop` | `laptop_qwen.yaml` | RTX 500 Ada 4 GB | Qwen3-0.6B | **No** — teacher ≈ draft | Crash-check: every code path runs without OOM |
+| `laptop` | `laptop_gpt2.yaml` | RTX 500 Ada 4 GB (CUDA) | GPT-2-medium 355M | **Limited** — 4.3× gap, small | Convergence check on GPU with real distillation signal; faster than server |
+| `laptop` | `laptop_llama.yaml` | RTX 500 Ada 4 GB (CUDA) | LLaMA-3.2-3B NF4 | **✓ Directional** — 3× gap | Research-relevant family; results generalize beyond Qwen |
+| `cpu` | `server_gpt2.yaml` | 128 GB RAM, CPU-only (ATS Cloud) | GPT-2-medium 355M | **No** — too small, CPU | T4-alternative: proves convergence when GPU credits exhausted. Not paper-quality but validates algorithm before T4 run. ~1-2 day job. |
+| `colab` | `colab.yaml` | Colab T4 15 GB | Qwen3-4B BF16 | **✓ Yes** | Exploration: rank losses, tune LR |
+| `colab` | `kaggle.yaml` | Kaggle T4 x2 (29 GB RAM) | Qwen3-8B NF4 | **✓ Yes** | Exploration: 8B teacher = same signal as A100; use when Kaggle quota available |
+| `a100` | `a100_qwen.yaml` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes** | Publication confirmation only |
+
+**GPU credit priority order** (use the cheapest that fits):
+1. **IITH A100** — ₹80/GPU-hr (~$0.94). Best value; use for all A100 confirmation runs.
+2. **Lightning AI** — monthly free credits; good for sustained Tier 2 exploration.
+3. **Kaggle T4 x2** — free, 30 GPU-hr/week. Burns 2× quota → ~15 effective hr/wk.
+4. **Colab free T4** — limited session time; use when Kaggle is exhausted.
+5. **Modal A100** — ⚠️ **$1 free credit only** (was $30; no longer viable for full runs). Use only for a single targeted smoke/ablation. ~$3–4 per 1000-step run.
 
 **Per-loss iteration** (works on all persistent platforms):
 ```bash
@@ -249,8 +262,8 @@ the existing guard thresholds (>5pp task drop / >10% PPL rise in `evaluate.py`).
 - **A100 confirmation: only the 1–2 promoted loss×verifier pairings + control.**
   Not a grid — the funnel has already collapsed the matrix to its finalists.
 - **Full 13×8 cross-pair grid is "extended"** (appendix-only), deferred to a
-  later Lightning-credit month if the core result lands — never on the $30 Modal
-  critical path.
+  later Lightning-credit month if the core result lands — never on the IITH A100
+  critical path (priority compute is IITH at ₹80/GPU-hr; Modal is effectively $0 free credit).
 
 ### B.4 Core (must-run) vs extended (nice-to-have)
 
@@ -405,13 +418,13 @@ numbers** (3 seeds, full GSM8K, the Section C stats apply).
   Stage D to a follow-up **Lightning-credit** month so the Modal credit is never
   blocked on the lowest-priority work.
 
-**Spend order is A → B → C**, stopping the moment the credit is exhausted. The `forward_kl` baseline + the single headline tree-loss result are the non-negotiable minimum. Stages A+B at 3 seeds, K=3, matched + naive/bv reference fit within a typical $30 free credit. For the full cost breakdown (Trimmed-A / Trimmed-B spec analysis), see `docs/COMPUTE.md`.
+**Spend order is A → B → C**, stopping the moment the budget is exhausted. The `forward_kl` baseline + the single headline tree-loss result are the non-negotiable minimum. Stages A+B at 3 seeds, K=3, matched + naive/bv reference ≈ 15–20 GPU-hours ≈ ₹1,200–1,600 (~$15–20) on IITH A100. For the full cost breakdown (Trimmed-A / Trimmed-B spec analysis), see `docs/COMPUTE.md`.
 
 ### After the confirmation — write-up & reproducibility (no GPU)
 - Run `analyze_results.py` (after the C.6 stats upgrades) → Markdown tables;
   regenerate plots; verify `git_sha`/`seed`/`wandb_url` logged for every confirmed
   run; re-derive every paper number from a `run_tag`. A from-scratch re-run is a
-  Lightning-credit task, not a Modal one (protect the spent $30).
+  Lightning-credit or IITH task (IITH at ₹80/GPU-hr is cheap enough for re-runs).
 
 ---
 
@@ -467,5 +480,5 @@ numbers** (3 seeds, full GSM8K, the Section C stats apply).
 | **Approximate losses misread as exact** | `spectr_tree` (ρ detached), `khisti_tree` (LP-free) are documented surrogates | label both "approximate" in every table; if either underperforms its aligned verifier, attribute to the surrogate, not the alignment hypothesis (per their docstrings) |
 | **Stats invalid by construction** | single seed, no BE variance, approximate p-values (Section 0.6) | implement the Section C.6 checklist *before* the A100 confirmation; Kaggle 1-seed numbers are direction-only, never published |
 | **Wasted weekly quota** (lost session) | `/kaggle/working` ephemeral; T4 x2 burns 2× → ~15 effective h/wk | Always T4 x2 (only working Kaggle GPU); checkpoint backup every session; `--skip_existing`; ≤1 session/week so one crash ≤ quota — see `deploy/PROGRESSION.md` |
-| **Burning the $30 Modal credit early or twice** | one-time, irreplaceable | spend ONCE, last, on the Trimmed-B spec only after Kaggle narrows to ≤2 pairings; keep ~$8 buffer for one retry; Lightning credits for any extension |
+| **Running out of GPU budget mid-confirmation** | IITH at ₹80/GPU-hr is affordable; Modal $1 free is essentially zero | prefer IITH A100 for all confirmation runs; use Lightning/Kaggle for exploration; Modal is last resort for a single ablation only |
 | **gbv numerical instability at K>4** | `compute_skew` docstring: "not recommended … K>4" | restrict gbv/gbv_tree to K≤4; footnote |
