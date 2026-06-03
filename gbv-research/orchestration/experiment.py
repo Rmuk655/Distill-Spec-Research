@@ -1159,6 +1159,16 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # colab=64).  The KL computation is now memory-efficient (rejects-only selection
     # in _kl_at_positions) so the main remaining constraint is the KV cache.
     _online_max_tok = 30 if smoke else int(_h.get("max_new_tokens", 64))
+
+    # max_train_prompts: caps the training dataset for convergence checks.
+    # Defined HERE (before _train_hargs) because _train_hargs references it.
+    # Set training.max_train_prompts in YAML; steps/N gives effective epochs.
+    # Smoke always uses "20" regardless of the YAML value.
+    _max_train_prompts_arg = (
+        ["--max_train_prompts", str(_h["max_train_prompts"])]
+        if _h.get("max_train_prompts", 0) > 0 else []
+    )
+
     _train_hargs = [
         # model_family: drives LoRA target modules, temperature recovery, log-prob
         # clamping, and chat-template selection in trainer.py.  Comes from
@@ -1237,15 +1247,6 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--tree_K", str(_h.get("tree_K", 4)),
         "--tree_L", str(_h.get("tree_L", 8)),
     ]
-
-    # max_train_prompts: caps the training dataset for convergence checks.
-    # Set training.max_train_prompts in YAML to limit to N prompts, giving
-    # steps/N effective epochs.  Example: laptop_gpt2 sets 100 so 500 steps
-    # = 5 epochs (clear convergence signal vs 0.07 epochs on the full 7473).
-    _max_train_prompts_arg = (
-        ["--max_train_prompts", str(_h["max_train_prompts"])]
-        if _h.get("max_train_prompts", 0) > 0 else []
-    )
 
     # Override step count from YAML only when NOT in smoke mode.
     # Smoke always uses its own fixed step count (10) to stay fast regardless
