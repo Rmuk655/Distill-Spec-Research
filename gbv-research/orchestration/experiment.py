@@ -204,11 +204,14 @@ def _acquire_lock():
 # ---------------------------------------------------------------------------
 
 CONFIGS = {
+    # Legacy preset names kept for backward compat.  All new configs are YAML-based:
+    # use --config laptop_qwen (or laptop_gpt2 / laptop_llama / a100_qwen / etc.)
+    # These entries are the fallback when no matching .yaml file exists.
     "laptop": {
         "draft":        "Qwen/Qwen2.5-0.5B",
         "target":       "Qwen/Qwen3-0.6B",
         "model_family": "qwen",
-        "desc":         "Laptop/low-VRAM: Qwen2.5-0.5B draft -> Qwen3-0.6B target",
+        "desc":         "Legacy preset: Qwen2.5-0.5B draft -> Qwen3-0.6B target (use --config laptop_qwen)",
     },
     "server": {
         "draft":        "Qwen/Qwen3-0.6B",
@@ -242,10 +245,12 @@ CONFIGS = {
 #     • Nested dicts     → keys merged recursively (parent fills gaps)
 #   This lets a child config state only what differs from its parent.
 #
-#   Inheritance chain:
-#     laptop_gpt2.yaml  → _base: laptop
-#     laptop_llama.yaml → _base: laptop
-#     server_gpt2.yaml  → _base: laptop_gpt2  (inherits model pair; overrides hw)
+#   Inheritance structure (platform-first — see configs/bases/):
+#     laptop_qwen.yaml  → _base: bases/laptop  (Qwen toy pair on laptop GPU)
+#     laptop_gpt2.yaml  → _base: bases/laptop  (GPT-2 pair on laptop GPU)
+#     laptop_llama.yaml → _base: bases/laptop  (LLaMA pair on laptop GPU)
+#     server_gpt2.yaml  → _base: bases/server  (GPT-2 pair on CPU server)
+#     a100_qwen.yaml    → _base: bases/a100    (Qwen 8B pair on A100)
 # ---------------------------------------------------------------------------
 
 def _deep_merge(parent: dict, child: dict) -> dict:
@@ -3339,11 +3344,13 @@ def _print_header(cfg, draft, target, args):
         print(f"  Mode   : SMOKE TEST  n=5 · max_tokens=30 · K=3 · modes=all-6-verifiers · temp=0.6")
         print(f"           (6 losses × 10 steps + 6 evals — exercises every code path; ~25-35 min)")
     if args.eagle:
-        if args.config == "laptop":
-            print(f"\n  [WARN] --eagle with --config laptop makes no sense for the paper.")
+        _is_laptop_tier = (args.config.startswith("laptop")
+                           or _yaml_cfg.get("hw_tier") == "laptop")
+        if _is_laptop_tier:
+            print(f"\n  [WARN] --eagle with a laptop-tier config makes no sense for the paper.")
             print(f"         The EAGLE head trains on the TARGET model's hidden states.")
-            print(f"         A head built on Qwen3-0.6B hidden states is NOT a useful")
-            print(f"         comparison baseline.  Run with --config server or colab")
+            print(f"         A head built on a toy teacher (0.6B) is NOT a useful")
+            print(f"         comparison baseline.  Run with --config a100_qwen or kaggle")
             print(f"         (Qwen3-8B target) on Colab/Kaggle/Modal instead.\n")
         print(f"  Eagle  : Phase 5 included — EAGLE head train+eval on {target}")
         print(f"           (rerun per Colab/Kaggle session — ephemeral disk loses checkpoints)")
@@ -3351,10 +3358,10 @@ def _print_header(cfg, draft, target, args):
 
 def main():
     p = argparse.ArgumentParser(description="SpecDist pipeline with crash-safe resume")
-    p.add_argument("--config", default="laptop",
-                   help="Hardware config preset (laptop/server/colab) or a YAML profile name "
-                        "relative to orchestration/configs/ "
-                        "(e.g. profiles/colab_tree_losses, colab_lite, a100).")
+    p.add_argument("--config", default="laptop_qwen",
+                   help="Config name (YAML file in orchestration/configs/, without .yaml). "
+                        "Examples: laptop_qwen, laptop_gpt2, laptop_llama, kaggle, colab, "
+                        "a100_qwen, server_gpt2, profiles/colab_tree_losses.")
     p.add_argument("--draft",  default=None,
                    help="Override draft model HF ID (overrides --config)")
     p.add_argument("--target", default=None,
@@ -3936,7 +3943,9 @@ def main():
         s["id"].startswith("eval") and step_status(s, state) != "done"
         for s in STEPS
     )
-    if (args.config == "laptop"
+    _is_laptop_config = (args.config.startswith("laptop")
+                         or _yaml_cfg.get("hw_tier") == "laptop")
+    if (_is_laptop_config
             and not args.no_smoke_first
             and not args.smoke
             and _has_pending_eval):

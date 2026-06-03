@@ -267,17 +267,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python orchestration/clean_restart.py                    # laptop (default)
-  python orchestration/clean_restart.py --config kaggle
+  python orchestration/clean_restart.py                      # laptop_qwen (default)
   python orchestration/clean_restart.py --config laptop_gpt2
-  python orchestration/clean_restart.py --config laptop_gpt2 --device cpu
+  python orchestration/clean_restart.py --config laptop_llama
+  python orchestration/clean_restart.py --config kaggle
+  python orchestration/clean_restart.py --config a100_qwen
+  python orchestration/clean_restart.py --config server_gpt2
   python orchestration/clean_restart.py --config profiles/kl_only
-  python orchestration/clean_restart.py --no_restart       # wipe only
+  python orchestration/clean_restart.py --no_restart          # wipe only
         """)
-    p.add_argument("--config", default="laptop",
+    p.add_argument("--config", default="laptop_qwen",
                    help="Pipeline config (any value accepted by experiment.py, "
-                        "e.g. laptop, kaggle, laptop_gpt2, profiles/kl_only). "
-                        "Default: laptop")
+                        "e.g. laptop_qwen, laptop_gpt2, laptop_llama, kaggle, "
+                        "a100_qwen, server_gpt2, profiles/kl_only). "
+                        "Default: laptop_qwen")
     p.add_argument("--dry_run", action="store_true",
                    help="Show what would be done, make no changes")
     p.add_argument("--no_restart", action="store_true",
