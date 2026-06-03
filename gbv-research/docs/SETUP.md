@@ -65,12 +65,36 @@ upgraded regardless of what the platform pre-installs.
 
 ## 2. Download datasets
 
+> **GPU server quick-start:** `aip_gpu_setup.sh` handles all dataset downloads automatically. Skip this section if using that script.
+
 ```bash
 # Run from gbv-research/
 python core/datasets/downloader.py
 ```
 
-This downloads `gsm8k_train.jsonl` (7,473 training prompts) to `core/datasets/raw/`.
+This downloads **eval sets** (30-prompt files) to `core/datasets/raw/`.
+
+**Training data must be downloaded separately** — `downloader.py` only fetches eval sets. The full 7,473-prompt training set is required for any training run:
+
+```bash
+# Download gsm8k_train.jsonl (7473 prompts, ~3 MB)
+python -c "
+from datasets import load_dataset
+import json, os
+ds = load_dataset('gsm8k', 'main', split='train')
+path = 'core/datasets/raw/gsm8k_train.jsonl'
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, 'w') as f:
+    for item in ds:
+        f.write(json.dumps({'prompt': item['question']}) + '\n')
+print(f'Saved {len(ds)} prompts to {path}')
+"
+```
+
+Without `gsm8k_train.jsonl`, all training steps fail with:
+```
+FileNotFoundError: core/datasets/raw/gsm8k_train.jsonl
+```
 
 **Small eval sets are already committed to the repo** — no download needed:
 

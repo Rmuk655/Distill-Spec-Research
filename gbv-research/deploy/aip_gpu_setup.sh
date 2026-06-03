@@ -132,6 +132,11 @@ export GBV_DIR="${GBV_DIR}"
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
+# Avoid CUDA OOM from transformers caching_allocator_warmup (>= 4.46).
+# That function pre-allocates ~half the model size in FP16 during load.
+# expandable_segments allows the allocator to use multiple non-contiguous
+# blocks instead of one giant contiguous allocation — avoids OOM spikes.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 EOF
 echo "      Env saved to ${ENVFILE}  (source it in new terminals)"
 

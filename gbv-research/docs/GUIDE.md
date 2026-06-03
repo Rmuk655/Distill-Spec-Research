@@ -157,36 +157,63 @@ python orchestration/experiment.py --config a10_qwen --yes \
 ### Stage 2 — A100 (paper quality, bf16)
 
 **Hardware**: A100 (40/80 GB). In priority order:
-1. **IITH Hyderabad A100** — ₹80/GPU-hour (~$0.94/hr). Best value. Access via IITH compute allocation.
-2. **Colab Pro A100** — ~$10/month subscription for A100 runtime access.
-3. **Lightning AI** — free monthly credits, A100 available.
-4. **Modal.com** — ⚠️ only **$1 free credit** available (was $30 previously). Effectively unavailable for full runs; use only for smoke tests or short ablations. ~$3-4 for a single 2000-step loss + eval.
-5. **RunPod** — spot A100 at ~$1.5-2/hr; reliable but requires manual setup.
+1. **IITH Hyderabad A100** — ₹80/GPU-hour (~$0.94/hr). Best value.
+2. **Lightning AI** — free monthly credits, A100 available.
+3. **Colab Pro A100** — ~$10/month subscription.
+4. **Modal.com** — ⚠️ only **$1 free credit** (was $30). Single targeted ablation only.
+5. **RunPod** — spot A100 at ~$1.5-2/hr; requires manual setup.
 
 **Config**: `a100_qwen`.  
-**Models**: Qwen3-0.6B draft → Qwen3-8B target, full bf16.  
-**Eval sets**: Phase 3 uses **full GSM8K test set (1,319 prompts)** — auto-downloaded on first eval run. Phase 4 uses n=100 each for alpaca, math500, humaneval, mtbench.  
+**Models**: Qwen3-0.6B draft → Qwen3-8B target, full BF16 (no quantization).  
 **hw_tier tag in results.db**: `a100`
 
-**Purpose**: Paper-quality numbers. These are the numbers that go in the paper.
+**Purpose**: Paper-quality numbers. These go in the paper.
 
 | Parameter | Value |
 |---|---|
-| Train steps | 2000 |
+| Train steps | 2000 (sequential — 1 job at a time, ~15 min/loss on A100-40GB) |
+| max_train_prompts | none (full 7473 prompts — diversity matters for paper) |
 | Phase 3 eval (GSM8K) | **n=1319** (full test set — auto-downloaded) |
-| Phase 4 eval (secondary) | **n=100** per domain (alpaca, math500, humaneval, mtbench) |
-| Losses | all enabled in experiment.losses |
-| Verifiers | ALL 6: alpha, bv, gbv, traversal, specinfer, naive |
-| K | 1, 3, 5, 8 |
-| Temperature | 0.6, 1.0 |
+| Phase 4 eval (secondary) | **n=100** per domain |
+| Losses | all 17 (sequential on single GPU) |
+| Verifiers | alpha, bv, gbv, traversal, specinfer, naive |
+| K | 3 |
+| Temperature | 1.0 |
+| Time estimate | ~15 min/loss × 17 losses ≈ **4-5 hours total** |
 
+**One-time setup** (run `aip_gpu_setup.sh` — handles all of these automatically):
 ```bash
-python orchestration/experiment.py --config a100_qwen --yes
+git clone https://github.com/Rmuk655/Distill-Spec-Research.git ~/repo
+export WANDB_API_KEY="..."
+bash ~/repo/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
-**IMPORTANT**: `evaluate.py --hw_tier a100` includes a guard that errors if the target model appears quantized. This prevents accidentally tagging quantized results as a100 tier.
+The setup script:
+1. Pulls latest code + initializes git submodules (specInfer)
+2. Creates a virtual environment (avoids system Python permission errors)
+3. Installs all dependencies (torch cu128, transformers, peft, etc.)
+4. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — required to avoid OOM from `transformers >= 4.46` `caching_allocator_warmup()` which pre-allocates ~15 GB during model load
+5. Sets `TRANSFORMERS_OFFLINE=1` — no HF Hub network calls after first run
+6. Downloads `gsm8k_train.jsonl` (7473 training prompts, ~3 MB)
+7. Authenticates W&B and HuggingFace
 
-**Note on large eval files**: `gsm8k_1319.jsonl`, `alpaca_100.jsonl`, `math500_100.jsonl` are not committed to git (too large). `evaluate.py` downloads them automatically via `get_dataset_path()` on the first eval run — no manual step needed.
+**Then run one loss at a time:**
+```bash
+source ~/.specdist_env
+cd ~/repo/gbv-research
+python deploy/aip_run.py --config a100_qwen --losses kl --no_smoke
+python deploy/aip_run.py --config a100_qwen --losses kl_tree --no_smoke
+# ... or all at once:
+python deploy/aip_run.py --config a100_qwen --no_smoke
+```
+
+**Known issues and fixes:**
+- **VRAM**: transformers >= 4.46 needs `expandable_segments:True` — set by setup script
+- **Train slots**: Scheduler uses 1 slot on A100-40GB (each 8B job peaks at ~35 GB during load). A100-80GB gets 3 slots.
+- **Training data**: `gsm8k_train.jsonl` must be downloaded — setup script does this
+- **specInfer alpha**: requires `git submodule update --init --recursive` — setup script does this; if skipped, inline fallback is used (correct values, tagged in DB notes)
+
+**IMPORTANT**: `evaluate.py --hw_tier a100` errors if target model appears quantized — prevents contaminating paper data with NF4 results.
 
 **Decision gate**: after A100 runs, use `analyze_results.py` to generate the paper table.
 
