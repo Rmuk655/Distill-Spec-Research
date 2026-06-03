@@ -64,9 +64,19 @@ fi
 
 echo "[1/5] Pulling latest code..."
 git -C "${REPO_DIR}" pull --ff-only 2>/dev/null || echo "      (already up to date or skip)"
-# Note: OSD git submodule (specInfer Generator) requires repo credentials to init.
-# Alpha eval uses a correct inline fallback when specInfer is unavailable.
-# Submodule init is NOT attempted here to avoid repeated auth-failure noise.
+
+# Clone OSD (public repo) alongside Distill-Spec-Research if not already present.
+# evaluate.py looks for specInfer at:  <parent_of_repo>/OSD/distill/specInfer/
+# i.e. one level up from the cloned repo, at ~/ram/OSD/ when repo is at ~/ram/Distill-Spec-Research/
+OSD_DIR="$(dirname "${REPO_DIR}")/OSD"
+if [ ! -d "${OSD_DIR}/.git" ]; then
+    echo "      Cloning OSD (specInfer Generator, public repo)..."
+    git clone https://github.com/LiuXiaoxuanPKU/OSD "${OSD_DIR}" 2>/dev/null && \
+        echo "      OSD cloned to ${OSD_DIR}" || \
+        echo "      OSD clone failed — alpha eval will use inline fallback (correct values)"
+else
+    echo "      OSD already present at ${OSD_DIR}"
+fi
 
 # ── Python environment ────────────────────────────────────────────────────────
 # Use a virtual environment to avoid permission issues with system Python.
