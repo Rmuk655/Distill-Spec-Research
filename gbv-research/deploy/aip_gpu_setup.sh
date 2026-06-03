@@ -111,9 +111,15 @@ echo "[3/5] Setting environment..."
 
 export HF_HOME="${HF_CACHE}"
 export TRANSFORMERS_CACHE="${HF_CACHE}"
+# Allow downloads on this first run (models may not be cached yet).
+# After setup completes, offline mode is set in the persistent env file so
+# subsequent sessions skip the HF Hub etag check and the warning:
+#   "Warning: You are sending unauthenticated requests to the HF Hub"
 unset TRANSFORMERS_OFFLINE HF_DATASETS_OFFLINE HF_HUB_OFFLINE 2>/dev/null || true
 
-# Persist env across new terminals — includes venv activation
+# Persist env across new terminals — includes venv activation and offline mode.
+# Offline mode: models are cached in HF_HOME after first run; all future loads
+# read from local cache with no network calls → no HF Hub warnings.
 ENVFILE="${HOME}/.specdist_env"
 cat > "${ENVFILE}" <<EOF
 source "${VENV_DIR}/bin/activate"
@@ -121,6 +127,11 @@ export HF_HOME="${HF_CACHE}"
 export TRANSFORMERS_CACHE="${HF_CACHE}"
 export STORAGE_ROOT="${STORAGE}"
 export GBV_DIR="${GBV_DIR}"
+# Offline mode: models already cached — skip HF Hub network checks.
+# Unset these if you need to download updated models.
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
 EOF
 echo "      Env saved to ${ENVFILE}  (source it in new terminals)"
 
