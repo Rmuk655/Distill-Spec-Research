@@ -26,6 +26,7 @@ models:
 training:
   steps: 100                    # exercises all checkpointing paths; NOT for paper results
   lr: 3.0e-5
+  warmup_steps: 10              # 10% of 100 steps (1 optimizer step at grad_accum=4)
   lora_r: 4                     # smallest rank — this run is about code, not capacity
   lora_alpha: 8
   max_new_tokens: 32

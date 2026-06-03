@@ -36,6 +36,7 @@ models:
 
 training:
   steps: 1000                   # 2x laptop_gpt2
+  warmup_steps: 100             # 10% of 1000 steps (25 optimizer steps at grad_accum=4)
   lr: 1.0e-4
   lora_r: 8
   lora_alpha: 16

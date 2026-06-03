@@ -28,6 +28,7 @@ models:
 
 training:
   steps: 500
+  warmup_steps: 50              # 10% of 500 steps
   lr: 5.0e-5
   lora_r: 8
   lora_alpha: 16

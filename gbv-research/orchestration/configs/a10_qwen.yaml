@@ -68,7 +68,8 @@ logging:
   run_label: "8B-a10"
 
 health:
-  val_every: 100               # every 100 steps → 10 val checks over 1000 steps
+  val_every: 200               # 2000/200 = 10 val checks total; gsm8k_30 ~60s each = ~10 min overhead
+                               # val_every=100 would be 20 checks = 20 min overhead on 83-min run
   ppl_check_every: 500
 
 checkpointing:

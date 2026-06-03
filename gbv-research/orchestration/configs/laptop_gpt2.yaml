@@ -19,6 +19,7 @@ models:
 
 training:
   steps: 500
+  warmup_steps: 50              # 10% of 500 steps (12 optimizer steps at grad_accum=4)
   lr: 3.0e-5                    # same as Qwen; 1e-4 caused oscillation on math prompts
                                 # (high per-prompt KL variance at 4.3x teacher gap)
   lora_r: 8
