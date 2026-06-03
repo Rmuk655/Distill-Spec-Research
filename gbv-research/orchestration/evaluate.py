@@ -648,7 +648,13 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     total_tokens, total_time = 0, 0.0
     draft_times, verify_times = [], []
 
-    if _SPECINFER_AVAILABLE:
+    # specInfer internally creates CUDA buffers at Generator.__init__ regardless
+    # of where the models live — it has no device parameter.  On a CPU run this
+    # contaminates the process with cuda:0 tensors, causing wrapper_CUDA_cat to
+    # crash when the inline fallback later tries to cat CPU hidden states with
+    # those leftover CUDA buffers.  Skip specInfer entirely when device is CPU.
+    _use_specinfer = _SPECINFER_AVAILABLE and device == "cuda"
+    if _use_specinfer:
         generator = _SpecInferGenerator(
             small_model=student_model, large_model=teacher_model,
             tokenizer=tokenizer, max_propose_num=max_propose,
@@ -658,8 +664,11 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         generator = None
         global _SPECINFER_FALLBACK_WARNED
         if not _SPECINFER_FALLBACK_WARNED:
-            print("  [alpha] specInfer not found — using inline fallback "
-                  "(git submodule update --init --recursive to fix; warned once per session)")
+            reason = ("running on CPU — specInfer requires CUDA"
+                      if device != "cuda" else
+                      "not found (git submodule update --init --recursive to fix)")
+            print(f"  [alpha] specInfer skipped — {reason}; using inline fallback "
+                  "(warned once per session)")
             _SPECINFER_FALLBACK_WARNED = True
 
     for i, item in enumerate(prompts):
@@ -671,7 +680,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
             torch.cuda.synchronize()
         t0 = time.perf_counter()
 
-        if _SPECINFER_AVAILABLE:
+        if _use_specinfer:
             try:
                 with torch.inference_mode():
                     output = generator.generate(
