@@ -1072,6 +1072,11 @@ def measure_perplexity(model_path: str, prompts: list, max_tokens: int = 200) ->
         model_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
         attn_implementation=_ATTN_IMPL,
     ).to(device).eval()
+    # Suppress "loss_type=None is unrecognized" warning from transformers ≥4.46.
+    # The default fallback IS ForCausalLMLoss — we're just making it explicit
+    # so transformers doesn't log a warning on every forward pass with labels=.
+    if not getattr(model.config, "loss_type", None):
+        model.config.loss_type = "ForCausalLMLoss"
 
     total_nll, total_tokens = 0.0, 0
     per_prompt = []
