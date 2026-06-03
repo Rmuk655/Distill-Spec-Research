@@ -303,7 +303,7 @@ def load_prompts(path: str | None) -> list[str]:
                 prompts.append(text.strip())
     if not prompts:
         raise ValueError(f"No prompts found in {path}")
-    print(f"[data] Loaded {len(prompts)} training prompts from {path}")
+    print(f"[data] Loaded {len(prompts)} prompts from {path}")
     return prompts
 
 

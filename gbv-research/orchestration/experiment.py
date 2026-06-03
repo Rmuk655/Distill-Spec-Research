@@ -380,6 +380,12 @@ def _load_config_yaml(config_name: str) -> dict:
             # no_lora: disable LoRA entirely (full fine-tune).  False by default.
             "no_lora":              training.get("no_lora", False),
         }
+        # training.max_train_prompts: cap the training set for convergence checks.
+        # When set, trainer.py uses only the first N prompts from the training JSONL.
+        # Useful for laptop_gpt2: 100 prompts × 500 steps = 5 epochs → clear signal.
+        # Without this, 500 steps / 7473 prompts = 6.7% of one epoch → no convergence.
+        if training.get("max_train_prompts"):
+            out["max_train_prompts"] = int(training["max_train_prompts"])
         # training.steps → train_steps (server=5000, colab=500, laptop=1000).
         # No default — None lets build_steps() apply the smoke/full default.
         if "steps" in training:
@@ -1210,7 +1216,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # smoke: cap training dataset to 20 prompts so pre-tokenization is instant (~0.3s).
         # Without this, trainer loads and tokenizes all 6726 prompts even for a 10-step run.
         # 20 gives enough variety for shuffle (10 steps × 1 prompt/step = 10 used; 2× margin).
-        *( ["--max_train_prompts", "20"] if smoke else [] ),
+        *( ["--max_train_prompts", "20"] if smoke else _max_train_prompts_arg ),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.
@@ -1231,6 +1237,15 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         "--tree_K", str(_h.get("tree_K", 4)),
         "--tree_L", str(_h.get("tree_L", 8)),
     ]
+
+    # max_train_prompts: caps the training dataset for convergence checks.
+    # Set training.max_train_prompts in YAML to limit to N prompts, giving
+    # steps/N effective epochs.  Example: laptop_gpt2 sets 100 so 500 steps
+    # = 5 epochs (clear convergence signal vs 0.07 epochs on the full 7473).
+    _max_train_prompts_arg = (
+        ["--max_train_prompts", str(_h["max_train_prompts"])]
+        if _h.get("max_train_prompts", 0) > 0 else []
+    )
 
     # Override step count from YAML only when NOT in smoke mode.
     # Smoke always uses its own fixed step count (10) to stay fast regardless

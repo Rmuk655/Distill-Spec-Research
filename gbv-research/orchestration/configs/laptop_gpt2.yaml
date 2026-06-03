@@ -19,17 +19,23 @@ models:
 
 training:
   steps: 500
-  lr: 1.0e-4                    # higher than Qwen — smaller model, faster adaptation
+  lr: 3.0e-5                    # same as Qwen; 1e-4 caused oscillation on math prompts
+                                # (high per-prompt KL variance at 4.3x teacher gap)
   lora_r: 8
   lora_alpha: 16
   max_new_tokens: 32
   teacher_temperature: 1.0      # GPT-2 does not pre-scale logits by temperature
-  online_lr: 1.0e-3
+  online_lr: 3.0e-4
   seed: 42
   grad_clip: 1.0
   lora_dropout: 0.05
   ebe_kl_weight: 0.1
   jsd_alpha: 0.5
+  # Convergence proof: cap training set so each prompt is seen ~5 times.
+  # Without this cap: 500 steps / 7473 prompts = 6.7% of one epoch → no trend.
+  # With this cap: 500 steps / 100 prompts = 5 epochs → clear monotonic decrease.
+  # This is convergence verification only; paper results come from Qwen 8B on T4/A100.
+  max_train_prompts: 100
 
 logging:
   wandb_group: laptop-gpt2-gsm8k
