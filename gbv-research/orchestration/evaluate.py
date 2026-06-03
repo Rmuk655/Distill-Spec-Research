@@ -1455,31 +1455,48 @@ def main():
     global _FORCED_DEVICE
     if getattr(args, "device", "auto") == "cpu":
         _FORCED_DEVICE = "cpu"
-        print("  [device] --device cpu — forcing CPU for all eval (CPU-path smoke test)")
 
-        # CPU speed caps — gpt2-medium tree attention on CPU runs ~400-700 s/prompt.
-        # We cap n, max_tokens, and L to values that exercise every code path
-        # in a few minutes rather than hours.  GPU runs are unaffected.
+        # Two distinct CPU eval scenarios:
         #
-        #   n=2, max_tokens=20, L=3  →  ~2-3 min per mode, ~12 min for all 5 modes
-        #   vs default (n=5, max_tokens=50, L=8) → 56 min for bv alone on CPU
+        #   hw_tier=cpu  (server_gpt2.yaml — ATS Cloud, 128 GB RAM, NO GPU)
+        #     CPU IS the intended device for the whole research run.
+        #     Run full n/max_tokens/L — these produce the actual convergence results.
+        #     The server has many CPU cores and fast memory; 128 GB RAM means
+        #     gpt2-medium fits in L3 cache after first load (~20-50 s/prompt vs
+        #     400-700 s/prompt on a laptop with 16 GB RAM and no ML-tuned BLAS).
         #
-        _CPU_CAP_N          = 2   # prompts per mode  (enough to see tree variation)
-        _CPU_CAP_MAX_TOKENS = 20  # generation length (each token is ~5 s on CPU)
-        _CPU_CAP_L          = 3   # draft block depth (shorter tree = fewer nodes)
-        _cpu_reduced = []
-        if args.n > _CPU_CAP_N:
-            _cpu_reduced.append(f"n {args.n}→{_CPU_CAP_N}")
-            args.n = _CPU_CAP_N
-        if args.max_tokens > _CPU_CAP_MAX_TOKENS:
-            _cpu_reduced.append(f"max_tokens {args.max_tokens}→{_CPU_CAP_MAX_TOKENS}")
-            args.max_tokens = _CPU_CAP_MAX_TOKENS
-        if args.L > _CPU_CAP_L:
-            _cpu_reduced.append(f"L {args.L}→{_CPU_CAP_L}")
-            args.L = _CPU_CAP_L
-        if _cpu_reduced:
-            print(f"  [cpu-cap] Reduced for CPU speed: {', '.join(_cpu_reduced)}")
-            print(f"            (exercises all code paths; research numbers come from GPU)")
+        #   hw_tier=laptop/colab/a100  (GPU machine + --device cpu forced)
+        #     User is spot-checking the CPU code path on their GPU laptop.
+        #     The laptop has 16 GB RAM; gpt2-medium tree attention saturates it
+        #     (~400-700 s/prompt).  Cap n/max_tokens/L so the check finishes
+        #     in minutes, not hours.
+        #
+        _hw = getattr(args, "hw_tier", "laptop")
+        _is_cpu_server = (_hw == "cpu")
+
+        if _is_cpu_server:
+            print("  [device] --device cpu — CPU server (hw_tier=cpu); full eval params kept")
+        else:
+            print("  [device] --device cpu — forcing CPU for all eval (CPU-path smoke test)")
+            # Cap params so the GPU-laptop CPU code-path check finishes in ~15-20 min.
+            # Tree attention on a laptop CPU: ~400-700 s/prompt.
+            # With cap (n=2, max_tokens=20, L=3): ~2-3 min per mode, ~15 min for 5 modes.
+            _CPU_CAP_N          = 2   # prompts (enough to exercise tree variation)
+            _CPU_CAP_MAX_TOKENS = 20  # tokens  (each token ~5 s on laptop CPU)
+            _CPU_CAP_L          = 3   # draft block depth (shorter tree = fewer nodes)
+            _cpu_reduced = []
+            if args.n > _CPU_CAP_N:
+                _cpu_reduced.append(f"n {args.n}→{_CPU_CAP_N}")
+                args.n = _CPU_CAP_N
+            if args.max_tokens > _CPU_CAP_MAX_TOKENS:
+                _cpu_reduced.append(f"max_tokens {args.max_tokens}→{_CPU_CAP_MAX_TOKENS}")
+                args.max_tokens = _CPU_CAP_MAX_TOKENS
+            if args.L > _CPU_CAP_L:
+                _cpu_reduced.append(f"L {args.L}→{_CPU_CAP_L}")
+                args.L = _CPU_CAP_L
+            if _cpu_reduced:
+                print(f"  [cpu-cap] Reduced for laptop-CPU speed: {', '.join(_cpu_reduced)}")
+                print(f"            (code-path check only; research numbers come from GPU)")
 
     # Default experiment_tag: {hostname}-{YYYYMMDD_HHMM}-v{n}
     # The version number auto-increments per machine per calendar day so
