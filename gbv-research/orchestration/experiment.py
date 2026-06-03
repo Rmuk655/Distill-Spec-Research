@@ -3555,7 +3555,7 @@ def main():
     # In interactive mode (sys.stdout.isatty() == True), we do NOT redirect
     # so the user still sees output in their terminal.  The step tee still
     # writes to pipeline_output.log via _log_fh in run_step().
-    global _LOG_IS_STDOUT, _PIPELINE_LOG, _DB_LOGS
+    global STATE_FILE, _LOG_IS_STDOUT, _PIPELINE_LOG, _DB_LOGS  # all module globals written in main()
     if not sys.stdout.isatty() and not args.storage_root:
         # Compute path using same slug logic as the STATE_FILE block below.
         # Duplicated here (instead of refactored) to keep the redirect as
@@ -3626,7 +3626,7 @@ def main():
     #   SPECDIST_STORAGE_ROOT  the root itself (informational)
     #   SPECDIST_DB_PATH       full path to results.db
     #   SPECDIST_LOGS_ROOT     full path to logs/ directory
-    global STATE_FILE, _DB_LOGS, _PIPELINE_LOG
+    # (global STATE_FILE, _DB_LOGS, _PIPELINE_LOG already declared above)
 
     # Priority: CLI --storage_root > env var > YAML checkpointing.storage_root
     _storage_root = (args.storage_root
