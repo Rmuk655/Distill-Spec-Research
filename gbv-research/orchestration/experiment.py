@@ -489,6 +489,87 @@ def _data(name): return os.path.join(_GBV_RESEARCH, "core", "datasets", "raw", n
 def _merged(name): return _ckpt(name + "_merged")
 
 
+# ── Model-pair tag for checkpoint namespacing ─────────────────────────────────
+# Checkpoint directories are named  kl-gsm8k-<tag>/  so different (draft, target,
+# quantization) triples never share the same directory on the same machine.
+#
+# Problem it solves:
+#   Without this, running  Qwen-0.6B→Qwen-8B  and  Qwen-0.6B→Qwen-4B  on the
+#   same machine both write to  kl-gsm8k/ , causing one to appear "already done"
+#   and the eval to load the wrong model.  The family-only suffix (-qwen) was not
+#   enough: all Qwen pairs share the same family.
+#
+# Design:
+#   tag = _short(draft) + "-" + _short(target) + optional "nf4"
+#   e.g.  q0.6b-q8bnf4  /  q0.6b-q4b  /  dg2-g2m  /  l1b-l3bnf4
+#
+#   The default laptop pair (Qwen2.5-0.5B → Qwen3-0.6B, no 4bit) returns ""
+#   so existing checkpoints keep their plain names (backward compat).
+#
+#   State files and eval DB are already per-(config, student_path), so they don't
+#   need this tag — only checkpoint dirs do.
+#
+_DEFAULT_DRAFT  = "Qwen/Qwen2.5-0.5B"
+_DEFAULT_TARGET = "Qwen/Qwen3-0.6B"
+
+def _run_tag(draft: str, target: str, load_in_4bit: bool) -> str:
+    """Return a short human-readable tag for a (draft, target, quantization) triple.
+
+    Used to suffix checkpoint directory names so different model pairs never
+    collide when run on the same machine.
+
+    Examples
+    --------
+    Qwen2.5-0.5B → Qwen3-0.6B   no-4bit  → ""          (default pair; backward compat)
+    Qwen3-0.6B   → Qwen3-8B     nf4      → "q0.6b-q8bnf4"
+    Qwen3-0.6B   → Qwen3-4B     no-4bit  → "q0.6b-q4b"
+    Qwen3-0.6B   → Qwen3-8B     no-4bit  → "q0.6b-q8b"
+    distilgpt2   → gpt2-medium  no-4bit  → "dg2-g2m"
+    Llama-3.2-1B → Llama-3.2-3B nf4     → "l1b-l3bnf4"
+    """
+    if draft == _DEFAULT_DRAFT and target == _DEFAULT_TARGET and not load_in_4bit:
+        return ""  # keep legacy plain names for the original laptop Qwen pair
+
+    import re as _re
+
+    _FAM_PREFIX = [
+        ("qwen",    "q"),
+        ("llama",   "l"),
+        ("gemma",   "g"),
+        ("mistral", "m"),
+        ("phi",     "p"),
+        ("falcon",  "f"),
+    ]
+
+    def _short(model_id: str) -> str:
+        name = model_id.split("/")[-1].lower()
+        # GPT-2 variants (no size number in base name)
+        if "distilgpt2" in name or "distil-gpt2" in name:
+            return "dg2"
+        if "gpt2" in name or "gpt-2" in name:
+            sz = "m" if "medium" in name else ("l" if "large" in name else ("xl" if "xl" in name else ""))
+            return f"g2{sz}"
+        # Size token: "0.5b", "0.6b", "1b", "1.1b", "3b", "4b", "7b", "8b", "13b", "70b"
+        sz_m = _re.search(r"(\d+\.?\d*)\s*([bm])", name, _re.I)
+        size = ""
+        if sz_m:
+            num, unit = sz_m.group(1), sz_m.group(2).lower()
+            # Normalise decimal: "0.50" → "0.5", "1.0" → "1"
+            if "." in num:
+                num = num.rstrip("0").rstrip(".")
+            size = f"{num}{unit}"
+        # Family prefix
+        for kw, pfx in _FAM_PREFIX:
+            if kw in name:
+                return pfx + size
+        # Unknown family — first 8 chars of model name + size
+        return (name.replace("-", "")[:6] + size)[:10]
+
+    d = _short(draft)
+    t = _short(target) + ("nf4" if load_in_4bit else "")
+    return f"{d}-{t}"
+
+
 def _auto_download_models(*model_ids: str) -> None:
     """Download models that are not yet in the HuggingFace cache.
 
@@ -1114,20 +1195,29 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _ckpt   = lambda n, _b=_smoke_base: os.path.join(_b, "smoke", n)          # noqa: E731
         _merged = lambda n, _b=_smoke_base: os.path.join(_b, "smoke", n + "_merged")  # noqa: E731
 
-    # ── Model-family checkpoint namespace ────────────────────────────────────
-    # Checkpoint dirs must be family-scoped so Qwen and GPT-2 (or LLaMA etc.)
-    # never share the same directory.  Without this, a Qwen kl-gsm8k checkpoint
-    # makes GPT-2 kl training appear "already done" and GPT-2 eval runs the
-    # wrong model.  Qwen keeps the plain name (backward compat); all others get
-    # a "-<family>" suffix, e.g. kl-gsm8k-gpt2, kl-gsm8k_merged-gpt2.
+    # ── Model-pair checkpoint namespace ──────────────────────────────────────
+    # Checkpoint dirs are suffixed with a short (draft, target, quantization) tag
+    # so that different model pairs running on the same machine never share dirs.
+    #
+    # Examples:
+    #   Qwen2.5-0.5B → Qwen3-0.6B  no-4bit  →  kl-gsm8k/          (default, no suffix)
+    #   Qwen3-0.6B   → Qwen3-8B    nf4      →  kl-gsm8k-q0.6b-q8bnf4/
+    #   Qwen3-0.6B   → Qwen3-4B    no-4bit  →  kl-gsm8k-q0.6b-q4b/
+    #   Qwen3-0.6B   → Qwen3-8B    no-4bit  →  kl-gsm8k-q0.6b-q8b/
+    #   distilgpt2   → gpt2-medium  no-4bit  →  kl-gsm8k-dg2-g2m/
+    #   Llama-3.2-1B → Llama-3.2-3B nf4     →  kl-gsm8k-l1b-l3bnf4/
+    #
+    # This supersedes the old family-only suffix (-gpt2 / -llama) which only
+    # separated different families but allowed Kaggle-Qwen and Colab-Qwen to
+    # collide (both Qwen, different teacher sizes).
     _h_for_family = train_hparams or {}
-    _model_family = _h_for_family.get("model_family", "qwen")
-    _fam_suffix = "" if _model_family == "qwen" else f"-{_model_family}"
-    if _fam_suffix:
+    _model_family = _h_for_family.get("model_family", "qwen")   # still used for model-specific behaviour
+    _pair_tag = _run_tag(draft, target, load_in_4bit)
+    if _pair_tag:
         _base_ckpt   = _ckpt
         _base_merged = _merged
-        _ckpt   = lambda n, _sfx=_fam_suffix: _base_ckpt(f"{n}{_sfx}")      # noqa: E731
-        _merged = lambda n, _sfx=_fam_suffix: _base_merged(f"{n}{_sfx}")    # noqa: E731
+        _ckpt   = lambda n, _t=_pair_tag: _base_ckpt(f"{n}-{_t}")      # noqa: E731
+        _merged = lambda n, _t=_pair_tag: _base_merged(f"{n}-{_t}")    # noqa: E731
 
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
