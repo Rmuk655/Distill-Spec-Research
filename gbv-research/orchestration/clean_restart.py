@@ -42,13 +42,14 @@ _GBV_RESEARCH = os.path.dirname(_HERE)
 
 # ── Pair-tag derivation ────────────────────────────────────────────────────
 
-def _get_config_pair_tag(config_name: str) -> str:
-    """Derive the pair tag for a config by loading its YAML (resolving _base).
+def _get_config_pair_info(config_name: str):
+    """Derive the pair tag and draft model ID from a config YAML.
 
-    The pair tag encodes (draft, target, load_in_4bit) as a short string —
+    Returns (pair_tag, draft_model_id).
+    pair_tag encodes (draft, target, load_in_4bit) as a short string —
     the same tag that experiment.py appends to checkpoint dir names.
 
-    Returns "" if the YAML cannot be loaded or models.draft/target are missing.
+    Returns ("", "") if the YAML cannot be loaded or models.draft/target are missing.
     """
     try:
         import yaml, re as _re
@@ -106,9 +107,15 @@ def _get_config_pair_tag(config_name: str) -> str:
 
         d = _short(draft)
         t = _short(target) + ("nf4" if load_in_4bit else "")
-        return f"{d}-{t}"
+        return f"{d}-{t}", draft   # (pair_tag, draft_model_id)
     except Exception:
-        return ""
+        return "", ""
+
+
+def _get_config_pair_tag(config_name: str) -> str:
+    """Convenience wrapper — returns just the pair tag string."""
+    tag, _ = _get_config_pair_info(config_name)
+    return tag
 
 
 # ── Directories / files to wipe ────────────────────────────────────────────
@@ -178,16 +185,21 @@ def _wipe_targets(config_slug=None, pair_tag=""):
     return targets
 
 
-def _wipe_results_db_rows(pair_tag: str, dry_run=False):
-    """Delete rows from results.db whose draft_path contains the pair tag.
+def _wipe_results_db_rows(pair_tag: str, draft_model: str = "", dry_run=False):
+    """Delete rows from results.db for this model pair.
 
-    This scopes the DB wipe to the model pair being restarted, preserving
-    eval results from all other model pairs.
+    Two types of rows are cleaned:
 
-    After wiping checkpoints and re-training, the old DB rows would make
-    evaluate.py's --skip_existing think the model has already been evaluated
-    (it matches on draft_path, which is the checkpoint dir path including the
-    pair tag).  Deleting those rows forces a clean re-evaluation.
+    1. TRAINED model rows — draft_path contains the pair tag:
+       e.g.  db/checkpoints/kl-gsm8k-dg2-g2m_merged  → LIKE '%dg2-g2m%'
+       These are rows written when evaluating a LoRA-trained checkpoint.
+
+    2. BASELINE rows — draft_path == draft_model_id (raw HF model name):
+       e.g.  distilgpt2  or  Qwen/Qwen2.5-0.5B
+       The baseline eval uses the untrained draft directly.  evaluate.py's
+       _already_run() for baseline checks ONLY draft_label + dataset + mode
+       (not the path), so old baseline rows survive a pair-tag-only DB wipe
+       and cause all baseline cells to SKIP on the next run.
     """
     db_path = os.path.join(_GBV_RESEARCH, "db", "results.db")
     if not os.path.exists(db_path):
@@ -198,34 +210,57 @@ def _wipe_results_db_rows(pair_tag: str, dry_run=False):
         import sqlite3
         with sqlite3.connect(db_path) as conn:
             cur = conn.cursor()
-            # Check how many rows match
+
+            # Count rows to delete
             cur.execute(
                 "SELECT COUNT(*) FROM runs WHERE draft_path LIKE ?",
                 (f"%{pair_tag}%",)
             )
-            n = cur.fetchone()[0]
-            if n == 0:
-                print(f"  [skip] db/results.db — no rows matching pair tag '{pair_tag}'")
+            n_trained = cur.fetchone()[0]
+
+            n_baseline = 0
+            if draft_model:
+                cur.execute(
+                    "SELECT COUNT(*) FROM runs WHERE draft_path = ?",
+                    (draft_model,)
+                )
+                n_baseline = cur.fetchone()[0]
+
+            n_total = n_trained + n_baseline
+            if n_total == 0:
+                print(f"  [skip] db/results.db — no rows for pair '{pair_tag}' or baseline '{draft_model}'")
                 return
+
             if dry_run:
-                print(f"  [dry_run] Would delete {n} row(s) from results.db "
-                      f"where draft_path LIKE '%{pair_tag}%'")
+                print(f"  [dry_run] Would delete {n_trained} trained + "
+                      f"{n_baseline} baseline row(s) from results.db")
                 return
-            cur.execute(
-                "DELETE FROM runs WHERE draft_path LIKE ?",
-                (f"%{pair_tag}%",)
-            )
-            # Also clear per_prompt rows for the same models
+
+            # Delete trained model rows (pair tag in path)
+            if n_trained > 0:
+                cur.execute("DELETE FROM runs WHERE draft_path LIKE ?",
+                            (f"%{pair_tag}%",))
+
+            # Delete baseline rows (exact draft model ID match)
+            if n_baseline > 0:
+                cur.execute("DELETE FROM runs WHERE draft_path = ?",
+                            (draft_model,))
+
+            # Also clean per_prompt table if it exists
             try:
                 cur.execute(
-                    "DELETE FROM per_prompt WHERE run_tag IN "
-                    "(SELECT run_tag FROM runs WHERE draft_path LIKE ?)",
-                    (f"%{pair_tag}%",)
+                    "DELETE FROM per_prompt WHERE run_tag NOT IN "
+                    "(SELECT run_tag FROM runs)"
                 )
             except sqlite3.OperationalError:
-                pass  # per_prompt table might not exist
+                pass
+
             conn.commit()
-        print(f"  [clear] db/results.db — deleted {n} row(s) for pair '{pair_tag}' [ok]")
+
+        msg_parts = []
+        if n_trained:  msg_parts.append(f"{n_trained} trained")
+        if n_baseline: msg_parts.append(f"{n_baseline} baseline (draft_path='{draft_model}')")
+        print(f"  [clear] db/results.db — deleted {' + '.join(msg_parts)} row(s) [ok]")
     except Exception as e:
         print(f"  [warn] Could not clear results.db rows: {e}")
 
@@ -478,15 +513,17 @@ Examples:
     dry = args.dry_run
     tag = " [DRY RUN]" if dry else ""
 
-    # Derive pair tag from YAML so all wipe operations are scoped to ONE model pair.
+    # Derive pair tag AND draft model ID from YAML.
+    # Both are needed: pair tag scopes trained-model rows; draft model ID
+    # scopes baseline rows (which have draft_path=<hf_model_id>, no pair tag).
     _config_slug = args.config.replace("/", "_").replace("\\", "_")
-    _pair_tag    = _get_config_pair_tag(args.config)
+    _pair_tag, _draft_model = _get_config_pair_info(args.config)
 
     print(f"\n{'='*60}")
     print(f"  GBV Clean Restart{tag}")
     print(f"  Config : {args.config}")
     if _pair_tag:
-        print(f"  Pair   : {_pair_tag}  (only THIS pair's outputs will be wiped)")
+        print(f"  Pair   : {_pair_tag}  (trained rows + baseline for '{_draft_model}')")
     else:
         print(f"  Pair   : (unknown — full wipe)")
     print(f"{'='*60}\n")
@@ -499,7 +536,7 @@ Examples:
 
     print("\n2b. Clearing results.db rows for this model pair...")
     if _pair_tag:
-        _wipe_results_db_rows(_pair_tag, dry_run=dry)
+        _wipe_results_db_rows(_pair_tag, _draft_model, dry_run=dry)
     else:
         print("  [skip] No pair tag — results.db untouched (YAML could not be read)")
 
