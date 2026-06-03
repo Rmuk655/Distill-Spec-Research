@@ -2865,7 +2865,7 @@ _ANOMALY_PATTERNS = [
     (r"exit code 14[23]",                 "CRITICAL", "Killed (exit 143)"),
     (r"\[early stop\]",                   "WARNING",  "Early stopping triggered"),
     (r"ppl.*exceeded|ppl_threshold",      "WARNING",  "PPL threshold exceeded"),
-    (r"(out of memory|oom)",              "WARNING",  "Out-of-memory hint"),
+    (r"(cuda out of memory|torch\.cuda\.OutOfMemoryError|CUDA error.*out of memory|RuntimeError.*out of memory)", "WARNING", "Out-of-memory hint"),
     (r"nan_count.*[1-9]",                 "WARNING",  "NaN count > 0"),
     (r"\[health\].*warn",                 "WARNING",  "Health check warning"),
     (r"loss.*spike|spike.*loss",          "WARNING",  "Loss spike"),
@@ -2892,18 +2892,10 @@ def _scan_log_anomalies(log_path: str, tail_lines: int = 300) -> list[tuple[str,
     for raw in tail:
         lo = raw.lower().strip()
 
-        # Skip lines that are known-false-positive sources.  These contain OOM/error
-        # keywords as part of their DESCRIPTION of what they guard against, not as
-        # actual events (e.g. "[BE batch]...CPU fallback if OOM" is a help string).
-        _FALSE_POSITIVE_FRAGMENTS = (
-            "cpu fallback if oom",          # BE batch description text
-            "retrying on cpu (only this",   # per-mode cpu fallback description
-            "will retry on cpu automatically",  # alpha eval description
-            "gpu would oom / hard-crash",   # alpha preload guard description
-            "specdist_allow_oom_fallback",  # env-var guard description
-        )
-        if any(fp in lo for fp in _FALSE_POSITIVE_FRAGMENTS):
-            continue
+        # Note: OOM/error keywords in DESCRIPTION strings (e.g. "CPU fallback on
+        # VRAM exhaustion") no longer match because the OOM anomaly pattern now
+        # requires CUDA/RuntimeError context (torch.cuda.OutOfMemoryError etc.).
+        # No false-positive filter needed here.
 
         for pattern, severity, label in _ANOMALY_PATTERNS:
             if label in seen_labels:

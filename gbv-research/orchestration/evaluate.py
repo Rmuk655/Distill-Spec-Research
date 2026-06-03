@@ -1760,7 +1760,7 @@ def main():
                 # If a mode's GPU subprocess produces no results (OOM or crash),
                 # retry that specific mode on CPU so the pipeline still completes.
                 print(f"  [BE batch] hw_tier=laptop -> one GPU subprocess per mode "
-                      f"(serial isolation; VRAM-wait between modes; CPU fallback if OOM)")
+                      f"(serial isolation; VRAM-wait between modes; CPU fallback on VRAM exhaustion)")
                 # Local helper: poll until enough VRAM is free (or give up after
                 # `timeout_s`).  On Windows the GPU driver takes 1-3 s to reclaim
                 # VRAM after a subprocess exits; launching the next one too early
