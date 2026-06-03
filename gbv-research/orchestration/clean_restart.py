@@ -273,28 +273,28 @@ def _reset_state(config_slug: str, dry_run=False):
 
 def _launch(config: str, extra_args: list, dry_run=False):
     pipeline_script = os.path.join(_HERE, "experiment.py")
-    # Startup log captures experiment.py's own prints before it creates the
-    # run-specific subdir.  Step output (training/eval) goes to the subdir.
     slug = config.replace("/", "_").replace("\\", "_")
-    startup_log = os.path.join(_GBV_RESEARCH, "db", "logs", f"startup_{slug}.log")
     cmd = [sys.executable, pipeline_script, "--config", config, "--yes"] + extra_args
     print(f"\n  Launching: {' '.join(os.path.basename(p) if os.sep in p else p for p in cmd)}")
     if dry_run:
         print("  [dry_run] Would launch pipeline")
         return
     os.makedirs(os.path.join(_GBV_RESEARCH, "db", "logs"), exist_ok=True)
-    with open(startup_log, "w") as log_f:
-        kwargs = {}
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.DETACHED_PROCESS
-        proc = subprocess.Popen(
-            cmd, cwd=_GBV_RESEARCH,
-            stdout=log_f, stderr=subprocess.STDOUT,
-            **kwargs
-        )
+    # experiment.py redirects its own stdout to  db/logs/{slug}-{pair_tag}/pipeline_output.log
+    # as soon as it knows the run slug.  We do NOT redirect here — that would create a
+    # separate startup log duplicating the pipeline log.  stdout → DEVNULL for the brief
+    # pre-redirect output (just HF caching status, not needed externally).
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.DETACHED_PROCESS
+    proc = subprocess.Popen(
+        cmd, cwd=_GBV_RESEARCH,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        **kwargs
+    )
     print(f"  Pipeline started (PID {proc.pid}) [ok]")
-    print(f"\n  Step logs:   tail -f db/logs/{slug}-*/pipeline_output.log")
-    print(f"               (subdir appears once the pipeline identifies the model pair)")
+    print(f"\n  Log:         tail -f db/logs/{slug}-*/pipeline_output.log")
+    print(f"               (dir appears 2-3 s after startup)")
     print(f"  Dashboard:   http://127.0.0.1:5000  (auto-shows most recent run)")
     print(f"  Status:      python orchestration/experiment.py --config {config} --status")
 

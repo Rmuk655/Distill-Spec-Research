@@ -110,6 +110,7 @@ _GBV_RESEARCH_ROOT = os.path.dirname(HERE)                   # gbv-research/
 _DB_LOGS      = os.path.join(_GBV_RESEARCH_ROOT, "db", "logs")
 _PIPELINE_LOG = os.path.join(_DB_LOGS, "pipeline_output.log")  # live log visible in dashboard Logs panel
 _child_popen  = None   # Popen handle for the currently running child step
+_LOG_IS_STDOUT = False  # True when sys.stdout has been redirected to _PIPELINE_LOG
 
 
 def _pid_alive(pid: int) -> bool:
@@ -3185,20 +3186,36 @@ def run_step(step, state, dry_run=False):
         if os.environ.get(_ekey):
             env[_ekey] = os.environ[_ekey]
 
-    # Open the pipeline log in append mode — one file for the whole pipeline run,
-    # readable live from the dashboard Logs panel (http://127.0.0.1:5000/ → Logs button).
-    _log_fh = open(_PIPELINE_LOG, "a", encoding="utf-8", errors="replace", buffering=1)
-    _log_fh.write(
+    # Log file for this step.
+    #
+    # Two modes:
+    #   _LOG_IS_STDOUT=True  (detached: started by clean_restart or background):
+    #     sys.stdout was already redirected to _PIPELINE_LOG in main(), so
+    #     _log_fh = sys.stdout — all writes go to the file once, no duplicate.
+    #
+    #   _LOG_IS_STDOUT=False (interactive: python experiment.py in a terminal):
+    #     _log_fh is a separate file handle; subprocess output is teed to BOTH
+    #     the terminal (sys.stdout) and _log_fh (pipeline_output.log).
+    #
+    # Either way there is exactly ONE pipeline_output.log (plus be_progress.log).
+    _log_fh_owned = not _LOG_IS_STDOUT          # True = we opened it, we close it
+    _log_fh = (sys.stdout if _LOG_IS_STDOUT
+               else open(_PIPELINE_LOG, "a", encoding="utf-8", errors="replace", buffering=1))
+
+    _step_hdr = (
         f"\n{'='*65}\n"
         f"  STEP : {step['desc']}\n"
         f"  TIME : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"  CMD  : {' '.join(step['cmd'])}\n"
         f"{'='*65}\n"
     )
+    _log_fh.write(_step_hdr)
     _log_fh.flush()
 
     try:
-        # Popen with PIPE so we can tee output to both the terminal and pipeline_output.log.
+        # Popen with PIPE so we can stream subprocess output.
+        # In interactive mode: tee to terminal (sys.stdout) AND log file (_log_fh).
+        # In detached mode:    sys.stdout IS the log, so write once to _log_fh.
         # The dashboard Logs panel reads pipeline_output.log live via /api/log_tail.
         proc = subprocess.Popen(
             step["cmd"], cwd=HERE, env=env,
@@ -3208,15 +3225,16 @@ def run_step(step, state, dry_run=False):
         _child_popen = proc
         _write_lock(child_pid=proc.pid)   # record child PID → killed on next startup if orphaned
 
-        # Stream line-by-line → terminal AND log file simultaneously (tee).
+        # Stream line-by-line — tee to terminal when interactive.
         # INLINE CRITICAL detection: check every line as it arrives.
         # This fires immediately — no need to wait for step completion or pipeline end.
         # Only CRITICAL patterns are flagged here (NaN, OOM, traceback, SIGKILL).
         # WARNING/INFO patterns are caught in the post-step and end-of-pipeline sweeps.
         _inline_alerted: set[str] = set()
         for _line in iter(proc.stdout.readline, ""):
-            sys.stdout.write(_line)
-            sys.stdout.flush()
+            if not _LOG_IS_STDOUT:          # interactive: also print to terminal
+                sys.stdout.write(_line)
+                sys.stdout.flush()
             _log_fh.write(_line)
             _log_fh.flush()
             # Check CRITICAL patterns on every line as it arrives
@@ -3229,8 +3247,9 @@ def run_step(step, state, dry_run=False):
                                   f"  LIVE ANOMALY [{_lbl}]\n"
                                   f"  {_line.rstrip()[:110]}\n"
                                   f"  {'!'*60}\n\n")
-                        sys.stdout.write(_alert)
-                        sys.stdout.flush()
+                        if not _LOG_IS_STDOUT:
+                            sys.stdout.write(_alert)
+                            sys.stdout.flush()
                         _log_fh.write(_alert)
                         _log_fh.flush()
 
@@ -3242,7 +3261,8 @@ def run_step(step, state, dry_run=False):
         _done_msg = (f"\n  {TICK} Done in {elapsed/60:.1f} min\n"
                      if rc == 0
                      else f"\n  {CROSS} Failed (exit code {rc})\n")
-        sys.stdout.write(_done_msg); sys.stdout.flush()
+        if not _LOG_IS_STDOUT:
+            sys.stdout.write(_done_msg); sys.stdout.flush()
         _log_fh.write(_done_msg);   _log_fh.flush()
 
         if rc == 0:
@@ -3267,7 +3287,8 @@ def run_step(step, state, dry_run=False):
                 "  Restart   -> python experiment.py --config laptop --yes\n"
                 "               (resets 'failed' training steps to 'pending' automatically)\n"
             )
-            sys.stdout.write(_hints); sys.stdout.flush()
+            if not _LOG_IS_STDOUT:
+                sys.stdout.write(_hints); sys.stdout.flush()
             _log_fh.write(_hints);   _log_fh.flush()
             # Write a self-contained per-step error snapshot for remote debugging.
             # On Colab/Modal you can download just this one file to see what failed.
@@ -3291,7 +3312,8 @@ def run_step(step, state, dry_run=False):
         # Kill the child so it doesn't keep holding GPU VRAM as an orphan
         if _child_popen and _child_popen.poll() is None:
             _msg = f"\n  [Ctrl-C] Terminating child process PID {_child_popen.pid}...\n"
-            sys.stdout.write(_msg); sys.stdout.flush()
+            if not _LOG_IS_STDOUT:
+                sys.stdout.write(_msg); sys.stdout.flush()
             _log_fh.write(_msg);   _log_fh.flush()
             _kill_tree(_child_popen.pid)
             try:
@@ -3302,12 +3324,14 @@ def run_step(step, state, dry_run=False):
         _write_lock()
         mark_step(state, sid, "failed", "interrupted by user")
         _int_msg = f"\n  [interrupted] Step {sid} marked as failed. Re-run to resume.\n"
-        sys.stdout.write(_int_msg); sys.stdout.flush()
+        if not _LOG_IS_STDOUT:
+            sys.stdout.write(_int_msg); sys.stdout.flush()
         _log_fh.write(_int_msg);   _log_fh.flush()
         raise
 
     finally:
-        _log_fh.close()
+        if _log_fh_owned:   # only close if we opened it; don't close sys.stdout
+            _log_fh.close()
 
 
 # ---------------------------------------------------------------------------
@@ -3504,6 +3528,40 @@ def main():
 
     draft  = args.draft  or cfg["draft"]
     target = args.target or cfg["target"]
+
+    # ── Early stdout redirect (detached mode) ────────────────────────────────
+    # When experiment.py is started by clean_restart.py (or any non-interactive
+    # launcher), sys.stdout is NOT a tty.  We redirect sys.stdout and sys.stderr
+    # to the run-specific pipeline_output.log BEFORE the first print() call so
+    # that ALL output — startup info, step headers, step subprocess output —
+    # lands in ONE file:
+    #
+    #   db/logs/{config}-{pair_tag}/pipeline_output.log  ← everything
+    #   db/logs/{config}-{pair_tag}/be_progress.log      ← BE tqdm detail only
+    #
+    # Without this, clean_restart redirected experiment.py stdout to a separate
+    # startup_{config}.log and run_step() teed to BOTH that file AND
+    # pipeline_output.log — creating 3 log files with duplicated content.
+    #
+    # In interactive mode (sys.stdout.isatty() == True), we do NOT redirect
+    # so the user still sees output in their terminal.  The step tee still
+    # writes to pipeline_output.log via _log_fh in run_step().
+    global _LOG_IS_STDOUT, _PIPELINE_LOG, _DB_LOGS
+    if not sys.stdout.isatty() and not args.storage_root:
+        # Compute path using same slug logic as the STATE_FILE block below.
+        # Duplicated here (instead of refactored) to keep the redirect as
+        # early as possible with minimal dependencies.
+        _e_slug = args.config.replace("/", "_").replace(os.sep, "_")
+        _e_tag  = _run_tag(draft, target, cfg.get("load_in_4bit", False))
+        _e_dir  = os.path.join(_GBV_RESEARCH_ROOT, "db", "logs", f"{_e_slug}-{_e_tag}")
+        _e_log  = os.path.join(_e_dir, "pipeline_output.log")
+        os.makedirs(_e_dir, exist_ok=True)
+        _log_redirect = open(_e_log, "a", encoding="utf-8", errors="replace", buffering=1)
+        sys.stdout = _log_redirect
+        sys.stderr = _log_redirect
+        _DB_LOGS      = _e_dir
+        _PIPELINE_LOG = _e_log
+        _LOG_IS_STDOUT = True
 
     # ── HuggingFace offline mode (auto) ─────────────────────────────────────
     # Once we've confirmed both models are available locally (either as a
