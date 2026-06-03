@@ -103,12 +103,21 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)  # gbv-research/
 sys.path.insert(0, _HERE)
-# OSD/ — kept for specInfer.generator (alpha eval) and legacy checkpoint fallback.
-# fetch_datasets is NO LONGER imported from OSD/; we use core/datasets/downloader.py.
+# specInfer package resolution — two locations checked in priority order:
+#
+# 1. algorithms/specinfer/ (bundled copy inside gbv-research) — PRIMARY.
+#    These 6 files (generator.py, common.py, proposer.py, verifier.py, logger.py,
+#    __init__.py) are committed to the repo so specInfer works regardless of whether
+#    the OSD sibling repo is cloned.  No external dependency, no submodule needed.
+#    Copied from LiuXiaoxuanPKU/OSD at a known-good commit; update manually if needed.
+#
+# 2. OSD/distill/ (sibling repo fallback) — kept for backward compat.
+#    OSD is the original Online Speculative Decoding codebase (Liu et al. 2023).
+#    Populated by: git clone https://github.com/LiuXiaoxuanPKU/OSD ~/ram/OSD
+_BUNDLED_SPECINFER = os.path.join(_PARENT, "algorithms")  # contains specinfer/ package
 _OSD_DIR = os.path.join(os.path.dirname(_PARENT), "OSD")
-# OSD/distill/ — so `from specInfer.generator import Generator` resolves correctly.
-# (specInfer package lives at OSD/distill/specInfer/, not at OSD/specInfer/)
-sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))
+sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))     # fallback: sibling OSD repo
+sys.path.insert(0, _BUNDLED_SPECINFER)                    # primary: bundled copy wins
 # gbv-research/db/ MUST come LAST (position 0 wins) so `import results_db` resolves
 # to gbv-research/db/results_db.py — not OSD/results_db.py — and writes to db/results.db
 # which is where the dashboard reads from.
@@ -1105,12 +1114,16 @@ def measure_perplexity(model_path: str, prompts: list, max_tokens: int = 200) ->
 # ---------------------------------------------------------------------------
 
 def _already_run(student_label: str, dataset: str, mode: str, K: int, temperature: float,
-                  student_path: str | None = None) -> bool:
-    """Return True if a matching run already exists in the DB.
+                  student_path: str | None = None, n_prompts: int | None = None) -> bool:
+    """Return True if a matching run already exists in the DB with the same prompt count.
 
-    student_path is included in the match when provided so that results for
-    Qwen/Qwen2.5-0.5B and distilgpt2 both labelled 'baseline' are never
-    confused — a Qwen baseline result in the DB must not skip GPT-2 baseline.
+    n_prompts is checked when provided to prevent smoke results (n=5) from
+    blocking full-run eval (n=1319 for A100, n=100 for T4).  Without this,
+    a smoke baseline with n=5 would make _already_run return True and the
+    full-run baseline eval would be silently skipped.
+
+    student_path is included in the match so results for Qwen/Qwen2.5-0.5B
+    and distilgpt2 both labelled 'baseline' are never confused.
     """
     runs = results_db.query_runs({
         "draft_label": student_label,
@@ -1121,6 +1134,14 @@ def _already_run(student_label: str, dataset: str, mode: str, K: int, temperatur
     matching = [r for r in runs if abs(r.get("temperature", 0) - temperature) < 0.01]
     if not matching:
         return False
+    # Filter by n_prompts: a smoke result (n=5) must NOT block a full run (n=1319).
+    # Allow ±10% tolerance for minor prompt-count differences between runs.
+    if n_prompts is not None:
+        matching = [r for r in matching
+                    if r.get("n_prompts") is None                    # old row, no n_prompts stored
+                    or abs(r.get("n_prompts", 0) - n_prompts) <= max(1, n_prompts * 0.1)]
+        if not matching:
+            return False
     # If we know the student path, require it to match so different model
     # families sharing the same label don't cross-skip each other.
     if student_path:
@@ -1158,7 +1179,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
     run_tag = make_run_tag(student_label, mode, dataset, K)
 
     if skip_existing and _already_run(student_label, dataset, mode, K, temperature,
-                                       student_path=student_path):
+                                       student_path=student_path, n_prompts=n):
         print(f"\n[{run_tag}] SKIP (already in DB)")
         return {"skipped": True}
 
@@ -1683,7 +1704,7 @@ def main():
             elif ds == "mtbench": n = 80
             # Skip if already measured and --skip_existing is set
             if args.skip_existing and _already_run(student_label, ds, "perplexity", 0, 0.0,
-                                                     student_path=args.student):
+                                                     student_path=args.student, n_prompts=n):
                 print(f"  {student_label} | {ds} | PPL=SKIP (already in DB)")
                 continue
             try:
@@ -1754,7 +1775,7 @@ def main():
     for ds, mode, K, T in cells:
         if mode != "alpha":
             if not (args.skip_existing and _already_run(student_label, ds, mode, K, T,
-                                                         student_path=args.student)):
+                                                         student_path=args.student, n_prompts=args.n)):
                 be_cells_to_run.add((ds, mode, K, T))
 
     _be_cache: dict = {}   # (ds, mode, K, T) -> block_eff
@@ -2011,7 +2032,7 @@ def main():
             # BE result already computed in pre-batch step above
             run_tag = make_run_tag(student_label, mode, ds, K, T)
             if args.skip_existing and _already_run(student_label, ds, mode, K, T,
-                                                     student_path=args.student):
+                                                     student_path=args.student, n_prompts=args.n):
                 print(f" [{run_tag}] SKIP (already in DB)")
                 continue
             be_val = _be_cache.get((ds, mode, K, T))
