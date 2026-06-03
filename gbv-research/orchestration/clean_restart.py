@@ -1,34 +1,30 @@
 """
-clean_restart.py — Wipe all pipeline outputs and restart from scratch.
+clean_restart.py — Wipe pipeline outputs for ONE config and restart from scratch.
 
 Usage:
-    python orchestration/clean_restart.py                   # laptop config
-    python orchestration/clean_restart.py --config kaggle   # any config
-    python orchestration/clean_restart.py --config laptop_gpt2
-    python orchestration/clean_restart.py --dry_run         # show what would be deleted
-    python orchestration/clean_restart.py --no_restart      # wipe only, don't relaunch
+    python orchestration/clean_restart.py --config laptop_gpt2   # GPT-2 only
+    python orchestration/clean_restart.py --config kaggle         # Kaggle Qwen only
+    python orchestration/clean_restart.py --config laptop_qwen    # laptop Qwen only
+    python orchestration/clean_restart.py --dry_run               # show what would be deleted
+    python orchestration/clean_restart.py --no_restart            # wipe only, don't relaunch
 
-What it wipes:
-    db/checkpoints/   — all trained LoRA adapters and merged models
-    db/logs/{slug}-*/ — run-specific log subdirs (pipeline_output.log, be_progress.log, step error logs)
-    db/wandb/         — local WandB run dirs
-    db/results.db     — evaluation results database
-    OSD/checkpoints/  — legacy OSD checkpoint dir (migration period)
-    OSD/wandb/        — legacy OSD WandB run dirs
-    orchestration/wandb/ — stale WandB runs written before db/wandb fix
+Scope — only touches outputs belonging to the specified config's model pair:
+    db/checkpoints/*-{pair_tag}*/    — checkpoints for THIS pair only (NOT other models)
+    db/logs/{slug}-{pair_tag}/       — run logs for THIS pair only
+    db/results.db rows               — DB rows where draft_path contains the pair tag
+    pipeline_state_{slug}*.json      — state file(s) for this config
 
-What it keeps:
-    db/.gitkeep, db/logs/.gitkeep   — directory markers
-    All source code, configs, datasets
+What it NEVER touches:
+    Checkpoints from OTHER model pairs (e.g. restarting laptop_gpt2 keeps Qwen checkpoints)
+    DB rows from OTHER models
+    Source code, configs, datasets
 
-Pipeline state reset:
-    The state file for the chosen config (and its smoke variant) is reset to
-    all-pending.  The step IDs are read from the existing state file when
-    present; otherwise the file is simply deleted so experiment.py creates it
-    fresh on the next run.
-
-Accepts ANY --config value that experiment.py accepts (laptop, kaggle,
-colab, a100, laptop_gpt2, laptop_llama, server_gpt2, profiles/*, ...).
+Pair tag is derived from the YAML config's models.draft / models.target / load_in_4bit,
+matching the same slug used in checkpoint directory names:
+    laptop_gpt2  (distilgpt2→gpt2-medium)        → pair tag: dg2-g2m
+    laptop_qwen  (Qwen2.5-0.5B→Qwen3-0.6B)       → pair tag: q0.5b-q0.6b
+    kaggle       (Qwen3-0.6B→Qwen3-8B NF4)        → pair tag: q0.6b-q8bnf4
+    a100_qwen    (Qwen3-0.6B→Qwen3-8B BF16)       → pair tag: q0.6b-q8b
 """
 
 import argparse
@@ -46,44 +42,200 @@ _SUMMER_DIR   = os.path.dirname(_GBV_RESEARCH)
 _OSD_DIR      = os.path.join(_SUMMER_DIR, "OSD")
 
 
+# ── Pair-tag derivation ────────────────────────────────────────────────────
+
+def _get_config_pair_tag(config_name: str) -> str:
+    """Derive the pair tag for a config by loading its YAML (resolving _base).
+
+    The pair tag encodes (draft, target, load_in_4bit) as a short string —
+    the same tag that experiment.py appends to checkpoint dir names.
+
+    Returns "" if the YAML cannot be loaded or models.draft/target are missing.
+    """
+    try:
+        import yaml, re as _re
+
+        def _deep_merge(parent, child):
+            result = dict(parent)
+            for k, v in child.items():
+                if k == "_base": continue
+                if isinstance(v, dict) and isinstance(result.get(k), dict):
+                    result[k] = _deep_merge(result[k], v)
+                else:
+                    result[k] = v
+            return result
+
+        def _load_raw(name, seen=None):
+            if seen is None: seen = set()
+            if name in seen: return {}
+            seen = seen | {name}
+            p = os.path.join(_HERE, "configs", f"{name}.yaml")
+            if not os.path.exists(p): return {}
+            with open(p, encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            base = raw.pop("_base", None)
+            if base:
+                return _deep_merge(_load_raw(str(base), seen), raw)
+            return raw
+
+        raw = _load_raw(config_name)
+        models = raw.get("models", {})
+        hardware = raw.get("hardware", {})
+        draft = models.get("draft", "")
+        target = models.get("target", "")
+        load_in_4bit = bool(hardware.get("load_in_4bit", False))
+
+        if not draft or not target:
+            return ""
+
+        # Same _run_tag() logic as experiment.py
+        _FAM = [("qwen","q"),("llama","l"),("gemma","g"),("mistral","m"),("phi","p"),("falcon","f")]
+        def _short(mid):
+            name = mid.split("/")[-1].lower()
+            if "distilgpt2" in name or "distil-gpt2" in name: return "dg2"
+            if "gpt2" in name or "gpt-2" in name:
+                sz = "m" if "medium" in name else ("l" if "large" in name else ("xl" if "xl" in name else ""))
+                return f"g2{sz}"
+            sz_m = _re.search(r"(\d+\.?\d*)\s*([bm])", name, _re.I)
+            size = ""
+            if sz_m:
+                num, unit = sz_m.group(1), sz_m.group(2).lower()
+                if "." in num: num = num.rstrip("0").rstrip(".")
+                size = f"{num}{unit}"
+            for kw, pfx in _FAM:
+                if kw in name: return pfx + size
+            return (name.replace("-","")[:6] + size)[:10]
+
+        d = _short(draft)
+        t = _short(target) + ("nf4" if load_in_4bit else "")
+        return f"{d}-{t}"
+    except Exception:
+        return ""
+
+
 # ── Directories / files to wipe ────────────────────────────────────────────
 
-def _wipe_targets(config_slug=None):
+def _wipe_targets(config_slug=None, pair_tag=""):
     """Return (path, keep_dir, description) tuples to wipe.
 
-    config_slug: sanitised config name (e.g. "laptop_gpt2", "kaggle").
-      When set, log subdirs are scoped to this config:
-        db/logs/laptop_gpt2-*/  (all pair-tag variants for this config)
-      When None (full wipe), all of db/logs/ is wiped.
+    Scoped by pair_tag so that restarting one model family never touches
+    another family's checkpoints or eval results.
+
+    config_slug: sanitised config name  (e.g. "laptop_gpt2")
+    pair_tag:    model-pair identifier  (e.g. "dg2-g2m", "q0.5b-q0.6b")
+
+    When both are given:
+      - db/checkpoints/*-{pair_tag}*   ← only THIS pair's checkpoints
+      - db/logs/{slug}-{pair_tag}/     ← only THIS pair's logs
+      - db/results.db rows             ← handled separately in _wipe_results_db_rows()
+      - OSD/ legacy dirs               ← always wiped (legacy, not pair-specific)
+      - db/wandb                       ← skipped for config-specific restart
+                                          (WandB metadata has no pair-tag; user manages)
+
+    When neither is given (no --config) → full wipe of everything.
     """
     import glob as _glob
     db = os.path.join(_GBV_RESEARCH, "db")
+
     targets = [
-        # (path, keep_dir, description)
-        (os.path.join(db, "checkpoints"),                True,  "db/checkpoints (trained models)"),
-        (os.path.join(db, "wandb"),                      True,  "db/wandb (local WandB runs)"),
-        (os.path.join(db, "results.db"),                 False, "db/results.db (eval results)"),
-        (os.path.join(_OSD_DIR, "checkpoints"),          True,  "OSD/checkpoints (legacy)"),
-        (os.path.join(_OSD_DIR, "wandb"),                False, "OSD/wandb (legacy WandB runs)"),
-        (os.path.join(_OSD_DIR, "results.db"),           False, "OSD/results.db (legacy eval results)"),
-        (os.path.join(_HERE, "wandb"),                   False, "orchestration/wandb (stale WandB)"),
+        # OSD legacy dirs — always safe to wipe (not pair-specific; legacy only)
+        (os.path.join(_OSD_DIR, "checkpoints"), True,  "OSD/checkpoints (legacy)"),
+        (os.path.join(_OSD_DIR, "wandb"),        False, "OSD/wandb (legacy WandB runs)"),
+        (os.path.join(_OSD_DIR, "results.db"),   False, "OSD/results.db (legacy eval results)"),
+        (os.path.join(_HERE, "wandb"),            False, "orchestration/wandb (stale WandB)"),
     ]
-    if config_slug:
-        # Wipe only log subdirs belonging to this config (e.g. laptop_gpt2-dg2-g2m/).
-        # Also catches the legacy flat log files in db/logs/ that start with this slug.
+
+    if config_slug and pair_tag:
         slug = config_slug.replace("/", "_").replace("\\", "_")
-        log_subdirs = _glob.glob(os.path.join(db, "logs", f"{slug}-*"))
-        if log_subdirs:
-            for d in sorted(log_subdirs):
-                targets.append((d, False, f"db/logs/{os.path.basename(d)}/ (run logs)"))
+
+        # ── Checkpoints: only dirs belonging to THIS pair tag ──────────────
+        # Checkpoint dirs are named  <loss>-<dataset>-<pair_tag>/  and
+        # <loss>-<dataset>-<pair_tag>_merged/  so we can safely glob for them.
+        ckpt_base = os.path.join(db, "checkpoints")
+        ckpt_dirs = (
+            _glob.glob(os.path.join(ckpt_base, f"*-{pair_tag}"))
+            + _glob.glob(os.path.join(ckpt_base, f"*-{pair_tag}_merged"))
+            + _glob.glob(os.path.join(ckpt_base, "smoke", f"*-{pair_tag}"))
+            + _glob.glob(os.path.join(ckpt_base, "smoke", f"*-{pair_tag}_merged"))
+        )
+        if ckpt_dirs:
+            for d in sorted(ckpt_dirs):
+                rel = os.path.relpath(d, _GBV_RESEARCH)
+                targets.append((d, False, f"{rel}/"))
         else:
-            # No subdir found — wipe any legacy flat log files for this config
-            # (pipeline_output.log lives in db/logs/ before the subdir change)
-            targets.append((os.path.join(db, "logs"), True, "db/logs (pipeline + step logs — legacy)"))
+            print(f"  [info] No checkpoints found for pair tag '{pair_tag}'")
+
+        # ── Logs: only this config's run subdirs ───────────────────────────
+        log_subdirs = _glob.glob(os.path.join(db, "logs", f"{slug}-*"))
+        for d in sorted(log_subdirs):
+            targets.append((d, False, f"db/logs/{os.path.basename(d)}/ (run logs)"))
+
+        # db/results.db rows are handled separately by _wipe_results_db_rows()
+        # db/wandb is NOT wiped for config-specific restart (cross-family, no pair tag)
+
     else:
-        # Full wipe: no config specified — wipe everything
-        targets.insert(1, (os.path.join(db, "logs"), True, "db/logs (all pipeline + step logs)"))
+        # ── Full wipe: no config specified ────────────────────────────────
+        # Wipe everything including all checkpoints, all logs, results.db, WandB.
+        targets = [
+            (os.path.join(db, "checkpoints"), True,  "db/checkpoints (ALL trained models)"),
+            (os.path.join(db, "logs"),         True,  "db/logs (ALL pipeline logs)"),
+            (os.path.join(db, "wandb"),         True,  "db/wandb (ALL local WandB runs)"),
+            (os.path.join(db, "results.db"),    False, "db/results.db (ALL eval results)"),
+        ] + targets  # append OSD + orchestration/wandb
+
     return targets
+
+
+def _wipe_results_db_rows(pair_tag: str, dry_run=False):
+    """Delete rows from results.db whose draft_path contains the pair tag.
+
+    This scopes the DB wipe to the model pair being restarted, preserving
+    eval results from all other model pairs.
+
+    After wiping checkpoints and re-training, the old DB rows would make
+    evaluate.py's --skip_existing think the model has already been evaluated
+    (it matches on draft_path, which is the checkpoint dir path including the
+    pair tag).  Deleting those rows forces a clean re-evaluation.
+    """
+    db_path = os.path.join(_GBV_RESEARCH, "db", "results.db")
+    if not os.path.exists(db_path):
+        print(f"  [skip] db/results.db not found — nothing to clear")
+        return
+
+    try:
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            cur = conn.cursor()
+            # Check how many rows match
+            cur.execute(
+                "SELECT COUNT(*) FROM runs WHERE draft_path LIKE ?",
+                (f"%{pair_tag}%",)
+            )
+            n = cur.fetchone()[0]
+            if n == 0:
+                print(f"  [skip] db/results.db — no rows matching pair tag '{pair_tag}'")
+                return
+            if dry_run:
+                print(f"  [dry_run] Would delete {n} row(s) from results.db "
+                      f"where draft_path LIKE '%{pair_tag}%'")
+                return
+            cur.execute(
+                "DELETE FROM runs WHERE draft_path LIKE ?",
+                (f"%{pair_tag}%",)
+            )
+            # Also clear per_prompt rows for the same models
+            try:
+                cur.execute(
+                    "DELETE FROM per_prompt WHERE run_tag IN "
+                    "(SELECT run_tag FROM runs WHERE draft_path LIKE ?)",
+                    (f"%{pair_tag}%",)
+                )
+            except sqlite3.OperationalError:
+                pass  # per_prompt table might not exist
+            conn.commit()
+        print(f"  [clear] db/results.db — deleted {n} row(s) for pair '{pair_tag}' [ok]")
+    except Exception as e:
+        print(f"  [warn] Could not clear results.db rows: {e}")
 
 
 # ── Kill running pipeline / model processes ────────────────────────────────
@@ -175,8 +327,8 @@ def _force_remove(path):
         print(f"  [warn] Could not remove {path}: {e}")
 
 
-def _wipe(config_slug=None, dry_run=False):
-    for path, keep_dir, desc in _wipe_targets(config_slug=config_slug):
+def _wipe(config_slug=None, pair_tag="", dry_run=False):
+    for path, keep_dir, desc in _wipe_targets(config_slug=config_slug, pair_tag=pair_tag):
         if not os.path.exists(path):
             print(f"  [skip] {desc} — not found")
             continue
@@ -335,17 +487,30 @@ Examples:
     dry = args.dry_run
     tag = " [DRY RUN]" if dry else ""
 
+    # Derive pair tag from YAML so all wipe operations are scoped to ONE model pair.
+    _config_slug = args.config.replace("/", "_").replace("\\", "_")
+    _pair_tag    = _get_config_pair_tag(args.config)
+
     print(f"\n{'='*60}")
     print(f"  GBV Clean Restart{tag}")
-    print(f"  Config: {args.config}")
+    print(f"  Config : {args.config}")
+    if _pair_tag:
+        print(f"  Pair   : {_pair_tag}  (only THIS pair's outputs will be wiped)")
+    else:
+        print(f"  Pair   : (unknown — full wipe)")
     print(f"{'='*60}\n")
 
     print("1. Killing running pipeline processes...")
     _kill_pipeline_processes(dry_run=dry)
 
     print("\n2. Wiping outputs...")
-    _config_slug = args.config.replace("/", "_").replace("\\", "_")
-    _wipe(config_slug=_config_slug, dry_run=dry)
+    _wipe(config_slug=_config_slug, pair_tag=_pair_tag, dry_run=dry)
+
+    print("\n2b. Clearing results.db rows for this model pair...")
+    if _pair_tag:
+        _wipe_results_db_rows(_pair_tag, dry_run=dry)
+    else:
+        print("  [skip] No pair tag — results.db untouched (YAML could not be read)")
 
     print("\n3. Resetting pipeline state...")
     # _reset_state globs for pipeline_state_{slug}*.json so it catches both
