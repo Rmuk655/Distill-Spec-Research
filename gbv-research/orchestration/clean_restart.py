@@ -513,14 +513,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python orchestration/clean_restart.py                      # laptop_qwen (default)
-  python orchestration/clean_restart.py --config laptop_gpt2
-  python orchestration/clean_restart.py --config laptop_llama
-  python orchestration/clean_restart.py --config kaggle
-  python orchestration/clean_restart.py --config a100_qwen
-  python orchestration/clean_restart.py --config server_gpt2
-  python orchestration/clean_restart.py --config profiles/kl_only
-  python orchestration/clean_restart.py --no_restart          # wipe only
+  python orchestration/clean_restart.py --config a100_qwen   # full wipe + restart
+  python orchestration/clean_restart.py --config a100_qwen --no_restart   # wipe, don't restart
+  python orchestration/clean_restart.py --config a100_qwen --reset_state_only  # ONLY reset state, keep checkpoints/DB
+
+When to use what:
+  Failed steps, want to retry without wiping data:
+    → python deploy/aip_run.py --config a100_qwen --resume
+    → (pipeline auto-retries failed steps, skips completed ones)
+  OR: reset only the pipeline state (keep checkpoints + DB rows):
+    → python orchestration/clean_restart.py --config a100_qwen --reset_state_only
+  Full clean start (wipe everything):
+    → python orchestration/clean_restart.py --config a100_qwen --no_restart
         """)
     p.add_argument("--config", default="laptop_qwen",
                    help="Pipeline config (any value accepted by experiment.py, "
@@ -537,6 +541,11 @@ Examples:
                    help="Show what would be done, make no changes")
     p.add_argument("--no_restart", action="store_true",
                    help="Wipe only — do not relaunch the pipeline")
+    p.add_argument("--reset_state_only", action="store_true",
+                   help="Reset pipeline state file to all-pending WITHOUT wiping "
+                        "checkpoints, results.db, or logs.  Use this to retry failed "
+                        "steps without losing completed work.  Equivalent to just "
+                        "re-running experiment.py --yes (which auto-retries failed).")
     # Pass-through args forwarded to experiment.py (e.g. --device cpu)
     p.add_argument("--device", default=None,
                    help="Forwarded to experiment.py (e.g. --device cpu)")
@@ -567,6 +576,21 @@ Examples:
     else:
         print(f"  Pair   : (unknown — full wipe)")
     print(f"{'='*60}\n")
+
+    # ── State-only reset (no data wipe) ───────────────────────────────────────
+    if args.reset_state_only:
+        print("Mode: --reset_state_only — resetting pipeline state ONLY.")
+        print("      Checkpoints, results.db, and logs are NOT touched.")
+        print("      Use this to retry failed steps without losing completed work.")
+        print("      Tip: 'python deploy/aip_run.py --resume' does the same thing.\n")
+        print("3. Resetting pipeline state...")
+        _reset_state(args.config, dry_run=dry, storage_root=_sr)
+        print(f"\n{'='*60}")
+        print(f"  Done{tag} — state reset, no data wiped")
+        print(f"  Re-run: python deploy/aip_run.py --config {args.config} --resume")
+        print(f"{'='*60}\n")
+        return
+    # ──────────────────────────────────────────────────────────────────────────
 
     print("1. Killing running pipeline processes...")
     _kill_pipeline_processes(dry_run=dry)
