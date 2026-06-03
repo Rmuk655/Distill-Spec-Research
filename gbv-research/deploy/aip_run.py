@@ -158,36 +158,36 @@ def _resolve_storage_root(args):
     return os.path.join(_GBV_DIR, "db")
 
 
-def _kill_stale_trainers():
-    """Kill any leftover trainer.py / evaluate.py subprocesses from a previous run.
+def _warn_stale_trainers():
+    """Warn if leftover trainer/evaluate subprocesses are found — but do NOT kill them.
 
-    When a pipeline run is interrupted (Ctrl+C, crash, session restart), child
-    training subprocesses may keep running on the GPU — consuming VRAM and causing
-    subsequent runs to OOM.  This is a best-effort cleanup on startup.
+    Auto-killing would terminate intentionally parallel jobs the user kicked off.
+    Instead, print a warning with GPU VRAM usage so the user can decide whether
+    to kill manually before starting a new run.
     """
-    killed = []
-    my_pid = os.getpid()
     try:
         result = subprocess.run(
             ["ps", "aux"], capture_output=True, text=True, timeout=5
         )
-        keywords = ["trainer.py", "evaluate.py", "runner.py", "online_serve.py"]
+        keywords = ["trainer.py", "evaluate.py", "runner.py"]
+        stale = []
         for line in result.stdout.splitlines():
             if any(kw in line for kw in keywords):
                 parts = line.split()
                 if len(parts) > 1:
                     try:
-                        pid = int(parts[1])
-                        if pid != my_pid:
-                            os.kill(pid, 9)   # SIGKILL
-                            killed.append(pid)
-                    except (ValueError, ProcessLookupError, PermissionError):
+                        stale.append((int(parts[1]), line.split()[-1]))
+                    except ValueError:
                         pass
+        if stale:
+            print(f"\n  [WARNING] {len(stale)} pipeline subprocess(es) already running:")
+            for pid, cmd in stale[:5]:
+                print(f"    PID {pid}: {cmd}")
+            print("  If these are stale (from a crashed run), kill them first:")
+            print("    pkill -f trainer.py; pkill -f evaluate.py; pkill -f runner.py")
+            print("  If these are intentional parallel jobs, ignore this warning.\n")
     except Exception:
         pass
-    if killed:
-        print(f"  [cleanup] Killed {len(killed)} stale subprocess(es): {killed}")
-        import time; time.sleep(2)   # let GPU VRAM release
 
 
 def main():
@@ -199,7 +199,7 @@ def main():
     print(f"  losses  : {args.losses or 'all'}")
     print("=" * 68)
 
-    _kill_stale_trainers()   # kill any zombies from a previous interrupted run
+    _warn_stale_trainers()   # warn (not kill) if stale subprocesses are found
     _install_deps()
     _auth()
 
