@@ -924,7 +924,12 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
     }
     if sys.platform != "win32":   # expandable_segments is Linux-only
         _sub_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    _db_logs = os.path.join(_PARENT, "db", "logs")
+    # SPECDIST_LOGS_ROOT is set by experiment.py to the run-specific log subdir
+    # (e.g. db/logs/laptop_gpt2-dg2-g2m/) so be_progress.log lands alongside
+    # pipeline_output.log for the same run.  Falls back to the flat db/logs/ dir
+    # when evaluate.py is called directly without the pipeline.
+    _db_logs = (os.environ.get("SPECDIST_LOGS_ROOT")
+                or os.path.join(_PARENT, "db", "logs"))
     os.makedirs(_db_logs, exist_ok=True)
     _be_log = os.path.join(_db_logs, "be_progress.log")
 

@@ -10,7 +10,7 @@ Usage:
 
 What it wipes:
     db/checkpoints/   — all trained LoRA adapters and merged models
-    db/logs/          — pipeline_output.log, be_progress.log, step error logs
+    db/logs/{slug}-*/ — run-specific log subdirs (pipeline_output.log, be_progress.log, step error logs)
     db/wandb/         — local WandB run dirs
     db/results.db     — evaluation results database
     OSD/checkpoints/  — legacy OSD checkpoint dir (migration period)
@@ -48,12 +48,19 @@ _OSD_DIR      = os.path.join(_SUMMER_DIR, "OSD")
 
 # ── Directories / files to wipe ────────────────────────────────────────────
 
-def _wipe_targets():
+def _wipe_targets(config_slug=None):
+    """Return (path, keep_dir, description) tuples to wipe.
+
+    config_slug: sanitised config name (e.g. "laptop_gpt2", "kaggle").
+      When set, log subdirs are scoped to this config:
+        db/logs/laptop_gpt2-*/  (all pair-tag variants for this config)
+      When None (full wipe), all of db/logs/ is wiped.
+    """
+    import glob as _glob
     db = os.path.join(_GBV_RESEARCH, "db")
-    return [
+    targets = [
         # (path, keep_dir, description)
         (os.path.join(db, "checkpoints"),                True,  "db/checkpoints (trained models)"),
-        (os.path.join(db, "logs"),                       True,  "db/logs (pipeline + step logs)"),
         (os.path.join(db, "wandb"),                      True,  "db/wandb (local WandB runs)"),
         (os.path.join(db, "results.db"),                 False, "db/results.db (eval results)"),
         (os.path.join(_OSD_DIR, "checkpoints"),          True,  "OSD/checkpoints (legacy)"),
@@ -61,6 +68,22 @@ def _wipe_targets():
         (os.path.join(_OSD_DIR, "results.db"),           False, "OSD/results.db (legacy eval results)"),
         (os.path.join(_HERE, "wandb"),                   False, "orchestration/wandb (stale WandB)"),
     ]
+    if config_slug:
+        # Wipe only log subdirs belonging to this config (e.g. laptop_gpt2-dg2-g2m/).
+        # Also catches the legacy flat log files in db/logs/ that start with this slug.
+        slug = config_slug.replace("/", "_").replace("\\", "_")
+        log_subdirs = _glob.glob(os.path.join(db, "logs", f"{slug}-*"))
+        if log_subdirs:
+            for d in sorted(log_subdirs):
+                targets.append((d, False, f"db/logs/{os.path.basename(d)}/ (run logs)"))
+        else:
+            # No subdir found — wipe any legacy flat log files for this config
+            # (pipeline_output.log lives in db/logs/ before the subdir change)
+            targets.append((os.path.join(db, "logs"), True, "db/logs (pipeline + step logs — legacy)"))
+    else:
+        # Full wipe: no config specified — wipe everything
+        targets.insert(1, (os.path.join(db, "logs"), True, "db/logs (all pipeline + step logs)"))
+    return targets
 
 
 # ── Kill running pipeline / model processes ────────────────────────────────
@@ -152,8 +175,8 @@ def _force_remove(path):
         print(f"  [warn] Could not remove {path}: {e}")
 
 
-def _wipe(dry_run=False):
-    for path, keep_dir, desc in _wipe_targets():
+def _wipe(config_slug=None, dry_run=False):
+    for path, keep_dir, desc in _wipe_targets(config_slug=config_slug):
         if not os.path.exists(path):
             print(f"  [skip] {desc} — not found")
             continue
@@ -250,15 +273,17 @@ def _reset_state(config_slug: str, dry_run=False):
 
 def _launch(config: str, extra_args: list, dry_run=False):
     pipeline_script = os.path.join(_HERE, "experiment.py")
-    log_path = os.path.join(_GBV_RESEARCH, "db", "logs", "pipeline_output.log")
+    # Startup log captures experiment.py's own prints before it creates the
+    # run-specific subdir.  Step output (training/eval) goes to the subdir.
+    slug = config.replace("/", "_").replace("\\", "_")
+    startup_log = os.path.join(_GBV_RESEARCH, "db", "logs", f"startup_{slug}.log")
     cmd = [sys.executable, pipeline_script, "--config", config, "--yes"] + extra_args
     print(f"\n  Launching: {' '.join(os.path.basename(p) if os.sep in p else p for p in cmd)}")
-    print(f"  Log -> db/logs/pipeline_output.log")
     if dry_run:
         print("  [dry_run] Would launch pipeline")
         return
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "w") as log_f:
+    os.makedirs(os.path.join(_GBV_RESEARCH, "db", "logs"), exist_ok=True)
+    with open(startup_log, "w") as log_f:
         kwargs = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.DETACHED_PROCESS
@@ -268,9 +293,10 @@ def _launch(config: str, extra_args: list, dry_run=False):
             **kwargs
         )
     print(f"  Pipeline started (PID {proc.pid}) [ok]")
-    print(f"\n  Watch progress:  tail -f db/logs/pipeline_output.log")
-    print(f"  Dashboard:       http://127.0.0.1:5000")
-    print(f"  Status:          python orchestration/experiment.py --status")
+    print(f"\n  Step logs:   tail -f db/logs/{slug}-*/pipeline_output.log")
+    print(f"               (subdir appears once the pipeline identifies the model pair)")
+    print(f"  Dashboard:   http://127.0.0.1:5000  (auto-shows most recent run)")
+    print(f"  Status:      python orchestration/experiment.py --config {config} --status")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -318,7 +344,8 @@ Examples:
     _kill_pipeline_processes(dry_run=dry)
 
     print("\n2. Wiping outputs...")
-    _wipe(dry_run=dry)
+    _config_slug = args.config.replace("/", "_").replace("\\", "_")
+    _wipe(config_slug=_config_slug, dry_run=dry)
 
     print("\n3. Resetting pipeline state...")
     # _reset_state globs for pipeline_state_{slug}*.json so it catches both

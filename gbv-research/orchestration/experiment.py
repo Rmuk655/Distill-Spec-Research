@@ -3708,10 +3708,31 @@ def main():
     # so the state file is a flat filename with no subdirectory components.
     _config_slug = args.config.replace("/", "_").replace(os.sep, "_")
     _state_pair_tag = _run_tag(draft, target, cfg.get("load_in_4bit", False))
+    _run_slug = f"{_config_slug}-{_state_pair_tag}"   # e.g. "laptop_gpt2-dg2-g2m"
     STATE_FILE = os.path.join(
         _effective_state_dir,
-        f"pipeline_state_{_config_slug}-{_state_pair_tag}{_smoke_tag}.json"
+        f"pipeline_state_{_run_slug}{_smoke_tag}.json"
     )
+
+    # ── Run-specific log directory ────────────────────────────────────────────
+    # All log files (pipeline_output.log, be_progress.log, step error logs,
+    # anomaly report) live in a subdirectory named after the run slug so
+    # concurrent or sequential runs never overwrite each other's logs:
+    #
+    #   db/logs/laptop_gpt2-dg2-g2m/pipeline_output.log
+    #   db/logs/laptop_gpt2-dg2-g2m/be_progress.log
+    #   db/logs/laptop_qwen-q0.5b-q0.6b/pipeline_output.log
+    #   db/logs/kaggle-q0.6b-q8bnf4/pipeline_output.log
+    #
+    # The _DB_LOGS and _PIPELINE_LOG globals are re-pointed here (they were set
+    # in the storage_root block above, or left at their module-level defaults).
+    # SPECDIST_LOGS_ROOT is exported so evaluate.py subprocesses write their
+    # be_progress.log to the same run-specific directory.
+    _run_logs_dir = os.path.join(_effective_logs_dir, _run_slug)
+    os.makedirs(_run_logs_dir, exist_ok=True)
+    _DB_LOGS      = _run_logs_dir
+    _PIPELINE_LOG = os.path.join(_run_logs_dir, "pipeline_output.log")
+    os.environ["SPECDIST_LOGS_ROOT"] = _run_logs_dir
 
     # Run-mode resolution. The three modes are mutually exclusive:
     #   eval_only  = eval existing checkpoints           (groups 0/3, no train/merge)

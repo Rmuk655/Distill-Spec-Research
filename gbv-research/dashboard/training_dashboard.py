@@ -37,12 +37,58 @@ sys.path.insert(0, os.path.join(_GBV_RESEARCH, "db"))
 import results_db
 
 HERE          = _SERVER_HERE
-# Logs live in db/logs/ by default, but respect SPECDIST_LOGS_ROOT so that
-# cloud runs (Colab/Kaggle/Modal) point at the persistent storage logs directory.
-_DB_LOGS      = (os.environ.get("SPECDIST_LOGS_ROOT")
-                 or os.path.join(_GBV_RESEARCH, "db", "logs"))
+# Base logs directory.  Each pipeline run writes to a run-specific subdir:
+#   db/logs/laptop_gpt2-dg2-g2m/pipeline_output.log
+#   db/logs/laptop_qwen-q0.5b-q0.6b/pipeline_output.log
+# SPECDIST_LOGS_ROOT is set to the specific subdir by experiment.py when it
+# starts, so the dashboard can also be pointed at it via env var or --root.
+_DB_LOGS_BASE = os.path.join(_GBV_RESEARCH, "db", "logs")
+_DB_LOGS      = (os.environ.get("SPECDIST_LOGS_ROOT") or _DB_LOGS_BASE)
 _BE_LOG       = os.path.join(_DB_LOGS, "be_progress.log")
 _PIPELINE_LOG = os.path.join(_DB_LOGS, "pipeline_output.log")
+
+
+def _list_run_slugs() -> list:
+    """Return all run slugs that have a pipeline_output.log, newest-modified first.
+
+    Scans db/logs/{slug}/pipeline_output.log.  Also returns "." if a legacy
+    flat pipeline_output.log exists directly in db/logs/ (pre-subdir runs).
+    """
+    base = _DB_LOGS_BASE
+    results = []
+    if not os.path.isdir(base):
+        return results
+    for entry in os.scandir(base):
+        if entry.is_dir():
+            p = os.path.join(entry.path, "pipeline_output.log")
+            if os.path.isfile(p):
+                results.append((os.path.getmtime(p), entry.name))
+    # Legacy flat log
+    legacy = os.path.join(base, "pipeline_output.log")
+    if os.path.isfile(legacy):
+        results.append((os.path.getmtime(legacy), "."))
+    results.sort(reverse=True)   # newest first
+    return [slug for _, slug in results]
+
+
+def _resolve_log_dir(run_slug) -> str:
+    """Return the log directory for the requested run slug.
+
+    If run_slug is None or empty, returns the most recently modified run's
+    directory (so the dashboard always shows the currently-active run by default).
+    Falls back to _DB_LOGS (which may be SPECDIST_LOGS_ROOT if set).
+    """
+    if run_slug and run_slug != ".":
+        candidate = os.path.join(_DB_LOGS_BASE, run_slug)
+        if os.path.isdir(candidate):
+            return candidate
+    slugs = _list_run_slugs()
+    if slugs:
+        top = slugs[0]
+        if top == ".":
+            return _DB_LOGS_BASE
+        return os.path.join(_DB_LOGS_BASE, top)
+    return _DB_LOGS   # env-var override or base
 
 try:
     from flask import Flask, jsonify, request, render_template_string, send_from_directory
@@ -495,6 +541,21 @@ def api_pipeline_status():
     })
 
 
+@app.route("/api/pipeline_runs")
+def api_pipeline_runs():
+    """Return all available pipeline run slugs, newest first.
+
+    Each slug corresponds to a  db/logs/{slug}/  subdirectory that contains
+    pipeline_output.log (and optionally be_progress.log, step error logs, etc.).
+
+    Response:
+        { "runs": ["laptop_gpt2-dg2-g2m", "laptop_qwen-q0.5b-q0.6b", ...],
+          "active": "laptop_gpt2-dg2-g2m" }   # most recently modified
+    """
+    slugs = _list_run_slugs()
+    return jsonify({"runs": slugs, "active": slugs[0] if slugs else None})
+
+
 @app.route("/api/log_tail")
 def api_log_tail():
     """Return last N lines from pipeline_output.log (training + eval) or be_progress.log (eval detail).
@@ -502,17 +563,24 @@ def api_log_tail():
     ?source=pipeline  (default) — pipeline_output.log: all training steps, health checks,
                                    step boundaries, val loss lines — the main live view.
     ?source=eval                 — be_progress.log: per-prompt GBV progress during eval.
+    ?run=<slug>                  — read from db/logs/<slug>/ instead of the most recent run.
+                                   Omit to auto-select the most recently active run.
     """
     n      = min(int(request.args.get("lines", 80)), 500)
     source = request.args.get("source", "pipeline")
-    log_path = _PIPELINE_LOG if source != "eval" else _BE_LOG
+    run    = request.args.get("run", None)
+    log_dir  = _resolve_log_dir(run)
+    log_path = (os.path.join(log_dir, "pipeline_output.log") if source != "eval"
+                else os.path.join(log_dir, "be_progress.log"))
 
     if not os.path.exists(log_path):
-        other = _BE_LOG if source != "eval" else _PIPELINE_LOG
-        fallback_exists = os.path.exists(other)
+        other_path = (os.path.join(log_dir, "be_progress.log") if source != "eval"
+                      else os.path.join(log_dir, "pipeline_output.log"))
+        fallback_exists = os.path.exists(other_path)
+        run_label = os.path.basename(log_dir) if log_dir != _DB_LOGS_BASE else "."
         return jsonify({
             "lines": [], "total_lines": 0, "found": False,
-            "source": source,
+            "source": source, "run": run_label,
             "msg": (
                 f"{os.path.basename(log_path)} not created yet — "
                 f"{'run experiment.py first' if source != 'eval' else 'starts when the first GBV eval batch runs'}."
@@ -522,11 +590,13 @@ def api_log_tail():
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
+        run_label = os.path.basename(log_dir) if log_dir != _DB_LOGS_BASE else "."
         return jsonify({
             "lines": all_lines[-n:],
             "total_lines": len(all_lines),
             "found": True,
             "source": source,
+            "run": run_label,
             "log_file": os.path.basename(log_path),
         })
     except Exception as e:
