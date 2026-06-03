@@ -1540,8 +1540,22 @@ def main():
     # Without this guard, from_pretrained() raises confusing deep errors
     # (IndexError in embedding, shape mismatch, FileNotFoundError) that look
     # like code bugs rather than missing prerequisites.
-    _student_is_local = (os.sep in args.student or "/" in args.student
-                         or args.student.startswith("."))
+    # Detect whether the student arg is a LOCAL path (checkpoint dir) vs an
+    # HuggingFace model ID (e.g. "Qwen/Qwen3-0.6B", "distilgpt2").
+    #
+    # HF model IDs also contain "/" (namespace/name), so we cannot use
+    # "/"  in args.student — that would flag Qwen/Qwen3-0.6B as local.
+    #
+    # A local path is identified by:
+    #   - absolute path  (/home/... or C:\...)
+    #   - explicitly relative path (./... or ../...)
+    # HF model IDs never start with / or .
+    _student_is_local = (
+        args.student.startswith(os.sep) or       # /absolute/path
+        args.student.startswith("/") or           # Unix absolute (os.sep=\\ on Windows)
+        args.student.startswith(".") or           # ./relative or ../relative
+        (len(args.student) > 1 and args.student[1] == ":")  # Windows C:\...
+    )
     if _student_is_local and not os.path.isdir(args.student):
         # Try to give a helpful hint about WHICH training step to run
         _student_base = os.path.basename(args.student.rstrip("/\\"))
