@@ -16,11 +16,12 @@ Key design:
   - Gradient flows through softmax(logits/temp) at each node, all the
     way back to the LoRA parameters.
 
-Compatibility note:
-  Requires the same {"full_attention": mask} dict-style attention that
-  target_tree_pass uses.  Verified against Qwen3 family.  Other families
-  need the same attention_type == "full_attention" attribute on their
-  attention layers (checked in load_models in verifiers/utils.py).
+Multi-family attention mask:
+  The attention mask format is family-specific.  Pass the ModelFamily
+  instance so draft_tree_forward_with_grad calls family.tree_attn_mask():
+    Qwen3:             {"full_attention": tensor}   (QwenFamily override)
+    GPT-2 / LLaMA / …: raw 4D tensor              (base class default)
+  Without family (family=None), raw 4D tensor is used (safe for non-Qwen).
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ def draft_tree_forward_with_grad(
     L: int,
     K: int,
     q_temp: float = 1.0,
+    family=None,                     # ModelFamily — provides tree_attn_mask(); None = raw 4D tensor
 ) -> Dict[str, torch.Tensor]:
     """
     Re-run the draft model over the fixed sampled tree WITH gradients.
@@ -101,12 +103,18 @@ def draft_tree_forward_with_grad(
 
     mask = mask.unsqueeze(0).unsqueeze(0)                   # [1, 1, n_nodes, total]
 
+    # ── Tree attention mask — family-specific format ───────────────────────────
+    # Qwen3:        family.tree_attn_mask(mask) → {"full_attention": mask}
+    # GPT-2/LLaMA: family.tree_attn_mask(mask) → mask  (raw 4D tensor, base default)
+    # No family:   raw 4D tensor (safe for all non-Qwen families)
+    _attn = family.tree_attn_mask(mask) if family is not None else mask
+
     # ── Tree forward pass WITH grad ───────────────────────────────────────────
     draft_model.train()
     out   = draft_model(
         q_tokens,
         past_key_values=p_cache,
-        attention_mask={"full_attention": mask},
+        attention_mask=_attn,
         use_cache=True,          # must be True for past_key_values to be honoured
         return_dict=True,
     )
@@ -133,6 +141,7 @@ def verify_tree_forward_grad(
     L: int,
     K: int,
     q_temp: float = 1.0,
+    family=None,   # ModelFamily — forwarded to draft_tree_forward_with_grad
 ) -> None:
     """
     Smoke test: run draft_tree_forward_with_grad and assert that every
@@ -142,7 +151,7 @@ def verify_tree_forward_grad(
     Raises AssertionError with a helpful message if grad is not flowing.
     """
     q_probs_dict_grad = draft_tree_forward_with_grad(
-        draft_model, prompt_ids, q_paths, L=L, K=K, q_temp=q_temp
+        draft_model, prompt_ids, q_paths, L=L, K=K, q_temp=q_temp, family=family
     )
 
     if not q_probs_dict_grad:

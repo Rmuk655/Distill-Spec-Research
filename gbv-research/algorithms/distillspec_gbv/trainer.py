@@ -533,6 +533,7 @@ def _tree_training_step(
     K: int,
     L: int,
     temperature: float,
+    family=None,    # ModelFamily — provides tree_attn_mask() for draft + target passes
 ) -> torch.Tensor:
     """
     One training step for tree-structured losses (kl_tree / bv_tree / gbv_tree / traversal_tree).
@@ -567,12 +568,14 @@ def _tree_training_step(
         _, _, _, p_probs_dict = target_tree_pass(
             target_model, p_cache_init, q_paths,
             K=K, L=L, p_temp=temperature,
+            family=family,   # ← family-specific tree_attn_mask (Qwen dict vs raw tensor)
         )
         # p_probs_dict: {prefix → [V]}, all detached (target is frozen)
 
     # ── 3. Student re-runs on fixed tree WITH grad ─────────────────────────────
     q_probs_dict_grad = draft_tree_forward_with_grad(
         draft_model, prompt_ids, q_paths, L=L, K=K, q_temp=temperature,
+        family=family,   # ← same family so draft uses the right mask format
     )
 
     # ── 4. Tree loss ───────────────────────────────────────────────────────────
@@ -958,6 +961,7 @@ def main() -> None:
         verify_tree_forward_grad(
             draft_model, _smoke_ids, _smoke_paths,
             L=args.tree_L, K=args.tree_K, q_temp=args.teacher_temp,
+            family=family,   # ← must match draft model's attention mask format
         )
         del _smoke_out, _smoke_qcache, _smoke_pending, _smoke_paths
         torch.cuda.empty_cache()
@@ -1058,6 +1062,7 @@ def main() -> None:
                 loss = _tree_training_step(
                     draft_model, target_model, prompt_ids,
                     args.loss, args.tree_K, args.tree_L, args.teacher_temp,
+                    family=family,   # ← tree_attn_mask format: Qwen dict vs raw tensor
                 )
             else:
                 out = get_loss(args.loss, s_log, t_log, token_ids=gen_ids,
