@@ -1,0 +1,50 @@
+# bases/laptop.yaml — shared platform settings for all laptop (RTX 500 Ada) configs.
+#
+# What belongs here:   hardware tier, device, eval budget, health defaults,
+#                      dataset paths, checkpointing, logging defaults.
+# What does NOT belong: models (draft/target/family), training hparams (lr, steps,
+#                       lora_r, teacher_temp), experiment.losses — those are
+#                       model-family-specific and live in each leaf config.
+#
+# Leaf configs that inherit from this base:
+#   laptop.yaml        (_base: bases/laptop + qwen toy combo)
+#   laptop_gpt2.yaml   (_base: bases/laptop + GPT-2 combo)
+#   laptop_llama.yaml  (_base: bases/laptop + LLaMA combo)
+#   laptop_debug.yaml  (_base: bases/laptop + debug/tiny combo)
+
+hardware:
+  device: cuda
+  hw_tier: laptop      # RTX 500 Ada 6 GB — drives alpha VRAM floor (2700 MB) + per-mode GPU isolation
+  load_in_4bit: false  # both models fit BF16 on 6 GB; override to true only for larger targets
+  compile: false       # torch.compile not reliable on Windows
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_5.jsonl
+  val_dataset: gsm8k_5.jsonl    # fixed 5-prompt val — fast (~30 s), consistent signal
+
+checkpointing:
+  max_checkpoints: 3
+  output_root: db/checkpoints
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+  no_wandb: true        # laptop = code verification only, no W&B overhead
+
+health:
+  nan_action: stop
+  early_stop_patience: 3
+  ppl_threshold: 1.25
+
+evaluation:
+  # All 6 verifier modes — each runs in its own subprocess on the 6 GB GPU.
+  # Single K and temperature: laptop is a crash-test, not a sweep.
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3]
+  L: 8
+  n_prompts: 5          # ~3 min/mode × 6 modes = ~18 min total eval
+
+tree_training:
+  tree_K: 4
+  tree_L: 8

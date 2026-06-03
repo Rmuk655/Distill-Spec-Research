@@ -1,0 +1,59 @@
+# bases/server.yaml — shared platform settings for CPU-only server (ATS Cloud).
+#
+# What belongs here:   CPU hardware, eval defaults, health, dataset, logging.
+# What does NOT belong: models, training hparams, experiment.losses — those are
+#                       model-family-specific and live in each leaf config.
+#
+# Leaf configs that inherit from this base:
+#   server_gpt2.yaml   (_base: bases/server + GPT-2 combo)
+#
+# Note: server inherits from bases/server, NOT from laptop_gpt2.  The model
+# pair (distilgpt2 → gpt2-medium) may be the same, but the hardware is
+# completely different (CPU bare-metal vs CUDA laptop).  Platform is the
+# correct inheritance axis.
+
+hardware:
+  device: cpu
+  hw_tier: cpu         # CPU-only — drives CPU batch path in evaluate.py, no CUDA buffers
+  load_in_4bit: false
+  compile: false
+  # OMP thread count for CPU inference (trainer.py + runner.py).
+  # gpt2-medium inference is memory-bandwidth-bound above ~16 threads:
+  # more threads add synchronization overhead without proportional speedup.
+  # Tune to your server's core count:
+  #   16-core Xeon:  omp_threads: 8   (leave headroom for OS + other jobs)
+  #   32-core Xeon:  omp_threads: 16
+  #   64-core EPYC:  omp_threads: 16  (diminishing returns past 16 for small models)
+  # If running 15 losses in parallel (Option B in server_gpt2.yaml), set lower:
+  #   omp_threads: 4  (15 × 4 = 60 cores across 64 physical cores)
+  omp_threads: 16
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_5.jsonl
+  val_dataset: gsm8k_5.jsonl
+
+checkpointing:
+  max_checkpoints: 3
+  output_root: db/checkpoints
+
+logging:
+  log_every: 50         # less frequent — CPU steps are slow, less noise needed
+  wandb_project: distillspec
+  no_wandb: true        # CPU server runs — no W&B overhead
+
+health:
+  nan_action: stop
+  early_stop_patience: 3
+  ppl_threshold: 1.5    # base ppl on GSM8K for small models is high; looser threshold
+
+evaluation:
+  modes: [alpha, bv, gbv, traversal, specinfer, naive]
+  K_values: [3]
+  temperatures: [1.0]   # server models (GPT-2) don't pre-scale by temperature
+  L: 8
+  n_prompts: 5
+
+tree_training:
+  tree_K: 4
+  tree_L: 8

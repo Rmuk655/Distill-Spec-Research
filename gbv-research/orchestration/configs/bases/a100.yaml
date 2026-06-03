@@ -1,0 +1,56 @@
+# bases/a100.yaml — shared platform settings for A100-class GPU (≥ 19 GB VRAM).
+#
+# What belongs here:   A100 hardware, full eval sweep, dataset paths (larger
+#                      val set), health, checkpointing, logging.
+# What does NOT belong: models, training hparams (lr, steps, lora_r, teacher_temp),
+#                       experiment.losses — those vary by model family.
+#
+# Leaf configs that inherit from this base:
+#   a100.yaml          (_base: bases/a100 + Qwen3-0.6B→8B BF16)
+#   a100_gpt2.yaml     (_base: bases/a100 + distilgpt2→gpt2-medium)   [when added]
+#   a100_llama.yaml    (_base: bases/a100 + LLaMA 1B→3B)              [when added]
+#
+# To add a new model family on A100:
+#   1. Create orchestration/configs/a100_<family>.yaml with _base: bases/a100
+#   2. Add models.family/draft/target and training.lr/steps/lora_r/teacher_temperature
+#   3. Add experiment.exclude_losses if the family has unsupported losses
+#   Done — hardware, eval, health, dataset all inherited automatically.
+
+hardware:
+  device: cuda
+  hw_tier: a100
+  load_in_4bit: false   # A100 40 GB fits any model in BF16; override to true only if needed
+  compile: true         # torch.compile reliable on A100 (Linux); ~10-30% speedup
+
+dataset:
+  train: core/datasets/raw/gsm8k_train.jsonl
+  eval:  core/datasets/raw/gsm8k_30.jsonl
+  val_dataset: gsm8k_30.jsonl   # 30-prompt val — reliable signal without the 672-prompt cost
+
+checkpointing:
+  max_checkpoints: 8
+  storage_root: /content/drive/MyDrive/specdist   # override with --storage_root if needed
+
+logging:
+  log_every: 10
+  wandb_project: distillspec
+
+health:
+  nan_action: stop              # A100 sessions are stable; stop on NaN rather than skipping
+  early_stop_patience: 5
+  ppl_threshold: 1.25
+
+evaluation:
+  # Full 9-verifier matrix for the loss-verifier alignment result (paper main result).
+  # Override modes in leaf config if only a subset is needed.
+  modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+  K_values: [3]
+  temperatures: [1.0]
+  L: 8
+  n_prompts: 100
+  n_prompts_gsm8k: 1319         # full GSM8K test set for paper numbers
+  eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
+
+tree_training:
+  tree_K: 4
+  tree_L: 8
