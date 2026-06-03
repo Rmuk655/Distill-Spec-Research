@@ -3725,6 +3725,16 @@ def main():
         # 'cpu' forces the CPU code path (CPU-only server, or laptop CPU smoke test).
         "device":               (getattr(args, "device", None)
                                   or _yaml_cfg.get("device", "auto")),
+        # max_train_prompts: cap training set for epoch-based convergence.
+        # epochs = steps / max_train_prompts.  Set in YAML; 0 = no cap (full dataset).
+        # MUST be in train_hparams so _train_hargs in build_steps() can pass
+        # --max_train_prompts to every trainer.py call.  Without this line,
+        # the YAML value is read into _yaml_cfg but never reaches the trainer.
+        "max_train_prompts":    _yaml_cfg.get("max_train_prompts", 0),
+        # warmup_steps: explicit LR warmup. None → trainer defaults to 10% of steps.
+        "warmup_steps":         _yaml_cfg.get("warmup_steps", None),
+        # omp_threads: PyTorch CPU thread count for server_gpt2 runs.
+        "omp_threads":          _yaml_cfg.get("omp_threads", 0),
     }
     # Wire YAML `evaluation:` block (modes / K_values / temperatures / n_prompts /
     # n_prompts_gsm8k / max_tokens) for ALL configs — profiles AND top-level YAMLs.
