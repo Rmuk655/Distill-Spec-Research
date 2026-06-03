@@ -189,6 +189,18 @@ export HF_DATASETS_OFFLINE=1
 # blocks instead of one giant contiguous allocation — avoids OOM spikes.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 EOF
+
+# Persist WANDB_API_KEY so trainer.py / evaluate.py subprocesses can auth.
+# wandb.login() writes to ~/.netrc but subprocess environments don't reliably
+# read from there.  The env var is the only reliable cross-subprocess auth.
+WANDB_KEY="${WANDB_API_KEY:-}"
+if [ -n "${WANDB_KEY}" ]; then
+    echo "export WANDB_API_KEY='${WANDB_KEY}'" >> "${ENVFILE}"
+    echo "      WANDB_API_KEY added to ${ENVFILE} (persists across sessions and subprocesses)"
+else
+    echo "      WANDB_API_KEY not set — W&B training runs will show [wandb] None"
+    echo "      Fix: export WANDB_API_KEY=your-key && bash aip_gpu_setup.sh"
+fi
 # Auto-source in every new shell by adding to ~/.bashrc (idempotent — only adds once).
 BASHRC="${HOME}/.bashrc"
 MARKER="# specdist env"
@@ -204,13 +216,14 @@ fi
 source "${ENVFILE}"
 echo "      Env sourced in current shell (TRANSFORMERS_OFFLINE=1, venv active)"
 
-# W&B auth
+# W&B auth — login so wandb CLI works interactively (env var handles subprocess auth above)
 WANDB_KEY="${WANDB_API_KEY:-}"
 if [ -n "${WANDB_KEY}" ]; then
     python -c "import wandb; wandb.login(key='${WANDB_KEY}', relogin=True)" 2>/dev/null && \
-        echo "      W&B: authenticated" || echo "      W&B: login failed"
+        echo "      W&B: authenticated (interactive + subprocess auth via env var)"  || \
+        echo "      W&B: login failed"
 else
-    echo "      W&B: WANDB_API_KEY not set — set it to enable W&B logging"
+    echo "      W&B: WANDB_API_KEY not set — training will log [wandb] None"
 fi
 
 # HF auth (optional — Qwen3 is public)
