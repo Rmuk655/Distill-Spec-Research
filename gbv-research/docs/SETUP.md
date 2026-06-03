@@ -3,9 +3,25 @@
 Step-by-step instructions for getting a new machine running the full pipeline,
 including WandB credentials, first smoke test, and dashboard.
 
+> **Quick start for GPU servers (A10G / A100):** use `deploy/aip_gpu_setup.sh`
+> which handles all steps below automatically.
+
 ---
 
-## 1. Prerequisites
+## 1. Clone and initialize
+
+```bash
+git clone https://github.com/Rmuk655/Distill-Spec-Research.git
+cd Distill-Spec-Research
+
+# Initialize submodules (required for full specInfer alpha eval).
+# Without this, alpha eval uses an inline fallback and logs a warning:
+#   "[alpha] specInfer skipped — not found (git submodule update ...)"
+# The fallback gives correct alpha values but is not the full implementation.
+git submodule update --init --recursive
+```
+
+## 2. Prerequisites
 
 ```bash
 # Python 3.10+, CUDA 11.8+

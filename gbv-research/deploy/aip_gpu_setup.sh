@@ -64,6 +64,13 @@ fi
 
 echo "[1/5] Pulling latest code..."
 git -C "${REPO_DIR}" pull --ff-only 2>/dev/null || echo "      (already up to date or skip)"
+# Initialize submodules (required for specInfer Generator in OSD/).
+# Without this, alpha eval falls back to inline implementation with a warning:
+#   "[alpha] specInfer skipped — not found (git submodule update ...)"
+# The inline fallback gives correct alpha values but is not the full implementation.
+git -C "${REPO_DIR}" submodule update --init --recursive 2>/dev/null && \
+    echo "      Submodules initialized." || \
+    echo "      (submodule init skipped — not critical, inline fallback will be used)"
 
 # ── Python environment ────────────────────────────────────────────────────────
 # Use a virtual environment to avoid permission issues with system Python.
