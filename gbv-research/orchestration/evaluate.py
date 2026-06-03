@@ -708,7 +708,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                 _SPECINFER_AVAILABLE = False
                 generator = None
                 # Fall through to inline block below for this prompt.
-        if not _SPECINFER_AVAILABLE:
+        if not _use_specinfer:
             # Inline fallback: run draft-propose / target-verify without specInfer.
             # Each round: draft proposes `max_propose` tokens greedily; target scores
             # the full candidate sequence; acceptance is sampled under temperature.
