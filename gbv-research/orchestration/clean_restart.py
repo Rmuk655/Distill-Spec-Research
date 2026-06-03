@@ -124,26 +124,26 @@ def _wipe_targets(config_slug=None, pair_tag=""):
     config_slug: sanitised config name  (e.g. "laptop_gpt2")
     pair_tag:    model-pair identifier  (e.g. "dg2-g2m", "q0.5b-q0.6b")
 
-    When both are given:
+    Config-specific restart (config_slug + pair_tag given):
       - db/checkpoints/*-{pair_tag}*   ← only THIS pair's checkpoints
       - db/logs/{slug}-{pair_tag}/     ← only THIS pair's logs
       - db/results.db rows             ← handled separately in _wipe_results_db_rows()
-      - OSD/ legacy dirs               ← always wiped (legacy, not pair-specific)
-      - db/wandb                       ← skipped for config-specific restart
-                                          (WandB metadata has no pair-tag; user manages)
+      - db/wandb                       ← skipped (WandB metadata has no pair-tag; user manages)
+      - OSD/ legacy dirs               ← NOT touched (OSD is an external reference codebase,
+                                          unrelated to any specific model pair)
+      - orchestration/wandb/           ← skipped (stale runs aren't pair-scoped either)
 
-    When neither is given (no --config) → full wipe of everything.
+    Full wipe (no config_slug) → wipes everything including OSD legacy dirs.
+
+    OSD = Online Speculative Decoding (Liu et al. 2023) — the original reference
+    codebase at OSD/ (sibling of gbv-research/).  Early in the project, some
+    checkpoints and WandB runs were accidentally written there.  The full wipe
+    cleans those up; but a config-specific restart should never touch OSD.
     """
     import glob as _glob
     db = os.path.join(_GBV_RESEARCH, "db")
 
-    targets = [
-        # OSD legacy dirs — always safe to wipe (not pair-specific; legacy only)
-        (os.path.join(_OSD_DIR, "checkpoints"), True,  "OSD/checkpoints (legacy)"),
-        (os.path.join(_OSD_DIR, "wandb"),        False, "OSD/wandb (legacy WandB runs)"),
-        (os.path.join(_OSD_DIR, "results.db"),   False, "OSD/results.db (legacy eval results)"),
-        (os.path.join(_HERE, "wandb"),            False, "orchestration/wandb (stale WandB)"),
-    ]
+    targets = []  # built up below based on scope
 
     if config_slug and pair_tag:
         slug = config_slug.replace("/", "_").replace("\\", "_")
@@ -171,17 +171,25 @@ def _wipe_targets(config_slug=None, pair_tag=""):
             targets.append((d, False, f"db/logs/{os.path.basename(d)}/ (run logs)"))
 
         # db/results.db rows are handled separately by _wipe_results_db_rows()
-        # db/wandb is NOT wiped for config-specific restart (cross-family, no pair tag)
+        # db/wandb: skipped — WandB run IDs have no pair-tag; user manages via wandb.ai
+        # OSD/:     skipped — external reference codebase, not pair-specific
 
     else:
         # ── Full wipe: no config specified ────────────────────────────────
-        # Wipe everything including all checkpoints, all logs, results.db, WandB.
+        # Wipe everything: all checkpoints, all logs, all results, WandB, OSD legacy.
         targets = [
-            (os.path.join(db, "checkpoints"), True,  "db/checkpoints (ALL trained models)"),
-            (os.path.join(db, "logs"),         True,  "db/logs (ALL pipeline logs)"),
-            (os.path.join(db, "wandb"),         True,  "db/wandb (ALL local WandB runs)"),
-            (os.path.join(db, "results.db"),    False, "db/results.db (ALL eval results)"),
-        ] + targets  # append OSD + orchestration/wandb
+            (os.path.join(db, "checkpoints"),          True,  "db/checkpoints (ALL trained models)"),
+            (os.path.join(db, "logs"),                  True,  "db/logs (ALL pipeline logs)"),
+            (os.path.join(db, "wandb"),                 True,  "db/wandb (ALL local WandB runs)"),
+            (os.path.join(db, "results.db"),            False, "db/results.db (ALL eval results)"),
+            # OSD = Online Speculative Decoding reference codebase (Liu et al. 2023).
+            # Early project runs accidentally wrote checkpoints/WandB runs there.
+            # Only wiped on full restart — never on a config-specific restart.
+            (os.path.join(_OSD_DIR, "checkpoints"),    True,  "OSD/checkpoints (legacy)"),
+            (os.path.join(_OSD_DIR, "wandb"),           False, "OSD/wandb (legacy WandB runs)"),
+            (os.path.join(_OSD_DIR, "results.db"),      False, "OSD/results.db (legacy eval results)"),
+            (os.path.join(_HERE, "wandb"),              False, "orchestration/wandb (stale WandB)"),
+        ]
 
     return targets
 
