@@ -1,142 +1,58 @@
-# A100-class configuration — any platform with ≥ 19 GB free VRAM
-# (Google Colab Pro A100 40 GB, Lightning AI L40S 48 GB, Adobe AIP, RunPod A100, etc.)
-# Draft: Qwen3-0.6B (bf16, ~1.2 GB)   Teacher: Qwen3-8B (bf16, ~16 GB)
+# a100.yaml — Qwen3-0.6B→8B BF16, A100-class GPU (≥ 19 GB VRAM)
+# Inherits platform settings from bases/a100.yaml; adds Qwen model pair.
 #
-# Why this config exists separately from colab.yaml (T4):
-#   T4 has 15 GB VRAM -- Qwen3-8B in bf16 (~16 GB) doesn't fit.
-#   A100 40 GB has plenty of headroom.  No 4-bit quantization needed.
-#   Larger teacher = stronger distillation signal = better draft quality.
+# Platforms: Google Colab Pro A100 40 GB, Lightning AI L40S 48 GB, RunPod A100.
+# Draft: Qwen3-0.6B (~1.2 GB BF16)   Teacher: Qwen3-8B (~16 GB BF16)
+# VRAM: 1.2 + 16 + ~2-3 activations = ~19-20 GB — fits A100 40 GB with room to spare.
 #
-# VRAM budget:   draft 1.2 GB + teacher 16 GB + KV/activations 2-3 GB = ~19-20 GB
-# System RAM:    ~51 GB on Colab Pro+ -- no constraints
-# Alpha eval:    both models in VRAM simultaneously -- works fine
+# A100 vs T4 speed (Qwen3-0.6B, seq 128):
+#   T4:   ~1-2 s/step   (500 steps ≈ 15-30 min training)
+#   A100: ~0.3-0.5 s/step (2000 steps ≈ 10-17 min training)
 #
-# A100 vs T4 training speed (Qwen3-0.6B draft, seq 128):
-#   T4:   ~1-2 s/step  (500 steps  ~= 15-30 min training only)
-#   A100: ~0.3-0.5 s/step (2000 steps ~= 10-17 min training only)
+# Usage:
+#   python orchestration/experiment.py --config a100 \
+#     --storage_root /content/drive/MyDrive/specdist
 #
-# Requires Colab Pro or Pro+ with A100 runtime:
-#   Runtime -> Change runtime type -> A100 GPU
-#
-# Use with: python orchestration/experiment.py --config a100 --storage_root /content/drive/MyDrive/specdist
+# Other A100 family configs (when needed):
+#   a100_gpt2.yaml   → _base: bases/a100 + distilgpt2→gpt2-medium
+#   a100_llama.yaml  → _base: bases/a100 + Llama-3.2-1B→3B
 
-hardware:
-  device: cuda
-  hw_tier: a100           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
-  load_in_4bit: false           # A100 40 GB fits Qwen3-8B in bfloat16 easily
-  compile: true                 # torch.compile is reliable on A100 (Linux); ~10-30% speedup
+_base: bases/a100   # A100 hardware + full eval sweep + dataset — see bases/a100.yaml
 
 models:
   family: qwen
   draft:  Qwen/Qwen3-0.6B
-  target: Qwen/Qwen3-8B         # 16 GB bf16; fits A100 with ~20 GB to spare
+  target: Qwen/Qwen3-8B         # 16 GB BF16; fits A100 with ~20 GB to spare
 
 training:
-  steps: 2000                   # A100 is ~4x faster than T4; 2000 steps ~= 15-20 min training
+  steps: 2000                   # A100 is ~4x faster; 2000 steps ≈ 15-20 min training
   lr: 3.0e-5
-  warmup_steps: 200             # 10% of 2000 steps; linear warmup → linear decay to 0
-                                # DistillSpec/EAGLE convention — prevents early val-loss bounce
-  grad_accum: 16                # effective batch 16 (matches DistillSpec paper); zero VRAM cost
-                                # On A100 you could also raise to true batch=4 per step (--grad_accum 4
-                                # with physical batch 4) for the same effective batch with fewer optimizer
-                                # steps. Grad-accum is simpler and works now without any code change.
-  lora_r: 16                    # larger rank for bigger teacher-student gap (8B -> 0.6B)
+  warmup_steps: 200             # 10% of 2000 steps; DistillSpec/EAGLE convention
+  grad_accum: 16
+  lora_r: 16                    # larger rank for wider teacher-student gap (8B→0.6B)
   lora_alpha: 32
-  max_new_tokens: 128           # longer sequences; A100 handles the KV cache easily
+  max_new_tokens: 128
   teacher_temperature: 0.8
   seed: 42
-  # Regularization
-  grad_clip: 1.0                 # gradient clipping max norm
-  lora_dropout: 0.05             # LoRA dropout (0 = no dropout)
-  # Loss-specific hyperparameters (only used when the named loss is active)
-  ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
-  jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
-
-dataset:
-  train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_30.jsonl
-  # val_dataset: fixed 30-prompt val set passed to trainer.py --val_dataset.
-  # A100 is fast enough for 30 prompts (~2 min/check); gives a more reliable signal
-  # for paper runs than the 10-prompt Kaggle set.
-  # Without this, trainer uses val_split=0.1 → 672 prompts → ~20 min/check even on A100.
-  val_dataset: gsm8k_30.jsonl
-
-checkpointing:
-  save_every: 100               # save every 100 steps (~30-50 s on A100) -- less crash risk than T4
-  milestone_every: 500          # permanent snapshots every 500 steps
-  max_checkpoints: 8
-  storage_root: /content/drive/MyDrive/specdist
+  grad_clip: 1.0
+  lora_dropout: 0.05
+  ebe_kl_weight: 0.1
+  jsd_alpha: 0.5
 
 logging:
-  log_every: 10
-  wandb_project: distillspec
   wandb_group: a100
-  # run_label is prepended to every W&B run name: "8B-A100-kl_qwen_2000steps"
   run_label: "8B-a100"
 
 health:
   val_every: 100
   ppl_check_every: 500
-  ppl_threshold: 1.25
-  nan_action: stop              # A100 sessions are stable; stop on NaN rather than skipping
-  early_stop_patience: 5
 
-evaluation:
-  # Full 8-verifier cross-pair for the loss-verifier alignment matrix (paper main result):
-  #   naive, nss, specinfer, spectr, khisti — OT-based (have matching *_tree losses)
-  #   bv, gbv, traversal               — non-OT (have matching *_tree losses)
-  #   alpha                             — on-policy block efficiency baseline (untrained-style)
-  modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
-  K_values: [3]                 # K=3 only: single representative value; K sweep adds wall time without scientific value
-  temperatures: [1.0]          # T=1.0: DistillSpec/EAGLE/Medusa paper standard; T=0.6 changes acceptance probabilities
-  L: 8
-  n_prompts: 100                # secondary datasets (alpaca/math500/humaneval/mtbench)
-  n_prompts_gsm8k: 1319          # full GSM8K test set (1319 problems) for paper numbers
-  # Paper datasets (in order — Phase 3 runs all on the full 8×8 (loss,verifier) matrix):
-  #   gsm8k    — primary benchmark, 1319 prompts (full test set)
-  #   alpaca   — instruction-following, 100 prompts
-  #   math500  — competition math, 100 prompts
-  #   humaneval — code generation, all 164 prompts (filtered to ≤100 for budget)
-  #   mtbench  — multi-turn chat, 80 prompts (the entire MT-Bench)
-  eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
-
-tree_training:
-  tree_K: 4                     # draft candidates per node (branching factor)
-  tree_L: 8                     # draft block depth (max speculative tokens per path)
+checkpointing:
+  save_every: 100
+  milestone_every: 500
 
 experiment:
-  # Pipeline ordering — controls how training, merging, and evaluation are sequenced.
-  #
-  # parallel_groups (default, laptop/kaggle):
-  #   ALL training → ALL merges → ALL evals
-  #   Good for: code exercisers (laptop), Kaggle (use --losses to pick one loss per session)
-  #
-  # per_loss (A100/persistent servers):
-  #   For each loss: train → merge → eval GSM8K → [eval multi-DS]
-  #   Results appear after each loss, not after all losses complete.
-  #   On a persistent server, you can see kl_tree results before bv_tree trains.
-  #   Use: python experiment.py --config a100 --losses kl_tree → results appear,
-  #        python experiment.py --config a100 --losses bv_tree → next, etc.
-  #   NOTE: true per_loss sequential mode requires --losses one at a time for now.
-  #         A single run without --losses still does parallel_groups ordering.
-  pipeline_ordering: per_loss   # per_loss recommended for A100 / persistent servers
-
-  # Loss family — covers the full 8×8 cross-pair matrix in Phase 3:
-  #
-  # Flat (token-level, off-policy):
-  #   kl rev_kl jsd l1 ebe ebe_single
-  #
-  # Tree (on-policy, generic divergences):
-  #   kl_tree rev_kl_tree jsd_tree
-  #
-  # Tree (verifier-aligned — non-OT):
-  #   bv_tree gbv_tree traversal_tree
-  #
-  # Tree (verifier-aligned — OT-based, NEW 2026-05, see tree_losses.py docstring):
-  #   naive_tree nss_tree specinfer_tree spectr_tree khisti_tree
-  #
-  # ebe_tree intentionally excluded — superseded by ebe-aligned variants above.
-  # online / online_ebe still disabled pending Kaggle smoke verification.
+  pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
   losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,

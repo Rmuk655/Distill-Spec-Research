@@ -1,20 +1,19 @@
-# server_gpt2 — ATS Cloud bare-metal server (CPU only, 128 GB RAM, no GPU)
-# Inherits model pair and loss config from laptop_gpt2.yaml; overrides hardware
-# to CPU-only and scales up steps/cadence for a longer server run.
+# server_gpt2.yaml — GPT-2 convergence run (ATS Cloud, CPU-only, 128 GB RAM)
+# Inherits platform settings from bases/server.yaml; adds distilgpt2→gpt2-medium pair.
 #
 # Draft:  distilgpt2   (82 M,  ~330 MB)
 # Target: gpt2-medium  (355 M, ~1.4 GB)
-# Both share vocab_size=50257 — SD requirement satisfied.
+# vocab_size = 50257 for both — SD requirement satisfied.
 #
-# PURPOSE: Run all GPT-2 loss variants on the ATS Cloud server when GPU
-# credits (Kaggle/Colab) are exhausted.  CPU-only — no CUDA needed.
-# Results ARE research-meaningful: 355M teacher >> 82M student (4.3x gap).
+# PURPOSE: Run all GPT-2 loss variants on the ATS Cloud server when GPU credits
+# (Kaggle/Colab) are exhausted.  CPU-only — no CUDA needed.
+# Results ARE research-meaningful: 4.3x model-size gap → real distillation signal.
 #
 # RUNNING:
-#   Option A — sequential, experiment.py handles everything (simple, ~30-50 hr):
+#   Option A — sequential (simple, ~30-50 hr total):
 #     python orchestration/experiment.py --config server_gpt2 --yes
 #
-#   Option B — parallel trainer.py calls (faster, ~4-6 hr for all losses):
+#   Option B — parallel trainer.py calls (~4-6 hr for all losses):
 #     for loss in kl rev_kl jsd l1 kl_tree rev_kl_tree jsd_tree bv_tree \
 #                 gbv_tree traversal_tree naive_tree nss_tree specinfer_tree \
 #                 spectr_tree khisti_tree; do
@@ -23,21 +22,33 @@
 #         --loss $loss --steps 1000 --device cpu --no_wandb \
 #         --output db/checkpoints/${loss}-dg2-g2m &
 #     done
-#     wait  # all 15 run in parallel — 128 GB RAM handles it easily
+#     wait   # 128 GB RAM runs all 15 losses in parallel
 #
-# NOTE: Checkpoint tag for this pair is "dg2-g2m" (see _run_tag in experiment.py).
+# NOTE: server_gpt2 inherits from bases/server (CPU platform), NOT from
+# laptop_gpt2.  They share the same model pair but are different hardware.
 
-_base: laptop_gpt2   # inherits: model pair, gpt2 training hparams, ebe/online exclusions
+_base: bases/server   # CPU hardware + eval + health + dataset — see bases/server.yaml
 
-hardware:
-  device: cpu
-  hw_tier: cpu          # CPU-only server — no GPU; drives CPU batch path in evaluate.py
+models:
+  family: gpt2
+  draft:  distilgpt2
+  target: gpt2-medium
 
 training:
-  steps: 1000           # 2x laptop_gpt2; clearer convergence curves on server
+  steps: 1000                   # 2x laptop_gpt2; clearer convergence curves
+  lr: 1.0e-4
+  lora_r: 8
+  lora_alpha: 16
+  max_new_tokens: 32
+  teacher_temperature: 1.0
+  online_lr: 1.0e-3
+  seed: 42
+  grad_clip: 1.0
+  lora_dropout: 0.05
+  ebe_kl_weight: 0.1
+  jsd_alpha: 0.5
 
 logging:
-  log_every: 50
   wandb_group: server-gpt2-gsm8k
   run_label: "gpt2-cpu-server"
 
@@ -48,3 +59,7 @@ health:
 checkpointing:
   save_every: 200
   milestone_every: 1000
+
+experiment:
+  exclude_losses: [ebe, ebe_single, ebe_tree,
+                   online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]

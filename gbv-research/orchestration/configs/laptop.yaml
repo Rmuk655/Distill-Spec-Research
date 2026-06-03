@@ -1,52 +1,22 @@
-# Laptop configuration — code verification only (no trend detection)
+# laptop.yaml — Qwen toy combo, code verification (RTX 500 Ada, 6 GB VRAM)
+# Inherits platform settings from bases/laptop.yaml; adds Qwen2.5-0.5B→Qwen3-0.6B pair.
 #
 # Hardware (Mukund's machine):
-#   CPU:  Intel (2.39 GHz observed, ~26% at idle)
-#   RAM:  64 GB DDR5 5600 MT/s SODIMM (2/2 slots used)
 #   GPU0: NVIDIA RTX 500 Ada Generation, 6 GB VRAM
-#   GPU1: Intel Arc Pro Graphics (iGPU — ignored by training scripts)
-#   NPU:  Intel AI Boost (not used)
-#   SSD:  NVMe (Disk 0)
-#
-# Draft: Qwen2.5-0.5B (0.5B, ~1 GB BF16)   Teacher: Qwen3-0.6B (0.6B, ~1.2 GB BF16)
-# Total VRAM: ~3 GB.  No 4-bit quantization needed.
+#   RAM:  64 GB DDR5 5600 MT/s
 #
 # WHY TRENDS ARE IMPOSSIBLE HERE:
-#   The teacher (0.6B) is the same size class as the draft (0.5B).
-#   Distillation signal from a model barely larger than the student is
-#   essentially noise.  Do not interpret laptop results as research findings.
+#   Teacher (0.6B) ≈ student (0.5B) — zero meaningful distillation gap.
+#   Do NOT interpret laptop results as research findings.
 #
-# PURPOSE: Verify that every code path runs without crashing:
-#   Every loss function is unique code — bugs in ebe, rev_kl, bv_tree, etc.
-#   must be caught here before they reach T4 (expensive to debug there).
-#   Use --smoke for a fast all-loss crash test (~25 min, 10 steps each).
-#   Run without --smoke to exercise ALL paths (~2-3 hr, 100 steps each).
+# PURPOSE: Crash-test every code path before pushing to T4/A100.
+#   --smoke:  all losses, 10 steps each, ~25 min  (fast all-code-path check)
+#   no flag:  all losses, 100 steps each, ~2-3 hr (full pipeline exerciser)
 #
-# TWO-STAGE LAPTOP GATE:
-#   1. python orchestration/experiment.py --config laptop --smoke --yes
-#      All losses, 10 steps each.  Fast all-loss code-path check.
-#      Gate: no exceptions, losses are finite numbers.
-#      ~25 min (all losses).
-#   2. python orchestration/experiment.py --config laptop --yes
-#      All losses, 100 steps each.  Full pipeline exerciser.
-#      Exercises checkpoint save/load (save_every=20 → 5 saves), milestone
-#      checkpoint (milestone_every=100 → 1 save), 2 val passes (val_every=50),
-#      PPL health check (ppl_check_every=100 → fires at step 100), merge, eval.
-#      Gate: all eval modes produce output, checkpoint resume works,
-#      merge completes, W&B run appears in wandb.ai.
-#      ~2-3 hr total.  Use --losses kl,kl_tree for a faster 60-75 min run
-#      when you only want to check the pipeline, not every loss.
-#
-# WHEN TO MOVE TO T4 (Kaggle/Modal):
-#   Both gates pass AND you want to assess whether a new loss function or
-#   verifier implementation actually helps.  T4 uses Qwen3-8B NF4
-#   teacher → real distillation signal → real trends.
+# WHEN TO MOVE TO T4/A100:
+#   Both smoke and full pass → promote to Kaggle/Colab for real distillation signal.
 
-hardware:
-  device: cuda
-  hw_tier: laptop           # hardware tier (laptop/cpu/colab/a100) — not the notebook platform
-  load_in_4bit: false
-  compile: false               # torch.compile has limited support on Windows
+_base: bases/laptop   # hardware + eval + health + dataset — see bases/laptop.yaml
 
 models:
   family: qwen
@@ -54,78 +24,35 @@ models:
   target: Qwen/Qwen3-0.6B
 
 training:
-  steps: 100                    # 10× smoke (10), exercises all checkpointing paths; NOT for paper
+  steps: 100                    # exercises all checkpointing paths; NOT for paper results
   lr: 3.0e-5
-  lora_r: 4                     # smallest rank -- this run is about code, not capacity
+  lora_r: 4                     # smallest rank — this run is about code, not capacity
   lora_alpha: 8
-  max_new_tokens: 32            # keep inference fast; we're not measuring quality
+  max_new_tokens: 32
   teacher_temperature: 0.8
-  online_lr: 3.0e-4             # LR for online adapt (higher than offline distillation LR)
+  online_lr: 3.0e-4
   seed: 42
-  # Regularization
-  grad_clip: 1.0                 # gradient clipping max norm
-  lora_dropout: 0.05             # LoRA dropout (0 = no dropout)
-  # Loss-specific hyperparameters (only used when the named loss is active)
-  ebe_kl_weight: 0.1             # EBE loss: weight for the KL regularization term
-  jsd_alpha: 0.5                 # JSD loss: interpolation weight (0=forward KL, 1=reverse KL)
-
-dataset:
-  train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_5.jsonl
-  # val_dataset: fixed 5-prompt val set passed to trainer.py --val_dataset.
-  # Without this, trainer uses val_split=0.1 → last 10% of 6726 = 672 prompts → very slow.
-  # Same 5 prompts every run (deterministic) — consistent signal, fast (~30 s on laptop).
-  val_dataset: gsm8k_5.jsonl
-
-checkpointing:
-  save_every: 20                # fires 10x in 200 steps -- exercises rolling checkpoint logic
-  milestone_every: 100          # fires 2x in 200 steps -- exercises permanent checkpoint logic
-  max_checkpoints: 3
-  output_root: db/checkpoints
+  grad_clip: 1.0
+  lora_dropout: 0.05
+  ebe_kl_weight: 0.1
+  jsd_alpha: 0.5
 
 logging:
-  log_every: 10
-  wandb_project: distillspec
   wandb_group: laptop-gsm8k
   run_label: "0.6B-laptop"
-  no_wandb: true        # laptop runs are code verification only — no W&B overhead
 
 health:
-  val_every: 50                 # fires 4x in 200 steps -- exercises validation path
-  ppl_check_every: 100          # fires 2x in 200 steps -- exercises ppl health check
-  ppl_threshold: 1.25
-  nan_action: stop
-  early_stop_patience: 3
+  val_every: 50
+  ppl_check_every: 100
+
+checkpointing:
+  save_every: 20                # fires 5x in 100 steps — exercises rolling checkpoint logic
+  milestone_every: 100
 
 evaluation:
-  # All 6 verifier modes.  specinfer and naive are OTLP-based; they need clean
-  # VRAM and run fine when isolated (confirmed: 5/5 prompts at 4-5 s/it with L=8).
-  # The per-mode subprocess approach waits for VRAM to be released before each
-  # launch so all modes complete reliably on the 4 GB laptop GPU.
-  modes: [alpha, bv, gbv, traversal, specinfer, naive]
-  K_values: [3]                 # single K -- no parameter sweep on laptop
-  temperatures: [0.6]           # single temperature -- no sweep
-  L: 8
-  # 5 prompts: ~3 min per eval mode, ~18 min total for 6 modes.
-  # Smoke uses 3 prompts (overrides this).  10 was the old default but 5 is enough
-  # to confirm finite BE and catch shape errors on all code paths.
-  n_prompts: 5
-
-tree_training:
-  # Hyperparameters for tree-structured distillation losses.
-  # Used when experiment.losses includes any of the *_tree losses.
-  # tree_K: number of i.i.d. draft paths sampled per training step.
-  # tree_L: draft block depth (tokens per path).
-  tree_K: 4
-  tree_L: 8
+  temperatures: [0.6]
 
 experiment:
-  # All non-online losses run — every loss function has unique code that must be
-  # exercised before promoting to T4.  Bugs in ebe, rev_kl, jsd, bv_tree, etc.
-  # must be found here.  Online OSD is excluded (needs 2 models simultaneously,
-  # exceeds laptop VRAM and is lowest-priority in the research plan).
-  #
-  # For a faster pipeline-only check (no per-loss coverage), pass --losses kl,kl_tree.
   losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
