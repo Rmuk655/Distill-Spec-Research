@@ -1094,15 +1094,28 @@ def measure_perplexity(model_path: str, prompts: list, max_tokens: int = 200) ->
 # Skip-existing check
 # ---------------------------------------------------------------------------
 
-def _already_run(student_label: str, dataset: str, mode: str, K: int, temperature: float) -> bool:
-    """Return True if a matching run already exists in the DB."""
+def _already_run(student_label: str, dataset: str, mode: str, K: int, temperature: float,
+                  student_path: str | None = None) -> bool:
+    """Return True if a matching run already exists in the DB.
+
+    student_path is included in the match when provided so that results for
+    Qwen/Qwen2.5-0.5B and distilgpt2 both labelled 'baseline' are never
+    confused — a Qwen baseline result in the DB must not skip GPT-2 baseline.
+    """
     runs = results_db.query_runs({
         "draft_label": student_label,
         "dataset": dataset,
         "mode": mode,
         "K": K,
     })
-    return any(abs(r.get("temperature", 0) - temperature) < 0.01 for r in runs)
+    matching = [r for r in runs if abs(r.get("temperature", 0) - temperature) < 0.01]
+    if not matching:
+        return False
+    # If we know the student path, require it to match so different model
+    # families sharing the same label don't cross-skip each other.
+    if student_path:
+        return any(r.get("draft_path", "") == student_path for r in matching)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1134,7 +1147,8 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
              preloaded: tuple = None) -> dict:
     run_tag = make_run_tag(student_label, mode, dataset, K)
 
-    if skip_existing and _already_run(student_label, dataset, mode, K, temperature):
+    if skip_existing and _already_run(student_label, dataset, mode, K, temperature,
+                                       student_path=student_path):
         print(f"\n[{run_tag}] SKIP (already in DB)")
         return {"skipped": True}
 
@@ -1569,7 +1583,8 @@ def main():
             if ds == "humaneval": n = 164
             elif ds == "mtbench": n = 80
             # Skip if already measured and --skip_existing is set
-            if args.skip_existing and _already_run(student_label, ds, "perplexity", 0, 0.0):
+            if args.skip_existing and _already_run(student_label, ds, "perplexity", 0, 0.0,
+                                                     student_path=args.student):
                 print(f"  {student_label} | {ds} | PPL=SKIP (already in DB)")
                 continue
             try:
@@ -1639,7 +1654,8 @@ def main():
     be_cells_to_run: set = set()
     for ds, mode, K, T in cells:
         if mode != "alpha":
-            if not (args.skip_existing and _already_run(student_label, ds, mode, K, T)):
+            if not (args.skip_existing and _already_run(student_label, ds, mode, K, T,
+                                                         student_path=args.student)):
                 be_cells_to_run.add((ds, mode, K, T))
 
     _be_cache: dict = {}   # (ds, mode, K, T) -> block_eff
@@ -1895,7 +1911,8 @@ def main():
         else:
             # BE result already computed in pre-batch step above
             run_tag = make_run_tag(student_label, mode, ds, K, T)
-            if args.skip_existing and _already_run(student_label, ds, mode, K, T):
+            if args.skip_existing and _already_run(student_label, ds, mode, K, T,
+                                                     student_path=args.student):
                 print(f" [{run_tag}] SKIP (already in DB)")
                 continue
             be_val = _be_cache.get((ds, mode, K, T))

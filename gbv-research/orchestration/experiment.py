@@ -1114,6 +1114,21 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _ckpt   = lambda n, _b=_smoke_base: os.path.join(_b, "smoke", n)          # noqa: E731
         _merged = lambda n, _b=_smoke_base: os.path.join(_b, "smoke", n + "_merged")  # noqa: E731
 
+    # ── Model-family checkpoint namespace ────────────────────────────────────
+    # Checkpoint dirs must be family-scoped so Qwen and GPT-2 (or LLaMA etc.)
+    # never share the same directory.  Without this, a Qwen kl-gsm8k checkpoint
+    # makes GPT-2 kl training appear "already done" and GPT-2 eval runs the
+    # wrong model.  Qwen keeps the plain name (backward compat); all others get
+    # a "-<family>" suffix, e.g. kl-gsm8k-gpt2, kl-gsm8k_merged-gpt2.
+    _h_for_family = train_hparams or {}
+    _model_family = _h_for_family.get("model_family", "qwen")
+    _fam_suffix = "" if _model_family == "qwen" else f"-{_model_family}"
+    if _fam_suffix:
+        _base_ckpt   = _ckpt
+        _base_merged = _merged
+        _ckpt   = lambda n, _sfx=_fam_suffix: _base_ckpt(f"{n}{_sfx}")      # noqa: E731
+        _merged = lambda n, _sfx=_fam_suffix: _base_merged(f"{n}{_sfx}")    # noqa: E731
+
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
 
