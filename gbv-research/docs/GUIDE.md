@@ -181,37 +181,74 @@ python orchestration/experiment.py --config a10_qwen --yes \
 | Temperature | 1.0 |
 | Time estimate | ~15 min/loss × 17 losses ≈ **4-5 hours total** |
 
-**One-time setup** (run `aip_gpu_setup.sh` — handles all of these automatically):
+**One-time setup** — set `WANDB_API_KEY` first, then run the setup script:
 ```bash
-git clone https://github.com/Rmuk655/Distill-Spec-Research.git ~/repo
-export WANDB_API_KEY="..."
-bash ~/repo/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+# On the A100 server terminal:
+export WANDB_API_KEY="your-key-from-wandb.ai/authorize"   # REQUIRED before setup
+git clone https://github.com/Rmuk655/Distill-Spec-Research.git ~/ram/Distill-Spec-Research
+bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
-The setup script:
-1. Pulls latest code + initializes git submodules (specInfer)
-2. Creates a virtual environment (avoids system Python permission errors)
-3. Installs all dependencies (torch cu128, transformers, peft, etc.)
-4. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — required to avoid OOM from `transformers >= 4.46` `caching_allocator_warmup()` which pre-allocates ~15 GB during model load
-5. Sets `TRANSFORMERS_OFFLINE=1` — no HF Hub network calls after first run
-6. Downloads `gsm8k_train.jsonl` (7473 training prompts, ~3 MB)
-7. Authenticates W&B and HuggingFace
+The setup script handles everything (verified end-to-end on AIP/Pluto A100):
+1. Clones OSD (specInfer Generator, public repo) alongside the main repo
+2. Creates a virtual environment — avoids system Python permission errors on managed servers
+3. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
+4. Downloads `gsm8k_train.jsonl` (7473 prompts) from GitHub — HF dataset API broken for bare `gsm8k` name
+5. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY` — subprocesses inherit it
+6. Adds `source ~/.specdist_env` to `~/.bashrc` — persistent across sessions
+7. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — avoids OOM from transformers warmup buffer
 
-**Then run one loss at a time:**
+> **WANDB_API_KEY must be exported BEFORE running the setup script** — this is the only reliable way to authenticate W&B in trainer subprocesses. `wandb login` alone (saves to `~/.netrc`) does NOT propagate to subprocesses.
+
+**Run the full pipeline:**
 ```bash
-source ~/.specdist_env
-cd ~/repo/gbv-research
+source ~/.specdist_env   # if new terminal
+cd ~/ram/Distill-Spec-Research/gbv-research
+
+# First run: smoke test automatically runs first, then full pipeline
+python deploy/aip_run.py --config a100_qwen
+
+# Resume after interruption (skips smoke, retries failed steps):
+python deploy/aip_run.py --config a100_qwen --resume
+
+# One loss at a time:
 python deploy/aip_run.py --config a100_qwen --losses kl --no_smoke
-python deploy/aip_run.py --config a100_qwen --losses kl_tree --no_smoke
-# ... or all at once:
-python deploy/aip_run.py --config a100_qwen --no_smoke
 ```
 
-**Known issues and fixes:**
-- **VRAM**: transformers >= 4.46 needs `expandable_segments:True` — set by setup script
-- **Train slots**: Scheduler uses 1 slot on A100-40GB (each 8B job peaks at ~35 GB during load). A100-80GB gets 3 slots.
-- **Training data**: `gsm8k_train.jsonl` must be downloaded — setup script does this
-- **specInfer alpha**: requires `git submodule update --init --recursive` — setup script does this; if skipped, inline fallback is used (correct values, tagged in DB notes)
+**Monitor progress:**
+```bash
+# Logs:
+tail -f /home/colligo/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
+
+# Dashboard (local access):
+python dashboard/training_dashboard.py --root /home/colligo/specdist
+
+# Dashboard (accessible from browser on your laptop via VS Code port forwarding):
+python dashboard/training_dashboard.py --root /home/colligo/specdist --host 0.0.0.0
+# Then: VS Code → Ports tab → Forward Port 5000 → click the generated URL
+
+# W&B (cloud, accessible anywhere):
+# https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec
+# Filter by: Group = a100-qwen, Tag = KrishnanRIITHServer
+```
+
+**Verified on AIP/Pluto A100-SXM4-40GB (June 2026):**
+
+| Check | Status |
+|---|---|
+| 1 train slot / 1 eval slot | ✅ EVAL_VRAM_GB=20 prevents concurrent eval OOM |
+| W&B logging from trainer subprocesses | ✅ WANDB_API_KEY in ~/.specdist_env |
+| specInfer alpha eval | ✅ bundled in `algorithms/specInfer/`, DynamicCache compat fixed |
+| gsm8k_train.jsonl download | ✅ from GitHub raw (HF API broken for bare 'gsm8k' name) |
+| Offline mode + online download | ✅ training data downloaded BEFORE offline flags set in env |
+| Smoke → full auto-transition | ✅ `--resume` skips smoke when already done |
+| clean_restart scoped to pair | ✅ only wipes q0.6b-q8b checkpoints/DB rows/logs |
+
+**Known issues (all fixed in codebase as of June 2026):**
+- **eval OOM**: was 3 eval slots × 8B teacher = 57 GB > 39.5 GB → CPU fallback (1000 s/prompt). Fixed: `EVAL_VRAM_GB=20` → 1 slot.
+- **specInfer DynamicCache**: `TypeError: 'DynamicCache' object is not subscriptable` in transformers 5.x. Fixed: `proposer.py` and `verifier.py` updated; `UnboundLocalError: alpha` fallback also fixed.
+- **smoke/full DB intermingling**: smoke n=5 results blocked full-run n=1319 eval via `--skip_existing`. Fixed: `_already_run()` checks n_prompts (±10% tolerance).
+- **clean_restart wrong path**: with `--storage_root`, state/DB/checkpoints in storage dir but `clean_restart` looked in repo `db/`. Fixed: `--storage_root` arg + `STORAGE_ROOT` env var support.
 
 **IMPORTANT**: `evaluate.py --hw_tier a100` errors if target model appears quantized — prevents contaminating paper data with NF4 results.
 
