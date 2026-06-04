@@ -31,16 +31,40 @@ GBV_DIR="$(dirname "$SCRIPT_DIR")"          # gbv-research/
 REPO_DIR="$(dirname "$GBV_DIR")"            # Distill-Spec-Research/
 
 # ── Storage root ──────────────────────────────────────────────────────────────
-# Priority: env var > $HOME/specdist > local db/
+# Where to write checkpoints, logs, results.db, and HF model cache.
+# Priority: STORAGE_ROOT env var > /sensei-fs/users/rkrishna/specdist (persistent NFS)
+#           > $HOME/specdist (local, fallback) > repo/db/ (last resort)
+#
+# /sensei-fs/users/rkrishna is Adobe's persistent research filesystem — survives
+# GPU session restarts and machine re-allocations. Use it for:
+#   - Checkpoints (large, ~1.2 GB each, persist across sessions)
+#   - Results DB  (small, must persist to accumulate across runs)
+#   - Logs        (for later analysis)
+#   - HF model cache (large, ~17 GB per model family)
+#
+# NOTE: venv is intentionally kept in $HOME (not NFS) — pip packages are
+# thousands of small files; NFS makes imports 5-10× slower than local disk.
+SENSEI_STORAGE="/sensei-fs/users/rkrishna/specdist"
 if [ -n "${STORAGE_ROOT:-}" ]; then
     STORAGE="${STORAGE_ROOT}"
+elif [ -d "/sensei-fs/users/rkrishna" ] && [ -w "/sensei-fs/users/rkrishna" ]; then
+    STORAGE="${SENSEI_STORAGE}"
+    echo "  [storage] Using Sensei persistent filesystem: ${STORAGE}"
 elif [ -w "$HOME" ]; then
     STORAGE="$HOME/specdist"
+    echo "  [storage] Sensei fs not available — using \$HOME/specdist"
 else
     STORAGE="${GBV_DIR}/db"
+    echo "  [storage] Fallback to repo db/"
 fi
 
 HF_CACHE="${STORAGE}/hf_cache"
+
+# Venv: ALWAYS in $HOME/specdist/venv regardless of STORAGE.
+# NFS is slow for pip-installed packages (thousands of small files).
+LOCAL_SPECDIST="$HOME/specdist"
+mkdir -p "${LOCAL_SPECDIST}"
+VENV_HOME="${LOCAL_SPECDIST}/venv"
 
 echo "========================================================================"
 echo "  SpecDist GPU Setup"
@@ -92,11 +116,11 @@ else
 fi
 
 # ── Python environment ────────────────────────────────────────────────────────
-# Use a virtual environment to avoid permission issues with system Python.
-# The venv lives at $STORAGE/venv so it persists across restarts.
-VENV_DIR="${STORAGE}/venv"
+# Venv in $HOME/specdist/venv (local disk, fast imports).
+# Data (checkpoints, DB, logs) in $STORAGE (Sensei NFS, persistent).
+VENV_DIR="${VENV_HOME}"   # = $HOME/specdist/venv
 if [ ! -d "${VENV_DIR}" ]; then
-    echo "[2/5] Creating virtual environment at ${VENV_DIR}..."
+    echo "[2/5] Creating virtual environment at ${VENV_DIR} (local, not NFS)..."
     python3 -m venv "${VENV_DIR}"
 else
     echo "[2/5] Using existing venv at ${VENV_DIR}"
