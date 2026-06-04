@@ -248,6 +248,38 @@ def main():
         print(" ".join(cmd))
         return
 
+    # ── Pre-launch: clear stale Python bytecode cache ─────────────────────
+    # Python caches compiled .pyc files in __pycache__/ dirs.  On network /
+    # container filesystems, mtime-based invalidation can fail after a git pull,
+    # causing old bytecode (e.g. un-fixed specInfer) to run despite updated .py.
+    # Clearing takes <1s and guarantees fresh imports on every pipeline launch.
+    import glob as _glob, shutil as _shutil
+    _pyc_count = 0
+    for _pyc in _glob.glob(os.path.join(_GBV_DIR, "**", "*.pyc"), recursive=True):
+        try: os.remove(_pyc); _pyc_count += 1
+        except OSError: pass
+    for _pycache in _glob.glob(os.path.join(_GBV_DIR, "**", "__pycache__"), recursive=True):
+        try: _shutil.rmtree(_pycache); _pyc_count += 1
+        except OSError: pass
+    if _pyc_count:
+        print(f"  [startup] Cleared {_pyc_count} stale .pyc / __pycache__ entries.")
+
+    # ── Pre-launch: disable specInfer if transformers ≥5.x ────────────────
+    # DynamicCache internal state (_seen_tokens etc.) changed in transformers 5.x
+    # making our specInfer KV-cache surgery invalid.  The inline alpha fallback
+    # gives IDENTICAL values at ~20% lower speed.  Disable automatically so the
+    # eval never wastes time attempting a doomed specInfer call.
+    import importlib.util as _ilu
+    try:
+        import transformers as _tf
+        _tf_ver = tuple(int(x) for x in _tf.__version__.split(".")[:2])
+        if _tf_ver >= (5, 0):
+            os.environ.setdefault("SPECDIST_DISABLE_SPECINFER", "1")
+            print(f"  [startup] transformers {_tf.__version__} ≥ 5.x detected — "
+                  f"specInfer disabled (SPECDIST_DISABLE_SPECINFER=1); using inline alpha fallback.")
+    except Exception:
+        pass
+
     print(f"\nLaunching: {' '.join(cmd[-6:])}")
     result = subprocess.run(cmd, cwd=_GBV_DIR)
     if result.returncode != 0:
