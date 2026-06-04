@@ -88,6 +88,17 @@ import torch
 import torch.nn.functional as F
 import transformers
 from torch.optim import AdamW
+
+# Suppress "Loading weights: X%" progress bars from from_pretrained().
+# These print one new line per update in non-TTY log files (40+ lines per load).
+# set_verbosity_error() keeps actual errors visible; disable_progress_bar()
+# removes the tqdm bars. Both are needed — verbosity alone doesn't stop the bars.
+try:
+    transformers.logging.set_verbosity_error()
+    transformers.logging.disable_progress_bar()
+    os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+except Exception:
+    pass
 from peft import get_peft_model, LoraConfig, TaskType, PeftModel
 
 from core.model_families import get_family, ModelFamily
