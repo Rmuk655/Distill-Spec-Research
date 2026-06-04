@@ -558,7 +558,13 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     #
     # Batch size: 8 fits comfortably for a 0.6B model on any GPU (A100/T4).
     # Increase to 16 on A100-40GB or 32 on A100-80GB for more throughput.
-    _task_batch = int(os.environ.get("SPECDIST_TASK_BATCH", "8"))
+    # Optimal batch size from roofline model:
+    #   optimal ≈ FLOPs_peak / (params × bytes × HBM_BW)
+    #   A100 + Qwen3-0.6B (BF16): 312e12 / (1.2e9 × 2039) ≈ 127 → use 32 (conservative)
+    #   A100 + distilgpt2 (82M):  312e12 / (0.16e9 × 2039) ≈ 956 → use 32 (same)
+    #   T4   + Qwen3-0.6B:        65e12  / (1.2e9 × 320)   ≈ 169 → use 16
+    #   Override: SPECDIST_TASK_BATCH=64 for maximum A100 throughput
+    _task_batch = int(os.environ.get("SPECDIST_TASK_BATCH", "32"))
     tokenizer.padding_side = "left"   # required for decoder-only batched generation
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
