@@ -24,8 +24,14 @@ hardware:
 
 dataset:
   train: core/datasets/raw/gsm8k_train.jsonl
-  eval:  core/datasets/raw/gsm8k_30.jsonl
-  val_dataset: gsm8k_30.jsonl   # 30-prompt val — reliable signal without the 672-prompt cost
+  eval:  core/datasets/raw/gsm8k_100.jsonl
+  val_dataset: gsm8k_100.jsonl
+  # Val set sizing rationale (SE = σ/√n, σ≈0.17 for per-prompt KL on Qwen pair):
+  #   n=5   (laptop):  SE≈0.076 → detects only >15% changes  (crash-check only)
+  #   n=30  (colab):   SE≈0.031 → detects >6% changes        (directional)
+  #   n=100 (A100):    SE≈0.017 → detects >3% changes        (paper convergence)
+  # Cost: 100 prompts × 20 val checks × ~0.5s = ~17 min over a 30-min run (negligible).
+  # Seed=42 fixed in downloader so val set is identical across server/laptop re-runs.
 
 checkpointing:
   max_checkpoints: 8

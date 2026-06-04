@@ -3944,6 +3944,16 @@ def main():
         else:
             # All Qwen / LLaMA configs use gsm8k for training
             _dl_mod.fetch_gsm8k_train()
+        # Also prefetch the val dataset if it's a specific gsm8k_N.jsonl.
+        # This avoids trainer crash if the file doesn't exist yet (e.g. gsm8k_100
+        # on a fresh server where only gsm8k_30 was committed pre-A100-config change).
+        _val_ds = _yaml_cfg.get("val_dataset", "")
+        if _val_ds and _val_ds.startswith("gsm8k_") and _val_ds.endswith(".jsonl"):
+            try:
+                _n_val = int(_val_ds.replace("gsm8k_", "").replace(".jsonl", ""))
+                _dl_mod.fetch_gsm8k(n=_n_val)
+            except ValueError:
+                pass   # non-numeric suffix, skip
     except Exception as _ds_err:
         print(f"  [setup] Dataset prefetch skipped ({_ds_err}) — "
               f"ensure core/datasets/raw/ has the required files.")
