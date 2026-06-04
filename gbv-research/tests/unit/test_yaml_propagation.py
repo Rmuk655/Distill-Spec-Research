@@ -83,6 +83,7 @@ def _build_train_hparams(yaml_cfg: dict) -> dict:
         "lr":                   args.lr           or yaml_cfg.get("lr", 3e-5),
         "lora_r":               args.lora_r       or yaml_cfg.get("lora_r", 8),
         "lora_alpha":                                 yaml_cfg.get("lora_alpha", 16),
+        "grad_accum":                                 yaml_cfg.get("grad_accum", 4),
         "teacher_temp":         args.teacher_temp or yaml_cfg.get("teacher_temp", 0.8),
         "train_steps":          args.train_steps  or yaml_cfg.get("train_steps"),
         "max_new_tokens":                             yaml_cfg.get("max_new_tokens", 80),
@@ -225,6 +226,7 @@ _CANARY = {
     "lr":               0.00012345,
     "lora_r":           7,
     "lora_alpha":       14,
+    "grad_accum":       11,   # must propagate — was silently ignored (grad_accum: 16 in a100 YAML)
     "teacher_temp":     0.77,
     "max_new_tokens":   99,
     "seed":             1234,
@@ -288,6 +290,7 @@ _KEY_TO_FLAG = {
     "lr":               "--lr",
     "lora_r":           "--lora_r",
     "lora_alpha":       "--lora_alpha",
+    "grad_accum":       "--grad_accum",
     "teacher_temp":     "--teacher_temp",
     "max_new_tokens":   "--max_new_tokens",
     "seed":             "--seed",

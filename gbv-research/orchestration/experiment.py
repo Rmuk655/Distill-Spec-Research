@@ -885,7 +885,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
               experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
               loss_name=None, model_family="qwen", device="auto",
-              force_rerun=False, omp_threads=0):
+              force_rerun=False, omp_threads=0, task_batch=0):
     """Eval command.
 
     Passes --skip_existing by default so session restarts never duplicate DB rows.
@@ -935,11 +935,9 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
     if task_score:
         cmd.append("--task_score")
     # task_batch: machine-specific batch size from YAML evaluation.task_batch.
-    # Lives in the hardware base YAML (bases/a100.yaml=32, bases/laptop.yaml=4)
-    # so each machine gets the right value without touching the code.
-    _tb = _h.get("eval_task_batch", 0)
-    if _tb and int(_tb) > 1:
-        cmd += ["--task_batch", str(int(_tb))]
+    # Passed in from the inner _ec closure in build_steps via task_batch=_h.get(...)
+    if task_batch and int(task_batch) > 1:
+        cmd += ["--task_batch", str(int(task_batch))]
     if experiment_tag:
         cmd += ["--experiment_tag", experiment_tag]
     if wandb_group:
@@ -1393,7 +1391,8 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         omp_threads=_h.get("omp_threads", 0),
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),
-                        force_rerun=smoke or force_eval)  # smoke/--force_eval: bypass skip_existing
+                        force_rerun=smoke or force_eval,
+                        task_batch=_h.get("eval_task_batch", 0))
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy
@@ -3721,6 +3720,10 @@ def main():
         "lr":           args.lr           or _yaml_cfg.get("lr", 3e-5),
         "lora_r":       args.lora_r       or _yaml_cfg.get("lora_r", 8),
         "lora_alpha":                         _yaml_cfg.get("lora_alpha", 16),
+        # grad_accum: MUST be here or _train_hargs falls back to default of 4.
+        # a100_qwen.yaml sets grad_accum: 16 — without this line the trainer
+        # uses 4, giving 500 opt-steps instead of 125 (confirmed in run logs).
+        "grad_accum":                         _yaml_cfg.get("grad_accum", 4),
         "teacher_temp": args.teacher_temp or _yaml_cfg.get("teacher_temp", 0.8),
         # CLI --train_steps > YAML training.steps > None (smoke/full default)
         "train_steps":  args.train_steps or _yaml_cfg.get("train_steps"),
