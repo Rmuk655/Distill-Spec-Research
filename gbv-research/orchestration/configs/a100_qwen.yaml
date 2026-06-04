@@ -102,7 +102,10 @@ evaluation:
 
 experiment:
   pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+  # ebe / ebe_single excluded: off-policy flat losses (optimise teacher-sampled tokens,
+  # not draft proposals). Valid mathematically but not the paper contribution.
+  # Keep as manual ablations only via --losses ebe if needed.
+  losses: [kl, rev_kl, jsd, l1,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
            naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]

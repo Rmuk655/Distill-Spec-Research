@@ -54,8 +54,10 @@ evaluation:
   temperatures: [0.6]
 
 experiment:
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+  # ebe / ebe_single removed: off-policy flat losses, not the paper contribution.
+  losses: [kl, rev_kl, jsd, l1,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
            naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
-  exclude_losses: [online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]
+  exclude_losses: [ebe, ebe_single,
+                   online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]

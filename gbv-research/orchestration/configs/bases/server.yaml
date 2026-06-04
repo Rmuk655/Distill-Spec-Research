@@ -57,3 +57,6 @@ evaluation:
 tree_training:
   tree_K: 4
   tree_L: 8
+
+experiment:
+  exclude_losses: [ebe, ebe_single]   # off-policy flat losses, not paper contribution

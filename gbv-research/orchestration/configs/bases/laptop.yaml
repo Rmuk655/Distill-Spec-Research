@@ -57,3 +57,10 @@ evaluation:
 tree_training:
   tree_K: 4
   tree_L: 8
+
+experiment:
+  # ebe and ebe_single are off-policy flat losses: they optimise teacher-sampled tokens,
+  # not draft proposals. Their gradient direction is valid but they are not the paper
+  # contribution and should not appear in default sweeps on any hardware tier.
+  # To run as a manual ablation: python experiment.py --losses ebe --config <cfg>
+  exclude_losses: [ebe, ebe_single]

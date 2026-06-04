@@ -135,10 +135,11 @@ experiment:
   # Full 17-loss family — same as A100 — for Kaggle's 9-hour session budget.
   # New verifier-aligned tree losses (naive/nss/specinfer/spectr/khisti) added
   # 2026-05; see tree_losses.py for the math and α formulas.
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+  # ebe / ebe_single removed: off-policy flat losses, not the paper contribution.
+  losses: [kl, rev_kl, jsd, l1,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
            naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
-  # Exclude online OSD variants from the default Kaggle run — online is last priority.
-  # Override with --losses online,online_ebe if you specifically want online runs.
-  exclude_losses: [online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]
+  # Exclude online OSD variants and off-policy EBE flat losses.
+  exclude_losses: [ebe, ebe_single,
+                   online, online_ebe, online_ebe_single, online_kl_tree, online_ebe_tree]

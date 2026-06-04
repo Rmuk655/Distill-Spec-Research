@@ -109,7 +109,9 @@ experiment:
   # T4 trains the full 17-loss family — same as A100 — so paper-quality results
   # can be reproduced on Kaggle/Colab T4 with degraded compute (smaller teacher,
   # fewer steps, fewer eval prompts).  The 8×8 verifier cross-pair runs on A100.
-  losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
+  # ebe / ebe_single removed: off-policy flat losses, not the paper contribution.
+  losses: [kl, rev_kl, jsd, l1,
            kl_tree, rev_kl_tree, jsd_tree,
            bv_tree, gbv_tree, traversal_tree,
            naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree]
+  exclude_losses: [ebe, ebe_single]
