@@ -185,7 +185,7 @@ python orchestration/experiment.py --config a10_qwen --yes \
 
 ---
 
-### Stage 2 — A100 (paper quality, bf16)
+### Stage 2 — A100 (exploration → paper confirmation)
 
 **Hardware**: A100 (40/80 GB). In priority order:
 1. **IITH Hyderabad A100** — ₹80/GPU-hour (~$0.94/hr). Best value.
@@ -201,24 +201,65 @@ python orchestration/experiment.py --config a10_qwen --yes \
 | `a100_qwen` | Qwen3-0.6B → Qwen3-8B BF16 | **Primary result** — main paper table |
 | `a100_llama` | LLaMA-3.2-1B → LLaMA-3.2-3B BF16 | **Cross-family result** — proves algorithm is family-agnostic |
 
-**hw_tier tag in results.db**: `a100`
-
-**Purpose**: Paper-quality numbers. Both configs use full BF16 (no quantization), full GSM8K eval (n=1319), same benchmark for direct comparison.
-
-| Parameter | a100_qwen | a100_llama |
-|---|---|---|
-| Train steps | 2000 | 2000 |
-| max_train_prompts | none (7473 prompts) | none (7473 prompts) |
-| Phase 3 eval (GSM8K) | **n=1319** | **n=1319** |
-| Phase 4 eval (secondary) | **n=100** per domain | **n=100** per domain |
-| LoRA rank | r=8 | r=8 |
-| Temperature | 1.0 | 1.0 |
-| Time estimate | ~4-5 hr (17 losses) | ~3-4 hr (15 losses, 3B is faster) |
-
 > **LLaMA access**: HuggingFace gated model. Accept the licence at  
 > `https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct` then `huggingface-cli login`.
 
-**One-time setup** — set `WANDB_API_KEY` first, then run the setup script:
+---
+
+#### Stage 2A — Exploration (current default in `a100_qwen.yaml`)
+
+**Purpose**: Rank all 17 losses quickly. Pick the top 4-5 winners before committing to full eval.
+
+| Parameter | Value |
+|---|---|
+| Train steps | 2000 (~15-20 min/loss on A100) |
+| max_train_prompts | null — full 7473 prompts |
+| GSM8K eval (n) | **100** |
+| Verifier modes | alpha, bv, gbv, traversal (4 of 9) |
+| Time per eval | ~40 min |
+| **Total: 17 losses** | **~11 hours** (train + eval) |
+
+This is the active setting in `a100_qwen.yaml`. Run as-is:
+```bash
+python deploy/aip_run.py --config a100_qwen
+```
+
+**Decision gate**: after all 17 losses complete, rank by `BE/gbv` and `alpha/gsm8k` in W&B runs table. Promote the top 4-5 to Stage 2B.
+
+---
+
+#### Stage 2B — Paper confirmation (flip two lines in YAML)
+
+**Purpose**: Full eval on winners only. These numbers go in the paper.
+
+In `a100_qwen.yaml`, change the `evaluation:` section:
+```yaml
+evaluation:
+  n_prompts_gsm8k: 1319          # was 100
+  modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]  # all 9
+```
+
+Then clean-restart only the winning losses and rerun:
+```bash
+# Example: gbv_tree and traversal_tree won — rerun only those
+bash deploy/rerun_loss.sh gbv_tree paper_run
+bash deploy/rerun_loss.sh traversal_tree paper_run
+```
+
+| Parameter | Value |
+|---|---|
+| GSM8K eval (n) | **1319** (full test set) |
+| Verifier modes | all 9 |
+| Time per eval | ~14-17 hours |
+| **Top 5 losses** | **~70-85 hours total** |
+
+> Run Stage 2B only on the 4-5 winners from Stage 2A. Running all 17 losses at n=1319 would take ~300 hours.
+
+---
+
+#### One-time setup
+
+Set `WANDB_API_KEY` first, then run the setup script:
 ```bash
 # On the A100 server terminal:
 export WANDB_API_KEY="your-key-from-wandb.ai/authorize"   # REQUIRED before setup
@@ -227,74 +268,77 @@ bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 The setup script handles everything (verified end-to-end on AIP/Pluto A100):
-1. Clones OSD (specInfer Generator, public repo) alongside the main repo
-2. Creates a virtual environment — avoids system Python permission errors on managed servers
-3. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
-4. Downloads `gsm8k_train.jsonl` (7473 prompts) from GitHub — HF dataset API broken for bare `gsm8k` name
-5. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY` — subprocesses inherit it
-6. Adds `source ~/.specdist_env` to `~/.bashrc` — persistent across sessions
-7. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — avoids OOM from transformers warmup buffer
+1. Creates a virtual environment — avoids system Python permission errors on managed servers
+2. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
+3. Downloads `gsm8k_train.jsonl` (7473 prompts) from GitHub — HF dataset API broken for bare `gsm8k` name
+4. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY` — subprocesses inherit it
+5. Adds `source ~/.specdist_env` to `~/.bashrc` — persistent across sessions
+6. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — avoids OOM from transformers warmup buffer
 
-> **WANDB_API_KEY must be exported BEFORE running the setup script** — this is the only reliable way to authenticate W&B in trainer subprocesses. `wandb login` alone (saves to `~/.netrc`) does NOT propagate to subprocesses.
+> **WANDB_API_KEY must be exported BEFORE running the setup script** — `wandb login` alone (saves to `~/.netrc`) does NOT propagate to subprocesses.
 
-**Run the full pipeline:**
+---
+
+#### Running the pipeline
+
 ```bash
 source ~/.specdist_env   # if new terminal
 cd ~/ram/Distill-Spec-Research/gbv-research
 
-# Primary Qwen result (run this first):
+# Stage 2A — exploration (all 17 losses, n=100 eval):
 python deploy/aip_run.py --config a100_qwen
 
-# Cross-family LLaMA result (run after Qwen or in parallel on a second A100):
+# Cross-family (run after Qwen or in parallel on second A100):
 python deploy/aip_run.py --config a100_llama
 
-# Resume after interruption (skips smoke, retries failed steps):
+# Resume after interruption:
 python deploy/aip_run.py --config a100_qwen --resume
-python deploy/aip_run.py --config a100_llama --resume
 
 # One loss at a time:
 python deploy/aip_run.py --config a100_qwen --losses kl --no_smoke
-python deploy/aip_run.py --config a100_llama --losses kl --no_smoke
+
+# Restart a specific loss (changed hyperparams or algo):
+bash deploy/rerun_loss.sh kl my_experiment_tag
 ```
 
 **Monitor progress:**
 ```bash
-# Logs:
+# Live log:
 tail -f /home/colligo/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
 
-# Dashboard (local access):
-python dashboard/training_dashboard.py --root /home/colligo/specdist
+# BE progress (runner.py subprocess — updates every ~60s):
+tail -f /home/colligo/specdist/logs/a100_qwen-q0.6b-q8b/be_progress.log
 
-# Dashboard (accessible from browser on your laptop via VS Code port forwarding):
-python dashboard/training_dashboard.py --root /home/colligo/specdist --host 0.0.0.0
-# Then: VS Code → Ports tab → Forward Port 5000 → click the generated URL
-
-# W&B (cloud, accessible anywhere):
+# W&B (cloud, primary monitoring tool):
 # https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec
-# Filter by: Group = a100-qwen, Tag = KrishnanRIITHServer
+# Filter: Group = a100-qwen, Tag = KrishnanRIITHServer
+# Key columns in runs table: BE/gbv, BE/traversal, alpha/gsm8k
 ```
+
+---
 
 **Verified on AIP/Pluto A100-SXM4-40GB (June 2026):**
 
 | Check | Status |
 |---|---|
-| 1 train slot / 1 eval slot | ✅ EVAL_VRAM_GB=20 prevents concurrent eval OOM |
+| 2 eval slots on 40GB | ✅ EVAL_VRAM_GB=19 → 2×19=38 GB < 39.5 GB |
 | W&B logging from trainer subprocesses | ✅ WANDB_API_KEY in ~/.specdist_env |
-| specInfer alpha eval | ✅ bundled in `algorithms/specInfer/`, DynamicCache compat fixed |
-| gsm8k_train.jsonl download | ✅ from GitHub raw (HF API broken for bare 'gsm8k' name) |
-| Offline mode + online download | ✅ training data downloaded BEFORE offline flags set in env |
-| Smoke → full auto-transition | ✅ `--resume` skips smoke when already done |
-| clean_restart scoped to pair | ✅ only wipes q0.6b-q8b checkpoints/DB rows/logs |
+| specInfer DynamicCache (transformers 5.x) | ✅ duck-typing fix in `algorithms/specInfer/` |
+| gsm8k_train.jsonl download | ✅ from GitHub raw (HF API broken for bare `gsm8k` name) |
+| Offline mode + online download ordering | ✅ training data downloaded BEFORE offline flags set in env |
+| BE batch timeout | ✅ scales with n_prompts × combos (was hardcoded 2h, killed 14h eval) |
+| tqdm log verbosity | ✅ mininterval=60s in runner.py (one line per minute in log files) |
+| clean_restart scoped to model pair | ✅ only wipes q0.6b-q8b checkpoints/DB rows/logs |
 
 **Known issues (all fixed in codebase as of June 2026):**
-- **eval OOM**: was 3 eval slots × 8B teacher = 57 GB > 39.5 GB → CPU fallback (1000 s/prompt). Fixed: `EVAL_VRAM_GB=20` → 1 slot.
-- **specInfer DynamicCache**: `TypeError: 'DynamicCache' object is not subscriptable` in transformers 5.x. Fixed: `proposer.py` and `verifier.py` updated; `UnboundLocalError: alpha` fallback also fixed.
-- **smoke/full DB intermingling**: smoke n=5 results blocked full-run n=1319 eval via `--skip_existing`. Fixed: `_already_run()` checks n_prompts (±10% tolerance).
-- **clean_restart wrong path**: with `--storage_root`, state/DB/checkpoints in storage dir but `clean_restart` looked in repo `db/`. Fixed: `--storage_root` arg + `STORAGE_ROOT` env var support.
+- **eval OOM**: was 3 eval slots × 8B = 57 GB. Fixed: `EVAL_VRAM_GB=19` → 2 slots (38 GB).
+- **specInfer DynamicCache TypeError**: `isinstance(pkv, DynamicCache)` failed with class-identity mismatch. Fixed: duck-typing (`hasattr(pkv, 'key_cache')`).
+- **BE batch timeout**: hardcoded 7200s killed a 14h eval at 9%. Fixed: timeout scales as `n_prompts × combos × 5s × 1.3`.
+- **smoke/full DB intermingling**: n=5 results blocked n=1319 eval. Fixed: `_already_run()` checks n_prompts ±10%.
+- **clean_restart wrong path**: Fixed: `--storage_root` arg + `STORAGE_ROOT` env var.
+- **YAML dataset.train not reaching trainer**: 24 hardcoded `gsm8k_train.jsonl` paths ignored YAML override. Fixed: `--dataset` appended to `_train_hargs` (last-value-wins).
 
-**IMPORTANT**: `evaluate.py --hw_tier a100` errors if target model appears quantized — prevents contaminating paper data with NF4 results.
-
-**Decision gate**: after A100 runs, use `analyze_results.py` to generate the paper table.
+**Decision gate**: after Stage 2A, rank losses by `BE/gbv` in W&B. Losses beating baseline BE are candidates for Stage 2B. Use `analyze_results.py` to generate the comparison table.
 
 ---
 
