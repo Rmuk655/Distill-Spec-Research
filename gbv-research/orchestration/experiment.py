@@ -479,13 +479,16 @@ def _load_config_yaml(config_name: str) -> dict:
         # natural matched verifier from _LOSS_LIGHT_VERIFIER automatically.
         if "light_eval_verifier" in experiment_cfg:
             out["light_eval_verifier"] = str(experiment_cfg["light_eval_verifier"])
-        # dataset section — val_dataset is a filename (not a full path) that
-        # is resolved to a full path by _data() in _train_hargs.
-        # Without this, trainer.py falls back to val_split=0.1 (10% of train set
-        # = 672 prompts = 23 min/check on T4).  gsm8k_10.jsonl → ~3 min/check.
+        # dataset section — train / val_dataset overrides.
+        # val_dataset: filename resolved to full path by _data() in _train_hargs.
+        # train: full relative path from repo root (e.g. core/datasets/raw/wikitext_train.jsonl).
+        #   When set, overrides the default gsm8k_train.jsonl in all training steps.
+        #   Used by GPT-2 configs (wikitext) and any future config that needs a different corpus.
         dataset_cfg = data.get("dataset", {})
         if dataset_cfg.get("val_dataset"):
             out["val_dataset"] = dataset_cfg["val_dataset"]
+        if dataset_cfg.get("train"):
+            out["train_dataset"] = dataset_cfg["train"]   # full relative path, resolved in build_steps
         # models.draft / models.target — present only when the YAML sets them.
         # Consumed by main() when the config is a YAML-based profile (not a
         # legacy CONFIGS preset) so we know which model pair to load.
@@ -1238,6 +1241,13 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # Without this, trainer loads and tokenizes all 6726 prompts even for a 10-step run.
         # 20 gives enough variety for shuffle (10 steps × 1 prompt/step = 10 used; 2× margin).
         *( ["--max_train_prompts", "20"] if smoke else _max_train_prompts_arg ),
+        # training dataset override — YAML dataset.train replaces the per-step default
+        # (gsm8k_train.jsonl).  This comes LAST so argparse last-value-wins overrides the
+        # hardcoded _data("gsm8k_train.jsonl") that each step passes before *_train_hargs.
+        # GPT-2 configs set dataset.train: core/datasets/raw/wikitext_train.jsonl.
+        # When not set, the per-step default (gsm8k) is used unchanged.
+        *( ["--dataset", os.path.join(_GBV_RESEARCH, _h["train_dataset"])]
+           if _h.get("train_dataset") else [] ),
     ]
     # Shared args passed to BOTH online adapt commands: lora_r/alpha must match
     # the offline training runs so all models have the same adapter capacity.
