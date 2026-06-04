@@ -934,10 +934,15 @@ _HTML = r"""<!DOCTYPE html>
 
       <!-- Context banner -->
       <div class="alert alert-secondary py-2 px-3 mb-3" style="font-size:12px;border-left:4px solid #6c757d">
-        <strong>What to look for:</strong>
-        One card per distillation method. Solid = train, dashed = val.
-        Train loss should fall steadily; val should track it — if val rises while train falls that's overfitting (red badge).
-        EBE/online loss values are negative (log-prob space) — lower is better. Online curves are shown in the Online Health chart below.
+        <strong>What to look for — flat losses (kl, jsd, l1, ebe…):</strong>
+        Solid = train, dashed = val. Train should fall; val should track it.
+        If val rises while train falls → overfitting (red badge). EBE values are negative — lower is better.
+        <br><strong>Tree losses (*_tree) — different rules:</strong>
+        Train loss is the tree objective (e.g. −E[τ_BV]).
+        <b>Negative train = good</b> — it means acceptance rate is improving on the student's own tree paths.
+        The dashed val line shows forward-KL proxy on teacher sequences — a different metric, not comparable to train.
+        High val + negative train is <em>expected and correct</em> — tree losses are evaluated by block efficiency (eval phase), not val loss.
+        No overfitting alerts fire for tree losses.
       </div>
 
       <!-- Overfitting banner (shown when triggered) -->
@@ -3111,13 +3116,20 @@ async function loadTrainingCurves() {
       });
     }
     if (valRows.length) {
+      // For tree losses: val uses forward-KL proxy (different metric from train).
+      // Label it clearly so users understand the curves are NOT comparable.
+      const valName     = isProxyVal ? 'val (fKL proxy ≠ train)' : 'val';
+      const valHover    = isProxyVal
+        ? 'step %{x}<br>fKL proxy: %{y:.4f}<br><i>Not comparable to tree train loss</i><extra>fKL proxy</extra>'
+        : 'step %{x}<br><b>val loss: %{y:.4f}</b><extra>val</extra>';
       traces.push({
         type: 'scatter', mode: 'lines',
-        name: 'val',
+        name: valName,
         x: valRows.map(r => r.step),
         y: valRows.map(r => r.loss),
-        line: { color: valColor, width: 2.5, dash: 'dash' },
-        hovertemplate: 'step %{x}<br><b>val loss: %{y:.4f}</b><extra>val</extra>',
+        line: { color: valColor, width: isProxyVal ? 1.5 : 2.5, dash: 'dash',
+                opacity: isProxyVal ? 0.5 : 1.0 },
+        hovertemplate: valHover,
       });
     }
 
