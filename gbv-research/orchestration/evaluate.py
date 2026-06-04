@@ -1037,14 +1037,27 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
 
             _tee_thread = threading.Thread(target=_tee, args=(proc.stdout,), daemon=True)
             _tee_thread.start()
+            # Timeout: scale with n_prompts × n_combos so large A100 evals don't
+            # time out mid-run.  At ~5s/prompt on A100:
+            #   n=5,   8 combos → 200s   → floor at 1800s (30 min)
+            #   n=100, 8 combos → 4000s  → 4000s
+            #   n=1319,8 combos → 52760s → 52760s (~14.7h)
+            # Add 30% safety margin.  The timeout is only a kill-switch for truly
+            # hung processes; a healthy run finishes well within this bound.
+            _n_prompts_est = sum(1 for _ in open(data_path)) if os.path.exists(data_path) else 100
+            _n_combos = len(modes) * len(Ks) * len(temps)
+            _be_timeout = max(1800, int(_n_prompts_est * _n_combos * 5 * 1.3))
+            _timeout_h = _be_timeout / 3600
+            print(f"    BE timeout: {_be_timeout}s ({_timeout_h:.1f}h) "
+                  f"for {_n_prompts_est} prompts × {_n_combos} combos")
             _timed_out = False
             try:
-                rc = proc.wait(timeout=7200)
+                rc = proc.wait(timeout=_be_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
                 _timed_out = True
-                print(f"    [TIMEOUT] GBV batch subprocess timed out after 2 hours. "
+                print(f"    [TIMEOUT] GBV batch subprocess timed out after {_timeout_h:.1f}h. "
                       f"Consider reducing --n or --max_tokens.")
                 # Do NOT return here — fall through to parse whatever completed combos
                 # are already in the log.  Combos that finished before the timeout will
