@@ -1375,7 +1375,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         omp_threads=_h.get("omp_threads", 0),
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),
-                        force_rerun=smoke)  # smoke: run even if result already in DB
+                        force_rerun=smoke or args.force_eval)  # smoke/--force_eval: bypass skip_existing
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy
@@ -3442,6 +3442,12 @@ def main():
                         "Always force-reruns every step (ignores state — immune to OneDrive races). "
                         "Time: ~15-25 min on laptop. "
                         "Use --restart to force-clean a non-smoke run.")
+    p.add_argument("--force_eval", action="store_true",
+                   help="Force re-evaluation even when results already exist in DB "
+                        "(bypass --skip_existing).  Use when re-training a specific "
+                        "loss to ADD new comparison rows without deleting old ones. "
+                        "Old rows are preserved; new rows get a new run_tag. "
+                        "Combine with --losses kl to re-eval only one loss.")
     p.add_argument("--no_smoke_first", action="store_true",
                    help="Skip the automatic 2-prompt preflight smoke check that normally "
                         "runs before the first eval step on laptop config.  Use this if "

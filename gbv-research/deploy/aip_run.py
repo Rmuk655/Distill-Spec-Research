@@ -68,6 +68,12 @@ Examples:
                    help="Human-readable tag for this session's eval results "
                         "(default: auto-generated from hostname+timestamp). "
                         "E.g. --experiment_tag rmukundServer")
+    p.add_argument("--force_eval", action="store_true",
+                   help="Force re-evaluation even when results exist in DB. "
+                        "Use when re-training a loss to add NEW comparison rows "
+                        "without deleting old ones. Old rows are preserved; new "
+                        "rows get a different run_tag. Always set --experiment_tag "
+                        "alongside this so you can distinguish runs in W&B/dashboard.")
     return p.parse_args()
 
 
@@ -228,6 +234,8 @@ def main():
         cmd += ["--losses", args.losses]
     if args.experiment_tag:
         cmd += ["--experiment_tag", args.experiment_tag]
+    if args.force_eval:
+        cmd.append("--force_eval")
 
     no_smoke = args.no_smoke or args.resume
     if not no_smoke:
