@@ -563,3 +563,136 @@ python orchestration/experiment.py --config server \
     --lr 4.2e-5 --lora_r 16 \
     --experiment_tag "best_sweep_v1"
 ```
+
+---
+
+## Troubleshooting FAQ
+
+> All issues below were encountered and fixed on AIP/Pluto A100-SXM4-40GB (June 2026).
+
+---
+
+### W&B shows `[wandb] None` in training logs
+
+**Cause**: `WANDB_API_KEY` is not set as an environment variable in subprocess scope. `wandb login` saves to `~/.netrc` but trainer.py subprocesses don't reliably read from there.
+
+**Fix**: Set `WANDB_API_KEY` before running setup — the setup script writes it to `~/.specdist_env` which all subprocesses inherit:
+```bash
+export WANDB_API_KEY="your-key"
+bash deploy/aip_gpu_setup.sh a100_qwen   # re-run setup to persist the key
+```
+Or add it manually to `~/.specdist_env`:
+```bash
+echo "export WANDB_API_KEY='your-key'" >> ~/.specdist_env
+source ~/.specdist_env
+```
+
+---
+
+### Training eval OOM / extremely slow (1000+ s/prompt)
+
+**Symptom**: Eval step shows 0.030 tok/s (CPU speed) instead of 5+ tok/s (GPU). Pipeline OOMs with multiple parallel eval jobs.
+
+**Cause**: Scheduler gave 3 eval slots. Each eval loads 8B teacher (~15.6 GB) + draft (~1.2 GB). 3 × 17 GB = 51 GB > 39.5 GB → models pushed to CPU.
+
+**Fix** (already in codebase): `EVAL_VRAM_GB=20` in `hw_scheduler.py` → 1 eval slot on A100-40GB. Verify:
+```
+[scheduler] Detected: A100-40GB -- 1 train slot(s) / 1 eval slot(s)
+```
+If you see 3 slots, pull latest code.
+
+---
+
+### `FileNotFoundError: gsm8k_train.jsonl`
+
+**Cause**: `aip_gpu_setup.sh` downloads eval sets (30-prompt files) but the training set needed a separate step. The HF `datasets` library API for bare `gsm8k` is broken in newer versions.
+
+**Fix** (already in setup script — download from GitHub):
+```bash
+python -c "
+import urllib.request, json, os
+url = 'https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl'
+path = 'core/datasets/raw/gsm8k_train.jsonl'
+os.makedirs(os.path.dirname(path), exist_ok=True)
+prompts = []
+with urllib.request.urlopen(url) as r:
+    for line in r:
+        item = json.loads(line)
+        prompts.append(json.dumps({'prompt': item['question']}) + '\n')
+with open(path, 'w') as f:
+    f.writelines(prompts)
+print(f'Saved {len(prompts)} prompts')
+"
+```
+
+---
+
+### `[alpha] specInfer incompatible — DynamicCache not subscriptable`
+
+**Cause**: The bundled specInfer was written for the old transformers tuple-cache API. transformers ≥4.46 uses `DynamicCache` which does not support `cache[i]` subscripting.
+
+**Fix** (already in codebase): `proposer.py` and `verifier.py` updated to use `cache.key_cache[i]` for `DynamicCache`. Also fixed: the fallback `UnboundLocalError: alpha` when specInfer throws.
+
+**Result**: specInfer now works natively on transformers 5.x. If you see the DynamicCache error, pull latest code.
+
+---
+
+### `[ERROR] cannot access local variable 'alpha'`
+
+**Cause**: When specInfer fails, the exception handler set `_SPECINFER_AVAILABLE = False` (module global) but NOT `_use_specinfer = False` (local variable). The inline fallback block `if not _use_specinfer:` was then skipped, leaving `alpha` unassigned.
+
+**Fix** (already in codebase): Added `_use_specinfer = False` inside the except block. Pull latest code.
+
+---
+
+### `clean_restart` says "no state file / no results / no checkpoints found"
+
+**Cause**: When running with `--storage_root` (or `STORAGE_ROOT` env var), all outputs go to that directory. `clean_restart` was looking only in the repo's `db/` directory.
+
+**Fix** (already in codebase): `clean_restart` now reads `STORAGE_ROOT` env var and accepts `--storage_root` arg. Always `source ~/.specdist_env` before running clean_restart so `STORAGE_ROOT` is set.
+
+---
+
+### `EVAL FAILED — smoke and full run results intermingled`
+
+**Symptom**: Full-run baseline eval shows `SKIP (already in DB)` immediately after smoke ran, even though smoke used n=5 and full run needs n=1319.
+
+**Cause**: `_already_run()` only checked `draft_label + dataset + mode + K + temperature`, not `n_prompts`. A smoke result (n=5) matched and blocked the full run.
+
+**Fix** (already in codebase): `_already_run()` now includes `n_prompts` with ±10% tolerance. Pull latest code.
+
+---
+
+### Dashboard not accessible from browser
+
+**For AIP/Pluto platform**: Replace the port in your current VS Code URL:
+- Current: `pluto-prod-rkrishna-rama100gpu-1-0:20000.jobs.colligo.dev`
+- Dashboard: `pluto-prod-rkrishna-rama100gpu-1-0:5000.jobs.colligo.dev`
+
+Run the dashboard with `--host 0.0.0.0` and the correct database:
+```bash
+python dashboard/training_dashboard.py \
+  --root /home/colligo/specdist \
+  --host 0.0.0.0 \
+  --port 5000
+```
+
+**For SSH access** (from your laptop):
+```bash
+ssh -L 5000:localhost:5000 user@server-hostname
+# Then open: http://localhost:5000
+```
+
+**Always use `--root`** to point at the storage directory — without it the dashboard reads the empty local `db/results.db`.
+
+---
+
+### Pipeline ran overnight but no results in W&B
+
+**Check results.db first** — data is always saved locally even if W&B fails:
+```bash
+sqlite3 /home/colligo/specdist/results.db \
+  "SELECT draft_label, mode, block_eff FROM runs ORDER BY ts DESC LIMIT 10;"
+```
+
+**Then check W&B** — filter by Group = `a100-qwen`, Tag = `KrishnanRIITHServer`. If 0 runs: W&B auth failed in subprocesses (see "W&B shows None" above).
