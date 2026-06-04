@@ -193,7 +193,9 @@ def parse_args() -> argparse.Namespace:
                         "should match inference L and EBE DEFAULT_BLOCK_LEN).")
     p.add_argument("--steps",  type=int, default=1000,
                    help="Total training steps.")
-    p.add_argument("--lr",     type=float, default=3e-5)
+    p.add_argument("--lr",     type=float, default=3e-5,
+                   help="Adam learning rate (default 3e-5). For bv_tree/gbv_tree use ~1e-5 "
+                        "— BV block-acceptance gradients are amplified vs kl_tree.")
     p.add_argument("--warmup_steps", type=int, default=None,
                    help="Linear warmup steps (DistillSpec/EAGLE convention). "
                         "Default: 10%% of --steps.  Set 0 to disable.")

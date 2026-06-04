@@ -800,6 +800,12 @@ BV acceptance at a node = `min(1, p/q)` integrated over the token distribution.
 Maximising this integral (minimising its negative) trains the student to increase the
 probability that BV accepts the tokens it proposes.
 
+**Learning rate:** The `h_i` block-acceptance denominator amplifies gradients relative to
+`kl_tree` (stability clamps in `tree_losses.py` bound the worst cases, but a lower step
+size still helps). Keep YAML `lr: 3e-5` for mixed sweeps; for dedicated `bv_tree` runs use
+`--lr 1e-5`, e.g.
+`python orchestration/experiment.py --config a100_qwen --losses bv_tree --lr 1e-5`.
+
 Evaluated primarily against: **bv**.  Also evaluated against gbv/traversal in full runs.
 
 ---
@@ -812,6 +818,9 @@ cumulative acceptance probability.  `gbv_tree` targets the resulting acceptance 
 **Numerical stability note**: `gbv_tree` is stable only for `tree_K ≤ 4`.  At K=5+, the
 q-skew term in `compute_skew` can underflow.  Always set `tree_K: 4` in YAML configs when
 using `gbv_tree`.
+
+**Learning rate:** Same gradient amplification as `bv_tree` — use `--lr 1e-5` for dedicated
+`gbv_tree` training (see `bv_tree` above).
 
 Evaluated primarily against: **gbv**.
 

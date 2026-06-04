@@ -3533,6 +3533,7 @@ def main():
     p.add_argument("--lr", type=float, default=None,
                    help="Learning rate for all training runs (overrides YAML config). "
                         "Default from YAML: laptop=3e-5, server=3e-5. "
+                        "bv_tree/gbv_tree: prefer 1e-5 (BV integral amplifies gradients). "
                         "W&B sweep: set via sweep agent, not this flag directly.")
     p.add_argument("--lora_r", type=int, default=None,
                    help="LoRA rank for all training runs (overrides YAML config). "

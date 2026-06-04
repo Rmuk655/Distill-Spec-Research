@@ -34,10 +34,12 @@ Loss functions
 
   bv_tree         Differentiable surrogate for E[τ_BV], averaged over K paths.
                   Gradient flows through q[token] (chain weight) and q[:]
-                  (block acceptance integral) at each node.
+                  (block acceptance integral) at each node.  Training: use lr ~1e-5
+                  (integral amplifies grads; see a100_qwen.yaml lr comment).
 
   gbv_tree        GBV path selection (no-grad argmax, straight-through),
                   then BV loss on the selected path with q_skew substituted.
+                  Same lr guidance as bv_tree (~1e-5).
 
   traversal_tree  Surrogate for E[τ_traversal]: maximise mean leaf weight
                   w_leaf = Π_ancestors min(1, p[t]/q[t]).

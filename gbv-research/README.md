@@ -44,6 +44,8 @@ python orchestration/experiment.py --config profiles/train_one_loss --yes \
   --losses forward_kl --skip_existing --experiment_tag p1_forward_kl
 ```
 
+**Tree losses `bv_tree` / `gbv_tree`:** default YAML `lr` (3e-5) is tuned for KL-style losses; the BV block-acceptance integral amplifies gradients — use `--lr 1e-5` when training these two (see `deploy/A100_SETUP.md` or `docs/GUIDE.md` § `bv_tree`).
+
 ---
 
 ## Repository layout

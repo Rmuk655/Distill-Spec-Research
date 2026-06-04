@@ -109,8 +109,19 @@ Other losses:
 ```bash
 python deploy/aip_run.py --config a100_qwen --losses kl --train_only --no_smoke
 python deploy/aip_run.py --config a100_qwen --losses naive_tree --train_only --no_smoke
-python deploy/aip_run.py --config a100_qwen --losses bv_tree --train_only --no_smoke
+python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
 ```
+
+### `bv_tree` / `gbv_tree` — use a lower learning rate
+
+The BV block-acceptance integral amplifies gradients compared with `kl_tree` or flat KL (see `algorithms/distillspec_gbv/losses/tree_losses.py`). YAML still uses `lr: 3e-5` for the full sweep; for these two losses override on the CLI:
+
+```bash
+python orchestration/experiment.py --config a100_qwen \
+  --losses bv_tree --lr 1e-5 --train_only --yes --storage_root ~/ram/specdist
+```
+
+Same pattern for `gbv_tree`. `deploy/aip_run.py` does not pass `--lr` through — call `experiment.py` as above (or add `--lr` to your own wrapper).
 
 **Timing (approx.):** ~15–20 min per loss for 2000 steps on A100; full 17-loss sweep is multi-hour — run one loss per session if needed.
 
