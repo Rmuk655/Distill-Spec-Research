@@ -62,10 +62,12 @@ health:
   nan_action: stop              # A100 sessions are stable; stop on NaN rather than skipping
   early_stop_patience: 5
   ppl_threshold: 1.25
-  # val_every=200 for exploration: 10 checks over 2000 steps (not 20).
-  # Val cost = 30 prompts × 1.5s = 45s/check → 7.5 min total, vs 27 min tree training.
-  # For paper confirmation, override in a100_qwen.yaml: val_every: 100
-  val_every: 200
+  # val_every=50: 40 checks over 2000 steps → smooth trend curves (40 points).
+  # Val cost = 30 prompts × 1.5s = 45s/check → 40 × 45s = 30 min total.
+  # vs flat training: 7 min (val dominates — acceptable for trend visibility)
+  # vs tree training: 27 min (60 min total — fine)
+  # Do NOT increase to 200: only 10 points, curves look like connect-the-dots.
+  val_every: 50
 
 evaluation:
   # Full 9-verifier matrix for the loss-verifier alignment result (paper main result).
