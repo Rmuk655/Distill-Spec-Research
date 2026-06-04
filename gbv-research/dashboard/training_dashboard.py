@@ -3075,10 +3075,19 @@ async function loadTrainingCurves() {
     const labelMaxTsMs = Math.max(...rows.map(r => new Date(r.ts).getTime()));
     const isCurrentRun  = labelMaxTsMs >= globalMaxTsMs - 2000;
     let overfit = false;
-    if (!isProxyVal && valRows.length >= 2 && isCurrentRun) {
+    // Overfitting fires only when BOTH conditions hold simultaneously:
+    //   1. lastVal > minVal × 1.15  (val hasn't recovered to near its best)
+    //   2. val is currently RISING  (last point > previous point)
+    // This means the alert clears automatically the moment val starts coming
+    // back down — a temporary spike followed by recovery is NOT flagged.
+    // Requires ≥3 val checkpoints to avoid noise with tiny val sets (n=5).
+    if (!isProxyVal && valRows.length >= 3 && isCurrentRun) {
       const minVal  = Math.min(...valRows.map(r => r.loss));
       const lastVal = valRows[valRows.length - 1].loss;
-      if (lastVal > minVal + 0.10 * Math.abs(minVal)) {
+      const prevVal = valRows[valRows.length - 2].loss;
+      const aboveMin     = lastVal > minVal * 1.15;   // not recovered to best
+      const risingNow    = lastVal > prevVal;          // val is currently going up
+      if (aboveMin && risingNow) {
         redFlagLabels.push(label);
         overfit = true;
       }
@@ -3175,7 +3184,7 @@ async function loadTrainingCurves() {
   const banner = document.getElementById('val-redflag-banner');
   if (banner) {
     if (redFlagLabels.length) {
-      banner.textContent = `⚠ Overfitting detected: val loss rising for [${redFlagLabels.join(', ')}]. Consider stopping early.`;
+      banner.textContent = `⚠ Val loss rising (not yet recovered): [${redFlagLabels.join(', ')}]. Clears automatically when val turns back down.`;
       banner.style.display = 'block';
     } else {
       banner.style.display = 'none';
