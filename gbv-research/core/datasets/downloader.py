@@ -600,12 +600,50 @@ def fetch_alpaca_train(n=None, force=False):
     return path
 
 
+def fetch_wikitext_train(force=False):
+    """Download WikiText-2 for GPT-2 family distillation.
+
+    WikiText-2 is in-distribution for distilgpt2 and gpt2-medium (both trained on
+    WebText / curated web text).  GSM8K math is OOD for GPT-2 → noisy distillation.
+    This dataset produces clean convergence for all losses on the GPT-2 family.
+    """
+    train_path = os.path.join(DATA_DIR, "wikitext_train.jsonl")
+    eval10_path = os.path.join(DATA_DIR, "wikitext_10.jsonl")
+    eval5_path  = os.path.join(DATA_DIR, "wikitext_5.jsonl")
+    if os.path.exists(train_path) and not force:
+        n = sum(1 for _ in open(train_path))
+        print(f"  wikitext_train.jsonl already exists ({n} prompts), skipping.")
+        return train_path
+    print("Fetching WikiText-2 (wikitext-2-raw-v1, train split)...")
+    try:
+        from datasets import load_dataset
+        ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+        prompts = []
+        for item in ds:
+            text = item["text"].strip()
+            if not text or text.startswith("="):
+                continue
+            words = text.split()
+            if 20 <= len(words) <= 300:
+                prompts.append({"prompt": text})
+        print(f"  {len(prompts)} paragraphs (filtered from {len(ds)} raw entries)")
+        save_jsonl(train_path, prompts)
+        val = random.sample(prompts, min(10, len(prompts)))
+        save_jsonl(eval10_path, val)
+        save_jsonl(eval5_path, val[:5])
+        return train_path
+    except Exception as e:
+        print(f"  [warning] WikiText download failed: {e}")
+        print("  Run: python core/datasets/download_wikitext.py")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 ALL_DATASETS = ["diverse50", "gsm8k", "humaneval", "math500", "mtbench", "alpaca"]
-TRAIN_DATASETS = ["gsm8k_train", "math_train", "alpaca_train"]
+TRAIN_DATASETS = ["gsm8k_train", "math_train", "alpaca_train", "wikitext_train"]
 
 def fetch_all(n=30, force=False, datasets=None, train=False):
     if datasets is None:
@@ -630,6 +668,9 @@ def fetch_all(n=30, force=False, datasets=None, train=False):
         paths["math_train"] = fetch_math_train(force=force)
     if train or "alpaca_train" in datasets:
         paths["alpaca_train"] = fetch_alpaca_train(force=force)
+    if train or "wikitext_train" in datasets:
+        # Always download WikiText for GPT-2 family convergence verification
+        paths["wikitext_train"] = fetch_wikitext_train(force=force)
     print("\nDone.")
     return paths
 

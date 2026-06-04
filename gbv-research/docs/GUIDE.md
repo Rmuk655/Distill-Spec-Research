@@ -1,9 +1,13 @@
 # SpecDist Experiment — Research Guide
 
-**System**: Qwen2.5-0.5B draft → Qwen3-0.6B target (laptop smoke) | Qwen3-0.6B → Qwen3-8B (T4/A100)  
-**Goal**: Train the draft model with a novel block-level EBE loss so it gets accepted more often by the target, speeding up generation without changing what the target produces.
+**Primary result**: Qwen3-0.6B → Qwen3-8B (A100, GSM8K) — main paper result.  
+**Cross-family result**: LLaMA-3.2-1B → LLaMA-3.2-3B (A100, GSM8K) — proves algorithm is family-agnostic.  
+**Laptop smoke**: Qwen toy pair (crash-check) + LLaMA 1B→3B NF4 (directional trends).  
+**CPU only**: GPT-2 (distilgpt2→gpt2-medium) — kept for WikiText-2 convergence verification; not a paper result.
 
-> **Doc status — June 2026**: updated for multi-family configs, `max_train_prompts` epoch-based training budget, A10 as Stage 1.5 exploration tier, BF16 vs NF4 convergence clarification, IITH A100 pricing, Modal credit change, W&B loss curve interpretation.
+**Goal**: Train the draft model with novel tree-aligned loss functions so it gets accepted more often by the target verifier (GBV, BV, traversal, etc.), speeding up generation without changing what the target produces.
+
+> **Doc status — June 2026**: updated for LLaMA cross-family paper result, GPT-2 demoted to CPU-only convergence check, multi-family configs, `max_train_prompts` epoch-based training budget, A10 as Stage 1.5 exploration tier, BF16 vs NF4 convergence clarification, IITH A100 pricing, Modal credit change, W&B loss curve interpretation.
 
 ---
 
@@ -28,6 +32,33 @@
 11. [Quick Interpretation Cheatsheet](#11-quick-interpretation-cheatsheet)
 12. [KL Divergence Comparison](#12-kl-divergence-comparison)
 13. [Online Speculative Decoding (OSD)](#13-online-speculative-decoding-osd)
+
+---
+
+## Model Family Strategy
+
+With A100 access, the model family choices are settled. Reference this table before choosing a config.
+
+| Family | Pair | Dataset | Hardware | Role | Paper result? |
+|--------|------|---------|----------|------|---------------|
+| **Qwen3** | Qwen3-0.6B → Qwen3-8B | GSM8K (7473 train, 1319 test) | A100 40GB BF16 | **Primary paper result** | ✅ Yes |
+| **LLaMA 3.2** | Llama-3.2-1B → Llama-3.2-3B | GSM8K (same benchmark) | A100 40GB BF16 | **Cross-family paper result** | ✅ Yes |
+| **LLaMA 3.2** | Llama-3.2-1B → Llama-3.2-3B NF4 | GSM8K | Laptop 6GB | Directional trends (3× gap, instruction-tuned) | Directional only |
+| **GPT-2** | distilgpt2 → gpt2-medium | WikiText-2 (in-distribution) | CPU server | Convergence verification only | ❌ No |
+| **Qwen3** | Qwen2.5-0.5B → Qwen3-0.6B | — | Laptop | Code crash-check only | ❌ No |
+
+**Why LLaMA and not GPT-2 for cross-family?**
+
+| Criterion | GPT-2 (distilgpt2 → gpt2-medium) | LLaMA 3.2 (1B → 3B) |
+|-----------|-----------------------------------|----------------------|
+| Year | 2019 | 2024 |
+| Instruction-tuned | ❌ No | ✅ Yes |
+| Same benchmark (GSM8K) | ❌ OOD — needs WikiText-2 | ✅ In-distribution |
+| Reviewer credibility | Low (legacy) | High (current SOTA family) |
+| Architecture difference from Qwen | Minimal impact | Strong: GQA, SwiGLU, RoPE, different tokenizer |
+| Purpose with A100 access | CPU-only backup (obsolete) | Cross-family paper result |
+
+**Bottom line**: Now that A100 is available, GPT-2 is retired as a paper family. Run `laptop_llama` for laptop convergence checks, `a100_llama` for the cross-family paper numbers. GPT-2 configs remain for anyone wanting WikiText-2 CPU convergence verification.
 
 ---
 
@@ -163,23 +194,29 @@ python orchestration/experiment.py --config a10_qwen --yes \
 4. **Modal.com** — ⚠️ only **$1 free credit** (was $30). Single targeted ablation only.
 5. **RunPod** — spot A100 at ~$1.5-2/hr; requires manual setup.
 
-**Config**: `a100_qwen`.  
-**Models**: Qwen3-0.6B draft → Qwen3-8B target, full BF16 (no quantization).  
+**Two A100 configs — run both for the paper:**
+
+| Config | Models | Role |
+|--------|--------|------|
+| `a100_qwen` | Qwen3-0.6B → Qwen3-8B BF16 | **Primary result** — main paper table |
+| `a100_llama` | LLaMA-3.2-1B → LLaMA-3.2-3B BF16 | **Cross-family result** — proves algorithm is family-agnostic |
+
 **hw_tier tag in results.db**: `a100`
 
-**Purpose**: Paper-quality numbers. These go in the paper.
+**Purpose**: Paper-quality numbers. Both configs use full BF16 (no quantization), full GSM8K eval (n=1319), same benchmark for direct comparison.
 
-| Parameter | Value |
-|---|---|
-| Train steps | 2000 (sequential — 1 job at a time, ~15 min/loss on A100-40GB) |
-| max_train_prompts | none (full 7473 prompts — diversity matters for paper) |
-| Phase 3 eval (GSM8K) | **n=1319** (full test set — auto-downloaded) |
-| Phase 4 eval (secondary) | **n=100** per domain |
-| Losses | all 17 (sequential on single GPU) |
-| Verifiers | alpha, bv, gbv, traversal, specinfer, naive |
-| K | 3 |
-| Temperature | 1.0 |
-| Time estimate | ~15 min/loss × 17 losses ≈ **4-5 hours total** |
+| Parameter | a100_qwen | a100_llama |
+|---|---|---|
+| Train steps | 2000 | 2000 |
+| max_train_prompts | none (7473 prompts) | none (7473 prompts) |
+| Phase 3 eval (GSM8K) | **n=1319** | **n=1319** |
+| Phase 4 eval (secondary) | **n=100** per domain | **n=100** per domain |
+| LoRA rank | r=8 | r=8 |
+| Temperature | 1.0 | 1.0 |
+| Time estimate | ~4-5 hr (17 losses) | ~3-4 hr (15 losses, 3B is faster) |
+
+> **LLaMA access**: HuggingFace gated model. Accept the licence at  
+> `https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct` then `huggingface-cli login`.
 
 **One-time setup** — set `WANDB_API_KEY` first, then run the setup script:
 ```bash
@@ -205,14 +242,19 @@ The setup script handles everything (verified end-to-end on AIP/Pluto A100):
 source ~/.specdist_env   # if new terminal
 cd ~/ram/Distill-Spec-Research/gbv-research
 
-# First run: smoke test automatically runs first, then full pipeline
+# Primary Qwen result (run this first):
 python deploy/aip_run.py --config a100_qwen
+
+# Cross-family LLaMA result (run after Qwen or in parallel on a second A100):
+python deploy/aip_run.py --config a100_llama
 
 # Resume after interruption (skips smoke, retries failed steps):
 python deploy/aip_run.py --config a100_qwen --resume
+python deploy/aip_run.py --config a100_llama --resume
 
 # One loss at a time:
 python deploy/aip_run.py --config a100_qwen --losses kl --no_smoke
+python deploy/aip_run.py --config a100_llama --losses kl --no_smoke
 ```
 
 **Monitor progress:**

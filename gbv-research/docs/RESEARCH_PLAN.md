@@ -6,8 +6,9 @@ This plan is grounded in an audit of the actual codebase (May/June 2026). Every 
 verifier, metric, dataset, and config name below is taken from source — file
 paths are cited inline so claims are checkable. Hypothetical names are avoided.
 
-> **Doc status — June 2026**: Updated for multi-family configs, `max_train_prompts` epoch-based
-> training budget per tier, A10 24 GB as Stage 1.5 exploration (free, BF16 8B teacher),
+> **Doc status — June 2026**: Updated for LLaMA-3.2 as cross-family A100 paper result (a100_llama),
+> GPT-2 demoted to CPU-only WikiText-2 convergence check, multi-family configs, `max_train_prompts`
+> epoch-based training budget per tier, A10 24 GB as Stage 1.5 exploration (free, BF16 8B teacher),
 > BF16 vs NF4 equivalence note, IITH A100 pricing (₹80/GPU-hr), Modal credit ($1 only).
 
 ---
@@ -100,8 +101,9 @@ verify_latency_ms, notes, experiment_tag, hw_tier, seed, git_sha, wandb_url`.
 | `math500` | configurable `n` | competition math, generalization |
 | `alpaca` | configurable `n` | instruction following, generalization |
 | `diverse50` | 50 | mixed smoke set |
-| `gsm8k_train` | 7,473 (6,726 train / 747 val @ 10% split) | training |
+| `gsm8k_train` | 7,473 (6,726 train / 747 val @ 10% split) | training — Qwen3 and LLaMA 3.2 (instruction-tuned, in-distribution) |
 | `alpaca_train` | 52,002 | training |
+| `wikitext_train` | ~2,000 paragraphs (WikiText-2 filtered) | training — GPT-2 family only (WebText in-distribution; GSM8K is OOD for base GPT-2) |
 
 ### 0.5 Hardware tiers and run commands
 
@@ -112,13 +114,14 @@ verify_latency_ms, notes, experiment_tag, hw_tier, seed, git_sha, wandb_url`.
 | hw_tier | Config | Hardware | Teacher | Research-valid? | max_train_prompts | Purpose |
 |---|---|---|---|---|---|---|
 | `laptop` | `laptop_qwen` | RTX 500 Ada 4 GB | Qwen3-0.6B | **No** — teacher ≈ draft | 50 (2 epochs) | Crash-check: every code path runs without OOM |
-| `laptop` | `laptop_gpt2` | RTX 500 Ada 4 GB (CUDA) | GPT-2-M 355M | **Limited** — 4.3× gap | 100 (5 epochs) | Convergence check on GPU with real distillation signal |
-| `laptop` | `laptop_llama` | RTX 500 Ada 4 GB (CUDA) | LLaMA-3B NF4 | **✓ Directional** — 3× gap | 100 (5 epochs) | Research-relevant family; results generalize beyond Qwen |
-| `cpu` | `server_gpt2` | 128 GB RAM, CPU-only | GPT-2-M 355M | **No** — too small, CPU | 200 (5 epochs) | T4-alternative: proves convergence without GPU credits |
+| `laptop` | `laptop_gpt2` | RTX 500 Ada 4 GB (CUDA) | GPT-2-M 355M | **No** — OOD on GSM8K; CPU backup only | 100 (5 epochs) | WikiText-2 convergence check; not a paper family |
+| `laptop` | `laptop_llama` | RTX 500 Ada 4 GB (CUDA) | LLaMA-3B NF4 | **✓ Directional** — 3× gap, instruction-tuned | 100 (5 epochs) | Cross-family laptop smoke; same family as A100 paper result |
+| `cpu` | `server_gpt2` | 128 GB RAM, CPU-only | GPT-2-M 355M | **No** — too small, CPU, WikiText-2 only | 200 (5 epochs) | Convergence verification without GPU; not a paper result |
 | `colab` | `colab` | Colab T4 15 GB | Qwen3-4B BF16 | **✓ Yes** | 250 (2 epochs) | Exploration: rank losses, tune LR |
 | `colab` | `kaggle` | Kaggle T4 x2 (29 GB RAM) | Qwen3-8B NF4 | **✓ Yes** | 500 (2 epochs) | Exploration: 8B teacher = same signal quality as A100 |
 | `a100` | `a10_qwen` | A10 24 GB (free access) | Qwen3-8B **BF16** | **✓ Yes** | 1000 (2 epochs) | Stage 1.5: stronger convergence; 8B BF16 no quantization |
-| `a100` | `a100_qwen` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes** | none (0.27 epochs) | Publication confirmation only; full data diversity |
+| `a100` | `a100_qwen` | A100 40/80 GB | Qwen3-8B BF16 | **✓ Yes — PRIMARY** | none (full 7473) | **Primary paper result**: main table numbers |
+| `a100` | `a100_llama` | A100 40/80 GB | LLaMA-3.2-3B BF16 | **✓ Yes — CROSS-FAMILY** | none (full 7473) | **Cross-family paper result**: proves algorithm is family-agnostic |
 
 **Training budget formula (applies to all tiers):**
 ```
