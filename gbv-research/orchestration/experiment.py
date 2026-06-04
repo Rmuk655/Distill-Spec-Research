@@ -3768,6 +3768,10 @@ def main():
         "warmup_steps":         _yaml_cfg.get("warmup_steps", None),
         # omp_threads: PyTorch CPU thread count for server_gpt2 runs.
         "omp_threads":          _yaml_cfg.get("omp_threads", 0),
+        # train_dataset: YAML dataset.train override (e.g. wikitext for GPT-2 configs).
+        # Without this line _yaml_cfg_to_hparams extracts it but it never reaches
+        # _train_hargs in build_steps(), so all configs silently fall back to gsm8k.
+        "train_dataset":        _yaml_cfg.get("train_dataset", ""),
     }
     # Wire YAML `evaluation:` block (modes / K_values / temperatures / n_prompts /
     # n_prompts_gsm8k / max_tokens) for ALL configs — profiles AND top-level YAMLs.
