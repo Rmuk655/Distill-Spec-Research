@@ -122,9 +122,32 @@ CREATE TABLE IF NOT EXISTS train_curves (
     lora_rank   INTEGER,
     step        INTEGER NOT NULL,
     loss        REAL    NOT NULL,
-    accept_weight REAL,             -- EBE-specific
+    accept_weight REAL,             -- EBE-specific training proxy (NOT the same as SD alpha)
     split       TEXT    NOT NULL DEFAULT 'train'   -- 'train' | 'val'
 );
+
+-- checkpoint_evals: paper-quality convergence curves.
+-- One row per (loss, milestone_step, verifier_mode).
+-- Populated by the checkpoint sweep pipeline phase that runs evaluate.py on
+-- each milestone checkpoint (saved every milestone_every=500 grad-steps) at
+-- n=20 prompts — lightweight enough to run in ~5 min per checkpoint.
+-- Enables plots of alpha / BE / task_score vs training step for the paper.
+CREATE TABLE IF NOT EXISTS checkpoint_evals (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    label           TEXT    NOT NULL,   -- loss label, e.g. 'kl-gsm8k-q0.6b-q8b'
+    loss_name       TEXT    NOT NULL,   -- 'kl' | 'gbv_tree' | ...
+    train_step      INTEGER NOT NULL,   -- grad-steps completed at checkpoint
+    mode            TEXT    NOT NULL,   -- 'alpha' | 'bv' | 'gbv' | 'traversal'
+    n_prompts       INTEGER NOT NULL,
+    alpha_mean      REAL,               -- SD acceptance rate (NULL for BE modes)
+    alpha_ci95      REAL,               -- 1.96*std/sqrt(n)
+    block_eff       REAL,               -- block efficiency (NULL for alpha mode)
+    task_score      REAL,               -- GSM8K accuracy (NULL if not measured)
+    experiment_tag  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ckpt_label ON checkpoint_evals(label, train_step);
 """
 
 
@@ -328,6 +351,58 @@ def distinct_model_pairs() -> list:
          "label": f"{_short(r[0])} draft → {_short(r[1])} teacher"}
         for r in rows if r[0] is not None and r[1] is not None
     ]
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint convergence curves (alpha / BE / task_score vs step)
+# ---------------------------------------------------------------------------
+
+def insert_checkpoint_eval(label: str, loss_name: str, train_step: int,
+                           mode: str, n_prompts: int,
+                           alpha_mean: float = None, alpha_ci95: float = None,
+                           block_eff: float = None, task_score: float = None,
+                           experiment_tag: str = None):
+    """Store one lightweight checkpoint eval result.
+
+    Called by the checkpoint-sweep pipeline phase (evaluate.py on milestone
+    checkpoints at n=20 prompts) to build alpha/BE/task_score vs step curves.
+
+    label      : run label, e.g. 'kl-gsm8k-q0.6b-q8b'
+    loss_name  : 'kl' | 'gbv_tree' | ... (for grouping in dashboard)
+    train_step : number of grad-steps completed when the checkpoint was saved
+    mode       : 'alpha' | 'bv' | 'gbv' | 'traversal'
+    """
+    conn = _connect()
+    conn.execute(
+        """INSERT INTO checkpoint_evals
+           (label, loss_name, train_step, mode, n_prompts,
+            alpha_mean, alpha_ci95, block_eff, task_score, experiment_tag)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (label, loss_name, train_step, mode, n_prompts,
+         alpha_mean, alpha_ci95, block_eff, task_score, experiment_tag),
+    )
+    conn.commit()
+    conn.close()
+
+
+def query_checkpoint_evals(label: str = None, loss_name: str = None,
+                            mode: str = None) -> list:
+    """Return checkpoint eval rows as dicts, sorted by label then train_step."""
+    conn = _connect()
+    clauses, params = [], []
+    if label:
+        clauses.append("label=?"); params.append(label)
+    if loss_name:
+        clauses.append("loss_name=?"); params.append(loss_name)
+    if mode:
+        clauses.append("mode=?"); params.append(mode)
+    sql = "SELECT * FROM checkpoint_evals"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY label, train_step"
+    rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    conn.close()
+    return rows
 
 
 # ---------------------------------------------------------------------------
