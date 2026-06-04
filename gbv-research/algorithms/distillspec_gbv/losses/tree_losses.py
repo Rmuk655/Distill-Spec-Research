@@ -259,8 +259,11 @@ def bv_tree_loss(
 
         # ── Chain weight: w_i = w_{i-1} * min(1, p[t] / q[t]) ───────────────
         # Gradient flows through q[token] (the denominator).
-        # We clamp to [1e-9, 1] for numerical safety.
-        alpha = torch.clamp(p[token] / q[token].clamp(min=1e-9), max=1.0)
+        # Clamp alpha to [1e-6, 1-1e-6]: lower bound prevents w from collapsing
+        # to 0 in one step; upper bound keeps 1-w > 0 strictly so the h_i
+        # denominator is never zero even before the explicit clamp below.
+        alpha = torch.clamp(p[token] / q[token].clamp(min=1e-9),
+                            min=1e-6, max=1.0 - 1e-6)
         w = w * alpha
 
         # ── Block acceptance h_i ──────────────────────────────────────────────
@@ -268,12 +271,21 @@ def bv_tree_loss(
             # h_i = relu(w * p - q).sum() / (relu(w * p - q).sum() + 1 - w)
             # Detach w to avoid a second-order path through the chain weight;
             # the primary gradient already entered via q[token] above.
+            #
+            # STABILITY FIX: when w ≈ 1 (high-quality draft early in training),
+            # c = 1 - w → 0, making the denominator ≈ eps = 1e-10.  This causes
+            # |∂h/∂q[v]| = c / (c+eps)² ≈ 1/c → ∞.  Clamping c to min=0.05
+            # bounds |∂h/∂num| ≤ 1/0.05 = 20 per node, keeping grad norms in the
+            # hundreds rather than the hundreds-of-thousands.
             residual = F.relu(w.detach() * p - q)              # [V]
             num = residual.sum()
-            h   = num / (num + 1.0 - w.detach() + 1e-10)
+            c   = (1.0 - w.detach()).clamp(min=0.05)           # stability floor
+            h   = (num / (num + c)).clamp(max=1.0 - 1e-6)     # h ∈ [0, 1)
         else:
-            # Leaf: block acceptance = weight itself
-            h = w
+            # Leaf: block acceptance = weight itself.
+            # Clamp to [0, 1-1e-6] so survival can never go negative due to
+            # bfloat16 → float32 rounding that might push h infinitesimally > 1.
+            h = w.clamp(max=1.0 - 1e-6)
 
         h_list.append(h)
 
