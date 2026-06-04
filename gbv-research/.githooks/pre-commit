@@ -1,0 +1,85 @@
+#!/bin/sh
+# SpecDist pre-commit hook — runs fast unit tests before every commit.
+#
+# Covers the two highest-value test files:
+#   test_yaml_propagation : YAML → train_hparams → trainer cmd chain (48 tests, ~0.2s)
+#                           Catches the silent "key added to YAML but never reaches trainer"
+#                           bug class that has bitten us 3 times (max_train_prompts,
+#                           train_dataset, and would catch any future key).
+#   test_losses           : Loss function correctness on tiny CPU tensors (~1-2s)
+#                           Catches NaN/Inf guards, gradient direction, numerical stability.
+#
+# Full suite (230 tests, ~90s) — run before PR or after large refactors:
+#   python -m pytest tests/unit/ -x -q
+#
+# One-time setup (run once per checkout):
+#   git config core.hooksPath gbv-research/.githooks
+#
+# Skip for a WIP/urgent commit:
+#   git commit --no-verify -m "message"
+
+set -e
+
+# ── Locate gbv-research dir ───────────────────────────────────────────────────
+# Git runs hooks with cwd = git root (parent of gbv-research).
+# This script lives at gbv-research/.githooks/pre-commit, so:
+#   $(dirname $0)/..  ==  gbv-research/
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+GBV_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$GBV_DIR"
+
+# ── Find Python ───────────────────────────────────────────────────────────────
+# Priority: active venv > server venv > system python3 > python
+PYTHON=""
+
+# 1. Already-activated venv (VIRTUAL_ENV set by `source venv/bin/activate`)
+if [ -n "$VIRTUAL_ENV" ] && [ -f "$VIRTUAL_ENV/bin/python" ]; then
+    PYTHON="$VIRTUAL_ENV/bin/python"
+fi
+
+# 2. AIP/Pluto server venv
+if [ -z "$PYTHON" ] && [ -f "/home/colligo/specdist/venv/bin/python" ]; then
+    PYTHON="/home/colligo/specdist/venv/bin/python"
+fi
+
+# 3. System python3 / python
+if [ -z "$PYTHON" ]; then
+    for candidate in python3 python; do
+        if command -v "$candidate" > /dev/null 2>&1; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PYTHON" ]; then
+    echo "[pre-commit] Python not found — skipping tests (install Python or activate venv)."
+    exit 0
+fi
+
+# ── Check pytest is available ─────────────────────────────────────────────────
+if ! "$PYTHON" -m pytest --version > /dev/null 2>&1; then
+    echo "[pre-commit] pytest not found — skipping tests."
+    echo "  Fix: $PYTHON -m pip install pytest"
+    exit 0
+fi
+
+# ── Run fast pre-commit tests ─────────────────────────────────────────────────
+echo "[pre-commit] Running fast unit tests..."
+"$PYTHON" -m pytest \
+    tests/unit/test_yaml_propagation.py \
+    tests/unit/test_losses.py \
+    -x -q --tb=short
+
+STATUS=$?
+
+if [ "$STATUS" -ne 0 ]; then
+    echo ""
+    echo "[pre-commit] FAILED. Fix tests before committing."
+    echo "  To skip (urgent/WIP only): git commit --no-verify"
+    exit 1
+fi
+
+echo "[pre-commit] All checks passed."
+exit 0
