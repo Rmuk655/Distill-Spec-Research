@@ -556,8 +556,16 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
                 if device == "cpu":
                     raise
                 free_mb = torch.cuda.mem_get_info(0)[0] // 1024**2
-                print(f"\n  [OOM] CUDA out of memory loading student ({free_mb} MB free). "
-                      f"Retrying task_score on CPU — will be slow.")
+                _n_p = len(prompts)
+                _est_h = _n_p * 512 * 0.5 / 3600
+                print(f"\n{'!' * 70}")
+                print(f"  [WARNING] task_score FALLING BACK TO CPU — THIS WILL TAKE HOURS")
+                print(f"  GPU OOM: only {free_mb} MB free (needed ~1200 MB for 0.6B model).")
+                print(f"  CPU estimate: {_n_p} prompts × 512 tokens × ~500 ms/tok ≈ {_est_h:.1f} hrs")
+                print(f"  ROOT CAUSE: alpha preloaded models still in VRAM when task_score runs.")
+                print(f"  FIX applied in ef4a865: pass preloaded_student= to reuse existing model.")
+                print(f"  IMMEDIATE: kill this process and git pull then restart.")
+                print(f"{'!' * 70}\n")
                 torch.cuda.empty_cache()
                 device, dtype = "cpu", torch.float32
 
