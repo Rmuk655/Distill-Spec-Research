@@ -2144,29 +2144,56 @@ def main():
                 _wmod_final.summary["mean_block_eff"] = sum(_all_bes) / len(_all_bes)
                 _wmod_final.summary["max_block_eff"]  = max(_all_bes)
 
-            # Per-verifier BE summary (e.g. "BE/bv", "BE/gbv") — key for cross-run comparison
-            # Per-dataset-mode breakdown omitted to keep W&B panel count ≤12;
-            # full detail is available in eval_summary_table.
+            # Per-verifier averages (e.g. "BE/bv", "BE/gbv", "alpha/gsm8k") ──────
+            # These appear as columns in the W&B runs-comparison table — useful for
+            # ranking losses by best verifier BE or by GSM8K alpha across many runs.
+            # Per-dataset-mode detail lives in eval_summary_table (keep panel count ≤15).
             from collections import defaultdict as _dd
             _be_by_mode: dict = _dd(list)
+            _alpha_by_ds: dict = _dd(list)
             for r in all_results:
                 if r.get("block_eff") is not None:
                     _be_by_mode[r["mode"]].append(r["block_eff"])
+                if r.get("alpha_mean") is not None and r.get("dataset"):
+                    _alpha_by_ds[r["dataset"]].append(r["alpha_mean"])
             for _mode, _vals in _be_by_mode.items():
-                _wmod_final.summary[f"BE/{_mode}"] = sum(_vals) / len(_vals)
+                _wmod_final.summary[f"BE/{_mode}"] = round(sum(_vals) / len(_vals), 4)
+            for _ds, _vals in _alpha_by_ds.items():
+                _wmod_final.summary[f"alpha/{_ds}"] = round(sum(_vals) / len(_vals), 4)
 
-            # ── Single comparison table: all verifier modes + alpha side-by-side ──
-            # One row per result; researcher can sort/filter in W&B Table view.
-            # Log once at the end so it shows as a single artifact, not a step chart.
+            # ── Pivot table: dataset × mode → all metrics side-by-side ──────────
+            # This is the PRIMARY eval view in W&B.  Open the run → Artifacts tab
+            # → eval_summary_table to get a sortable/filterable table.
+            # Dimensions: dataset, mode (verifier), K, temperature
+            # Values: block_eff, alpha_mean, alpha_ci95, throughput (tok/s),
+            #         ms_per_tok, task_score, perplexity
+            # Use W&B table "Group by" → dataset or mode for pivot-style views.
+            # Temperature and K are fixed per run — use them as filters, not axes.
+            def _round(v, d=4):
+                try: return round(float(v), d)
+                except: return None
             _tbl_rows = [
-                [r.get("dataset", ""), r.get("mode", ""),
-                 r.get("K", 1), r.get("temperature", 1.0),
-                 r.get("block_eff"), r.get("alpha_mean")]
+                [
+                    r.get("dataset", ""),
+                    r.get("mode", ""),
+                    r.get("K", 1),
+                    r.get("temperature", 1.0),
+                    _round(r.get("block_eff")),
+                    _round(r.get("alpha_mean")),
+                    _round(r.get("alpha_ci95")),
+                    _round(r.get("throughput")),
+                    _round(r.get("ms_per_tok")),
+                    _round(r.get("task_score")),
+                    _round(r.get("perplexity")),
+                ]
                 for r in all_results
             ]
             if _tbl_rows:
                 _eval_tbl = _wmod_final.Table(
-                    columns=["dataset", "mode", "K", "temperature", "block_eff", "alpha_mean"],
+                    columns=["dataset", "mode", "K", "temperature",
+                             "block_eff", "alpha_mean", "alpha_ci95",
+                             "throughput_tok_s", "ms_per_tok",
+                             "task_score", "perplexity"],
                     data=_tbl_rows,
                 )
                 _wmod_final.log({"eval_summary_table": _eval_tbl})
