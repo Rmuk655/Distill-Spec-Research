@@ -3906,6 +3906,32 @@ def main():
     # prompt — wasting hours.  Catch it here, before any subprocess launches.
     # (e.g. running the 8B teacher with --config colab instead of --config kaggle.)
     _check_teacher_fits_vram(target, _load_4bit, args)
+
+    # ── One-time dataset prefetch ──────────────────────────────────────────────
+    # Ensure the training and val datasets specified in the YAML exist locally.
+    # This runs once before any training step, so the trainer never crashes mid-
+    # pipeline with a missing-file error.  Each fetch function is a no-op when
+    # the file already exists.
+    #
+    # gsm8k_train.jsonl: always needed for flat-loss steps (default training set).
+    # wikitext: needed when YAML dataset.train points at a wikitext file.
+    # Both are safe to prefetch even when not strictly needed — they're small.
+    _prefetch_train_ds = _yaml_cfg.get("train_dataset", "")
+    try:
+        sys.path.insert(0, os.path.join(_GBV_RESEARCH, "core", "datasets"))
+        import downloader as _dl_mod
+        _dl_mod.DATA_DIR = os.path.join(_GBV_RESEARCH, "core", "datasets", "raw")
+        os.makedirs(_dl_mod.DATA_DIR, exist_ok=True)
+        if _prefetch_train_ds and "wikitext" in _prefetch_train_ds:
+            # GPT-2 / wikitext config — download in-distribution corpus
+            _dl_mod.fetch_wikitext_train()
+        else:
+            # All Qwen / LLaMA configs use gsm8k for training
+            _dl_mod.fetch_gsm8k_train()
+    except Exception as _ds_err:
+        print(f"  [setup] Dataset prefetch skipped ({_ds_err}) — "
+              f"ensure core/datasets/raw/ has the required files.")
+
     if args.status or args.dry_run:
         STEPS = build_steps(draft, target, experiment_tag=args.experiment_tag,
                             smoke=args.smoke, eagle=args.eagle,
