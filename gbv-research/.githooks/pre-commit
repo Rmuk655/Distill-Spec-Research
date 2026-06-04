@@ -70,6 +70,7 @@ echo "[pre-commit] Running fast unit tests..."
 "$PYTHON" -m pytest \
     tests/unit/test_yaml_propagation.py \
     tests/unit/test_losses.py \
+    tests/unit/test_alpha_eval.py \
     -x -q --tb=short
 
 STATUS=$?
