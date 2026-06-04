@@ -18,25 +18,26 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 
 | Provider | GPU | VRAM | System RAM | Session | Cost | Best for |
 |---|---|---|---|---|---|---|
+| **IIT Hyderabad A100** | A100 | 40 GB | ample | session-based | **₹80/h** | Paper runs — see **[A100_SETUP.md](A100_SETUP.md)** |
 | **Free Colab** | T4 | 16 GB | ~12 GB | ~90 min idle | free | Quick smoke tests, first runs |
-| **Kaggle** | T4 (×1 or ×2) | 16 GB | **29 GB** | **9 h (60 min idle)** | free (30 h/wk) | **Best free option (no persistent storage)** |
-| **Lightning AI** | T4-equiv | 16 GB | ~32 GB | unlimited | free (15 credits/mo ≈ 22-30 h) | **Best free option with persistent storage** |
-| **Adobe AIP** | A100 / varies | ≥ 16 GB | ample | **4 h guaranteed** | free (internal) | **Best option if you have AIP access** |
+| **Kaggle** | T4 (×1 or ×2) | 16 GB | **29 GB** | **9 h (60 min idle)** | free (30 h/wk) | Best free option (no persistent storage) |
+| **Lightning AI** | T4-equiv | 16 GB | ~32 GB | unlimited | free (15 credits/mo ≈ 22-30 h) | Free tier with persistent storage |
 | **Colab Pro** | A100 | 40 GB | ~50 GB | 12 h | ~$10/mo | Overnight paper runs |
 | **Modal A100** | A100-40GB | 40 GB | ample | unlimited | ~$1.10/h | Paper-quality overnight runs |
 | **Modal A10G** | A10G | 24 GB | ample | unlimited | ~$0.76/h | Budget paid runs |
 | **RunPod** | RTX 3090+ | 24 GB | ample | unlimited | ~$0.44/h | Cheapest paid option |
 | **Lightning AI** | L40S | 48 GB | ample | unlimited | ~$1.10-1.50/h | Paid: VS Code + A100-class GPU |
 | **HF Spaces** | T4/A10G | 15–24 GB | ample | unlimited | ~$0.60/h | HF-integrated experiments |
+| **ATS CPU server** | none | — | 128 GB | SSH | internal | Trend checks without GPU — see **[ats/README.md](ats/README.md)** |
 
 **Rule of thumb:**
-- **Kaggle T4** → use `--config kaggle` (8B teacher in 4-bit NF4; 29 GB RAM makes NF4 loading work)
-- **Lightning AI free T4** → use `--config kaggle` (same RAM headroom as Kaggle; storage persists — models download once)
-- **Free Colab T4** → use `--config colab` (4B teacher in plain BF16; Colab's 12 GB RAM can't load 8B NF4)
-- **Adobe AIP A100** → use `--config a100` (8B BF16, full run in ~2-3 h — fits one 4-hour session; see `deploy/aip.ipynb`)
-- **Adobe AIP T4/V100 16 GB** → use `--config kaggle` (8B NF4; 4-hour sessions mean ~1 loss/session)
-- **Paid A100 / L40S (Modal / RunPod / Lightning AI)** → use `--config a100` or `server` (8B teacher in bfloat16, no quantization)
-- **Local laptop** → use `--config laptop` (smoke tests only)
+- **IIT Hyderabad A100** → `--config a100` or `a100_qwen` (8B BF16, ~15–20 min/loss) — **[A100_SETUP.md](A100_SETUP.md)**
+- **Kaggle T4** → `--config kaggle` (8B teacher in 4-bit NF4; 29 GB RAM makes NF4 loading work)
+- **Lightning AI free T4** → `--config kaggle` (same RAM headroom as Kaggle; storage persists)
+- **Free Colab T4** → `--config colab` (4B teacher in plain BF16; Colab's 12 GB RAM can't load 8B NF4)
+- **Paid A100 / L40S (Modal / RunPod / Lightning AI)** → `--config a100` or `server` (8B teacher in bfloat16)
+- **Local laptop** → `--config laptop` (smoke tests only)
+- **CPU bare-metal (ATS)** → `deploy/ats/` scripts — **[ats/README.md](ats/README.md)**
 
 ---
 
@@ -44,13 +45,49 @@ The **config** abstracts the hardware; the **launcher** abstracts the cloud.
 
 | File | Provider | Usage |
 |---|---|---|
+| **[A100_SETUP.md](A100_SETUP.md)** | IIT Hyderabad A100 | Terminal workflow: setup → smoke → train → resume |
+| `aip_gpu_setup.sh` | A100 / A10G GPU server | One-shot deps + auth: `bash deploy/aip_gpu_setup.sh a100_qwen` |
+| `aip_run.py` | A100 / A10G GPU server | `python deploy/aip_run.py --config a100_qwen [--resume]` |
+| `a100_quickstart.ipynb` | Google Colab Pro A100 | Open in Colab, run top to bottom |
 | `colab_quickstart.ipynb` | Google Colab | Open in Colab, run top to bottom |
 | `kaggle.ipynb` | Kaggle Kernels | Upload to Kaggle, run top to bottom |
 | `lightning.ipynb` | Lightning AI Studios | Open in Studio Jupyter, run top to bottom |
-| `aip.ipynb` | Adobe AI Platform | Open in AIP VS Code Jupyter, run top to bottom |
 | `modal_app.py` | Modal.com | `modal run deploy/modal_app.py::run_pipeline` |
 | `runpod.sh` | RunPod | `bash runpod.sh` in pod terminal |
+| **[ats/README.md](ats/README.md)** | CPU cloud server | ATS step-by-step: setup → smoke → train → eval → dashboard |
 | `_provider.py` | All (shared) | Config registry + helper functions |
+
+---
+
+## A100 quick start (terminal)
+
+See **[A100_SETUP.md](A100_SETUP.md)** for the full workflow. Minimal version:
+
+```bash
+export WANDB_API_KEY="..."
+export STORAGE_ROOT=~/ram/specdist
+git clone https://github.com/Rmuk655/Distill-Spec-Research.git
+bash Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+cd Distill-Spec-Research/gbv-research
+python deploy/aip_run.py --config a100_qwen              # smoke
+python deploy/aip_run.py --config a100_qwen --losses kl --no_smoke
+python deploy/aip_run.py --config a100_qwen --resume     # after disconnect
+```
+
+---
+
+## ATS CPU server (no GPU)
+
+Complete workflow lives in **[deploy/ats/README.md](ats/README.md)**.
+
+```bash
+cd gbv-research
+source deploy/ats/00_env.sh      # edit WANDB_API_KEY first
+bash deploy/ats/01_setup.sh
+python deploy/ats/02_verify.py
+python deploy/ats/03_smoke.py
+# baseline / training / eval in screen sessions — see ats/README.md
+```
 
 ---
 

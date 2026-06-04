@@ -66,6 +66,7 @@ Examples:
   python deploy/aip_run.py --config a100_qwen         # A100 paper run
   python deploy/aip_run.py --config a10_qwen --losses kl
   python deploy/aip_run.py --config a10_qwen --losses kl_tree --no_smoke
+  python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
   python deploy/aip_run.py --resume                   # skip smoke, resume pipeline
         """,
     )
@@ -83,6 +84,11 @@ Examples:
                    help="Skip preflight smoke test")
     p.add_argument("--resume",         action="store_true",
                    help="Resume without smoke test (implies --no_smoke)")
+    p.add_argument("--train_only",     action="store_true",
+                   help="Train + merge only (skip baseline and post-train eval). "
+                        "Use with --losses traversal_tree to train one loss.")
+    p.add_argument("--from_step",      default=None,
+                   help="Start at this pipeline step id, e.g. train_trav_tree_gsm8k")
     p.add_argument("--dry_run",        action="store_true",
                    help="Print the experiment.py command without running it")
     p.add_argument("--experiment_tag", default=None,
@@ -257,6 +263,10 @@ def main():
         cmd += ["--experiment_tag", args.experiment_tag]
     if args.force_eval:
         cmd.append("--force_eval")
+    if args.train_only:
+        cmd.append("--train_only")
+    if args.from_step:
+        cmd += ["--from", args.from_step]
 
     no_smoke = args.no_smoke or args.resume
     if not no_smoke:

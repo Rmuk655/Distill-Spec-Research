@@ -53,17 +53,30 @@ echo ""
 mkdir -p "${STORAGE}" "${HF_CACHE}"
 
 # ── Pull latest code ──────────────────────────────────────────────────────────
+# Inject GITHUB_TOKEN only into a clean HTTPS URL.  If origin already contains
+# credentials (e.g. from a prior setup run), blind sed 's|https://|https://TOKEN@|'
+# produces https://TOKEN@TOKEN@github.com/... → "URL rejected: Bad hostname".
 GH_TOKEN="${GITHUB_TOKEN:-}"
 if [ -n "${GH_TOKEN}" ]; then
     REPO_URL=$(git -C "${REPO_DIR}" remote get-url origin 2>/dev/null || echo "")
-    if [ -n "${REPO_URL}" ]; then
-        AUTH_URL=$(echo "${REPO_URL}" | sed "s|https://|https://${GH_TOKEN}@|")
-        git -C "${REPO_DIR}" remote set-url origin "${AUTH_URL}" 2>/dev/null || true
-    fi
+    case "${REPO_URL}" in
+        git@*|ssh://*)
+            # SSH remotes: do not rewrite with HTTPS token
+            ;;
+        https://*|http://*)
+            CLEAN_URL=$(echo "${REPO_URL}" | sed -E 's#https?://[^/@]+@#https://#')
+            AUTH_URL=$(echo "${CLEAN_URL}" | sed "s|https://|https://${GH_TOKEN}@|")
+            git -C "${REPO_DIR}" remote set-url origin "${AUTH_URL}" 2>/dev/null || true
+            ;;
+    esac
 fi
 
 echo "[1/5] Pulling latest code..."
-git -C "${REPO_DIR}" pull --ff-only 2>/dev/null || echo "      (already up to date or skip)"
+if ! git -C "${REPO_DIR}" pull --ff-only 2>/dev/null; then
+    echo "      git pull failed — if you see 'Bad hostname', reset origin:"
+    echo "        git -C ${REPO_DIR} remote set-url origin https://github.com/Rmuk655/Distill-Spec-Research.git"
+    echo "      Then pull again (public repo) or set GITHUB_TOKEN once and re-run this script."
+fi
 
 # Clone OSD (public repo) alongside Distill-Spec-Research if not already present.
 # evaluate.py looks for specInfer at:  <parent_of_repo>/OSD/distill/specInfer/

@@ -68,3 +68,9 @@ evaluation:
 tree_training:
   tree_K: 4
   tree_L: 8
+
+experiment:
+  # Flat EBE losses are off-policy in the offline trainer: they optimise
+  # teacher-sampled tokens rather than draft proposals. Keep them as manual
+  # ablations only; tree losses provide verifier-aligned objectives.
+  exclude_losses: [ebe, ebe_single]

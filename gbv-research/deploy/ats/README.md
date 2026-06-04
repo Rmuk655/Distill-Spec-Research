@@ -1,28 +1,51 @@
-# ATS Cloud — Bare-Metal Server Scripts
+# ATS Cloud — CPU server workflow
 
-Adobe ATS Cloud · Ubuntu 24.04 · 128 GB RAM · 2-socket CPU · **no GPU**
+**IIT Hyderabad ATS / bare-metal CPU server** · Ubuntu 24.04 · 128 GB RAM · 2-socket CPU · **no GPU**
 
 Model pair: **distilgpt2 (82M) → gpt2-medium (355M)**  
-Purpose: prove convergence trends when GPU credits (Kaggle/Colab) are exhausted.
+Purpose: prove convergence trends when GPU time (A100 / Kaggle / Colab) is limited.
+
+For **A100 (Qwen3-0.6B → 8B)** use **[../A100_SETUP.md](../A100_SETUP.md)** instead.
 
 ---
 
-## Complete Workflow
+## Complete workflow (copy-paste)
 
-Run scripts one at a time in order. Each is standalone and idempotent.
+```bash
+# Clone repo on the server, then:
+cd gbv-research
 
+# Every SSH session — must source first
+source deploy/ats/00_env.sh      # edit WANDB_API_KEY here first
+
+# Run once
+bash deploy/ats/01_setup.sh      # deps + GPT-2 weights + W&B login
+python deploy/ats/02_verify.py   # prerequisite checklist
+
+# Smoke test (~15 min)
+python deploy/ats/03_smoke.py
+
+# Baseline (~2-3 hr) — run in screen
+screen -S baseline
+python deploy/ats/04_baseline_eval.py
+
+# Training (~4-6 hr) — run in screen
+screen -S training
+python deploy/ats/05_train_parallel.py
+# Monitor from a second SSH session:
+python deploy/ats/monitor.py --watch
+python deploy/ats/monitor.py --tail kl
+
+# Eval trained models (~30-45 hr) — run in screen
+screen -S eval
+python deploy/ats/06_eval_trained.py
+
+# Dashboard (any time)
+bash deploy/ats/07_dashboard.sh
+# From laptop: ssh -L 5000:localhost:5000 user@ats-server → http://localhost:5000
 ```
-Step 0   Configure environment (every SSH session)
-Step 1   One-time setup — install deps, download models
-Step 2   Verify setup — check every prerequisite
-Step 3   Smoke test — 10-step crash test on this hardware (~15 min)
-Step 4   Baseline eval — untrained model reference (~2-3 hr)
-Step 5   Parallel training — all 15 losses simultaneously (~4-6 hr)
-Step 6   Eval trained models — merge + evaluate each (~2-3 hr/model)
-Step 7   Dashboard — visualise results locally
-```
 
-Monitor is a sidecar: run it from a second SSH session any time.
+Run scripts one at a time in order. Each is standalone and idempotent. Details below.
 
 ---
 
