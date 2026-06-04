@@ -43,20 +43,26 @@ def slice_past_key_values(past_key_values, start_idx, slice_len):
     # Transformers >= 4.36 returns DynamicCache objects instead of plain tuples.
     # Crop and return a DynamicCache so the next forward() call doesn't fail
     # with "'tuple' object has no attribute 'get_seq_length'".
-    try:
-        from transformers import DynamicCache as _DC
-        if isinstance(past_key_values, _DC):
+    #
+    # Use duck-typing (hasattr) rather than isinstance to avoid class-identity
+    # mismatches when transformers is loaded via different sys.modules paths
+    # (causes isinstance to return False even for genuine DynamicCache objects).
+    if hasattr(past_key_values, 'key_cache') and hasattr(past_key_values, 'value_cache'):
+        try:
+            from transformers import DynamicCache as _DC
             new_cache = _DC()
-            for layer_idx in range(len(past_key_values.key_cache)):
-                new_cache.key_cache.append(
-                    past_key_values.key_cache[layer_idx][
-                        :, :, start_idx:start_idx + slice_len, :])
-                new_cache.value_cache.append(
-                    past_key_values.value_cache[layer_idx][
-                        :, :, start_idx:start_idx + slice_len, :])
-            return new_cache
-    except (ImportError, AttributeError):
-        pass
+        except ImportError:
+            # Very old transformers — use the object's own class so forward() accepts it
+            new_cache = past_key_values.__class__()
+        for layer_idx in range(len(past_key_values.key_cache)):
+            new_cache.key_cache.append(
+                past_key_values.key_cache[layer_idx][
+                    :, :, start_idx:start_idx + slice_len, :])
+            new_cache.value_cache.append(
+                past_key_values.value_cache[layer_idx][
+                    :, :, start_idx:start_idx + slice_len, :])
+        return new_cache
+    # Legacy: tuple-of-tuples (transformers < 4.36)
     new_past = []
     for idx in range(len(past_key_values)):
         new_past.append(

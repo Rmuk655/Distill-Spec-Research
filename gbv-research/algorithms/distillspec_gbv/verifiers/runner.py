@@ -31,6 +31,15 @@ _apply_omp_threads()
 import torch
 import time
 from tqdm import tqdm
+
+# Suppress "Loading weights: X%" bars and advisory messages in log files.
+try:
+    import transformers as _hf
+    _hf.logging.set_verbosity_error()
+    _hf.logging.disable_progress_bar()
+except Exception:
+    pass
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 import torch.nn.functional as F
 from typing import List, Tuple, Dict, Mapping, Callable, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
@@ -338,11 +347,17 @@ if __name__ == "__main__":
           f"p={args.p_model}, q={args.q_model}, L={args.L}, q_temp={args.q_temp}")
 
     # Run every (mode, K, T) combo — models stay loaded throughout.
+    _is_tty = sys.stdout.isatty()
     for (mode, K, p_temp) in combos:
         p_model._spec_profile = {"runs": []}   # reset per-combo profiler
 
+        # When output goes to a log file (non-TTY) tqdm can't overwrite lines, so
+        # every update becomes a new line.  Use a 60-second interval to print only
+        # ~2-3 lines per combo (start / midpoint / end) instead of one per prompt.
         for idx, prompt in tqdm(enumerate(prompts), total=len(prompts),
-                                desc=f"mode={mode} K={K} T={p_temp}"):
+                                desc=f"mode={mode} K={K} T={p_temp}",
+                                mininterval=1 if _is_tty else 60,
+                                ncols=80):
             _ = speculative_decoding_loop(
                 p_model=p_model, q_model=q_model, tok=tok,
                 prompt=prompt, verification_algo=mode,

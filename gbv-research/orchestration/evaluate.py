@@ -174,6 +174,24 @@ def _patch_config_json_serialization():
 _patch_config_json_serialization()
 
 
+# ── Suppress noisy HuggingFace logging ───────────────────────────────────────
+# "Loading weights: X%" progress bars and advisory warnings clutter log files.
+# These appear because evaluate.py logs to a file (non-TTY) and HF doesn't
+# check isatty() before showing them.
+#
+# We suppress here rather than in each from_pretrained() call because the
+# transformers logging module is global — one call covers all subsequent loads.
+try:
+    import transformers as _hf
+    _hf.logging.set_verbosity_error()        # suppress INFO/WARNING messages
+    _hf.logging.disable_progress_bar()       # suppress "Loading weights: X%"
+except Exception:
+    pass   # transformers not yet installed (e.g. during import-time dry-run)
+
+# Suppress "unauthenticated requests to HF Hub" advisory — we use local cache.
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+
+
 def _dtype_kwargs(dtype) -> dict:
     """Return the correct dtype kwarg for AutoModelForCausalLM.from_pretrained().
 
@@ -719,42 +737,57 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                 _use_specinfer = False   # ← CRITICAL: also update local var so fallback runs
                 # Fall through to inline block below for this prompt.
         if not _use_specinfer:
-            # Inline fallback: run draft-propose / target-verify without specInfer.
-            # Each round: draft proposes `max_propose` tokens greedily; target scores
-            # the full candidate sequence; acceptance is sampled under temperature.
+            # Inline fallback: draft-propose / target-verify without specInfer.
+            # Uses KV cache for draft proposals (1 prefill + K single-token passes)
+            # and a single teacher forward pass per round — avoids redundant full-
+            # sequence re-run of the student that the old code did.
             accepted_total, proposed_total = 0, 0
             cur_ids = input_ids
+            d_pkv = None   # draft KV cache — grown with accepted tokens each round
             with torch.inference_mode():
                 for _ in range(max(1, max_tokens // max_propose)):
-                    # Draft: greedy argmax over next max_propose positions
-                    d_logits = student_model(cur_ids).logits[0, -1:]   # (1, V)
+                    # ── Draft: prefill (or single-token if we have KV cache) ──
+                    if d_pkv is None:
+                        d_out = student_model(cur_ids, use_cache=True)
+                    else:
+                        # Only feed the last accepted token; reuse cached context
+                        d_out = student_model(cur_ids[:, -1:], past_key_values=d_pkv,
+                                              use_cache=True)
+                    d_pkv_propose = d_out.past_key_values
+
+                    # ── Propose K draft tokens ──
                     draft_tokens = []
+                    draft_logits = []           # per-token logits from draft
+                    d_logits = d_out.logits[0, -1:]
+                    pkv_k = d_pkv_propose
                     tmp_ids = cur_ids
                     for _k in range(max_propose):
                         tok = int(d_logits.argmax(dim=-1))
                         draft_tokens.append(tok)
+                        draft_logits.append(d_logits)        # save for ratio calc
                         next_tok = torch.tensor([[tok]], device=device)
+                        d_kout = student_model(next_tok, past_key_values=pkv_k,
+                                               use_cache=True)
+                        d_logits = d_kout.logits[0, -1:]
+                        pkv_k = d_kout.past_key_values
                         tmp_ids = torch.cat([tmp_ids, next_tok], dim=1)
-                        d_logits = student_model(tmp_ids).logits[0, -1:]
 
-                    # Target: score the full candidate (cur + draft) in one forward pass
-                    cand_ids = tmp_ids  # cur_ids + draft_tokens appended above
+                    # ── Target: score full candidate in ONE forward pass ──
+                    cand_ids = tmp_ids            # cur_ids + draft_tokens
                     t_all_logits = teacher_model(cand_ids).logits[0]  # (seq, V)
-                    # Re-run draft in one shot to get per-token logits for ratio
-                    d_all_logits = student_model(cand_ids).logits[0]
+                    # Draft logits come from the proposal loop above — no extra pass needed
 
-                    # Acceptance under temperature (sequential rejection sampling)
-                    bonus_start = cur_ids.shape[-1] - 1   # position of last cur token
+                    # ── Acceptance under temperature (sequential rejection sampling) ──
+                    bonus_start = cur_ids.shape[-1] - 1
                     n_accepted = 0
                     for _k in range(max_propose):
                         pos = bonus_start + _k
                         tok = draft_tokens[_k]
                         if temperature > 0:
                             t_p = float(_F.softmax(t_all_logits[pos] / temperature, dim=-1)[tok])
-                            d_p = float(_F.softmax(d_all_logits[pos] / temperature, dim=-1)[tok])
+                            d_p = float(_F.softmax(draft_logits[_k] / temperature, dim=-1)[tok])
                             ratio = t_p / max(d_p, 1e-9)
                         else:
-                            ratio = 1.0  # greedy: accept if draft == target argmax
                             ratio = 1.0 if int(t_all_logits[pos].argmax()) == tok else 0.0
                         proposed_total += 1
                         if torch.rand(1).item() < min(1.0, ratio):
@@ -763,11 +796,14 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                         else:
                             break
 
-                    # Advance cur_ids by accepted tokens (+1 bonus token from target)
+                    # ── Advance: accepted draft tokens + 1 bonus from target ──
                     bonus = int(t_all_logits[bonus_start + n_accepted].argmax())
                     new_toks = draft_tokens[:n_accepted] + [bonus]
                     new_tensor = torch.tensor([new_toks], device=device)
                     cur_ids = torch.cat([cur_ids, new_tensor], dim=1)
+                    # Update draft KV cache to cover the accepted tokens
+                    # (next iteration prefill will extend from here)
+                    d_pkv = d_pkv_propose   # cached up to cur_ids before proposal
                     if cur_ids.shape[-1] >= input_ids.shape[-1] + max_tokens:
                         break
 

@@ -218,15 +218,16 @@ class SmallModelKVCacheProposer(Proposer):
             total_generated_len = proposer_output.past_key_values[0].shape[-2] + 1
             proposer_key_values = crop_mqa_func(proposer_output.past_key_values,
                                                 max_len=total_generated_len - proposer_output.generated_len)
-        else:  # mha — support both DynamicCache (transformers ≥4.46) and legacy tuple cache
+        else:  # mha — support both DynamicCache (transformers ≥4.36) and legacy tuple cache
+            # Duck-typing instead of isinstance to avoid class-identity mismatch when
+            # transformers is loaded via different sys.modules paths.
             pkv = proposer_output.past_key_values
             try:
-                from transformers import DynamicCache as _DC
-                if isinstance(pkv, _DC):
+                if hasattr(pkv, 'key_cache'):
                     total_generated_len = pkv.key_cache[0].shape[-2] + 1
                 else:
                     total_generated_len = pkv[0][0].shape[2] + 1
-            except (ImportError, AttributeError, IndexError):
+            except (AttributeError, IndexError, TypeError):
                 total_generated_len = pkv[0][0].shape[2] + 1
             proposer_key_values = crop_func(pkv,
                                             max_len=total_generated_len - proposer_output.generated_len)
