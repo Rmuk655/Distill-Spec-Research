@@ -64,7 +64,12 @@ _GBV_ROOT = os.path.dirname(HERE)   # gbv-research/
 #     Set to 20 GB so floor(39.5 / 20) = 1 eval slot on A100-40GB (safe).
 #     A100-80GB: floor(79 / 20) = 3 eval slots (3 × 8B evals fit, correct).
 TRAIN_VRAM_GB = 20.0   # peak VRAM per training job (model + transformers warmup buffer)
-EVAL_VRAM_GB  = 20.0   # peak VRAM per eval job (8B teacher + draft + KV cache)
+# Eval VRAM: 8B teacher BF16 (15.6 GB) + draft (1.2 GB) + KV/activations (2 GB) = ~19 GB.
+# The warmup buffer (~15.26 GB) is temporary during model load, then freed.
+# With 2 eval slots: 2 × 19 = 38 GB < 39.5 GB (A100-40GB) → safe.
+# With 3 eval slots: 3 × 19 = 57 GB → OOM (previous setting caused 14-hour baseline).
+# Set to 19 GB → 2 eval slots on A100-40GB, 4 slots on A100-80GB.
+EVAL_VRAM_GB  = 19.0   # peak VRAM per eval job → 2 slots on A100-40GB
 MAX_SLOTS_PER_GPU = 3  # safety cap: never run more than 3 jobs per GPU
 
 _stdout_lock = threading.Lock()
