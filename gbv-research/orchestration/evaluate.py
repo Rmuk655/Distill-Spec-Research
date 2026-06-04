@@ -547,24 +547,56 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
             torch.cuda.empty_cache()
             device, dtype = "cpu", torch.float32
 
-    scores = []
-    for item in prompts:
-        prompt = item.get("prompt", item) if isinstance(item, dict) else item
-        ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
-        attn = torch.ones_like(ids)   # suppress pad==eos attention_mask warning
-        with torch.inference_mode():
-            out = model.generate(ids, attention_mask=attn, max_new_tokens=max_tokens,
-                                 do_sample=False,
-                                 pad_token_id=tokenizer.pad_token_id)
-        generated = tokenizer.decode(out[0][ids.shape[-1]:], skip_special_tokens=True)
+    # ── Batched generation: process N prompts simultaneously ──────────────
+    # Sequential (old): 100 prompts × 1 at a time → GPU sits ~30% utilised
+    # Batched (new): N prompts in parallel → GPU ~80-90% utilised
+    #
+    # Left-padding is REQUIRED for decoder-only models so all prompts start
+    # generating at the same position in the padded batch.  With left-padding,
+    # output[:, padded_len:] is the generated text for every prompt, no slicing
+    # arithmetic needed per item.
+    #
+    # Batch size: 8 fits comfortably for a 0.6B model on any GPU (A100/T4).
+    # Increase to 16 on A100-40GB or 32 on A100-80GB for more throughput.
+    _task_batch = int(os.environ.get("SPECDIST_TASK_BATCH", "8"))
+    tokenizer.padding_side = "left"   # required for decoder-only batched generation
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
 
-        if dataset == "gsm8k":
-            gold = item.get("answer", "") if isinstance(item, dict) else ""
-            scores.append(score_gsm8k(generated, gold))
-        elif dataset == "humaneval":
-            test_code = item.get("test", "") if isinstance(item, dict) else ""
-            entry_pt = item.get("entry_point", "") if isinstance(item, dict) else ""
-            scores.append(score_humaneval(prompt, generated, test_code, entry_pt))
+    scores = []
+    _texts  = [item.get("prompt", item) if isinstance(item, dict) else item for item in prompts]
+    _golds  = [item.get("answer", "")   if isinstance(item, dict) else "" for item in prompts]
+    _tests  = [item.get("test", "")     if isinstance(item, dict) else "" for item in prompts]
+    _eps    = [item.get("entry_point","") if isinstance(item, dict) else "" for item in prompts]
+
+    n_batches = (len(prompts) + _task_batch - 1) // _task_batch
+    print(f"  [task_score] {len(prompts)} prompts in {n_batches} batch(es) of {_task_batch}")
+
+    for b_start in range(0, len(prompts), _task_batch):
+        batch_texts = _texts[b_start : b_start + _task_batch]
+        batch_enc   = tokenizer(batch_texts, return_tensors="pt",
+                                padding=True, truncation=True,
+                                max_length=1024).to(device)
+        padded_len  = batch_enc["input_ids"].shape[-1]
+
+        with torch.inference_mode():
+            out = model.generate(
+                **batch_enc,
+                max_new_tokens=max_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+        # Generated tokens start at padded_len for every item (left-padded inputs)
+        gen_ids = out[:, padded_len:]
+
+        for j, gen in enumerate(gen_ids):
+            idx = b_start + j
+            generated = tokenizer.decode(gen, skip_special_tokens=True)
+            if dataset == "gsm8k":
+                scores.append(score_gsm8k(generated, _golds[idx]))
+            elif dataset == "humaneval":
+                scores.append(score_humaneval(batch_texts[j], generated,
+                                              _tests[idx], _eps[idx]))
 
     del model
     if device == "cuda":
