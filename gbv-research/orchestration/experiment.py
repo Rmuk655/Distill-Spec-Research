@@ -1041,7 +1041,7 @@ _LIGHT_VERIFIER_DEFAULT = "bv"
 def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 load_in_4bit=False, ckpt_root=None,
                 train_hparams=None, losses_to_run=None, hw_tier="laptop",
-                _light_eval_verifier_override=None):
+                _light_eval_verifier_override=None, force_eval=False):
     """Build the STEPS list for a given draft/target model pair.
 
     Pipeline structure (same for both smoke and full — only numbers differ):
@@ -1375,7 +1375,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                         omp_threads=_h.get("omp_threads", 0),
                         wandb_group=_h.get("wandb_group", ""),
                         wandb_project=_h.get("wandb_project", "distillspec"),
-                        force_rerun=smoke or args.force_eval)  # smoke/--force_eval: bypass skip_existing
+                        force_rerun=smoke or force_eval)  # smoke/--force_eval: bypass skip_existing
         return cmd + _4bit  # append --load_in_4bit for colab config
 
     # Tree-loss eval mode strategy
@@ -3903,7 +3903,8 @@ def main():
                             ckpt_root=_effective_ckpt_root,
                             train_hparams=train_hparams,
                             losses_to_run=_losses_to_run,
-                            _light_eval_verifier_override=_light_verifier_override)
+                            _light_eval_verifier_override=_light_verifier_override,
+                            force_eval=getattr(args, "force_eval", False))
         if _eval_only:
             _n_before = len(STEPS)
             STEPS = [s for s in STEPS if "Phase 2" not in s.get("group", "")]
@@ -3976,7 +3977,8 @@ def main():
                         # YAML hardware.hw_tier takes precedence; _hw_tier_from_config
                         # is the fallback for legacy hardcoded CONFIGS dict presets.
                         hw_tier=_yaml_cfg.get("hw_tier") or _hw_tier_from_config(args.config),
-                        _light_eval_verifier_override=_light_verifier_override)
+                        _light_eval_verifier_override=_light_verifier_override,
+                        force_eval=getattr(args, "force_eval", False))
 
     if _eval_only:
         _n_before = len(STEPS)
