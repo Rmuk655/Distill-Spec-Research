@@ -756,19 +756,23 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                     d_pkv_propose = d_out.past_key_values
 
                     # ── Propose K draft tokens ──
+                    # logits[0, -1] → shape (vocab,)   ← correct: scalar-indexed last pos
+                    # logits[0, -1:] → shape (1, vocab) ← WRONG: [tok] would index dim-0
+                    #                                      causing "index N out of bounds
+                    #                                      for dimension 0 with size 1"
                     draft_tokens = []
-                    draft_logits = []           # per-token logits from draft
-                    d_logits = d_out.logits[0, -1:]
+                    draft_logits = []           # per-token logits, each shape (vocab,)
+                    d_logits = d_out.logits[0, -1]   # (vocab,)
                     pkv_k = d_pkv_propose
                     tmp_ids = cur_ids
                     for _k in range(max_propose):
-                        tok = int(d_logits.argmax(dim=-1))
+                        tok = int(d_logits.argmax())
                         draft_tokens.append(tok)
-                        draft_logits.append(d_logits)        # save for ratio calc
+                        draft_logits.append(d_logits)        # (vocab,) — correct shape
                         next_tok = torch.tensor([[tok]], device=device)
                         d_kout = student_model(next_tok, past_key_values=pkv_k,
                                                use_cache=True)
-                        d_logits = d_kout.logits[0, -1:]
+                        d_logits = d_kout.logits[0, -1]      # (vocab,)
                         pkv_k = d_kout.past_key_values
                         tmp_ids = torch.cat([tmp_ids, next_tok], dim=1)
 
