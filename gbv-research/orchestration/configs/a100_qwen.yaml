@@ -58,6 +58,29 @@ logging:
   # Override on CLI: python deploy/aip_run.py --experiment_tag my_tag
   experiment_tag: KrishnanRIITHServer
 
+# ── Eval scope ────────────────────────────────────────────────────────────────
+# TWO PHASES — change these settings when switching phases:
+#
+# EXPLORATION (current): rank all 17 losses quickly, pick top 4-5 winners.
+#   n_prompts_gsm8k: 100      → ~40 min/eval  × 17 losses = ~11 h total
+#   modes: 4 essential verifiers only
+#
+# PAPER CONFIRMATION (after winners chosen): full eval on top losses only.
+#   n_prompts_gsm8k: 1319     → ~14-17h/eval × 5 losses  = ~70-85 h total
+#   modes: all 9 verifiers (full loss-verifier alignment matrix)
+#
+# To switch to paper mode: change n_prompts_gsm8k → 1319, uncomment full modes.
+# ─────────────────────────────────────────────────────────────────────────────
+evaluation:
+  # EXPLORATION: 100 prompts, 4 core verifiers (~40 min/eval)
+  n_prompts_gsm8k: 100
+  modes: [alpha, bv, gbv, traversal]
+  K_values: [3]
+  temperatures: [1.0]
+  # PAPER (uncomment when confirming top losses):
+  # n_prompts_gsm8k: 1319
+  # modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+
 experiment:
   pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
   losses: [kl, rev_kl, jsd, l1, ebe, ebe_single,
