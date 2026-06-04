@@ -53,6 +53,11 @@ evaluation:
   n_prompts: 100
   n_prompts_gsm8k: 1319         # full GSM8K test set for paper numbers
   eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
+  # task_score batch size: how many prompts to generate simultaneously.
+  # Roofline: optimal ≈ FLOPs_peak / (params_bytes × HBM_BW)
+  # A100-40GB + Qwen3-0.6B BF16: 312e12 / (1.2e9 × 2039e9) ≈ 127 → use 32 (safe margin)
+  # A100-40GB + Qwen3-8B BF16:   312e12 / (16e9  × 2039e9) ≈ 9.6 → use 8 (teacher scoring)
+  task_batch: 32
 
 tree_training:
   tree_K: 4

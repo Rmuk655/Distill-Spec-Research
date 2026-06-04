@@ -51,6 +51,8 @@ evaluation:
   K_values: [3]
   L: 8
   n_prompts: 5          # ~3 min/mode × 6 modes = ~18 min total eval
+  # task_score batch: RTX 500 Ada 6GB + distilgpt2 (82M): 65e12/(0.16e9×320e9)≈1269 → use 4 (safe)
+  task_batch: 4
 
 tree_training:
   tree_K: 4

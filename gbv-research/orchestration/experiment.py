@@ -449,6 +449,8 @@ def _load_config_yaml(config_name: str) -> dict:
             out["eval_n_prompts_gsm8k"] = eval_cfg["n_prompts_gsm8k"]  # int — GSM8K primary eval
         if eval_cfg.get("max_tokens"):
             out["eval_max_tokens"] = eval_cfg["max_tokens"]             # int — override eval max_tokens
+        if eval_cfg.get("task_batch"):
+            out["eval_task_batch"] = int(eval_cfg["task_batch"])        # int — task_score batch size
         # experiment.seed_override → run a specific seed without editing training.seed
         if "seed_override" in experiment_cfg:
             out["seed"] = experiment_cfg["seed_override"]
@@ -932,6 +934,12 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k",
         cmd += ["--loss_name", loss_name]
     if task_score:
         cmd.append("--task_score")
+    # task_batch: machine-specific batch size from YAML evaluation.task_batch.
+    # Lives in the hardware base YAML (bases/a100.yaml=32, bases/laptop.yaml=4)
+    # so each machine gets the right value without touching the code.
+    _tb = _h.get("eval_task_batch", 0)
+    if _tb and int(_tb) > 1:
+        cmd += ["--task_batch", str(int(_tb))]
     if experiment_tag:
         cmd += ["--experiment_tag", experiment_tag]
     if wandb_group:
@@ -3779,7 +3787,8 @@ def main():
     # sections were silently ignored, causing eval to fall back to hardcoded defaults
     # (n=10 prompts regardless of YAML).  Now every config YAML can control eval cost.
     for _ek in ("eval_modes", "eval_K_values", "eval_temps",
-                "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens"):
+                "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
+                "eval_task_batch"):
         if _ek in _yaml_cfg:
             train_hparams[_ek] = _yaml_cfg[_ek]
 

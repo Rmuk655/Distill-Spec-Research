@@ -510,7 +510,9 @@ def score_humaneval(prompt: str, generated: str, test_code: str,
 
 
 def run_task_score(student_path: str, dataset: str, prompts: list,
-                   max_tokens: int = 512) -> dict:
+                   max_tokens: int = 512,
+                   preloaded_student=None,
+                   preloaded_tokenizer=None) -> dict:
     """
     Generate full responses with the student model (greedy, no SD) and
     compute task accuracy. Used as a quality-preservation sanity check.
@@ -518,6 +520,11 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     GSM8K  → exact match on final numerical answer
     HumanEval → pass@1 via code execution
     Other  → None (not scored)
+
+    preloaded_student / preloaded_tokenizer: pass the already-resident model
+    from the alpha-eval preload to avoid loading a SECOND copy while the
+    teacher is still occupying VRAM (was causing OOM → silent CPU fallback
+    → task_score taking 7+ hours instead of 2-3 minutes).
     """
     if dataset not in ("gsm8k", "humaneval"):
         return {"task_score": None, "scored": 0}
@@ -525,27 +532,34 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     import torch
     from transformers import AutoTokenizer, AutoModelForCausalLM
 
-    device, dtype = _pick_device()
-    tokenizer = AutoTokenizer.from_pretrained(student_path, use_fast=False)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    _own_model = preloaded_student is None   # True = we loaded it, we must free it
 
-    model = None
-    for attempt in range(2):
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                student_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
-                attn_implementation=_ATTN_IMPL,
-            ).to(device).eval()
-            break
-        except torch.cuda.OutOfMemoryError:
-            if device == "cpu":
-                raise
-            free_mb = torch.cuda.mem_get_info(0)[0] // 1024**2
-            print(f"\n  [OOM] CUDA out of memory loading student ({free_mb} MB free). "
-                  f"Retrying task_score on CPU — will be slow.")
-            torch.cuda.empty_cache()
-            device, dtype = "cpu", torch.float32
+    if preloaded_student is not None:
+        # Reuse the already-loaded draft model — no extra VRAM needed
+        model    = preloaded_student
+        tokenizer = preloaded_tokenizer or AutoTokenizer.from_pretrained(student_path, use_fast=False)
+        device   = next(model.parameters()).device
+        print(f"  [task_score] reusing preloaded student model (device={device})")
+    else:
+        device, dtype = _pick_device()
+        tokenizer = AutoTokenizer.from_pretrained(student_path, use_fast=False)
+
+        model = None
+        for attempt in range(2):
+            try:
+                model = AutoModelForCausalLM.from_pretrained(
+                    student_path, **_dtype_kwargs(dtype), low_cpu_mem_usage=True,
+                    attn_implementation=_ATTN_IMPL,
+                ).to(device).eval()
+                break
+            except torch.cuda.OutOfMemoryError:
+                if device == "cpu":
+                    raise
+                free_mb = torch.cuda.mem_get_info(0)[0] // 1024**2
+                print(f"\n  [OOM] CUDA out of memory loading student ({free_mb} MB free). "
+                      f"Retrying task_score on CPU — will be slow.")
+                torch.cuda.empty_cache()
+                device, dtype = "cpu", torch.float32
 
     # ── Batched generation: process N prompts simultaneously ──────────────
     # Sequential (old): 100 prompts × 1 at a time → GPU sits ~30% utilised
@@ -558,13 +572,15 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     #
     # Batch size: 8 fits comfortably for a 0.6B model on any GPU (A100/T4).
     # Increase to 16 on A100-40GB or 32 on A100-80GB for more throughput.
-    # Optimal batch size from roofline model:
-    #   optimal ≈ FLOPs_peak / (params × bytes × HBM_BW)
-    #   A100 + Qwen3-0.6B (BF16): 312e12 / (1.2e9 × 2039) ≈ 127 → use 32 (conservative)
-    #   A100 + distilgpt2 (82M):  312e12 / (0.16e9 × 2039) ≈ 956 → use 32 (same)
-    #   T4   + Qwen3-0.6B:        65e12  / (1.2e9 × 320)   ≈ 169 → use 16
-    #   Override: SPECDIST_TASK_BATCH=64 for maximum A100 throughput
-    _task_batch = int(os.environ.get("SPECDIST_TASK_BATCH", "32"))
+    # Batch size from YAML evaluation.task_batch (machine-specific).
+    # Set in hardware base YAMLs — NOT hardcoded here:
+    #   bases/a100.yaml   → task_batch: 32  (A100-40GB + 0.6B: roofline ≈ 127)
+    #   bases/laptop.yaml → task_batch:  4  (RTX 6GB + 82M)
+    # Passed via --task_batch arg from experiment.py.
+    # SPECDIST_TASK_BATCH env var overrides for ad-hoc tuning.
+    # Default=1 (safe baseline — set your YAML to get the right value).
+    _task_batch = int(os.environ.get("SPECDIST_TASK_BATCH",
+                      str(getattr(args, "task_batch", 1))))
     tokenizer.padding_side = "left"   # required for decoder-only batched generation
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -604,9 +620,10 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
                 scores.append(score_humaneval(batch_texts[j], generated,
                                               _tests[idx], _eps[idx]))
 
-    del model
-    if device == "cuda":
-        torch.cuda.empty_cache()
+    if _own_model:
+        del model   # only free what we allocated — don't delete the preloaded alpha model
+        if str(device) == "cuda":
+            torch.cuda.empty_cache()
 
     mean_score = sum(scores) / len(scores) if scores else 0.0
     return {"task_score": mean_score, "scored": len(scores),
@@ -1323,7 +1340,13 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         # Task accuracy (GSM8K / HumanEval only)
         if task_score and dataset in ("gsm8k", "humaneval"):
             print(f"  [task_score] running {dataset} accuracy...")
-            ts_res = run_task_score(student_path, dataset, prompts, max_tokens=512)
+            # Pass preloaded student model to avoid loading a second copy while
+            # the teacher is still resident in GPU memory (caused OOM → CPU fallback).
+            _pre_sm = _alpha_preloaded[3] if _alpha_preloaded else None
+            _pre_tok = _alpha_preloaded[2] if _alpha_preloaded else None
+            ts_res = run_task_score(student_path, dataset, prompts, max_tokens=512,
+                                    preloaded_student=_pre_sm,
+                                    preloaded_tokenizer=_pre_tok)
             row["task_score"] = ts_res.get("task_score")
             print(f"  task_score={row['task_score']:.3f} ({ts_res['scored']} samples)")
             # Quality guard: warn if student is meaningfully worse than the best baseline on record
@@ -1514,6 +1537,10 @@ def main():
     p.set_defaults(perplexity=True)
     p.add_argument("--task_score", action="store_true",
                    help="Compute task accuracy: GSM8K exact match, HumanEval pass@1")
+    p.add_argument("--task_batch", type=int, default=1,
+                   help="Batch size for task_score generation (prompts processed in parallel). "
+                        "Set per machine in YAML evaluation.task_batch (a100=32, laptop=4). "
+                        "Default=1 is safe everywhere. Override: SPECDIST_TASK_BATCH env var.")
     p.add_argument("--train_steps", type=int, default=0,
                    help="Number of training steps used to produce this checkpoint "
                         "(stored in DB; 0 = baseline / not trained). "
