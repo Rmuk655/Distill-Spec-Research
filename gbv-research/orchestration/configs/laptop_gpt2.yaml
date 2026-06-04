@@ -5,23 +5,44 @@
 # Target: gpt2-medium  (355 M, ~1.4 GB)
 # vocab_size = 50257 for both — SD requirement satisfied.
 #
-# Results ARE meaningful: 4.3x model-size gap → real distillation signal.
-# Use this when Kaggle/Colab credits are exhausted.
+# Dataset: WikiText-2 (NOT GSM8K — see below)
+#
+# WHY WikiText-2 instead of GSM8K:
+#   Both distilgpt2 and gpt2-medium were trained on WebText (curated Reddit links,
+#   general English web text).  GSM8K math is completely out-of-distribution for them.
+#   On GSM8K: teacher has high-entropy random distributions → noisy distillation gradient
+#   → KL and rev_KL diverge, tree losses appear stable only because they measure acceptance
+#   on the student's own paths (which are also random on math text).
+#
+#   WikiText-2 is Wikipedia prose — same style as WebText, fully in-distribution.
+#   On WikiText: both models have meaningful distributions → clean KL convergence,
+#   real distillation signal, early trends generalize to larger runs.
+#
+# Download (one-time, before first run):
+#   python core/datasets/download_wikitext.py
+#
+# Purpose: Prove distillation algorithm converges for GPT-2 family before
+#   committing A100 budget to LLaMA 1B→3B (which uses GSM8K, is in-distribution).
 #
 # NOTE: ebe and online losses excluded — see docs/ISSUES.md.
 
-_base: bases/laptop   # hardware + eval + health + dataset — see bases/laptop.yaml
+_base: bases/laptop   # hardware + eval + health — see bases/laptop.yaml
 
 models:
   family: gpt2
   draft:  distilgpt2
   target: gpt2-medium
 
+# Override dataset: use WikiText-2 instead of GSM8K (bases/laptop uses gsm8k)
+dataset:
+  train: core/datasets/raw/wikitext_train.jsonl
+  eval:  core/datasets/raw/wikitext_5.jsonl
+  val_dataset: wikitext_5.jsonl      # fast fixed val — Wikipedia prose, in-distribution
+
 training:
   steps: 500
-  warmup_steps: 50              # 10% of 500 steps (12 optimizer steps at grad_accum=4)
-  lr: 3.0e-5                    # same as Qwen; 1e-4 caused oscillation on math prompts
-                                # (high per-prompt KL variance at 4.3x teacher gap)
+  warmup_steps: 50              # 10% of 500 steps
+  lr: 3.0e-5
   lora_r: 8
   lora_alpha: 16
   max_new_tokens: 32
@@ -32,20 +53,17 @@ training:
   lora_dropout: 0.05
   ebe_kl_weight: 0.1
   jsd_alpha: 0.5
-  # Convergence proof: cap training set so each prompt is seen ~5 times.
-  # Without this cap: 500 steps / 7473 prompts = 6.7% of one epoch → no trend.
-  # With this cap: 500 steps / 100 prompts = 5 epochs → clear monotonic decrease.
-  # This is convergence verification only; paper results come from Qwen 8B on T4/A100.
+  # 500 steps / 100 prompts = 5 epochs — clear convergence on in-distribution data.
   max_train_prompts: 100
 
 logging:
-  wandb_group: laptop-gpt2-gsm8k
-  run_label: "gpt2-laptop"
+  wandb_group: laptop-gpt2-wikitext
+  run_label: "gpt2-laptop-wiki"
 
 health:
   val_every: 100
   ppl_check_every: 250
-  ppl_threshold: 1.5            # GPT-2 base ppl on GSM8K is high; looser threshold
+  ppl_threshold: 1.5
 
 checkpointing:
   save_every: 100

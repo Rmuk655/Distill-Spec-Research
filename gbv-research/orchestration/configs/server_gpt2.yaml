@@ -52,9 +52,15 @@ training:
                                 # GPT-2-M teacher is weak (4.3x gap on CPU) —
                                 # needs 5 epochs to show clear convergence trend
 
+# Override dataset: use WikiText-2 (in-distribution for GPT-2, not GSM8K math)
+dataset:
+  train: core/datasets/raw/wikitext_train.jsonl
+  eval:  core/datasets/raw/wikitext_5.jsonl
+  val_dataset: wikitext_5.jsonl
+
 logging:
-  wandb_group: server-gpt2-gsm8k
-  run_label: "gpt2-cpu-server"
+  wandb_group: server-gpt2-wikitext
+  run_label: "gpt2-cpu-server-wiki"
 
 health:
   val_every: 200
