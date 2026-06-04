@@ -1350,8 +1350,8 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
             print(f"  [task_score] running {dataset} accuracy...")
             # Pass preloaded student model to avoid loading a second copy while
             # the teacher is still resident in GPU memory (caused OOM → CPU fallback).
-            _pre_sm = _alpha_preloaded[3] if _alpha_preloaded else None
-            _pre_tok = _alpha_preloaded[2] if _alpha_preloaded else None
+            _pre_sm = preloaded[3] if preloaded else None
+            _pre_tok = preloaded[2] if preloaded else None
             ts_res = run_task_score(student_path, dataset, prompts, max_tokens=512,
                                     preloaded_student=_pre_sm,
                                     preloaded_tokenizer=_pre_tok)

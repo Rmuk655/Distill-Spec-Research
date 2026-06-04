@@ -70,6 +70,7 @@ checkpointing:
   milestone_every: 500
 
 evaluation:
+  n_prompts: 3          # cap so bv/gbv cells finish within 0.5h subprocess timeout
   temperatures: [1.0]
 
 experiment:
