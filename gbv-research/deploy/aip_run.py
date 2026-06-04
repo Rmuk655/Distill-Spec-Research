@@ -28,6 +28,27 @@ import os
 import subprocess
 import sys
 
+# ── Auto-relaunch under venv if running with system Python ────────────────────
+# Problem: running `python deploy/aip_run.py` without activating the venv uses
+# the system Python which lacks torch/transformers.  On Python 3.12, pip also
+# throws "_distutils_hack has no attribute 'add_shim'" and the install fails.
+#
+# Fix: if a specdist venv exists and we're NOT already inside it, re-exec this
+# script under the venv Python automatically.  The user still gets the same
+# command they typed; no output is lost.
+_VENV_PYTHON = os.path.join(
+    os.path.expanduser("~"), "specdist", "venv", "bin", "python"
+)
+_IN_VENV = (
+    sys.prefix != sys.base_prefix                         # inside ANY venv
+    or os.environ.get("VIRTUAL_ENV")                      # venv is activated
+    or "specdist" in sys.executable                       # running from specdist venv path
+)
+if not _IN_VENV and os.path.isfile(_VENV_PYTHON):
+    print(f"[aip_run] Not in venv — re-launching under {_VENV_PYTHON}")
+    os.execv(_VENV_PYTHON, [_VENV_PYTHON] + sys.argv)
+    # os.execv replaces this process; code below only runs if exec fails
+
 # ── Locate repo root ──────────────────────────────────────────────────────────
 _THIS_FILE  = os.path.abspath(__file__)
 _DEPLOY_DIR = os.path.dirname(_THIS_FILE)
