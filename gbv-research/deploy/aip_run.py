@@ -181,17 +181,12 @@ def _auth():
 
 
 def _resolve_storage_root(args):
-    """Determine storage root: CLI arg > STORAGE_ROOT env var > Sensei NFS > $HOME/specdist > repo/db/."""
+    """Determine storage root: CLI arg > STORAGE_ROOT env var > $HOME/specdist > repo/db/."""
     if args.storage_root:
         return args.storage_root
     env = os.environ.get("STORAGE_ROOT", "")
     if env:
         return env
-    # Auto-detect Sensei persistent filesystem (Adobe research infra)
-    _sensei = "/sensei-fs/users/rkrishna/specdist"
-    if os.path.isdir("/sensei-fs/users/rkrishna") and os.access("/sensei-fs/users/rkrishna", os.W_OK):
-        return _sensei
-    # Fallback: local $HOME/specdist
     _home_specdist = os.path.join(os.path.expanduser("~"), "specdist")
     if os.access(os.path.expanduser("~"), os.W_OK):
         return _home_specdist
