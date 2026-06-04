@@ -465,12 +465,17 @@ def _compute_val_loss(
                     and tokenizer.pad_token_id == tokenizer.eos_token_id)
                 else tokenizer.eos_token_id
             )
+            # Val generation must be DETERMINISTIC so the loss curve is comparable
+            # across checkpoints.  do_sample=True (old) sampled fresh teacher
+            # continuations at each val check → ~5% noise on 30 prompts made
+            # val 0.447→0.464 look like regression when it was sampling variance.
+            # Greedy (do_sample=False) gives the same reference sequence every time,
+            # making the val curve a reliable convergence signal.
             gen_out = target_model.generate(
                 prompt_ids,
                 attention_mask=torch.ones_like(prompt_ids),
                 max_new_tokens=args.max_new_tokens,
-                do_sample=True,
-                temperature=args.teacher_temp,
+                do_sample=False,           # greedy = deterministic reference
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=_val_eos,   # None for GPT-2 to avoid 1-token val sequences
                 return_dict_in_generate=True,
@@ -1313,21 +1318,32 @@ def main() -> None:
                                  f"ACTION: check train/lr curve — warmup may need tuning.",
                             level="WARN",
                         )
-                    # Early convergence check: after 10% of steps, loss should have dropped
-                    if _cur_step == max(10, args.steps // 10):
+                    # Early convergence check: after 30% of OPTIMIZER steps, loss should
+                    # have dropped ≥10%.  Gate on optimizer steps (not grad-steps) so the
+                    # alert is invariant to grad_accum.  With grad_accum=16 and 2000
+                    # grad-steps: 30% = 37 optimizer steps = 600 grad-steps.  Without
+                    # this fix the alert fired at grad-step 200 = ~12 optimizer updates
+                    # (just after peak LR), always producing a false positive.
+                    _ga_now = max(1, args.grad_accum)
+                    _opt_total = max(1, (args.steps + _ga_now - 1) // _ga_now)
+                    _check_at_grad = int(0.30 * _opt_total) * _ga_now   # 30% of opt steps
+                    _check_at_grad = max(_ga_now * 5, _check_at_grad)   # at least 5 opt steps
+                    if _cur_step == _check_at_grad:
                         _initial_loss = losses[0] if losses else v_loss
                         _drop_pct = (_initial_loss - _cur_ema) / max(_initial_loss, 1e-8) * 100
                         if _drop_pct < 10:
                             _wandb.alert(
                                 title="Slow convergence",
                                 text=f"Loss dropped only {_drop_pct:.1f}% after "
-                                     f"{_cur_step} steps (from {_initial_loss:.4f} to "
+                                     f"{_cur_step} grad-steps / "
+                                     f"{_cur_step // _ga_now} opt-steps "
+                                     f"(30% of run; from {_initial_loss:.4f} to "
                                      f"{_cur_ema:.4f}). "
                                      f"ACTION: increase --lr or check --warmup_steps.",
                                 level="WARN",
                             )
                             print(f"  [ALERT] slow convergence: {_drop_pct:.1f}% drop after "
-                                  f"{_cur_step} steps — consider increasing LR")
+                                  f"{_cur_step // _ga_now} optimizer steps — consider increasing LR")
                 except Exception:
                     pass  # alerts are best-effort
             if _results_db is not None:
