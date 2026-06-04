@@ -680,7 +680,15 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     # contaminates the process with cuda:0 tensors, causing wrapper_CUDA_cat to
     # crash when the inline fallback later tries to cat CPU hidden states with
     # those leftover CUDA buffers.  Skip specInfer entirely when device is CPU.
-    _use_specinfer = _SPECINFER_AVAILABLE and device == "cuda"
+    #
+    # SPECDIST_DISABLE_SPECINFER=1 forces the inline fallback even on CUDA.
+    # Use when specInfer's DynamicCache API is incompatible with the installed
+    # transformers version and the .pyc cache fix hasn't propagated yet.
+    # Alpha values are IDENTICAL — inline fallback is ~20% slower only.
+    _specinfer_env_disabled = os.environ.get("SPECDIST_DISABLE_SPECINFER", "0") == "1"
+    _use_specinfer = _SPECINFER_AVAILABLE and device == "cuda" and not _specinfer_env_disabled
+    if _specinfer_env_disabled and device == "cuda":
+        print("  [alpha] specInfer disabled via SPECDIST_DISABLE_SPECINFER=1 — using inline fallback.")
     if _use_specinfer:
         generator = _SpecInferGenerator(
             small_model=student_model, large_model=teacher_model,

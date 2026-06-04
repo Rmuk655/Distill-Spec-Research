@@ -58,6 +58,18 @@ logging:
   # Override on CLI: python deploy/aip_run.py --experiment_tag my_tag
   experiment_tag: KrishnanRIITHServer
 
+# ── Training — paper confirmation hyperparams ──────────────────────────────
+# CURRENT (exploration, Stage 2A):  steps=2000, lr=3e-5, tree_K=4
+#
+# Switch to these for Stage 2B (paper confirmation on top 4-5 losses):
+#   steps: 5000      # 312 opt-steps at grad_accum=16 → fuller convergence
+#                    # Math: 2000 steps = 125 opt-steps (same as laptop!); 5000 = 312
+#   lr: 5.0e-5       # Compensates for lora_r=16 doubling trainable params vs r=8
+#                    # (effective per-param LR halved at same lr → need 5/3e-5)
+#   tree_K: 6        # Reduces cumprod variance: Var(Π α_i) ∝ 1/K
+#                    # At baseline α≈0.93/tok: 6 paths give 6× more gradient samples
+#
+# To apply: update the training: section below and run clean_restart for that loss.
 # ── Eval scope ────────────────────────────────────────────────────────────────
 # TWO PHASES — change these settings when switching phases:
 #
