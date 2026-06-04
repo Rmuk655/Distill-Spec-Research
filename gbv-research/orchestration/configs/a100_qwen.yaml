@@ -39,6 +39,14 @@ training:
   lora_r: 16                    # larger rank for wider teacher-student gap (8B→0.6B)
   lora_alpha: 32
   max_new_tokens: 128
+  # grad_clip for tree losses: tree losses have inherently larger gradient norms than
+  # flat losses because path weights (Π α_i) amplify the ∂log q/∂θ term.
+  # For Qwen3 pair (baseline α≈0.93/token): w_path ≈ 0.55–1.0 → grad_norms 30–100.
+  # grad_clip=1.0 (flat-loss default) clips to ~1/50 of nominal LR = effective LR ~6e-8.
+  # grad_clip=5.0 allows larger steps while still preventing catastrophic updates.
+  # Flat losses still benefit from 1.0 — this only affects tree loss training steps.
+  # To override for a specific loss: --grad_clip 5.0 on the CLI.
+  grad_clip: 5.0
   teacher_temperature: 0.8
   seed: 42
   grad_clip: 1.0

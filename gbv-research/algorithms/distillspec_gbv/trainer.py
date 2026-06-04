@@ -1191,26 +1191,38 @@ def main() -> None:
                     # ── Automated alerts (appear in W&B notifications + run log) ──
                     try:
                         _cur_step = step + 1
-                        if _gn > 10.0:
-                            # _gn is the PRE-clip norm.  When --grad_clip > 0 the actual
-                            # step is already clipped to that value, so a high pre-clip
-                            # norm is informational (the optimizer step is bounded), not
-                            # an explosion.  Make the message reflect whether clipping is
-                            # active so "lower --grad_clip" isn't suggested when it's
-                            # already doing its job.
+                        # Gradient norm threshold: tree losses have inherently larger norms
+                        # than flat losses because path-acceptance weights (Π α_i) amplify
+                        # ∂log q/∂θ.  For Qwen3-0.6B→8B (baseline α≈0.93/token), expect
+                        # pre-clip norms of 30–100 for traversal/bv/gbv tree losses — not
+                        # a training problem.  Use a higher threshold for tree losses.
+                        _is_tree_loss = hasattr(args, "loss") and args.loss in (
+                            "kl_tree", "rev_kl_tree", "jsd_tree",
+                            "bv_tree", "gbv_tree", "traversal_tree",
+                            "naive_tree", "nss_tree", "specinfer_tree",
+                            "spectr_tree", "khisti_tree", "ebe_tree",
+                        )
+                        _gn_threshold = 50.0 if _is_tree_loss else 10.0
+                        if _gn > _gn_threshold:
                             _clip_active = args.grad_clip > 0
                             _clip_note = (f"(pre-clip; step clipped to {args.grad_clip})"
                                           if _clip_active else "(no clipping active)")
-                            _action = ("reduce --lr — pre-clip grads are persistently large"
-                                       if _clip_active
-                                       else "reduce --lr or set --grad_clip")
+                            if _is_tree_loss:
+                                _action = ("tree-loss gradient — path weights amplify norms; "
+                                           "normal up to ~50 for Qwen3 pair. Consider "
+                                           "grad_clip=5.0 if loss is not converging.")
+                            else:
+                                _action = ("reduce --lr — pre-clip grads are persistently large"
+                                           if _clip_active
+                                           else "reduce --lr or set --grad_clip")
                             _wandb.alert(
                                 title="Large pre-clip gradient norm",
                                 text=f"grad_norm={_gn:.2f} {_clip_note} at step {_cur_step}. "
                                      f"ACTION: {_action}.",
                                 level="WARN",
                             )
-                            print(f"  [ALERT] grad_norm={_gn:.2f} > 10 {_clip_note} — {_action}")
+                            print(f"  [ALERT] grad_norm={_gn:.2f} > {_gn_threshold:.0f} "
+                                  f"{_clip_note} — {_action}")
                     except Exception:
                         pass
                 _wandb.log(_wlog)
