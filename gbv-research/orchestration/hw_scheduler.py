@@ -125,20 +125,19 @@ class HWProfile:
         if n_gpus == 0:
             return cls._cpu_profile()
 
-        # ── Shared-cluster GPU restriction ────────────────────────────────────
-        _cvd         = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        _allow_all   = os.environ.get("SPECDIST_ALL_GPUS", "0").strip() in ("1", "true", "yes")
-        _cvd_is_set  = bool(_cvd) and _cvd not in ("NoDevFiles",)
-
-        if not _cvd_is_set and n_gpus > 1 and not _allow_all:
-            # Shared machine: CUDA_VISIBLE_DEVICES not set, multiple GPUs visible.
-            # Restrict to GPU 0 to avoid claiming unallocated resources.
-            print(f"  [scheduler] CUDA_VISIBLE_DEVICES not set on {n_gpus}-GPU machine.")
-            print(f"  [scheduler] Defaulting to GPU 0 only (shared-cluster safety).")
-            print(f"  [scheduler] To use all GPUs: export SPECDIST_ALL_GPUS=1")
-            print(f"  [scheduler] Or set CUDA_VISIBLE_DEVICES explicitly (e.g. '0,1').")
-            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-            n_gpus = 1  # PyTorch already sees 8, but we'll restrict slot building
+        # ── GPU visibility info ───────────────────────────────────────────────
+        # Use all GPUs visible to this process. On a shared cluster the cluster
+        # scheduler sets CUDA_VISIBLE_DEVICES to restrict which GPUs are yours;
+        # PyTorch device_count() already respects that.
+        # If CUDA_VISIBLE_DEVICES is NOT set on a multi-GPU machine, ALL visible
+        # GPUs are used — which is correct if you own them (e.g. interactive
+        # multi-GPU session on Pluto). If you want to restrict manually:
+        #   export CUDA_VISIBLE_DEVICES=0    # only GPU 0
+        #   export CUDA_VISIBLE_DEVICES=0,1  # GPUs 0 and 1
+        _cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "<not set — using all visible>")
+        if n_gpus > 1 and "not set" in _cvd:
+            print(f"  [scheduler] {n_gpus} GPUs visible. CUDA_VISIBLE_DEVICES not set — "
+                  f"using all {n_gpus}. Set CUDA_VISIBLE_DEVICES=N to restrict.")
 
         gpus = [(i, torch.cuda.get_device_properties(i)) for i in range(n_gpus)]
 
@@ -464,14 +463,13 @@ class HWScheduler:
         except (UnicodeEncodeError, LookupError):
             _arrow = "->"
 
-        cvd_str = os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>")
+        cvd_str = os.environ.get("CUDA_VISIBLE_DEVICES", "<all visible>")
         print(f"\n[scheduler] Detected: {p.profile_name} -- "
               f"{n_t} train slot(s) / {n_e} eval slot(s)"
               f"  [CUDA_VISIBLE_DEVICES={cvd_str}]")
         if p.profile_name == "cpu":
             print(f"  CPU-only mode -- all steps run on CPU (slow but correct)")
         else:
-            print(f"  (Only GPUs listed below are USED — others on this node belong to other jobs)")
             for slot in p.slots:
                 vram  = slot.vram_gb
                 n_ts  = max(1, min(MAX_SLOTS_PER_GPU, floor(vram / TRAIN_VRAM_GB)))
