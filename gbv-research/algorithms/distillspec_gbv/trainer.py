@@ -352,7 +352,7 @@ def _resolve_adapter_dir(output_dir: str) -> str:
     adapter weights only under ckpt_latest/.  Merge steps pass the output root,
     so we probe root → ckpt_best → ckpt_latest before failing.
     """
-    for sub in ("", "ckpt_best", "ckpt_latest"):
+    for sub in ("", "ckpt_best_slow", "ckpt_best", "ckpt_latest"):
         d = output_dir if not sub else os.path.join(output_dir, sub)
         if os.path.isfile(os.path.join(d, "adapter_config.json")):
             if sub:
@@ -360,8 +360,9 @@ def _resolve_adapter_dir(output_dir: str) -> str:
             return d
     raise FileNotFoundError(
         f"No adapter_config.json under {output_dir} "
-        f"(checked root, ckpt_best/, ckpt_latest/). "
-        f"Re-run the training step for this loss."
+        f"(checked root, ckpt_best_slow/, ckpt_best/, ckpt_latest/). "
+        f"Re-run the training step for this loss, or copy the checkpoint dir "
+        f"to this path if training used a different storage root."
     )
 
 
