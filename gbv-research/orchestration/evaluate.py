@@ -937,7 +937,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
 
 def run_be(student_path: str, teacher_path: str,
            mode: str, K: int, L: int, data_path: str, max_new_tokens: int,
-           _device: str = "cuda") -> dict | None:
+           q_temp: float = 1.0, _device: str = "cuda") -> dict | None:
     """Run GBV block-efficiency eval as a subprocess. Retries on CPU if GPU OOMs."""
     import torch
     cmd = [
@@ -948,6 +948,7 @@ def run_be(student_path: str, teacher_path: str,
         "--mode", mode,
         "--K", str(K),
         "--L", str(L),
+        "--q_temp", str(q_temp),
         "--max_new_tokens", str(max_new_tokens),
         "--data", data_path,
         "--device", _device,
@@ -964,7 +965,7 @@ def run_be(student_path: str, teacher_path: str,
                 print(f"    [OOM] GBV subprocess ran out of GPU memory — retrying on CPU (slower)")
                 torch.cuda.empty_cache()
                 return run_be(student_path, teacher_path, mode, K, L,
-                              data_path, max_new_tokens, _device="cpu")
+                              data_path, max_new_tokens, q_temp=q_temp, _device="cpu")
             err_preview = (result.stderr or result.stdout or "(no output)")[:500]
             print(f"    [WARN] No block efficiency in GBV output "
                   f"(rc={result.returncode}, mode={mode}, K={K}, device={_device}):\n"
@@ -982,7 +983,7 @@ def run_be(student_path: str, teacher_path: str,
 
 def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                  modes: list, Ks: list, temps: list,
-                 L: int, max_new_tokens: int,
+                 L: int, max_new_tokens: int, q_temp: float = 1.0,
                  _device: str = "cuda",
                  load_in_4bit: bool = False,
                  _gpu_id: int = -1,
@@ -1018,6 +1019,7 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         "--Ks",       ",".join(str(k) for k in Ks),
         "--p_temps",  ",".join(str(t) for t in temps),
         "--L",        str(L),
+        "--q_temp",   str(q_temp),
         "--max_new_tokens", str(max_new_tokens),
         "--data",     data_path,
         "--device",   _device,
@@ -1167,7 +1169,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                 print(f"    [OOM] GBV batch subprocess OOM — retrying on CPU (slower)")
                 torch.cuda.empty_cache()
                 return run_be_batch(student_path, teacher_path, data_path,
-                                    modes, Ks, temps, L, max_new_tokens, _device="cpu",
+                                    modes, Ks, temps, L, max_new_tokens,
+                                    q_temp=q_temp, _device="cpu",
                                     load_in_4bit=load_in_4bit)
 
         # Parse tagged output: "Block efficiency (mode=gbv, K=3, T=1.0): 2.345678"
@@ -1424,7 +1427,8 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
             pass  # W&B logging is always best-effort
 
     else:
-        res = run_be(student_path, teacher_path, mode, K, L, data_path, max_tokens)
+        res = run_be(student_path, teacher_path, mode, K, L, data_path, max_tokens,
+                     q_temp=getattr(args, "q_temp", 1.0))
         if res is None:
             return {}
         row = {**base_row, "block_eff": res["block_eff"]}
@@ -1548,7 +1552,11 @@ def main():
     p.add_argument("--n", type=int, default=DEFAULT_N,
                    help="Prompts per dataset (default: 30; humaneval/mtbench use all if larger)")
     p.add_argument("--max_tokens", type=int, default=60)
-    p.add_argument("--L", type=int, default=5, help="Max draft length for GBV (default: 5)")
+    p.add_argument("--L", type=int, default=8,
+                   help="Draft tree depth at eval (match evaluation.L / tree_L; default: 8)")
+    p.add_argument("--q_temp", type=float, default=1.0,
+                   help="Draft sampling temperature in BE verifier (YAML evaluation.q_temp). "
+                        "Independent of --temperature (teacher/p_temp). Default: 1.0.")
     p.add_argument("--full", action="store_true",
                    help="Run full matrix: all datasets × all modes × K=1,3,5")
     p.add_argument("--skip_fetch", action="store_true",
@@ -1974,7 +1982,7 @@ def main():
                 batch_res = run_be_batch(
                     args.student, args.teacher, data_path,
                     modes_list, Ks_list, Ts_list,
-                    args.L, args.max_tokens,
+                    args.L, args.max_tokens, args.q_temp,
                     _device="cpu",
                     load_in_4bit=False,   # 4-bit requires CUDA; CPU uses full precision
                 )
@@ -2047,7 +2055,7 @@ def main():
                     _res = run_be_batch(
                         args.student, args.teacher, data_path,
                         [_mode], Ks_list, Ts_list,
-                        args.L, args.max_tokens,
+                        args.L, args.max_tokens, args.q_temp,
                         _device="cuda",
                         load_in_4bit=getattr(args, "load_in_4bit", False),
                         _gpu_id=_gpu,
@@ -2060,7 +2068,7 @@ def main():
                         _res = run_be_batch(
                             args.student, args.teacher, data_path,
                             [_mode], Ks_list, Ts_list,
-                            args.L, args.max_tokens,
+                            args.L, args.max_tokens, args.q_temp,
                             _device="cuda",
                             load_in_4bit=getattr(args, "load_in_4bit", False),
                             _gpu_id=_gpu,
@@ -2072,7 +2080,7 @@ def main():
                         _res = run_be_batch(
                             args.student, args.teacher, data_path,
                             [_mode], Ks_list, Ts_list,
-                            args.L, args.max_tokens,
+                            args.L, args.max_tokens, args.q_temp,
                             _device="cpu",
                             load_in_4bit=False,
                             _gpu_id=-1,

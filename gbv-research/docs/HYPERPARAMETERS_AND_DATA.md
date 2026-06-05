@@ -201,8 +201,9 @@ leaf config overrides them. Wired in `experiment.py` → `evaluate.py` CLI.
 | `max_tokens_smoke` | `--max_tokens` (smoke) | **30** | Same, for `--smoke` runs only |
 | `modes` | `--modes` | 9 verifiers | Which verifiers to sweep |
 | `K_values` | `--K` | `[3]` | Block size at eval |
-| `L` | `--L` | 8 | Draft depth per verification round |
-| `temperatures` | `--temperature` | `[1.0]` | Sampling temperature |
+| `L` | `--L` | 8 | Draft depth per verification round (must match `tree_L` for tree losses) |
+| `q_temp` | `--q_temp` | 1.0 | **Draft** sampling temp in BE verifier (`runner.py`); not `teacher_temperature` |
+| `temperatures` | `--temperature` | `[1.0]` | **Teacher/target** temp (`p_temp`) per BE combo |
 | `task_batch` | `--task_batch` | 32 (A100) / 4 (laptop) | Parallel prompts for **task_score** only |
 | `tree_eval_modes` | tree-loss `--modes` | 8-verifier matrix | A100 tree-loss alignment sweep |
 | `exclude_modes_when_4bit` | filters `--modes` | `[alpha]` | Drop modes that OOM with NF4 teacher |
@@ -210,6 +211,14 @@ leaf config overrides them. Wired in `experiment.py` → `evaluate.py` CLI.
 **`max_tokens` is NOT training `max_new_tokens`.** Training uses `training.max_new_tokens`
 (128) for teacher rollouts during distillation. Eval `max_tokens` caps how long each
 **eval prompt** runs under speculative decoding when measuring α or block efficiency.
+
+**`L` at eval must match `tree_L` (8).** If the pipeline omits `--L` (old code), `evaluate.py`
+used to fall back to **5**, which understates tree-verifier BE (bv/gbv/traversal). Re-run
+with `--force_eval` if any saved rows used `L=5`.
+
+**`q_temp` vs `teacher_temperature`:** Training `teacher_temperature: 0.8` affects teacher
+logits during distillation only. At eval, BE uses `q_temp` (draft path sampling, default 1.0)
+and `temperatures` (teacher verification, `p_temp`). Both are now YAML-controlled.
 
 **Why 50 (full) / 30 (smoke)?** GSM8K answers are usually short; 50 tokens is enough
 to measure acceptance/BE without 4× eval cost. Smoke uses 30 to keep the fast path under

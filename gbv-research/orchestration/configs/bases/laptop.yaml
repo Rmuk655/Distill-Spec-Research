@@ -52,6 +52,7 @@ evaluation:
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
   L: 8
+  q_temp: 1.0
   max_tokens: 50
   max_tokens_smoke: 30
   n_prompts: 5          # ~3 min/mode × 6 modes = ~18 min total eval

@@ -56,7 +56,8 @@ There is no `pipeline.py` — the orchestrator is `orchestration/experiment.py`.
 | `evaluation.n_prompts_gsm8k` | `--n` | Phase 3 gsm8k count |
 | `evaluation.max_tokens` | `--max_tokens` | Full eval (default 50 in bases) |
 | `evaluation.max_tokens_smoke` | `--max_tokens` | Smoke only (default 30) |
-| `evaluation.L` | `--L` | Draft depth at eval (match `tree_L`) |
+| `evaluation.L` | `--L` | Draft depth at eval (match `tree_L`; evaluate.py default 8) |
+| `evaluation.q_temp` | `--q_temp` | Draft sampling temp in BE verifier (default 1.0) |
 | `evaluation.tree_eval_modes` | tree-loss `--modes` (A100) | Full 8-verifier alignment matrix |
 | `evaluation.tree_eval_modes_subset` | tree-loss `--modes` (T4/colab) | Non-OT subset when `hw_tier != a100` |
 | `evaluation.exclude_modes_when_4bit` | filters `--modes` | Default `[alpha]` when `load_in_4bit: true` |

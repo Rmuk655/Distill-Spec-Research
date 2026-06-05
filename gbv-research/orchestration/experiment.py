@@ -475,6 +475,8 @@ def _load_config_yaml(config_name: str) -> dict:
             out["eval_datasets"] = eval_cfg["eval_datasets"]            # list[str] — Phase 3 gsm8k* + Phase 4 rest
         if eval_cfg.get("L"):
             out["eval_L"] = int(eval_cfg["L"])                          # draft block depth at eval (match tree_L)
+        if eval_cfg.get("q_temp") is not None:
+            out["eval_q_temp"] = float(eval_cfg["q_temp"])            # draft sampling temp in BE verifier
         if eval_cfg.get("tree_eval_modes"):
             out["tree_eval_modes_full"] = eval_cfg["tree_eval_modes"]   # A100 full tree-loss matrix
         if eval_cfg.get("tree_eval_modes_subset"):
@@ -915,8 +917,8 @@ def _check_teacher_fits_vram(target: str, load_in_4bit: bool, args) -> None:
 
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
               modes="alpha,specinfer,gbv,traversal",
-              Ks="3", temps="1.0", n=10, max_tokens=50, L=8, task_score=False,
-              experiment_tag=None, train_steps=0, hw_tier="laptop",
+              Ks="3", temps="1.0", n=10, max_tokens=50, L=8, q_temp=1.0,
+              task_score=False, experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
               loss_name=None, model_family="qwen", device="auto",
               force_rerun=False, omp_threads=0, task_batch=0):
@@ -950,6 +952,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
         "--n", str(n),
         "--max_tokens", str(max_tokens),
         "--L", str(L),
+        "--q_temp", str(q_temp),
         "--skip_fetch",
         "--hw_tier", hw_tier,
         # Forward the model family so the BE verifier subprocess uses the right
@@ -1227,6 +1230,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             str(_h.get("unstable_early_stop_patience", 3)),
         ]
     _eval_L = int(_h.get("eval_L", _h.get("tree_L", 8)))
+    _eval_q_temp = float(_h.get("eval_q_temp", 1.0))
 
     # Online adapt knobs (online_serve.py) — YAML online_adapt: section.
     _online_K = int(_h.get("online_K", 4))
@@ -1464,7 +1468,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _ds = datasets if datasets is not None else _gsm8k_dataset
         cmd = _eval_cmd(student_path, label, target,
                         datasets=_ds, modes=_eval_modes, Ks=_Ks_this, temps=_temps,
-                        n=_n_this, max_tokens=_max_tok, L=_eval_L,
+                        n=_n_this, max_tokens=_max_tok, L=_eval_L, q_temp=_eval_q_temp,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
                         loss_name=label,
@@ -3882,7 +3886,7 @@ def main():
     for _ek in ("eval_modes", "eval_K_values", "eval_temps",
                 "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
                 "eval_task_batch", "eval_datasets", "eval_L",
-                "eval_max_tokens", "eval_max_tokens_smoke",
+                "eval_max_tokens", "eval_max_tokens_smoke", "eval_q_temp",
                 "tree_eval_modes_full", "tree_eval_modes_subset",
                 "exclude_modes_when_4bit",
                 "unstable_nan_action", "unstable_early_stop_patience",

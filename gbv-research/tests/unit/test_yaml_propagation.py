@@ -122,7 +122,8 @@ def _build_train_hparams(yaml_cfg: dict) -> dict:
     # eval keys forwarded as-is
     for ek in ("eval_modes", "eval_K_values", "eval_temps",
                "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
-               "eval_datasets", "eval_L", "eval_max_tokens", "eval_max_tokens_smoke",
+               "eval_datasets", "eval_L", "eval_q_temp",
+               "eval_max_tokens", "eval_max_tokens_smoke",
                "tree_eval_modes_full", "tree_eval_modes_subset",
                "exclude_modes_when_4bit",
                "unstable_nan_action", "unstable_early_stop_patience",
@@ -285,6 +286,10 @@ class TestLayer1YamlExtraction:
         cfg = _load_config_yaml("a100_qwen")
         assert cfg.get("eval_max_tokens") == 50
         assert cfg.get("eval_max_tokens_smoke") == 30
+
+    def test_a100_qwen_inherits_eval_q_temp_from_base(self):
+        cfg = _load_config_yaml("a100_qwen")
+        assert cfg.get("eval_q_temp") == 1.0
 
     def test_a100_qwen_inherits_online_adapt_from_base(self):
         cfg = _load_config_yaml("a100_qwen")
@@ -624,6 +629,9 @@ class TestLayer3EvalCmd:
         assert val == "50", (
             f"--max_tokens={val!r}; expected 50 from evaluation.max_tokens in bases/a100.yaml"
         )
+
+    def test_eval_q_temp_from_yaml(self, a100_eval_cmd):
+        assert _cmd_value(a100_eval_cmd, "--q_temp") == "1.0"
 
     def test_eval_max_tokens_smoke_from_yaml(self):
         yaml_cfg = _load_config_yaml("a100_qwen")

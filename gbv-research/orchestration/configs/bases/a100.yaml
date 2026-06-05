@@ -102,6 +102,9 @@ evaluation:
   K_values: [3]
   temperatures: [1.0]
   L: 8
+  # Draft sampling temperature in BE verifier (runner.py --q_temp).  Independent of
+  # training teacher_temperature (0.8).  Paper standard: 1.0 at eval.
+  q_temp: 1.0
   # Tokens generated per prompt during alpha/BE eval (NOT training max_new_tokens).
   max_tokens: 50                     # full runs (--no_smoke): enough for GSM8K short answers
   max_tokens_smoke: 30               # smoke: fast path verification
