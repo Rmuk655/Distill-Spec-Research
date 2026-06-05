@@ -26,82 +26,92 @@ set -euo pipefail
 CONFIG="${1:-a10_qwen}"
 
 # =============================================================================
-# EVERYTHING on Sensei FS — truly one-time-ever setup.
+# Storage layout — two tiers with different persistence / quota constraints.
 #
-# After this script runs once, all state (repo, venv, models, checkpoints, DB)
-# lives in /sensei-fs/users/rkrishna/. On a new session you only need:
-#   source ~/.specdist_env
+# /home/colligo/ram/           (local fast storage, large quota, session-local)
+#   Distill-Spec-Research/     → git repo + all code
+#   specdist/venv/             → Python venv  (~8 GB, torch + transformers)
+#   specdist/hf_cache/         → Qwen3-8B + 0.6B weights  (~18 GB)
+#   specdist/wandb/            → W&B local run files
+#   specdist/logs/             → pipeline logs  (~5 GB, ephemeral)
+#   OSD/                       → specInfer reference impl
 #
-# Sensei FS (/sensei-fs/users/rkrishna) — 500 GB quota:
-#   Distill-Spec-Research/   → git repo  (~200 MB + history)
-#   specdist/venv/           → Python venv (~8 GB, torch + transformers)
-#   specdist/hf_cache/       → Qwen3-8B + 0.6B (~18 GB, cached forever)
-#   specdist/checkpoints/    → trained LoRA adapters (~130 GB over full run)
-#   specdist/results.db      → eval database (~50 MB)
-#   specdist/logs/           → pipeline logs (~5 GB)
+# /sensei-fs/users/rkrishna/specdist/   (persistent NFS, ~500 GB quota)
+#   checkpoints/               → trained LoRA adapters  (~130 GB over full run)
+#   merged/                    → final merged models kept for paper eval
+#   results.db                 → eval results database  (~50 MB)
 #   ─────────────────────────────────────────────────────────────────────
-#   Total:  ~161 GB / 500 GB  ✅
+#   Sensei total:  ~130 GB / 500 GB  ✅  (quota used only for irreplaceable data)
 #
-# NFS venv: Python import on first subprocess call is ~5-10s from NFS vs ~1s
-# local. Over 17 training runs × 20-30 min each, this is <1% overhead — fine.
+# Rationale: Sensei FS quota is scarce and shared.  Anything reproducible
+# (venv, HF weights, git repo, logs) lives locally — it can be re-created from
+# scratch in <30 min.  Only checkpoints + the eval DB are truly irreplaceable
+# mid-run, so they are the only things consuming Sensei quota.
+#
+# After this script runs once, start a new session with:
+#   source ~/.specdist_env && cd "$GBV_DIR"
 # =============================================================================
 
+LOCAL_BASE="/home/colligo/ram"
+LOCAL_SPECDIST="${LOCAL_BASE}/specdist"
+LOCAL_REPO="${LOCAL_BASE}/Distill-Spec-Research"
 SENSEI_BASE="/sensei-fs/users/rkrishna"
-SENSEI_REPO="${SENSEI_BASE}/Distill-Spec-Research"
 SENSEI_SPECDIST="${SENSEI_BASE}/specdist"
 REPO_URL="https://github.com/Rmuk655/Distill-Spec-Research.git"
 
 # ── Determine which repo directory we're running from ─────────────────────────
-# If already running from Sensei repo, use it. Otherwise clone to Sensei first.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GBV_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$GBV_DIR")"
 
-# ── Use Sensei FS if available, fall back to $HOME ────────────────────────────
+# ── Local storage: repo, venv, HF cache, wandb, logs ─────────────────────────
+if [ -d "${LOCAL_BASE}" ] && [ -w "${LOCAL_BASE}" ]; then
+    LOCAL="${LOCAL_SPECDIST}"
+else
+    LOCAL="${HOME}/specdist"
+    echo "  [storage] /home/colligo/ram not available — falling back to \$HOME/specdist"
+fi
+
+# ── Sensei FS: checkpoints + results.db only ─────────────────────────────────
 if [ -d "${SENSEI_BASE}" ] && [ -w "${SENSEI_BASE}" ]; then
     STORAGE="${SENSEI_SPECDIST}"
     USE_SENSEI=1
 elif [ -n "${STORAGE_ROOT:-}" ]; then
     STORAGE="${STORAGE_ROOT}"
     USE_SENSEI=0
-elif [ -w "$HOME" ]; then
-    STORAGE="$HOME/specdist"
-    USE_SENSEI=0
-    echo "  [storage] Sensei FS not available — using \$HOME/specdist (not persistent across machines)"
 else
-    STORAGE="${GBV_DIR}/db"
+    STORAGE="${LOCAL}"
     USE_SENSEI=0
+    echo "  [storage] Sensei FS not available — checkpoints will use local storage (not persistent across machines)"
 fi
 
-HF_CACHE="${STORAGE}/hf_cache"
-VENV_DIR="${STORAGE}/venv"
+HF_CACHE="${LOCAL}/hf_cache"
+VENV_DIR="${LOCAL}/venv"
 
 echo "========================================================================"
-echo "  SpecDist GPU Setup  (truly one-time-ever on Sensei FS)"
-echo "  Config  : ${CONFIG}"
-echo "  Storage : ${STORAGE}"
-echo "  Venv    : ${VENV_DIR}"
-echo "  HF cache: ${HF_CACHE}"
+echo "  SpecDist GPU Setup"
+echo "  Config      : ${CONFIG}"
+echo "  Local store : ${LOCAL}  (venv, HF cache, logs, wandb)"
+echo "  Sensei store: ${STORAGE}  (checkpoints, results.db)"
+echo "  Venv        : ${VENV_DIR}"
+echo "  HF cache    : ${HF_CACHE}"
 echo "========================================================================"
 echo ""
 
-mkdir -p "${STORAGE}" "${HF_CACHE}"
+mkdir -p "${LOCAL}" "${HF_CACHE}" "${LOCAL}/wandb" "${STORAGE}" "${STORAGE}/checkpoints"
 
-# ── [0] Clone repo to Sensei if not already there ─────────────────────────────
-if [ "${USE_SENSEI:-0}" = "1" ] && [ ! -d "${SENSEI_REPO}/.git" ]; then
-    echo "[0/5] Cloning repo to Sensei FS (one-time-ever)..."
-    git clone "${REPO_URL}" "${SENSEI_REPO}"
-    GBV_DIR="${SENSEI_REPO}/gbv-research"
-    REPO_DIR="${SENSEI_REPO}"
-    echo "      Repo now at: ${SENSEI_REPO}"
-    echo "      Future sessions: cd ${SENSEI_REPO}/gbv-research"
-elif [ "${USE_SENSEI:-0}" = "1" ]; then
-    echo "[0/5] Repo already at Sensei: ${SENSEI_REPO}"
-    # Update REPO_DIR to Sensei path so remaining steps use Sensei repo
-    GBV_DIR="${SENSEI_REPO}/gbv-research"
-    REPO_DIR="${SENSEI_REPO}"
+# ── [0] Clone repo to local storage if not already there ──────────────────────
+if [ ! -d "${LOCAL_REPO}/.git" ]; then
+    echo "[0/5] Cloning repo to ${LOCAL_REPO} ..."
+    git clone "${REPO_URL}" "${LOCAL_REPO}"
+    GBV_DIR="${LOCAL_REPO}/gbv-research"
+    REPO_DIR="${LOCAL_REPO}"
+    echo "      Repo now at: ${LOCAL_REPO}"
+    echo "      Future sessions: source ~/.specdist_env && cd \$GBV_DIR"
 else
-    echo "[0/5] Not on Sensei — using repo at: ${REPO_DIR}"
+    echo "[0/5] Repo already at: ${LOCAL_REPO}"
+    GBV_DIR="${LOCAL_REPO}/gbv-research"
+    REPO_DIR="${LOCAL_REPO}"
 fi
 
 # ── Pull latest code ──────────────────────────────────────────────────────────
@@ -132,8 +142,8 @@ fi
 
 # Clone OSD (public repo) alongside Distill-Spec-Research if not already present.
 # evaluate.py looks for specInfer at:  <parent_of_repo>/OSD/distill/specInfer/
-# i.e. one level up from the cloned repo, at ~/ram/OSD/ when repo is at ~/ram/Distill-Spec-Research/
-OSD_DIR="$(dirname "${REPO_DIR}")/OSD"
+# OSD lives in local storage next to the repo (reproducible → not on Sensei).
+OSD_DIR="${LOCAL_BASE}/OSD"
 if [ ! -d "${OSD_DIR}/.git" ]; then
     echo "      Cloning OSD (specInfer Generator, public repo)..."
     git clone https://github.com/LiuXiaoxuanPKU/OSD "${OSD_DIR}" 2>/dev/null && \
@@ -239,6 +249,8 @@ cat > "${ENVFILE}" <<EOF
 source "${VENV_DIR}/bin/activate"
 export HF_HOME="${HF_CACHE}"
 export TRANSFORMERS_CACHE="${HF_CACHE}"
+# W&B local run files go to local storage (not Sensei FS — ephemeral, large).
+export WANDB_DIR="${LOCAL}/wandb"
 export STORAGE_ROOT="${STORAGE}"
 export GBV_DIR="${GBV_DIR}"
 # Offline mode: models already cached — skip HF Hub network checks.

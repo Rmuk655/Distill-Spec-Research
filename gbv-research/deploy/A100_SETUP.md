@@ -1,11 +1,46 @@
-# A100 setup — IIT Hyderabad GPU server
+# A100 setup — IIT Hyderabad GPU server (Pluto)
 
 **Hardware:** NVIDIA A100 (40 GB typical)  
 **Model pair:** Qwen3-0.6B draft → Qwen3-8B teacher (BF16, no 4-bit)  
-**Cost:** about **₹80/hour** (IIT Hyderabad allocation)  
-**Config:** `--config a100` or `--config a100_qwen` (equivalent)
+**Config:** `--config a100_qwen`
 
-Flat `ebe` / `ebe_single` are excluded by default in `orchestration/configs/bases/a100.yaml` (off-policy on teacher rollouts). Prefer verifier-aligned tree losses: `naive_tree`, `bv_tree`, `gbv_tree`, `traversal_tree`, `specinfer_tree`.
+Flat `ebe` / `ebe_single` are excluded by default (off-policy on teacher rollouts). Prefer verifier-aligned tree losses: `naive_tree`, `bv_tree`, `gbv_tree`, `traversal_tree`, `specinfer_tree`.
+
+---
+
+## Storage layout
+
+Two tiers — keep them separate:
+
+| What | Where | Why |
+|------|-------|-----|
+| git repo, venv, HF model weights | `/home/colligo/ram/` | Large local quota; reproducible from scratch |
+| W&B local files, pipeline logs | `/home/colligo/ram/specdist/` | Ephemeral — not worth Sensei quota |
+| **Checkpoints, results.db, merged models** | **`/sensei-fs/users/rkrishna/specdist/`** | Irreplaceable mid-run — must survive session timeouts |
+
+Rule of thumb: **if you can re-create it in < 30 min, it goes in `/home/colligo/ram`**.
+
+---
+
+## Sensei FS quota
+
+If you hit "Disk quota exceeded" on Sensei, check actual usage:
+
+```bash
+# Lustre filesystems (most likely on Pluto):
+lfs quota -u rkrishna /sensei-fs
+
+# Generic NFS quota:
+quota -s
+
+# Fallback — byte count in your directory (may undercount if quota tracks inodes):
+du -sh /sensei-fs/users/rkrishna/
+```
+
+> **Note:** `du` showing only ~14 MB while quota is exceeded means the quota is
+> tracked at the filesystem level (inode count or project quota), not raw bytes.
+> `lfs quota` is the authoritative command on Lustre. Ask the Sensei platform team
+> for the exact quota command if none of the above work.
 
 ---
 
@@ -14,32 +49,31 @@ Flat `ebe` / `ebe_single` are excluded by default in `orchestration/configs/base
 ```bash
 # 1. Secrets (replace with real values)
 export WANDB_API_KEY="your-key-from-wandb.ai/authorize"
-export GITHUB_TOKEN="ghp_..."          # only if repo is private
-export STORAGE_ROOT=/sensei-fs/users/rkrishna/specdist     # checkpoints, logs, results.db persist here
+export GITHUB_TOKEN="ghp_..."   # only if repo is private
 
-# 2. Clone repo
-cd /sensei-fs/users/rkrishna
-git clone https://github.com/Rmuk655/Distill-Spec-Research.git
+# 2. Bootstrap clone (only if repo not yet on local storage)
+git clone https://github.com/Rmuk655/Distill-Spec-Research.git \
+    /home/colligo/ram/Distill-Spec-Research
 
-# 3. Install deps, auth, GPU check (creates $STORAGE_ROOT/venv if missing)
-bash /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+# 3. Run setup — clones repo to /home/colligo/ram, puts checkpoints on Sensei FS
+bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
-### After pulling doc/code fixes from GitHub
+`aip_gpu_setup.sh` writes `~/.specdist_env` with all paths. Source it in every new SSH session:
 
 ```bash
-git -C /sensei-fs/users/rkrishna/Distill-Spec-Research pull
-
-# Re-run setup (reuses existing venv at /sensei-fs/users/rkrishna/specdist/venv, refreshes deps + ~/.specdist_env)
-bash /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
-
 source ~/.specdist_env
 cd "$GBV_DIR"
 ```
 
-`aip_gpu_setup.sh` writes `~/.specdist_env` with `STORAGE_ROOT` and `GBV_DIR`. Source it in every new SSH session:
+### After pulling updates from GitHub
 
 ```bash
+git -C /home/colligo/ram/Distill-Spec-Research pull
+
+# Re-run setup (reuses existing venv, refreshes deps + ~/.specdist_env)
+bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+
 source ~/.specdist_env
 cd "$GBV_DIR"
 ```
@@ -49,7 +83,7 @@ cd "$GBV_DIR"
 ## Smoke test (run first)
 
 ```bash
-cd /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research
+source ~/.specdist_env && cd "$GBV_DIR"
 python deploy/aip_run.py --config a100_qwen
 ```
 
@@ -59,7 +93,7 @@ Smoke runs a short pipeline check (~10–20 min). If it passes, run full trainin
 
 ## Training (one loss at a time)
 
-`--losses` alone still runs **baseline eval** first (`eval_baseline_gsm8k`), then train/merge/eval for that loss. If a checkpoint already exists, **training is skipped** and you only see eval.
+`--losses` alone runs **baseline eval** first, then train/merge/eval for that loss. If a checkpoint already exists, training is skipped.
 
 **Train only (no baseline, no eval):**
 
@@ -84,17 +118,16 @@ python deploy/aip_run.py --config a100_qwen --losses traversal_tree --from_step 
 ```bash
 rm -rf /sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b
 rm -rf /sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b_merged
-# Reset train/merge/eval steps in pipeline state (or use deploy/rerun_loss.sh)
 python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
 ```
 
 Check what the pipeline thinks is done:
 
 ```bash
-python orchestration/experiment.py --config a100_qwen --status --storage_root /sensei-fs/users/rkrishna/specdist
+python orchestration/experiment.py --config a100_qwen --status
 ```
 
-Step IDs for `traversal_tree` (not `traversal`):
+Step IDs for `traversal_tree`:
 
 | Step | ID |
 |------|-----|
@@ -114,16 +147,14 @@ python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only
 
 ### `bv_tree` / `gbv_tree` — use a lower learning rate
 
-The BV block-acceptance integral amplifies gradients compared with `kl_tree` or flat KL (see `algorithms/distillspec_gbv/losses/tree_losses.py`). YAML still uses `lr: 3e-5` for the full sweep; for these two losses override on the CLI:
+The BV block-acceptance integral amplifies gradients compared with `kl_tree` or flat KL. YAML still uses `lr: 3e-5` for the full sweep; override on the CLI for these two:
 
 ```bash
 python orchestration/experiment.py --config a100_qwen \
-  --losses bv_tree --lr 1e-5 --train_only --yes --storage_root /sensei-fs/users/rkrishna/specdist
+  --losses bv_tree --lr 1e-5 --train_only --yes
 ```
 
-Same pattern for `gbv_tree`. `deploy/aip_run.py` does not pass `--lr` through — call `experiment.py` as above (or add `--lr` to your own wrapper).
-
-**Timing (approx.):** ~15–20 min per loss for 2000 steps on A100; full 17-loss sweep is multi-hour — run one loss per session if needed.
+Same pattern for `gbv_tree`. `deploy/aip_run.py` does not pass `--lr` through — call `experiment.py` directly as above.
 
 **Monitor:**
 
@@ -150,14 +181,14 @@ pkill -9 -f "experiment.py --config a100_qwen"   # only if still alive
 python deploy/aip_run.py --config a100_qwen --resume
 ```
 
-Training resumes from `ckpt_latest` + `training_state.json` inside each loss checkpoint dir. Pipeline skips completed steps and retries failed ones.
+Training resumes from `ckpt_latest` + `training_state.json` on Sensei FS. W&B run also resumes (same dashboard URL) because `wandb_run.json` is saved alongside the checkpoint.
 
 ---
 
 ## Kill and restart (same loss, keep progress)
 
 ```bash
-kill -TERM <pid>    # from top / ps — usually the python trainer or experiment.py parent
+kill -TERM <pid>
 python deploy/aip_run.py --config a100_qwen --resume
 ```
 
@@ -175,68 +206,59 @@ python orchestration/clean_restart.py --config a100_qwen
 
 ## Evaluation
 
-Eval runs automatically after train+merge in the pipeline. To re-eval only:
+Eval runs automatically after train+merge. To re-eval only:
 
 ```bash
 python deploy/aip_run.py --config a100_qwen --resume
-# with experiment.eval_only in YAML, or use orchestration/evaluate.py directly
 ```
 
-Default A100 eval modes (in `bases/a100.yaml`): `alpha`, `naive`, `nss`, `specinfer`, `spectr`, `khisti`, `bv`, `gbv`, `traversal`.
+Default modes (in `bases/a100.yaml`): `alpha`, `naive`, `nss`, `specinfer`, `spectr`, `khisti`, `bv`, `gbv`, `traversal`.
+
+Eval uses up to **3 GPUs in parallel** by default (shared machine — polite limit). Override:
+
+```bash
+SPECDIST_MAX_EVAL_GPUS=1 python deploy/aip_run.py ...   # force serial
+SPECDIST_MAX_EVAL_GPUS=2 python deploy/aip_run.py ...   # lighter footprint
+```
 
 ---
 
 ## Where logs live
 
-| What | Path (typical on Pluto) |
-|------|-------------------------|
+| What | Path |
+|------|------|
 | Pipeline stdout | `/sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
 | Per-step errors | `/sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log` |
-| Training (trainer) | `/sensei-fs/users/rkrishna/specdist/logs/<loss>-gsm8k-q0.6b-q8b/train.log` (if experiment routes there) |
-| W&B local run files | `/sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/db/wandb/wandb/run-<date>-<id>/logs/` |
-| W&B dashboard | URL printed as `[wandb] https://wandb.ai/...` in pipeline or train log |
-
-W&B stores under the **repo** (`gbv-research/db/wandb/`), not under `STORAGE_ROOT`, unless you set `WANDB_DIR` yourself. Checkpoints and `results.db` use `STORAGE_ROOT` (`/sensei-fs/users/rkrishna/specdist`).
+| W&B local run files | `/home/colligo/ram/specdist/wandb/wandb/run-<date>-<id>/logs/` |
+| W&B dashboard | URL printed as `[wandb] https://wandb.ai/...` in pipeline log |
 
 ```bash
 # Tail pipeline
 tail -f /sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
 
-# Tail one W&B run (replace run id)
-tail -f /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/db/wandb/wandb/run-20260604_062658-1zvnc3xf/logs/debug.log
+# Tail W&B local log (replace run id)
+tail -f /home/colligo/ram/specdist/wandb/wandb/run-<id>/logs/debug.log
 ```
 
 ---
 
 ## Git pull: fix "URL rejected: Bad hostname"
 
-This happens when `origin` was set twice with `GITHUB_TOKEN` embedded:
-
-`https://TOKEN@TOKEN@github.com/...`
-
-**Fix once (from repo root):**
-
 ```bash
-cd /sensei-fs/users/rkrishna/Distill-Spec-Research
+cd /home/colligo/ram/Distill-Spec-Research
 
 # Remove embedded credentials — use plain HTTPS URL
 git remote set-url origin https://github.com/Rmuk655/Distill-Spec-Research.git
 
 # Public repo: pull without token in URL
 git pull
-
-# Private repo: use env var, do NOT paste token into the URL manually
-export GITHUB_TOKEN="ghp_..."   # GitHub PAT with repo scope
-git pull
 ```
 
-Re-run setup only after fixing the remote (setup script now strips old credentials before re-injecting):
+Re-run setup after fixing the remote:
 
 ```bash
-bash /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
-
-**Security:** If a token appeared in a terminal log or chat, revoke it at GitHub → Settings → Developer settings → Personal access tokens and create a new one.
 
 ---
 
