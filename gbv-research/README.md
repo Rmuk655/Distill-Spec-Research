@@ -12,6 +12,9 @@ Novel contribution: **EBE loss** — directly optimises block efficiency instead
 |----------|----------|
 | **[docs/SETUP.md](docs/SETUP.md)** | First-time setup, WandB config, smoke test, environments (Colab/Modal/server) |
 | **[docs/GUIDE.md](docs/GUIDE.md)** | Full experiment guide: pipeline phases, loss descriptions, verifier modes, W&B sweeps, health checks |
+| **[docs/HYPERPARAMETERS_AND_DATA.md](docs/HYPERPARAMETERS_AND_DATA.md)** | Data splits (train/val1/val2/eval_final), hyperparameter rationale, eval tiers, Phase-2 continuation |
+| **[docs/CONFIG_PROPAGATION.md](docs/CONFIG_PROPAGATION.md)** | YAML → train_hparams → CLI audit; what is centralized vs hardcoded |
+| **[docs/ISSUES.md](docs/ISSUES.md)** | Known broken losses (ebe, online) and investigation pointers |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | Architecture decisions: loss math, training loop, verifier design, future directions |
 | **[docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md)** | Codebase map, research decisions log, baselines, what's borrowed vs. novel |
 | **[docs/ADDING_A_LOSS.md](docs/ADDING_A_LOSS.md)** | How to add a new distillation loss |

@@ -417,6 +417,18 @@ def _load_config_yaml(config_name: str) -> dict:
         # training.online_ebe_lr → LR for EBE online adapt (lower than online_lr).
         if "online_ebe_lr" in training:
             out["online_ebe_lr"] = training["online_ebe_lr"]
+        # online_adapt section — K, update cadence, milestone/early-stop for online_serve.py.
+        online_cfg = data.get("online_adapt", {})
+        if online_cfg.get("K") is not None:
+            out["online_K"] = int(online_cfg["K"])
+        if online_cfg.get("update_every") is not None:
+            out["online_update_every"] = int(online_cfg["update_every"])
+        if online_cfg.get("milestone_every") is not None:
+            out["online_milestone_every"] = int(online_cfg["milestone_every"])
+        if online_cfg.get("early_stop_patience") is not None:
+            out["online_early_stop_patience"] = int(online_cfg["early_stop_patience"])
+        if online_cfg.get("ebe_block_len") is not None:
+            out["online_ebe_block_len"] = int(online_cfg["ebe_block_len"])
         # tree_training section — hyperparameters for tree-structured distillation losses.
         # Used when --loss is one of {kl_tree, bv_tree, gbv_tree, traversal_tree}.
         # trainer.py accepts --tree_K (number of i.i.d. draft paths) and
@@ -453,10 +465,26 @@ def _load_config_yaml(config_name: str) -> dict:
             out["eval_n_prompts"] = eval_cfg["n_prompts"]        # int — secondary datasets
         if eval_cfg.get("n_prompts_gsm8k"):
             out["eval_n_prompts_gsm8k"] = eval_cfg["n_prompts_gsm8k"]  # int — GSM8K primary eval
-        if eval_cfg.get("max_tokens"):
-            out["eval_max_tokens"] = eval_cfg["max_tokens"]             # int — override eval max_tokens
+        if eval_cfg.get("max_tokens") is not None:
+            out["eval_max_tokens"] = int(eval_cfg["max_tokens"])        # full eval (--no_smoke)
+        if eval_cfg.get("max_tokens_smoke") is not None:
+            out["eval_max_tokens_smoke"] = int(eval_cfg["max_tokens_smoke"])
         if eval_cfg.get("task_batch"):
             out["eval_task_batch"] = int(eval_cfg["task_batch"])        # int — task_score batch size
+        if eval_cfg.get("eval_datasets"):
+            out["eval_datasets"] = eval_cfg["eval_datasets"]            # list[str] — Phase 3 gsm8k* + Phase 4 rest
+        if eval_cfg.get("L"):
+            out["eval_L"] = int(eval_cfg["L"])                          # draft block depth at eval (match tree_L)
+        if eval_cfg.get("tree_eval_modes"):
+            out["tree_eval_modes_full"] = eval_cfg["tree_eval_modes"]   # A100 full tree-loss matrix
+        if eval_cfg.get("tree_eval_modes_subset"):
+            out["tree_eval_modes_subset"] = eval_cfg["tree_eval_modes_subset"]  # T4/colab non-OT subset
+        if eval_cfg.get("exclude_modes_when_4bit") is not None:
+            out["exclude_modes_when_4bit"] = eval_cfg["exclude_modes_when_4bit"]
+        if health.get("unstable_nan_action"):
+            out["unstable_nan_action"] = health["unstable_nan_action"]
+        if health.get("unstable_early_stop_patience") is not None:
+            out["unstable_early_stop_patience"] = int(health["unstable_early_stop_patience"])
         # experiment.seed_override → run a specific seed without editing training.seed
         if "seed_override" in experiment_cfg:
             out["seed"] = experiment_cfg["seed_override"]
@@ -887,7 +915,7 @@ def _check_teacher_fits_vram(target: str, load_in_4bit: bool, args) -> None:
 
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
               modes="alpha,specinfer,gbv,traversal",
-              Ks="3", temps="1.0", n=10, max_tokens=50, task_score=False,
+              Ks="3", temps="1.0", n=10, max_tokens=50, L=8, task_score=False,
               experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
               loss_name=None, model_family="qwen", device="auto",
@@ -921,6 +949,7 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
         "--temperature", temps,
         "--n", str(n),
         "--max_tokens", str(max_tokens),
+        "--L", str(L),
         "--skip_fetch",
         "--hw_tier", hw_tier,
         # Forward the model family so the BE verifier subprocess uses the right
@@ -1094,11 +1123,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _steps         = 10    if smoke else 1000   # 10 steps = enough for 1 fwd+bwd, ckpt save, val check
     _online_steps  = 10    if smoke else 500
     _n             = 3     if smoke else 10     # 3 prompts = enough to confirm code path, fast (~2-3s each)
-    _max_tok       = 30    if smoke else 50
-    # Phase 4 (multi-dataset eval: humaneval, math500, mtbench, alpaca) is skipped
-    # for both smoke AND laptop tier.  On laptop the teacher is 0.6B (same scale as
-    # draft) so multi-dataset eval produces no meaningful signal and only wastes time.
-    # Phase 4 runs only on T4/A100 where a real teacher produces actionable numbers.
+    # max_tokens: YAML evaluation.max_tokens (50 full) / max_tokens_smoke (30 smoke).
+    _max_tok       = 30 if smoke else 50   # fallback if YAML omits keys
+    # Phase 4 skip is finalized after YAML eval_datasets is parsed (below).
     _skip_phase4   = smoke or (hw_tier == "laptop")
     # Tree loss Phase 3 eval: on smoke AND laptop use only the paired verifier
     # (1 mode).  The full alignment matrix (bv+gbv+traversal or 8-verifier sweep)
@@ -1112,24 +1139,22 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # an inter-mode VRAM wait in evaluate.py (poll until ≥ 2 GB free).
     # Confirmed working: specinfer 5/5 prompts at 4-5 s/it with L=8 on 4 GB GPU.
     _modes = "alpha,bv,gbv,traversal,specinfer,naive"
+    _h_early = train_hparams or {}
 
-    # Alpha evaluation requires both draft (0.6B BF16) and teacher (8B) in the
-    # same evaluate.py process simultaneously.  On Colab (load_in_4bit=True) this
-    # exhausts the ~12 GB system RAM and the Linux OOM killer fires with SIGKILL
-    # before any Python exception handler can catch it.  The symptom is exit -9 at
-    # ~7% of teacher weight loading (layer 2 of 28).
-    #
-    # Fix: exclude alpha on Colab.  Block-efficiency metrics (BE) run through
-    # runner.py subprocesses that start fresh each time (small RAM footprint).
-    # Alpha can be run with --config server (A100, full BF16, no 4-bit).
+    # Alpha eval loads draft + teacher in one process.  With load_in_4bit=True the
+    # teacher NF4 dequant path spikes system RAM → Linux OOM killer (exit -9).
+    # Default: drop alpha when 4-bit (evaluation.exclude_modes_when_4bit: [alpha]).
+    # BE verifiers (bv, gbv, …) run in per-mode subprocesses — safe on 4-bit tiers.
+    _exclude_4bit = set(_h_early.get("exclude_modes_when_4bit", ["alpha"]))
     if load_in_4bit:
-        _modes = "bv,gbv,traversal,specinfer,naive"
+        _modes = ",".join(
+            m for m in _modes.split(",") if m not in _exclude_4bit
+        ) or "bv,gbv,traversal,specinfer,naive"
 
     # All families now support BE eval via CompatCache + _attn_mask_for_model().
     # (The previous per-family restriction was removed once the adapter was implemented.)
     # If a new family's BE eval is confirmed broken, add it to _BE_UNSUPPORTED_FAMILIES:
     _BE_UNSUPPORTED_FAMILIES: set = set()   # currently empty — all families supported
-    _h_early = train_hparams or {}
     if _h_early.get("model_family", "qwen") in _BE_UNSUPPORTED_FAMILIES:
         _modes = "alpha"
 
@@ -1148,9 +1173,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _temps = ",".join(str(t) for t in _h["eval_temps"])
     if not smoke:
         if _h.get("eval_modes"):
-            # Still enforce the load_in_4bit alpha exclusion even if YAML requests it.
+            # Still enforce exclude_modes_when_4bit even if YAML lists those modes.
             yaml_modes = [m for m in _h["eval_modes"]
-                          if not (load_in_4bit and m == "alpha")]
+                          if not (load_in_4bit and m in _exclude_4bit)]
             if yaml_modes:
                 _modes = ",".join(yaml_modes)
     # YAML eval_n_prompts / eval_n_prompts_gsm8k override the defaults above.
@@ -1163,13 +1188,56 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             _n = _h["eval_n_prompts"]
             _n_gsm8k = _n   # stays in sync unless overridden below
         _n_gsm8k = _h.get("eval_n_prompts_gsm8k", _n_gsm8k)
-    if _h.get("eval_max_tokens"):
-        _max_tok = _h["eval_max_tokens"]
+    if smoke:
+        if _h.get("eval_max_tokens_smoke") is not None:
+            _max_tok = int(_h["eval_max_tokens_smoke"])
+    elif _h.get("eval_max_tokens") is not None:
+        _max_tok = int(_h["eval_max_tokens"])
     # Laptop baseline eval: cap K at 3 (computed after YAML override so it also
     # guards against any YAML that accidentally sets K_values: [3, 5]).
     # Traversal K=5 takes ~50-70 s/prompt on a 6 GB laptop GPU; even with K=3 from
     # YAML the explicit cap is kept as a safety net for laptop runs.
     _Ks_baseline   = "3" if hw_tier == "laptop" else _Ks
+
+    # ── YAML eval_datasets: single source for Phase 3 (gsm8k*) and Phase 4 (rest) ──
+    # bases/a100.yaml: eval_datasets: [gsm8k_eval]           → Phase 3 only
+    # paper override:   [gsm8k_eval, humaneval, math500, mtbench, alpaca]
+    _eval_ds_list = _h.get("eval_datasets") or ["gsm8k_eval"]
+    if isinstance(_eval_ds_list, str):
+        _eval_ds_list = [d.strip() for d in _eval_ds_list.split(",") if d.strip()]
+    _gsm8k_dataset = next((d for d in _eval_ds_list if "gsm8k" in d), "gsm8k_eval")
+    _phase4_list = [d for d in _eval_ds_list if "gsm8k" not in d]
+    _phase4_datasets = ",".join(_phase4_list)
+    if not _phase4_list:
+        _skip_phase4 = True   # finalization: gsm8k_eval only — no multi-DS sweep
+    elif smoke or hw_tier == "laptop":
+        _skip_phase4 = True
+    else:
+        _skip_phase4 = False
+
+    # Unstable-loss extras (ebe, rev_kl, jsd, l1, tree losses): YAML health section.
+    # When health.early_stop_patience > 0, _train_hargs forwards it for ALL losses;
+    # _unstable_hargs only adds the fallback patience when global is unset.
+    _unstable_nan = str(_h.get("unstable_nan_action", "skip"))
+    _unstable_nan_only = ["--nan_action", _unstable_nan]
+    _unstable_hargs = list(_unstable_nan_only)
+    if not _h.get("early_stop_patience", 0):
+        _unstable_hargs += [
+            "--early_stop_patience",
+            str(_h.get("unstable_early_stop_patience", 3)),
+        ]
+    _eval_L = int(_h.get("eval_L", _h.get("tree_L", 8)))
+
+    # Online adapt knobs (online_serve.py) — YAML online_adapt: section.
+    _online_K = int(_h.get("online_K", 4))
+    _online_update = int(_h.get("online_update_every", 4))
+    _online_milestone = int(_h.get("online_milestone_every", 50))
+    _online_early_stop = int(_h.get("online_early_stop_patience", 3))
+    _online_ebe_block = int(_h.get("online_ebe_block_len", _online_K))
+    _online_prompts = (
+        os.path.join(_GBV_RESEARCH, _h["train_dataset"])
+        if _h.get("train_dataset") else _data("gsm8k_train.jsonl")
+    )
 
     # 4-bit flag appended to every training/eval command when load_in_4bit=True.
     # Only set for --config colab (free T4, 15 GB).  Server/A100 loads bf16.
@@ -1362,7 +1430,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
 
-    def _ec(student_path, label, datasets="gsm8k_eval", task_score=False, modes=None,
+    def _ec(student_path, label, datasets=None, task_score=False, modes=None,
             n_override=None, Ks_override=None):
         """Shorthand: eval cmd with smoke-aware parameters.
 
@@ -1372,6 +1440,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
           everything else    → _steps
         This keeps every DB row honest without touching each call site.
 
+        datasets: evaluate.py --datasets.  None → YAML evaluation.eval_datasets
+                  gsm8k entry (_gsm8k_dataset, e.g. gsm8k_eval).  Phase 4 steps pass
+                  _phase4_datasets explicitly.
         modes: verifier mode string passed to evaluate.py --modes.
                Defaults to _modes (all 6 verifiers) when None.
                Tree-loss eval steps pass their paired mode(s) explicitly.
@@ -1390,9 +1461,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _eval_modes = modes if modes is not None else _modes
         _n_this = n_override if n_override is not None else _n
         _Ks_this = Ks_override if Ks_override is not None else _Ks
+        _ds = datasets if datasets is not None else _gsm8k_dataset
         cmd = _eval_cmd(student_path, label, target,
-                        datasets=datasets, modes=_eval_modes, Ks=_Ks_this, temps=_temps,
-                        n=_n_this, max_tokens=_max_tok,
+                        datasets=_ds, modes=_eval_modes, Ks=_Ks_this, temps=_temps,
+                        n=_n_this, max_tokens=_max_tok, L=_eval_L,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
                         loss_name=label,
@@ -1422,10 +1494,18 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # kl_tree, rev_kl_tree, jsd_tree are universal baselines — they run all
     # configured modes regardless of "paired" semantics.
     # ─────────────────────────────────────────────────────────────────────────
-    _TREE_NON_OT      = "bv,gbv,traversal"
-    _TREE_FULL_MATRIX = "naive,nss,specinfer,spectr,khisti,bv,gbv,traversal"
+    _tree_full_list = _h.get("tree_eval_modes_full")
+    _tree_subset_list = _h.get("tree_eval_modes_subset")
+    _TREE_FULL_MATRIX = (
+        ",".join(_tree_full_list) if _tree_full_list
+        else "naive,nss,specinfer,spectr,khisti,bv,gbv,traversal"
+    )
+    _TREE_NON_OT = (
+        ",".join(_tree_subset_list) if _tree_subset_list
+        else "bv,gbv,traversal"
+    )
 
-    # A100 evals against the full 8-verifier matrix; T4 stays at 3-verifier subset.
+    # A100 evals against the full matrix; T4/colab use the non-OT subset unless YAML overrides.
     _tree_full_modes = _TREE_FULL_MATRIX if hw_tier == "a100" else _TREE_NON_OT
 
     _TREE_PAIRED = {                     # smoke: just the naturally paired verifier
@@ -1490,7 +1570,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_baseline_gsm8k",
             "group": "Phase 1 — Baseline",
             "desc": "Eval unmodified draft on gsm8k (all 6 verifier modes)",
-            "cmd": _ec(draft, "baseline", datasets="gsm8k_eval", task_score=True,
+            "cmd": _ec(draft, "baseline", task_score=True,
                        n_override=_n_gsm8k, Ks_override=_Ks_baseline),
             "done_check": None,
         },
@@ -1538,8 +1618,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "ebe",
                 "--steps", str(_steps),
-                "--nan_action", "skip",
-                "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("ebe-gsm8k"),
@@ -1571,7 +1650,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "ebe_single",
                 "--steps", str(_steps),
-                "--nan_action", "skip",
+                *_unstable_nan_only,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("ebe_single-gsm8k"),
@@ -1596,7 +1675,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "reverse_kl",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("rev_kl-gsm8k"),
@@ -1621,7 +1700,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "jsd",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("jsd-gsm8k"),
@@ -1646,7 +1725,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "l1",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("l1-gsm8k"),
@@ -1669,12 +1748,12 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": f"Online OSD adaptation (forward_kl, K=4), {_online_steps} prompts, gsm8k",
             "cmd": [
                 sys.executable, _ONLINE_SCRIPT,
-                "--prompts", _data("gsm8k_train.jsonl"),
+                "--prompts", _online_prompts,
                 "--draft", draft, "--target", target,
                 "--output", _ckpt("online-gsm8k"),
                 "--steps", str(_online_steps),
-                "--update_every", "4",
-                "--K", "4",
+                "--update_every", str(_online_update),
+                "--K", str(_online_K),
                 "--kl_method", "forward_kl",
                 "--lr", str(_h.get("online_lr", 3e-4)),
                 # _online_max_tok: 30 smoke / YAML value full run (laptop=80, server=128, colab=64)
@@ -1705,14 +1784,14 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": f"Online EBE adaptation (ebe, K=4), {_online_steps} prompts, gsm8k",
             "cmd": [
                 sys.executable, _ONLINE_SCRIPT,
-                "--prompts", _data("gsm8k_train.jsonl"),
+                "--prompts", _online_prompts,
                 "--draft", draft, "--target", target,
                 "--output", _ckpt("online-ebe-gsm8k"),
                 "--steps", str(_online_steps),
-                "--update_every", "4",
-                "--K", "4",
+                "--update_every", str(_online_update),
+                "--K", str(_online_K),
                 "--kl_method", "ebe",
-                "--ebe_block_len", "4",    # match --K
+                "--ebe_block_len", str(_online_ebe_block),
                 "--ebe_kl_weight", "0.1",
                 # online_ebe uses a lower LR than forward_kl online (1e-4 vs 3e-4):
                 # EBE's cumprod gradient is more volatile — same step size causes
@@ -1725,10 +1804,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 # milestone checkpoints every 50 steps: preserve the best model even
                 # if it degrades later.  Forward_kl online is stable so doesn't need
                 # this; EBE online can peak early and then collapse.
-                "--milestone_every", "50",
-                # early stopping: if eval_alpha worsens for 3 consecutive eval windows
+                "--milestone_every", str(_online_milestone),
+                # early stopping: if eval_alpha worsens for N consecutive eval windows
                 # (eval_every=50 steps by default), stop and keep ckpt_latest as-is.
-                "--early_stop_patience", "3",
+                "--early_stop_patience", str(_online_early_stop),
                 *_online_hargs,   # --lora_r, --lora_alpha — must match offline training runs
             ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-gsm8k"), "adapter_config.json"),
@@ -1754,17 +1833,17 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": f"Online EBE-single adaptation (ebe_single, K=4), {_online_steps} prompts, gsm8k",
             "cmd": [
                 sys.executable, _ONLINE_SCRIPT,
-                "--prompts", _data("gsm8k_train.jsonl"),
+                "--prompts", _online_prompts,
                 "--draft", draft, "--target", target,
                 "--output", _ckpt("online-ebe-single-gsm8k"),
                 "--steps", str(_online_steps),
-                "--update_every", "4",
-                "--K", "4",
+                "--update_every", str(_online_update),
+                "--K", str(_online_K),
                 "--kl_method", "ebe_single",
                 "--lr", str(_h.get("online_ebe_lr", 1e-4)),
                 "--max_new_tokens", str(_online_max_tok),
-                "--milestone_every", "50",
-                "--early_stop_patience", "3",
+                "--milestone_every", str(_online_milestone),
+                "--early_stop_patience", str(_online_early_stop),
                 *_online_hargs,
             ] + _4bit + _compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-single-gsm8k"), "adapter_config.json"),
@@ -1837,7 +1916,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "bv_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("bv_tree-gsm8k"),
@@ -1862,7 +1941,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "gbv_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("gbv_tree-gsm8k"),
@@ -1887,7 +1966,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "traversal_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("trav_tree-gsm8k"),
@@ -1912,7 +1991,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "ebe_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("ebe_tree-gsm8k"),
@@ -1942,7 +2021,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "rev_kl_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("rev_kl_tree-gsm8k"),
@@ -1967,7 +2046,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "jsd_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("jsd_tree-gsm8k"),
@@ -2004,7 +2083,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "naive_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("naive_tree-gsm8k"),
@@ -2029,7 +2108,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "nss_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("nss_tree-gsm8k"),
@@ -2054,7 +2133,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "specinfer_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("si_tree-gsm8k"),
@@ -2079,7 +2158,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "spectr_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("st_tree-gsm8k"),
@@ -2104,7 +2183,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 sys.executable, _TRAIN_SCRIPT,
                 "--loss", "khisti_tree",
                 "--steps", str(_steps),
-                "--nan_action", "skip", "--early_stop_patience", "3",
+                *_unstable_hargs,
                 "--draft", draft, "--target", target,
                 "--dataset", _data("gsm8k_train.jsonl"),
                 "--output", _ckpt("khisti_tree-gsm8k"),
@@ -2134,14 +2213,14 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": f"Online tree adapt: kl_tree, tree_K={_h.get('tree_K', 4)}, {_online_steps} steps, gsm8k",
             "cmd": [
                 sys.executable, _ONLINE_SCRIPT,
-                "--prompts", _data("gsm8k_train.jsonl"),
+                "--prompts", _online_prompts,
                 "--draft", draft, "--target", target,
                 "--output", _ckpt("online-kl-tree-gsm8k"),
                 "--steps", str(_online_steps),
-                "--update_every", "4",
-                "--K", "4",
+                "--update_every", str(_online_update),
+                "--K", str(_online_K),
                 "--tree_loss", "kl_tree",
-                "--tree_K", str(min(_h.get("tree_K", 4), 4)),  # max K=4 for safety
+                "--tree_K", str(min(_h.get("tree_K", 4), _online_K)),
                 "--tree_L", str(_h.get("tree_L", 8)),
                 "--lr", str(_h.get("online_lr", 3e-4)),
                 "--max_new_tokens", str(_online_max_tok),
@@ -2164,14 +2243,14 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "desc": f"Online tree adapt: ebe_tree, tree_K={_h.get('tree_K', 4)}, {_online_steps} steps, gsm8k",
             "cmd": [
                 sys.executable, _ONLINE_SCRIPT,
-                "--prompts", _data("gsm8k_train.jsonl"),
+                "--prompts", _online_prompts,
                 "--draft", draft, "--target", target,
                 "--output", _ckpt("online-ebe-tree-gsm8k"),
                 "--steps", str(_online_steps),
-                "--update_every", "4",
-                "--K", "4",
+                "--update_every", str(_online_update),
+                "--K", str(_online_K),
                 "--tree_loss", "ebe_tree",
-                "--tree_K", str(min(_h.get("tree_K", 4), 4)),
+                "--tree_K", str(min(_h.get("tree_K", 4), _online_K)),
                 "--tree_L", str(_h.get("tree_L", 8)),
                 "--lr", str(_h.get("online_lr", 3e-4)),
                 "--max_new_tokens", str(_online_max_tok),
@@ -2200,7 +2279,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_kl_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval kl-gsm8k on gsm8k",
-            "cmd": _ec(_merged("kl-gsm8k"), "kl", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("kl-gsm8k"), "kl", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("kl-gsm8k"), "config.json"),
         },
@@ -2208,7 +2287,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_ebe_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval ebe-gsm8k on gsm8k",
-            "cmd": _ec(_merged("ebe-gsm8k"), "ebe", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("ebe-gsm8k"), "ebe", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("ebe-gsm8k"), "config.json"),
         },
@@ -2216,7 +2295,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_rev_kl_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval rev_kl-gsm8k on gsm8k",
-            "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
         },
@@ -2224,7 +2303,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_jsd_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval jsd-gsm8k on gsm8k",
-            "cmd": _ec(_merged("jsd-gsm8k"), "jsd", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("jsd-gsm8k"), "jsd", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("jsd-gsm8k"), "config.json"),
         },
@@ -2232,7 +2311,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_l1_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval l1-gsm8k on gsm8k",
-            "cmd": _ec(_merged("l1-gsm8k"), "l1", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("l1-gsm8k"), "l1", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("l1-gsm8k"), "config.json"),
         },
@@ -2240,7 +2319,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_online_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-gsm8k"), "online", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("online-gsm8k"), "online", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-gsm8k"), "config.json"),
         },
@@ -2248,7 +2327,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_online_ebe_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
         },
@@ -2256,7 +2335,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_ebe_single_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval ebe_single-gsm8k on gsm8k",
-            "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
         },
@@ -2264,7 +2343,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_online_ebe_single_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-single-gsm8k on gsm8k",
-            "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+            "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single", task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
         },
@@ -2277,8 +2356,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_kl_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval kl_tree-gsm8k on gsm8k [bv+gbv+traversal]",
-            "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["kl_tree"]),   # bv,gbv,traversal (smoke+full)
             "done_check": None,
             "requires": os.path.join(_merged("kl_tree-gsm8k"), "config.json"),
@@ -2287,8 +2365,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_bv_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval bv_tree-gsm8k on gsm8k [bv (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["bv_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("bv_tree-gsm8k"), "config.json"),
@@ -2297,8 +2374,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_gbv_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval gbv_tree-gsm8k on gsm8k [gbv (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["gbv_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("gbv_tree-gsm8k"), "config.json"),
@@ -2307,8 +2383,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_trav_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval trav_tree-gsm8k on gsm8k [traversal (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["traversal_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("trav_tree-gsm8k"), "config.json"),
@@ -2317,8 +2392,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_ebe_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval ebe_tree-gsm8k on gsm8k [bv (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["ebe_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("ebe_tree-gsm8k"), "config.json"),
@@ -2327,8 +2401,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_rev_kl_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval rev_kl_tree-gsm8k on gsm8k [paired (laptop/smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["rev_kl_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("rev_kl_tree-gsm8k"), "config.json"),
@@ -2337,8 +2410,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_jsd_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval jsd_tree-gsm8k on gsm8k [paired (laptop/smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["jsd_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("jsd_tree-gsm8k"), "config.json"),
@@ -2353,8 +2425,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_naive_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval naive_tree-gsm8k on gsm8k [naive (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("naive_tree-gsm8k"), "naive_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("naive_tree-gsm8k"), "naive_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["naive_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("naive_tree-gsm8k"), "config.json"),
@@ -2363,8 +2434,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_nss_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval nss_tree-gsm8k on gsm8k [nss (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("nss_tree-gsm8k"), "nss_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("nss_tree-gsm8k"), "nss_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["nss_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("nss_tree-gsm8k"), "config.json"),
@@ -2373,8 +2443,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_si_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval specinfer_tree-gsm8k on gsm8k [specinfer (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("si_tree-gsm8k"), "specinfer_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("si_tree-gsm8k"), "specinfer_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["specinfer_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("si_tree-gsm8k"), "config.json"),
@@ -2383,8 +2452,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_st_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval spectr_tree-gsm8k on gsm8k [spectr (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("st_tree-gsm8k"), "spectr_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("st_tree-gsm8k"), "spectr_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["spectr_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("st_tree-gsm8k"), "config.json"),
@@ -2393,8 +2461,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "id": "eval_khisti_tree_gsm8k",
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval khisti_tree-gsm8k on gsm8k [khisti (smoke) | full alignment matrix]",
-            "cmd": _ec(_merged("khisti_tree-gsm8k"), "khisti_tree", datasets="gsm8k_eval",
-                       task_score=True, n_override=_n_gsm8k,
+            "cmd": _ec(_merged("khisti_tree-gsm8k"), "khisti_tree", task_score=True, n_override=_n_gsm8k,
                        modes=_TREE_PAIRED["khisti_tree"] if _tree_light_eval else _tree_full_modes),
             "done_check": None,
             "requires": os.path.join(_merged("khisti_tree-gsm8k"), "config.json"),
@@ -2406,7 +2473,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-kl-tree-gsm8k on gsm8k [all 6 verifiers]",
             "cmd": _ec(_merged("online-kl-tree-gsm8k"), "online_kl_tree",
-                       datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+                       task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
         },
@@ -2415,7 +2482,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 3 — GSM8K Eval",
             "desc": "Eval online-ebe-tree-gsm8k on gsm8k [all 6 verifiers]",
             "cmd": _ec(_merged("online-ebe-tree-gsm8k"), "online_ebe_tree",
-                       datasets="gsm8k_eval", task_score=True, n_override=_n_gsm8k),
+                       task_score=True, n_override=_n_gsm8k),
             "done_check": None,
             "requires": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
         },
@@ -2431,7 +2498,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval baseline on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(draft, "baseline",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
         },
@@ -2440,7 +2507,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval kl on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("kl-gsm8k"), "kl",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("kl-gsm8k"), "config.json"),
@@ -2450,7 +2517,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval ebe on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("ebe-gsm8k"), "ebe",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("ebe-gsm8k"), "config.json"),
@@ -2460,7 +2527,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval rev_kl on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("rev_kl-gsm8k"), "rev_kl",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("rev_kl-gsm8k"), "config.json"),
@@ -2470,7 +2537,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval jsd on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("jsd-gsm8k"), "jsd",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("jsd-gsm8k"), "config.json"),
@@ -2480,7 +2547,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval l1 on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("l1-gsm8k"), "l1",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("l1-gsm8k"), "config.json"),
@@ -2490,7 +2557,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("online-gsm8k"), "online",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-gsm8k"), "config.json"),
@@ -2500,7 +2567,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online_ebe on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("online-ebe-gsm8k"), "online_ebe",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-ebe-gsm8k"), "config.json"),
@@ -2510,7 +2577,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval ebe_single on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("ebe_single-gsm8k"), "ebe_single",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("ebe_single-gsm8k"), "config.json"),
@@ -2520,7 +2587,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online_ebe_single on humaneval,math500,mtbench,alpaca",
             "cmd": _ec(_merged("online-ebe-single-gsm8k"), "online_ebe_single",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-ebe-single-gsm8k"), "config.json"),
@@ -2534,7 +2601,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval kl_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("kl_tree-gsm8k"), "kl_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2545,7 +2612,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval bv_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("bv_tree-gsm8k"), "bv_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2556,7 +2623,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval gbv_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("gbv_tree-gsm8k"), "gbv_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2567,7 +2634,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval trav_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("trav_tree-gsm8k"), "traversal_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2578,7 +2645,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval ebe_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("ebe_tree-gsm8k"), "ebe_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2589,7 +2656,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval rev_kl_tree on humaneval,math500,mtbench,alpaca [bv+gbv+traversal]",
             "cmd": _ec(_merged("rev_kl_tree-gsm8k"), "rev_kl_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2600,7 +2667,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval jsd_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("jsd_tree-gsm8k"), "jsd_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2614,7 +2681,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval naive_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("naive_tree-gsm8k"), "naive_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2625,7 +2692,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval nss_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("nss_tree-gsm8k"), "nss_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2636,7 +2703,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval specinfer_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("si_tree-gsm8k"), "specinfer_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2647,7 +2714,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval spectr_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("st_tree-gsm8k"), "spectr_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2658,7 +2725,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval khisti_tree on humaneval,math500,mtbench,alpaca [full alignment matrix]",
             "cmd": _ec(_merged("khisti_tree-gsm8k"), "khisti_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True,
+                       datasets=_phase4_datasets, task_score=True,
                        modes=_tree_full_modes),
             "done_check": None,
             "smoke_skip": _skip_phase4,
@@ -2669,7 +2736,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online-kl-tree on humaneval,math500,mtbench,alpaca [all 6 verifiers]",
             "cmd": _ec(_merged("online-kl-tree-gsm8k"), "online_kl_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-kl-tree-gsm8k"), "config.json"),
@@ -2679,7 +2746,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             "group": "Phase 4 — Multi-Dataset",
             "desc": "Eval online-ebe-tree on humaneval,math500,mtbench,alpaca [all 6 verifiers]",
             "cmd": _ec(_merged("online-ebe-tree-gsm8k"), "online_ebe_tree",
-                       datasets="humaneval,math500,mtbench,alpaca", task_score=True),
+                       datasets=_phase4_datasets, task_score=True),
             "done_check": None,
             "smoke_skip": _skip_phase4,
             "requires": os.path.join(_merged("online-ebe-tree-gsm8k"), "config.json"),
@@ -3814,7 +3881,13 @@ def main():
     # (n=10 prompts regardless of YAML).  Now every config YAML can control eval cost.
     for _ek in ("eval_modes", "eval_K_values", "eval_temps",
                 "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
-                "eval_task_batch"):
+                "eval_task_batch", "eval_datasets", "eval_L",
+                "eval_max_tokens", "eval_max_tokens_smoke",
+                "tree_eval_modes_full", "tree_eval_modes_subset",
+                "exclude_modes_when_4bit",
+                "unstable_nan_action", "unstable_early_stop_patience",
+                "online_K", "online_update_every", "online_milestone_every",
+                "online_early_stop_patience", "online_ebe_block_len"):
         if _ek in _yaml_cfg:
             train_hparams[_ek] = _yaml_cfg[_ek]
 

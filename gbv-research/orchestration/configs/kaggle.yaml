@@ -115,6 +115,7 @@ evaluation:
   # T=1.0: DistillSpec/EAGLE/Medusa paper standard (T=0.6 sharpens distributions, changing
   #   acceptance probabilities and making comparison to published numbers unfair).
   modes: [bv, gbv, traversal, specinfer, naive]
+  exclude_modes_when_4bit: [alpha]   # redundant with modes list; documents 4-bit safety rule
   K_values: [3]
   temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
   L: 8

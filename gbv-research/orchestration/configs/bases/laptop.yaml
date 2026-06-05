@@ -45,14 +45,27 @@ health:
   ppl_threshold: 1.25
 
 evaluation:
+  # Phase 3 eval file (gsm8k* only on laptop — Phase 4 skipped by hw_tier).
+  eval_datasets: [gsm8k_eval]
   # All 6 verifier modes — each runs in its own subprocess on the 6 GB GPU.
   # Single K and temperature: laptop is a crash-test, not a sweep.
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
   L: 8
+  max_tokens: 50
+  max_tokens_smoke: 30
   n_prompts: 5          # ~3 min/mode × 6 modes = ~18 min total eval
+  tree_eval_modes_subset: [bv, gbv, traversal]
+  exclude_modes_when_4bit: [alpha]
   # task_score batch: RTX 500 Ada 6GB + distilgpt2 (82M): 65e12/(0.16e9×320e9)≈1269 → use 4 (safe)
   task_batch: 4
+
+online_adapt:
+  K: 4
+  update_every: 4
+  milestone_every: 50
+  early_stop_patience: 3
+  ebe_block_len: 4
 
 tree_training:
   tree_K: 4

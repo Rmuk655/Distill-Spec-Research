@@ -459,6 +459,11 @@ def _extract_gsm8k_number(text: str):
     return nums[-1].replace(",", "") if nums else None
 
 
+def _is_gsm8k_scored_dataset(dataset: str) -> bool:
+    """True if dataset carries GSM8K numeric answers (gsm8k, gsm8k_eval, …)."""
+    return dataset == "gsm8k" or dataset.startswith("gsm8k")
+
+
 def score_gsm8k(generated: str, gold_answer_text: str) -> float:
     """Return 1.0 if the final number in `generated` matches the GSM8K gold answer."""
     gold = _extract_gsm8k_number(gold_answer_text or "")
@@ -526,7 +531,7 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     teacher is still occupying VRAM (was causing OOM → silent CPU fallback
     → task_score taking 7+ hours instead of 2-3 minutes).
     """
-    if dataset not in ("gsm8k", "humaneval"):
+    if not _is_gsm8k_scored_dataset(dataset) and dataset != "humaneval":
         return {"task_score": None, "scored": 0}
 
     import torch
@@ -622,7 +627,7 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
         for j, gen in enumerate(gen_ids):
             idx = b_start + j
             generated = tokenizer.decode(gen, skip_special_tokens=True)
-            if dataset == "gsm8k":
+            if _is_gsm8k_scored_dataset(dataset):
                 scores.append(score_gsm8k(generated, _golds[idx]))
             elif dataset == "humaneval":
                 scores.append(score_humaneval(batch_texts[j], generated,
@@ -1357,7 +1362,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
                   f"tagged in DB notes")
 
         # Task accuracy (GSM8K / HumanEval only)
-        if task_score and dataset in ("gsm8k", "humaneval"):
+        if task_score and (_is_gsm8k_scored_dataset(dataset) or dataset == "humaneval"):
             print(f"  [task_score] running {dataset} accuracy...")
             # Pass preloaded student model to avoid loading a second copy while
             # the teacher is still resident in GPU memory (caused OOM → CPU fallback).

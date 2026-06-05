@@ -60,6 +60,8 @@ logging:
 
 health:
   nan_action: stop              # A100 sessions are stable; stop on NaN rather than skipping
+  unstable_nan_action: skip       # ebe / rev_kl / jsd / l1 / tree losses (when global nan_action=stop)
+  unstable_early_stop_patience: 3  # fallback when early_stop_patience unset (see a100_qwen.yaml)
   ppl_threshold: 1.25
   # Dual-val is configured per leaf config (a100_qwen.yaml) because the optimal
   # cadence depends on model family speed (Qwen3-8B vs LLaMA-3B vs GPT-2 etc.).
@@ -100,13 +102,25 @@ evaluation:
   K_values: [3]
   temperatures: [1.0]
   L: 8
+  # Tokens generated per prompt during alpha/BE eval (NOT training max_new_tokens).
+  max_tokens: 50                     # full runs (--no_smoke): enough for GSM8K short answers
+  max_tokens_smoke: 30               # smoke: fast path verification
   n_prompts: 100
   n_prompts_gsm8k: 100               # paper: 1119 (all non-val test prompts)
-  # gsm8k_eval = eval pool: items[200:300] of seed=42 shuffled 1319-item test set.
-  # gsm8k      = val pool:  items[0:100]  — used during training for checkpoint selection.
-  # These two never overlap → no checkpoint-selection bias in reported eval numbers.
-  # paper: [gsm8k_eval, alpaca, math500, humaneval, mtbench] with n_prompts_gsm8k: 1119
+  # eval_datasets drives ALL pipeline eval steps (experiment.py reads this — do not
+  # hardcode dataset names in Python).  gsm8k* entry → Phase 3 (baseline + every loss).
+  # Other entries → Phase 4 multi-dataset eval (skipped when list has gsm8k* only).
+  #
+  # gsm8k_eval = held-out eval pool items[200:300]; gsm8k = val pool items[0:100].
+  # FINALIZATION (current):
   eval_datasets: [gsm8k_eval]
+  # Tree-loss Phase 3 eval: full 8-verifier matrix on A100; T4/colab use subset.
+  tree_eval_modes: [naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+  tree_eval_modes_subset: [bv, gbv, traversal]
+  # When hardware.load_in_4bit: true, drop these modes (alpha OOMs on NF4+RAM spike).
+  exclude_modes_when_4bit: [alpha]
+  # PAPER — uncomment in a100_qwen.yaml evaluation: override:
+  # eval_datasets: [gsm8k_eval, humaneval, math500, mtbench, alpaca]
   # task_score batch size: how many prompts to generate simultaneously.
   # Roofline: optimal ≈ FLOPs_peak / (params_bytes × HBM_BW)
   # A100-40GB + Qwen3-0.6B BF16: 312e12 / (1.2e9 × 2039e9) ≈ 127 → use 32 (safe margin)
@@ -116,6 +130,13 @@ evaluation:
 tree_training:
   tree_K: 4
   tree_L: 8
+
+online_adapt:
+  K: 4
+  update_every: 4
+  milestone_every: 50      # online_ebe / online_ebe_single checkpoint cadence
+  early_stop_patience: 3   # stop if online eval metric worsens N windows in a row
+  ebe_block_len: 4         # match K for block-level EBE online
 
 experiment:
   # Flat EBE losses are off-policy in the offline trainer: they optimise

@@ -121,10 +121,26 @@ def _build_train_hparams(yaml_cfg: dict) -> dict:
     }
     # eval keys forwarded as-is
     for ek in ("eval_modes", "eval_K_values", "eval_temps",
-               "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens"):
+               "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
+               "eval_datasets", "eval_L", "eval_max_tokens", "eval_max_tokens_smoke",
+               "tree_eval_modes_full", "tree_eval_modes_subset",
+               "exclude_modes_when_4bit",
+               "unstable_nan_action", "unstable_early_stop_patience",
+               "online_K", "online_update_every", "online_milestone_every",
+               "online_early_stop_patience", "online_ebe_block_len"):
         if ek in yaml_cfg:
             tp[ek] = yaml_cfg[ek]
     return tp
+
+
+def _first_eval_cmd(steps, step_id="eval_baseline_gsm8k") -> list:
+    """Return evaluate.py command list for a Phase-3 GSM8K eval step."""
+    for step in steps:
+        if step.get("id") == step_id:
+            return [str(x) for x in step["cmd"]]
+    raise AssertionError(
+        f"No eval step {step_id!r}. IDs: {[s['id'] for s in steps]}"
+    )
 
 
 def _first_train_cmd(steps, tree=False) -> list:
@@ -251,6 +267,36 @@ class TestLayer1YamlExtraction:
             f"a100_qwen sets early_stop_patience: 5, got {cfg['early_stop_patience']}"
         )
 
+    def test_a100_qwen_inherits_eval_datasets_from_base(self):
+        """bases/a100.yaml evaluation.eval_datasets must reach merged config."""
+        cfg = _load_config_yaml("a100_qwen")
+        assert "eval_datasets" in cfg, (
+            "eval_datasets missing — Phase 3 eval file is not YAML-controlled"
+        )
+        assert "gsm8k_eval" in cfg["eval_datasets"]
+
+    def test_a100_qwen_inherits_eval_L_from_base(self):
+        cfg = _load_config_yaml("a100_qwen")
+        assert cfg.get("eval_L") == 8, (
+            f"evaluation.L from bases/a100.yaml should be 8, got {cfg.get('eval_L')!r}"
+        )
+
+    def test_a100_qwen_inherits_eval_max_tokens_from_base(self):
+        cfg = _load_config_yaml("a100_qwen")
+        assert cfg.get("eval_max_tokens") == 50
+        assert cfg.get("eval_max_tokens_smoke") == 30
+
+    def test_a100_qwen_inherits_online_adapt_from_base(self):
+        cfg = _load_config_yaml("a100_qwen")
+        assert cfg.get("online_milestone_every") == 50
+        assert cfg.get("online_early_stop_patience") == 3
+        assert cfg.get("online_K") == 4
+
+    def test_a100_qwen_inherits_tree_eval_modes_from_base(self):
+        cfg = _load_config_yaml("a100_qwen")
+        assert "bv" in cfg.get("tree_eval_modes_full", [])
+        assert cfg.get("tree_eval_modes_subset") == ["bv", "gbv", "traversal"]
+
 
 
 # ── Layer 2: _yaml_cfg → train_hparams ───────────────────────────────────────
@@ -293,6 +339,11 @@ _CANARY = {
     "slow_val_every": 250,       # dual-val: run slow check every N steps
     "slow_val_n": 77,            # dual-val: number of prompts for slow val
     "eval_n_prompts_gsm8k": 77,
+    "online_K": 5,
+    "online_update_every": 7,
+    "online_milestone_every": 42,
+    "online_early_stop_patience": 9,
+    "online_ebe_block_len": 5,
 }
 
 # Keys that are NOT forwarded as --flag to trainer.py (control/meta-only)
@@ -312,6 +363,13 @@ _NOT_TRAINER_FLAGS = {
     "eval_temps",           # eval key
     "eval_n_prompts",       # eval key
     "eval_max_tokens",      # eval key
+    "eval_datasets",        # eval key
+    "eval_L",               # eval key
+    "tree_eval_modes_full", "tree_eval_modes_subset",
+    "exclude_modes_when_4bit",
+    "online_K", "online_update_every", "online_milestone_every",
+    "online_early_stop_patience", "online_ebe_block_len",
+    "online_lr", "online_ebe_lr",
     "ppl_threshold",        # forwarded as --ppl_threshold
     "log_every",            # forwarded as --log_every
     "early_stop_patience",  # forwarded as --early_stop_patience
@@ -527,6 +585,173 @@ class TestLayer3TrainerCmd:
             "--val_dataset missing from trainer cmd despite val_dataset being set in train_hparams."
         )
         assert "wikitext" in val
+
+
+# ── Layer 3 (eval): train_hparams → evaluate.py subprocess cmd ───────────────
+
+class TestLayer3EvalCmd:
+    """YAML eval_datasets / eval_L must reach evaluate.py --datasets / --L."""
+
+    @pytest.fixture(scope="class")
+    def a100_eval_cmd(self):
+        yaml_cfg = _load_config_yaml("a100_qwen")
+        tp = _build_train_hparams(yaml_cfg)
+        steps = _exp.build_steps(
+            draft="Qwen/Qwen3-0.6B",
+            target="Qwen/Qwen3-8B",
+            train_hparams=tp,
+            smoke=False,
+            losses_to_run=["kl"],
+            hw_tier="a100",
+            force_eval=False,
+        )
+        return _first_eval_cmd(steps, "eval_baseline_gsm8k")
+
+    def test_eval_datasets_from_yaml_not_hardcoded_gsm8k(self, a100_eval_cmd):
+        """Regression: 26× datasets='gsm8k' hardcode replaced by YAML eval_datasets."""
+        ds_flag = _cmd_value(a100_eval_cmd, "--datasets")
+        assert ds_flag == "gsm8k_eval", (
+            f"--datasets={ds_flag!r}; expected gsm8k_eval from bases/a100.yaml "
+            "evaluation.eval_datasets. Edit YAML, not experiment.py call sites."
+        )
+
+    def test_eval_L_from_yaml(self, a100_eval_cmd):
+        val = _cmd_value(a100_eval_cmd, "--L")
+        assert val == "8", f"--L={val!r}; expected 8 from evaluation.L in bases/a100.yaml"
+
+    def test_eval_max_tokens_from_yaml_full_run(self, a100_eval_cmd):
+        val = _cmd_value(a100_eval_cmd, "--max_tokens")
+        assert val == "50", (
+            f"--max_tokens={val!r}; expected 50 from evaluation.max_tokens in bases/a100.yaml"
+        )
+
+    def test_eval_max_tokens_smoke_from_yaml(self):
+        yaml_cfg = _load_config_yaml("a100_qwen")
+        tp = _build_train_hparams(yaml_cfg)
+        steps = _exp.build_steps(
+            draft="Qwen/Qwen3-0.6B",
+            target="Qwen/Qwen3-8B",
+            train_hparams=tp,
+            smoke=True,
+            losses_to_run=["kl"],
+            hw_tier="a100",
+            force_eval=True,
+        )
+        cmd = _first_eval_cmd(steps, "eval_baseline_gsm8k")
+        assert _cmd_value(cmd, "--max_tokens") == "30"
+
+    def test_canary_eval_datasets_override(self):
+        """Synthetic YAML eval_datasets must flow to --datasets."""
+        tp = _build_train_hparams({
+            **_CANARY,
+            "eval_datasets": ["gsm8k"],
+            "eval_modes": ["bv"],
+            "eval_K_values": [3],
+            "eval_temps": [1.0],
+            "eval_n_prompts_gsm8k": 50,
+        })
+        steps = _exp.build_steps(
+            draft="Qwen/Qwen3-0.6B",
+            target="Qwen/Qwen3-8B",
+            train_hparams=tp,
+            smoke=False,
+            losses_to_run=["kl"],
+            hw_tier="a100",
+            force_eval=False,
+        )
+        cmd = _first_eval_cmd(steps, "eval_kl_gsm8k")
+        assert _cmd_value(cmd, "--datasets") == "gsm8k"
+
+    def test_unstable_nan_action_on_ebe_train(self):
+        tp = _build_train_hparams({**_CANARY, "unstable_nan_action": "stop"})
+        steps = _exp.build_steps(
+            draft="distilgpt2",
+            target="gpt2-medium",
+            train_hparams=tp,
+            smoke=False,
+            losses_to_run=["ebe"],
+            hw_tier="laptop",
+            force_eval=False,
+        )
+        cmd = _first_train_cmd(steps, tree=False)
+        # ebe step id is train_ebe_gsm8k
+        for step in steps:
+            if step["id"] == "train_ebe_gsm8k":
+                cmd = [str(x) for x in step["cmd"]]
+                break
+        assert _cmd_value(cmd, "--nan_action") == "stop"
+
+    def test_4bit_excludes_alpha_from_eval_modes(self):
+        """load_in_4bit + exclude_modes_when_4bit must drop alpha from --modes."""
+        tp = _build_train_hparams({
+            **_CANARY,
+            "eval_modes": ["alpha", "bv", "gbv"],
+            "exclude_modes_when_4bit": ["alpha"],
+            "eval_datasets": ["gsm8k_eval"],
+            "eval_K_values": [3],
+            "eval_temps": [1.0],
+        })
+        steps = _exp.build_steps(
+            draft="Qwen/Qwen3-0.6B",
+            target="Qwen/Qwen3-8B",
+            train_hparams=tp,
+            smoke=False,
+            losses_to_run=["kl"],
+            hw_tier="colab",
+            load_in_4bit=True,
+            force_eval=False,
+        )
+        modes = _cmd_value(_first_eval_cmd(steps), "--modes")
+        assert "alpha" not in modes.split(",")
+        assert "bv" in modes.split(",")
+
+    def test_tree_eval_modes_full_on_kl_tree_eval(self):
+        tp = _build_train_hparams({
+            **_CANARY,
+            "tree_eval_modes_full": ["bv", "gbv", "canary_mode"],
+            "eval_datasets": ["gsm8k_eval"],
+            "eval_modes": ["bv"],
+            "eval_K_values": [3],
+            "eval_temps": [1.0],
+        })
+        steps = _exp.build_steps(
+            draft="Qwen/Qwen3-0.6B",
+            target="Qwen/Qwen3-8B",
+            train_hparams=tp,
+            smoke=False,
+            losses_to_run=["kl_tree"],
+            hw_tier="a100",
+            force_eval=False,
+        )
+        for step in steps:
+            if step.get("id") == "eval_kl_tree_gsm8k":
+                modes = _cmd_value([str(x) for x in step["cmd"]], "--modes")
+                assert modes == "bv,gbv,canary_mode"
+                return
+        pytest.fail("eval_kl_tree_gsm8k step not found")
+
+    def test_online_adapt_hargs_from_yaml(self):
+        tp = _build_train_hparams({**_CANARY})
+        steps = _exp.build_steps(
+            draft="distilgpt2",
+            target="gpt2-medium",
+            train_hparams=tp,
+            smoke=False,
+            losses_to_run=["online_ebe"],
+            hw_tier="laptop",
+            force_eval=False,
+        )
+        for step in steps:
+            if step.get("id") == "online_ebe_adapt_gsm8k":
+                cmd = [str(x) for x in step["cmd"]]
+                assert _cmd_value(cmd, "--milestone_every") == "42"
+                assert _cmd_value(cmd, "--early_stop_patience") == "9"
+                assert _cmd_value(cmd, "--K") == "5"
+                assert _cmd_value(cmd, "--update_every") == "7"
+                assert _cmd_value(cmd, "--ebe_block_len") == "5"
+                assert "wikitext" in _cmd_value(cmd, "--prompts")
+                return
+        pytest.fail("online_ebe_adapt_gsm8k step not found")
 
 
 # ── End-to-end: real laptop_gpt2.yaml → trainer cmd ─────────────────────────
