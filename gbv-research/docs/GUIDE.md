@@ -187,12 +187,7 @@ python orchestration/experiment.py --config a10_qwen --yes \
 
 ### Stage 2 — A100 (exploration → paper confirmation)
 
-**Hardware**: A100 (40/80 GB). In priority order:
-1. **IITH Hyderabad A100** — ₹80/GPU-hour (~$0.94/hr). Best value.
-2. **Lightning AI** — free monthly credits, A100 available.
-3. **Colab Pro A100** — ~$10/month subscription.
-4. **Modal.com** — ⚠️ only **$1 free credit** (was $30). Single targeted ablation only.
-5. **RunPod** — spot A100 at ~$1.5-2/hr; requires manual setup.
+**Hardware**: AIP/Pluto A100-SXM4-40GB (Colligo). Shared 8-GPU node — only GPU 0 is allocated to your job unless `CUDA_VISIBLE_DEVICES` is set by the cluster.
 
 **Two A100 configs — run both for the paper:**
 
@@ -201,47 +196,61 @@ python orchestration/experiment.py --config a10_qwen --yes \
 | `a100_qwen` | Qwen3-0.6B → Qwen3-8B BF16 | **Primary result** — main paper table |
 | `a100_llama` | LLaMA-3.2-1B → LLaMA-3.2-3B BF16 | **Cross-family result** — proves algorithm is family-agnostic |
 
-> **LLaMA access**: HuggingFace gated model. Accept the licence at  
+> **LLaMA access**: HuggingFace gated model. Accept licence at  
 > `https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct` then `huggingface-cli login`.
 
 ---
 
-#### Stage 2A — Exploration (current default in `a100_qwen.yaml`)
+#### Stage 2A — Exploration (current default)
 
-**Purpose**: Rank all 17 losses quickly. Pick the top 4-5 winners before committing to full eval.
+**Purpose**: Rank all 15 losses quickly (ebe/ebe_single excluded — off-policy, not the paper contribution). Pick top 4-5 winners before committing to full eval.
 
-| Parameter | Value |
-|---|---|
-| Train steps | 2000 (~15-20 min/loss on A100) |
-| max_train_prompts | null — full 7473 prompts |
-| GSM8K eval (n) | **100** |
-| Verifier modes | alpha, bv, gbv, traversal (4 of 9) |
-| Time per eval | ~40 min |
-| **Total: 17 losses** | **~11 hours** (train + eval) |
+| Parameter | Value | Rationale |
+|---|---|---|
+| Train steps | 2000 | ~15-20 min/loss |
+| grad_accum | 16 | 125 optimizer steps; lower variance than 4 |
+| grad_clip | **5.0** (tree losses) | Tree losses have path-weight amplification → norms 30-100 are normal |
+| max_train_prompts | null — full 7473 | Diversity > epochs for paper quality |
+| val_every | **50** | 40 val checks → smooth trend curves (not 200 → only 10 points) |
+| n_val (train) | **30 prompts** | SE≈0.031, 45s/check × 40 = 30 min total — doesn't dominate training |
+| val generation | **greedy** (do_sample=False) | Deterministic reference — sampling caused 5% noise masking real trends |
+| GSM8K eval (n) | **100** | SE≈0.017; ~40 min/eval |
+| Verifier modes | alpha, bv, gbv, traversal (4 of 9) | ~40 min/eval vs 14h for all 9 |
+| milestone_every | **200** | 10 checkpoints → smooth convergence curves for paper figures |
+| **Total: 15 losses** | **~11 hours** (train + eval) | |
 
-This is the active setting in `a100_qwen.yaml`. Run as-is:
 ```bash
+# Activate venv first (ALWAYS — running without venv gets killed by system Python 3.12):
+source ~/.specdist_env
+
+# Full exploration pipeline:
 python deploy/aip_run.py --config a100_qwen
+# OR one loss at a time (safer on shared cluster — 2h session limit):
+python deploy/aip_run.py --config a100_qwen --losses kl_tree --train_only --no_smoke
 ```
 
-**Decision gate**: after all 17 losses complete, rank by `BE/gbv` and `alpha/gsm8k` in W&B runs table. Promote the top 4-5 to Stage 2B.
+**Decision gate**: rank by `BE/gbv` and `alpha/gsm8k` in W&B runs table. Top 4-5 → Stage 2B.
 
 ---
 
 #### Stage 2B — Paper confirmation (flip two lines in YAML)
 
-**Purpose**: Full eval on winners only. These numbers go in the paper.
-
-In `a100_qwen.yaml`, change the `evaluation:` section:
+In `a100_qwen.yaml` `evaluation:` section:
 ```yaml
 evaluation:
   n_prompts_gsm8k: 1319          # was 100
   modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]  # all 9
 ```
+Also override val settings for paper quality:
+```yaml
+dataset:
+  val_dataset: gsm8k_100.jsonl   # was gsm8k_30
+health:
+  val_every: 100                  # was 50 — 20 checks with n=100 = 50 min total
+```
 
-Then clean-restart only the winning losses and rerun:
+Then rerun only winners:
 ```bash
-# Example: gbv_tree and traversal_tree won — rerun only those
 bash deploy/rerun_loss.sh gbv_tree paper_run
 bash deploy/rerun_loss.sh traversal_tree paper_run
 ```
@@ -253,29 +262,47 @@ bash deploy/rerun_loss.sh traversal_tree paper_run
 | Time per eval | ~14-17 hours |
 | **Top 5 losses** | **~70-85 hours total** |
 
-> Run Stage 2B only on the 4-5 winners from Stage 2A. Running all 17 losses at n=1319 would take ~300 hours.
+> Run Stage 2B only on 4-5 winners. Running all 15 losses at n=1319 = ~300 hours.
+
+---
+
+#### Convergence curves for paper figures
+
+Paper requires alpha/BE vs training step (not just final numbers). Infrastructure is in place:
+
+```bash
+# After training finishes, sweep milestone checkpoints (n=20 prompts, ~5 min/checkpoint):
+python deploy/eval_checkpoints.py \
+    --config a100_qwen --loss gbv_tree \
+    --storage_root /home/colligo/ram/specdist \
+    --n 20 --modes "alpha,gbv"
+
+# Generates checkpoint_evals table in DB + W&B metrics:
+#   checkpoint_eval/alpha_alpha  vs train_step
+#   checkpoint_eval/gbv_be       vs train_step
+```
+
+With `milestone_every=200` (10 milestones over 2000 steps), each eval_checkpoints run takes ~50 min and produces 10 data points — enough for a smooth convergence figure.
 
 ---
 
 #### One-time setup
 
-Set `WANDB_API_KEY` first, then run the setup script:
 ```bash
-# On the A100 server terminal:
 export WANDB_API_KEY="your-key-from-wandb.ai/authorize"   # REQUIRED before setup
 git clone https://github.com/Rmuk655/Distill-Spec-Research.git ~/ram/Distill-Spec-Research
 bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
-The setup script handles everything (verified end-to-end on AIP/Pluto A100):
-1. Creates a virtual environment — avoids system Python permission errors on managed servers
+The setup script handles everything:
+1. Creates venv at `$HOME/specdist/venv` (local disk — NFS is slow for pip packages)
 2. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
-3. Downloads `gsm8k_train.jsonl` (7473 prompts) from GitHub — HF dataset API broken for bare `gsm8k` name
-4. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY` — subprocesses inherit it
-5. Adds `source ~/.specdist_env` to `~/.bashrc` — persistent across sessions
-6. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — avoids OOM from transformers warmup buffer
+3. Downloads `gsm8k_train.jsonl` (7473 prompts) before offline flags are set
+4. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY`
+5. Adds `source ~/.specdist_env` to `~/.bashrc`
+6. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 
-> **WANDB_API_KEY must be exported BEFORE running the setup script** — `wandb login` alone (saves to `~/.netrc`) does NOT propagate to subprocesses.
+> **Always `source ~/.specdist_env` before running** — or `aip_run.py` auto-detects system Python and re-executes itself under the venv.
 
 ---
 
@@ -285,35 +312,52 @@ The setup script handles everything (verified end-to-end on AIP/Pluto A100):
 source ~/.specdist_env   # if new terminal
 cd ~/ram/Distill-Spec-Research/gbv-research
 
-# Stage 2A — exploration (all 17 losses, n=100 eval):
+# Full exploration (all 15 losses):
 python deploy/aip_run.py --config a100_qwen
 
-# Cross-family (run after Qwen or in parallel on second A100):
-python deploy/aip_run.py --config a100_llama
-
-# Resume after interruption:
+# Resume after SIGTERM (session expired):
 python deploy/aip_run.py --config a100_qwen --resume
 
-# One loss at a time:
-python deploy/aip_run.py --config a100_qwen --losses kl --no_smoke
+# Single-loss targeted run (safe to run in parallel — uses per-loss lock):
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --train_only --yes
+python orchestration/experiment.py --config a100_qwen --losses gbv_tree --train_only --yes
+# ↑ These two can run simultaneously without killing each other
 
-# Restart a specific loss (changed hyperparams or algo):
-bash deploy/rerun_loss.sh kl my_experiment_tag
+# Eval-only for specific losses (one at a time — 2h session limit):
+python orchestration/experiment.py --config a100_qwen --losses kl --eval_only --yes
+python orchestration/experiment.py --config a100_qwen --losses rev_kl --eval_only --yes
+
+# Restart a specific loss:
+bash deploy/rerun_loss.sh kl_tree my_tag
 ```
 
-**Monitor progress:**
+**Monitor:**
 ```bash
-# Live log:
-tail -f /home/colligo/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
-
-# BE progress (runner.py subprocess — updates every ~60s):
-tail -f /home/colligo/specdist/logs/a100_qwen-q0.6b-q8b/be_progress.log
-
-# W&B (cloud, primary monitoring tool):
-# https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec
-# Filter: Group = a100-qwen, Tag = KrishnanRIITHServer
-# Key columns in runs table: BE/gbv, BE/traversal, alpha/gsm8k
+tail -f /home/colligo/ram/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
+# W&B: https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec
+# Key W&B columns: BE/gbv, BE/traversal, alpha/gsm8k
 ```
+
+---
+
+#### Shared-cluster operational notes (AIP/Pluto)
+
+**Session time limit (~2h)**: each GPU session expires. Long evals get SIGTERMed.  
+**Fix**: run ONE loss per session for eval. Training is fast (~20 min); eval is the bottleneck.
+
+```bash
+# Wrong — runs two evals in parallel, both get killed when session expires:
+python experiment.py --config a100_qwen --losses kl,rev_kl --eval_only  # ← DON'T
+
+# Right — one per session, each finishes in ~40 min:
+python experiment.py --config a100_qwen --losses kl --eval_only --yes
+```
+
+**GPU allocation**: on the 8-GPU node, only GPU 0 is yours unless `CUDA_VISIBLE_DEVICES` is set.  
+The scheduler auto-detects this and restricts to GPU 0.  
+To use all 8 GPUs (dedicated machine only): `export SPECDIST_ALL_GPUS=1`
+
+**Parallel targeted training** (safe): per-loss lock files prevent `--train_only` runs from killing each other. Running kl_tree and gbv_tree simultaneously is fine; their lock files are separate.
 
 ---
 
@@ -321,24 +365,32 @@ tail -f /home/colligo/specdist/logs/a100_qwen-q0.6b-q8b/be_progress.log
 
 | Check | Status |
 |---|---|
-| 2 eval slots on 40GB | ✅ EVAL_VRAM_GB=19 → 2×19=38 GB < 39.5 GB |
-| W&B logging from trainer subprocesses | ✅ WANDB_API_KEY in ~/.specdist_env |
-| specInfer DynamicCache (transformers 5.x) | ✅ duck-typing fix in `algorithms/specInfer/` |
-| gsm8k_train.jsonl download | ✅ from GitHub raw (HF API broken for bare `gsm8k` name) |
-| Offline mode + online download ordering | ✅ training data downloaded BEFORE offline flags set in env |
-| BE batch timeout | ✅ scales with n_prompts × combos (was hardcoded 2h, killed 14h eval) |
-| tqdm log verbosity | ✅ mininterval=60s in runner.py (one line per minute in log files) |
-| clean_restart scoped to model pair | ✅ only wipes q0.6b-q8b checkpoints/DB rows/logs |
+| 2 eval slots on 40GB | ✅ EVAL_VRAM_GB=19 → 2×19=38 GB |
+| W&B from trainer subprocesses | ✅ WANDB_API_KEY in ~/.specdist_env |
+| specInfer auto-disabled on transformers 5.x | ✅ SPECDIST_DISABLE_SPECINFER=1 set at startup |
+| Inline alpha fallback correctness | ✅ identical values to specInfer, ~20% slower |
+| BE batch timeout | ✅ scales with n_prompts × combos (was hardcoded 2h) |
+| tqdm verbosity | ✅ mininterval=60s (one line/min in logs) |
+| HF loading bars | ✅ suppressed in trainer.py, evaluate.py, runner.py |
+| task_score CPU fallback prevention | ✅ reuses preloaded alpha model — no second 8B load |
+| task_score batch size | ✅ from YAML `evaluation.task_batch` (a100=32, laptop=4) |
+| val loss determinism | ✅ greedy generation (was do_sample=True — 5% noise) |
+| grad_accum from YAML | ✅ wired to train_hparams (was silently defaulting to 4) |
+| Per-loss lock for --train_only | ✅ parallel single-loss runs coexist |
+| GPU 0 only on shared cluster | ✅ auto-detected when CUDA_VISIBLE_DEVICES unset |
+| Auto venv relaunch | ✅ aip_run.py re-execs under venv if run from system Python |
+| .pyc cache cleared at startup | ✅ aip_run.py clears __pycache__ before launch |
 
-**Known issues (all fixed in codebase as of June 2026):**
-- **eval OOM**: was 3 eval slots × 8B = 57 GB. Fixed: `EVAL_VRAM_GB=19` → 2 slots (38 GB).
-- **specInfer DynamicCache TypeError**: `isinstance(pkv, DynamicCache)` failed with class-identity mismatch. Fixed: duck-typing (`hasattr(pkv, 'key_cache')`).
-- **BE batch timeout**: hardcoded 7200s killed a 14h eval at 9%. Fixed: timeout scales as `n_prompts × combos × 5s × 1.3`.
-- **smoke/full DB intermingling**: n=5 results blocked n=1319 eval. Fixed: `_already_run()` checks n_prompts ±10%.
-- **clean_restart wrong path**: Fixed: `--storage_root` arg + `STORAGE_ROOT` env var.
-- **YAML dataset.train not reaching trainer**: 24 hardcoded `gsm8k_train.jsonl` paths ignored YAML override. Fixed: `--dataset` appended to `_train_hargs` (last-value-wins).
+**Known issues fixed (June 2026):**
+- **grad_accum not reaching trainer**: was silently defaulting to 4 (125→500 optimizer steps). Fixed: wired to `train_hparams` dict.
+- **task_score CPU fallback (~7 hours)**: loaded second copy of 8B model while alpha models were resident → OOM → CPU. Fixed: reuses preloaded alpha student. Now prints a loud `[WARNING]` banner if CPU fallback occurs.
+- **specInfer DynamicCache TypeError**: `isinstance` failed cross-module. Fixed: `SPECDIST_DISABLE_SPECINFER=1` auto-set for transformers ≥5.x.
+- **BE batch timeout (2h hardcoded)**: killed 14h eval at 9%. Fixed: scales with prompts × combos.
+- **convergence alert miscalibrated**: fired at grad-step 200 (12 optimizer updates = peak LR). Fixed: fires at 30% of optimizer steps. Tree losses get threshold 50 (not 10) — path weights naturally amplify norms.
+- **SIGTERM from using all 8 GPUs**: scheduler claimed all 8 A100s on shared node. Fixed: defaults to GPU 0 when CUDA_VISIBLE_DEVICES unset.
+- **parallel runs killing each other**: --losses X --train_only used config-level lock → killed sibling loss runs. Fixed: per-loss lock files.
 
-**Decision gate**: after Stage 2A, rank losses by `BE/gbv` in W&B. Losses beating baseline BE are candidates for Stage 2B. Use `analyze_results.py` to generate the comparison table.
+**Decision gate**: after Stage 2A, rank losses by `BE/gbv` in W&B. Losses where `BE > baseline BE (3.77)` are candidates for Stage 2B. Use `analyze_results.py` to generate the paper comparison table.
 
 ---
 
