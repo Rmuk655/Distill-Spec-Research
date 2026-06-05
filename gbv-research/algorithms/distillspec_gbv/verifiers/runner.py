@@ -291,6 +291,13 @@ def parse_args():
                          "custom dict {'full_attention': tensor}; all other families "
                          "use a standard 4D additive bias tensor. "
                          "Must match a key registered in core/model_families/FAMILY_REGISTRY.")
+    ap.add_argument("--n_shards", type=int, default=1,
+                    help="Split prompts into N equal shards and run only shard --shard_i. "
+                         "Use with evaluate.py multi-GPU mode: each subprocess gets "
+                         "CUDA_VISIBLE_DEVICES=i and --shard_i=i --n_shards=N, "
+                         "processing 1/N of the prompts. Results are merged by evaluate.py.")
+    ap.add_argument("--shard_i", type=int, default=0,
+                    help="Index of the shard to process (0-based, 0 ≤ shard_i < n_shards).")
     args = ap.parse_args()
     return args
 
@@ -341,8 +348,15 @@ if __name__ == "__main__":
         load_in_4bit=getattr(args, "load_in_4bit", False),
     )
 
-    # Load prompts.
+    # Load prompts — apply sharding if requested.
+    # Interleaved slice (prompts[shard_i::n_shards]) distributes prompts evenly
+    # and preserves diversity within each shard (vs contiguous blocks which might
+    # cluster similar-length problems together and skew per-shard timing).
     prompts = load_prompts_jsonl(args.data)
+    if args.n_shards > 1:
+        prompts = prompts[args.shard_i :: args.n_shards]
+        print(f"  [shard {args.shard_i}/{args.n_shards}] Using {len(prompts)} prompt(s) "
+              f"(interleaved slice [{args.shard_i}::{args.n_shards}])")
     print(f"Loaded {len(prompts)} prompt(s) | {len(combos)} combo(s) | "
           f"p={args.p_model}, q={args.q_model}, L={args.L}, q_temp={args.q_temp}")
 

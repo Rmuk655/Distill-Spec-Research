@@ -979,7 +979,11 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                  modes: list, Ks: list, temps: list,
                  L: int, max_new_tokens: int,
                  _device: str = "cuda",
-                 load_in_4bit: bool = False) -> dict:
+                 load_in_4bit: bool = False,
+                 _gpu_id: int = -1,
+                 _log_suffix: str = "",
+                 _n_shards: int = 1,
+                 _shard_i: int = 0) -> dict:
     """
     Run all (mode, K, temp) combos in ONE GBV subprocess — models load once.
 
@@ -1019,6 +1023,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
     ]
     if load_in_4bit:
         cmd.append("--load_in_4bit")   # GBV/main.py loads teacher in 4-bit NF4 on Colab T4
+    if _n_shards > 1:
+        cmd += ["--n_shards", str(_n_shards), "--shard_i", str(_shard_i)]
     # PYTHONUNBUFFERED=1 forces line-by-line flushing inside the subprocess so
     # be_progress.log updates in real time rather than in large chunks.
     #
@@ -1033,6 +1039,11 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1",
+        # Pin this subprocess to a specific GPU.  _gpu_id=-1 = no pin (use
+        # whatever CUDA_VISIBLE_DEVICES the parent process sees, i.e. all GPUs).
+        # Parallel mode workers set _gpu_id=0,1,2,... so each subprocess owns
+        # one physical GPU and they don't compete for the same device.
+        **({"CUDA_VISIBLE_DEVICES": str(_gpu_id)} if _gpu_id >= 0 else {}),
         # Propagate the HF offline decision from experiment.py explicitly.
         # evaluate.py's module-level code sets TRANSFORMERS_OFFLINE=1 for
         # non-cloud runs; but experiment.py may have set it to "0" for first-
@@ -1052,7 +1063,7 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
     _db_logs = (os.environ.get("SPECDIST_LOGS_ROOT")
                 or os.path.join(_PARENT, "db", "logs"))
     os.makedirs(_db_logs, exist_ok=True)
-    _be_log = os.path.join(_db_logs, "be_progress.log")
+    _be_log = os.path.join(_db_logs, f"be_progress{_log_suffix}.log")
 
     try:
         # Open log for streaming — stderr merged into stdout so tqdm bars appear too.
@@ -1977,14 +1988,30 @@ def main():
                 #   and make partial failures individually retryable (--skip_existing on
                 #   restart skips already-saved modes).
                 #
+                # Multi-GPU parallelism:
+                #   When N ≥ 2 GPUs are detected, up to N modes run simultaneously —
+                #   each subprocess pinned to one physical GPU via CUDA_VISIBLE_DEVICES.
+                #   With 9 modes on 4 GPUs: 3 rounds of 3 parallel → ~3× wall-clock speedup.
+                #   With 9 modes on 8 GPUs: 2 rounds (8+1) → ~4.5× speedup.
+                #   Falls back to sequential (single-GPU) when only 1 GPU is present.
+                #
                 # VRAM isolation (laptop only):
                 #   On laptop-class GPUs (≤8 GB) consecutive subprocesses crash the driver
                 #   (native 0xC000013A) if VRAM is not fully reclaimed between runs.
-                #   A100/L40S have enough VRAM that this never occurs — no wait needed.
+                #   Multi-GPU servers have enough per-device VRAM that this never occurs.
                 _need_vram_wait = (_hw == "laptop")
 
-                def _wait_for_vram(mode_name, need_mb=2700, timeout_s=30):
-                    """Poll until ≥ need_mb VRAM is free.  No-op on non-laptop tiers."""
+                # Detect available GPUs for parallel mode execution.
+                _n_gpus = 1
+                if _device == "cuda":
+                    try:
+                        import torch as _tc
+                        _n_gpus = max(1, _tc.cuda.device_count())
+                    except Exception:
+                        pass
+
+                def _wait_for_vram(mode_name, need_mb=2700, timeout_s=30, gpu_idx=0):
+                    """Poll until ≥ need_mb VRAM is free on gpu_idx.  No-op on non-laptop."""
                     if not _need_vram_wait:
                         return
                     try:
@@ -1993,64 +2020,92 @@ def main():
                             return
                         for _ in range(timeout_s):
                             _t.cuda.empty_cache()
-                            if _t.cuda.mem_get_info(0)[0] // 1024**2 >= need_mb:
+                            if _t.cuda.mem_get_info(gpu_idx)[0] // 1024**2 >= need_mb:
                                 return
                             _time.sleep(1)
-                        _free = _t.cuda.mem_get_info(0)[0] // 1024**2
-                        print(f"  [BE batch] mode={mode_name}: VRAM still low "
+                        _free = _t.cuda.mem_get_info(gpu_idx)[0] // 1024**2
+                        print(f"  [BE batch] mode={mode_name} gpu={gpu_idx}: VRAM still low "
                               f"({_free} MB < {need_mb}) after {timeout_s}s — trying anyway")
                     except Exception:
                         pass
 
-                _tier_label = (
-                    "hw_tier=laptop (VRAM-wait + CPU fallback)"
-                    if _hw == "laptop"
-                    else f"hw_tier={_hw} (per-mode subprocess; no VRAM-wait needed)"
-                )
-                print(f"  [BE batch] {_tier_label} -> one GPU subprocess per mode "
-                      f"(serial isolation; each mode individually retryable on restart)")
+                def _run_mode(mode_idx_and_name):
+                    """Run one verifier mode with GPU→GPU-retry→CPU fallback."""
+                    _idx, _mode = mode_idx_and_name
+                    _gpu = _idx % _n_gpus if _n_gpus > 1 else -1
+                    _lsuffix = f"_{_mode}" if _n_gpus > 1 else f"_{_mode}"
 
-                for _mode in modes_list:
-                    _wait_for_vram(_mode)
-                    _mode_res = run_be_batch(
+                    _wait_for_vram(_mode, gpu_idx=max(_gpu, 0))
+                    _res = run_be_batch(
                         args.student, args.teacher, data_path,
                         [_mode], Ks_list, Ts_list,
                         args.L, args.max_tokens,
                         _device="cuda",
                         load_in_4bit=getattr(args, "load_in_4bit", False),
+                        _gpu_id=_gpu,
+                        _log_suffix=_lsuffix,
                     )
-                    if not _mode_res:
-                        # GPU subprocess produced no results — on laptop this is almost
-                        # always a transient VRAM abort; on A100 it signals a real failure
-                        # (OOM, NaN, model load error).  Give the GPU one more chance with
-                        # fully-cleared VRAM before falling back to the slower CPU path.
+                    if not _res:
                         print(f"  [BE batch] mode={_mode}: GPU subprocess failed "
                               f"-> clearing VRAM and retrying ONCE on GPU")
-                        _wait_for_vram(_mode, need_mb=2700, timeout_s=20)
-                        _mode_res = run_be_batch(
+                        _wait_for_vram(_mode, need_mb=2700, timeout_s=20, gpu_idx=max(_gpu, 0))
+                        _res = run_be_batch(
                             args.student, args.teacher, data_path,
                             [_mode], Ks_list, Ts_list,
                             args.L, args.max_tokens,
                             _device="cuda",
                             load_in_4bit=getattr(args, "load_in_4bit", False),
+                            _gpu_id=_gpu,
+                            _log_suffix=_lsuffix + "_retry",
                         )
-                    if not _mode_res:
-                        # GPU retry also failed — fall back to CPU (slow but correct).
+                    if not _res:
                         print(f"  [BE batch] mode={_mode}: GPU retry failed "
                               f"-> retrying on CPU (only this mode, ~30x slower)")
-                        _mode_res = run_be_batch(
+                        _res = run_be_batch(
                             args.student, args.teacher, data_path,
                             [_mode], Ks_list, Ts_list,
                             args.L, args.max_tokens,
                             _device="cpu",
-                            load_in_4bit=getattr(args, "load_in_4bit", False),
+                            load_in_4bit=False,
+                            _gpu_id=-1,
+                            _log_suffix=_lsuffix + "_cpu",
                         )
-                    if _mode_res:
-                        for (m, k, t), be in _mode_res.items():
-                            _be_cache[(ds, m, k, t)] = be
-                    else:
+                    if not _res:
                         print(f"  [BE batch] mode={_mode}: all attempts failed — "
                               f"skipping (will show as missing in eval summary)")
+                    return _mode, _res or {}
+
+                if _n_gpus > 1:
+                    _tier_label = f"hw_tier={_hw}, {_n_gpus} GPU(s)"
+                    print(f"  [BE batch] {_tier_label} -> {len(modes_list)} mode(s) "
+                          f"across {_n_gpus} GPU(s) in parallel "
+                          f"(~{max(1,(len(modes_list)+_n_gpus-1)//_n_gpus)} round(s), "
+                          f"CUDA_VISIBLE_DEVICES pinned per subprocess)")
+                else:
+                    _tier_label = (
+                        f"hw_tier=laptop (VRAM-wait + CPU fallback)"
+                        if _hw == "laptop"
+                        else f"hw_tier={_hw}"
+                    )
+                    print(f"  [BE batch] {_tier_label} -> one GPU subprocess per mode "
+                          f"(serial; each mode individually retryable on restart)")
+
+                if _n_gpus > 1:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed as _asc
+                    with ThreadPoolExecutor(max_workers=_n_gpus) as _pool:
+                        _futs = {
+                            _pool.submit(_run_mode, (i, m)): m
+                            for i, m in enumerate(modes_list)
+                        }
+                        for _fut in _asc(_futs):
+                            _mode_name, _mode_res = _fut.result()
+                            for (m, k, t), be in _mode_res.items():
+                                _be_cache[(ds, m, k, t)] = be
+                else:
+                    for _idx, _mode in enumerate(modes_list):
+                        _, _mode_res = _run_mode((_idx, _mode))
+                        for (m, k, t), be in _mode_res.items():
+                            _be_cache[(ds, m, k, t)] = be
         print(f"  BE pre-batch done: {len(_be_cache)} result(s) cached.\n")
 
     # ── Pre-load models for alpha evaluation (shared across all datasets) ───
