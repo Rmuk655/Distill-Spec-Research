@@ -4027,7 +4027,30 @@ def main():
     # Slashes in profile names are replaced with underscores.
     global _LOCK_FILE
     _config_slug = args.config.replace("/", "_").replace("\\", "_")
-    _LOCK_FILE = os.path.join(HERE, f".pipeline_lock_{_config_slug}")
+
+    # Lock scoping: single-loss targeted runs (--losses X --train_only) get a
+    # LOSS-SPECIFIC lock so they never kill each other when running in parallel.
+    # Full pipeline runs (no --losses filter) use the config-level lock so two
+    # full pipelines on the same config don't race.
+    #
+    # Example safe combination:
+    #   python experiment.py --config a100_qwen --losses kl_tree --train_only
+    #   python experiment.py --config a100_qwen --losses gbv_tree --train_only
+    # Both get separate lock files and coexist without killing each other.
+    #
+    # Full-pipeline runs still use the shared config lock (only one allowed):
+    #   python experiment.py --config a100_qwen   ← holds .pipeline_lock_a100_qwen
+    _is_single_loss_targeted = (
+        args.losses                                    # --losses was given
+        and len([l for l in args.losses.split(",") if l.strip()]) == 1  # exactly 1 loss
+        and getattr(args, "train_only", False)         # and it's train-only
+    )
+    if _is_single_loss_targeted:
+        _loss_slug = args.losses.strip().replace(",", "_")
+        _LOCK_FILE = os.path.join(HERE, f".pipeline_lock_{_config_slug}_{_loss_slug}")
+    else:
+        _LOCK_FILE = os.path.join(HERE, f".pipeline_lock_{_config_slug}")
+
     os.makedirs(_DB_LOGS, exist_ok=True)   # ensure db/logs/ exists before first log write
     _acquire_lock()
 
