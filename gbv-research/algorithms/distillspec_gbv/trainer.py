@@ -241,6 +241,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--slow_val_n", type=int, default=100,
                    help="Number of prompts for the slow val check (default 100). "
                         "SE≈0.017 → reliable enough for checkpoint selection.")
+    p.add_argument("--deep_eval_every_n", type=int, default=0,
+                   help="Run the highest-confidence val check every N steps (0 = disabled). "
+                        "Uses deep_eval_prompts prompts. Saves ckpt_best_deep when it improves. "
+                        "Intended for paper-quality within-training signal (SE < 0.015).")
+    p.add_argument("--deep_eval_prompts", type=int, default=256,
+                   help="Number of prompts for the deep eval check (default 256). "
+                        "256 prompts × 1.5s ≈ 6.4 min/check on A100 with Qwen3-8B.")
     p.add_argument("--max_train_prompts", type=int, default=0,
                    help="Cap training dataset to this many prompts (0 = no cap). "
                         "Smoke mode passes 20 — enough for 10 steps with shuffle variety, "
@@ -1045,6 +1052,7 @@ def main() -> None:
                              else float("inf"))
     _val_no_improve_count = (_resumed_no_improve if _resuming else 0)
     _best_slow_val_loss   = float("inf")   # updated by slow val; guards ckpt_best_slow
+    _best_deep_eval_loss  = float("inf")   # updated by deep eval; guards ckpt_best_deep
     _current_ppl          = None
     _baseline_ppl         = None
     _stop_training        = False
@@ -1525,6 +1533,49 @@ def main() -> None:
                 if _sv_aw is not None:
                     _sv_log["val/slow_accept_weight"] = _sv_aw
                 _wandb.log(_sv_log)
+
+        # ── Deep eval (largest, paper-quality training signal) ────────────────
+        # Runs every deep_eval_every_n steps with deep_eval_prompts prompts.
+        # Saves ckpt_best_deep — the most reliable within-training checkpoint.
+        # SE at 256 prompts ≈ 0.014 → detects >2.8% changes (paper-quality).
+        # Does NOT affect early stopping; that remains fast val only.
+        # For tree losses: still uses fkl proxy (same as fast/slow val).
+        # Naming: deep_eval_every_n / deep_eval_prompts follows val_every /
+        # slow_val_every / slow_val_n convention (all snake_case lowercase).
+        if (val_prompts and args.deep_eval_every_n > 0
+                and (step + 1) % args.deep_eval_every_n == 0):
+            _de_n = max(1, args.deep_eval_prompts)
+            _de_loss, _de_aw = _compute_val_loss(
+                draft_model, target_model, val_prompts, _tok_cache,
+                tokenizer, args, device, family, max_prompts=_de_n,
+            )
+            _val_is_proxy = args.loss in TREE_LOSS_NAMES
+            _de_tag = "deep_eval(fkl-proxy)" if _val_is_proxy else "deep_eval"
+            print(f"Step {step+1:4d}/{args.steps} | {_de_tag} (n={_de_n}): {_de_loss:.4f}")
+
+            if _de_loss < _best_deep_eval_loss:
+                _best_deep_eval_loss = _de_loss
+                _de_best_dir = os.path.join(args.output, "ckpt_best_deep")
+                _save_checkpoint(
+                    draft_model, optimizer, step + 1, args.output,
+                    losses, accept_weights, no_lora=args.no_lora)
+                shutil.copytree(
+                    os.path.join(args.output, "ckpt_latest"),
+                    _de_best_dir, dirs_exist_ok=True)
+                print(f"  [deep_best] New best deep_eval {_de_loss:.4f} at step {step+1} "
+                      f"→ {_de_best_dir}")
+            else:
+                print(f"  [deep_eval] No improvement (best={_best_deep_eval_loss:.4f})")
+
+            if _wandb:
+                _de_log = {
+                    "train_step":               step + 1,
+                    "train/deep_eval_loss":     _de_loss,
+                    "train/deep_eval_best":     _best_deep_eval_loss,
+                }
+                if _de_aw is not None:
+                    _de_log["val/deep_eval_accept_weight"] = _de_aw
+                _wandb.log(_de_log)
 
     # ── Final checkpoint ──────────────────────────────────────────────────────
     final_step = min(start_step + len(losses), args.steps)

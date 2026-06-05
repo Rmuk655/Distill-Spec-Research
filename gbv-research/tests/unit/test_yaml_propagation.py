@@ -94,6 +94,8 @@ def _build_train_hparams(yaml_cfg: dict) -> dict:
         "val_every":                                  yaml_cfg.get("val_every", 50),
         "slow_val_every":                             yaml_cfg.get("slow_val_every", 0),
         "slow_val_n":                                 yaml_cfg.get("slow_val_n", 100),
+        "deep_eval_every_n":                          yaml_cfg.get("deep_eval_every_n", 0),
+        "deep_eval_prompts":                          yaml_cfg.get("deep_eval_prompts", 256),
         "grad_clip":                                  yaml_cfg.get("grad_clip", 1.0),
         "lora_dropout":                               yaml_cfg.get("lora_dropout", 0.05),
         "ebe_kl_weight":                              yaml_cfg.get("ebe_kl_weight", 0.1),
@@ -251,6 +253,25 @@ class TestLayer1YamlExtraction:
             f"a100_qwen sets early_stop_patience: 5, got {cfg['early_stop_patience']}"
         )
 
+    def test_a100_qwen_extracts_deep_eval_every_n(self):
+        """health.deep_eval_every_n must reach _yaml_cfg for three-tier val."""
+        cfg = _load_config_yaml("a100_qwen")
+        assert "deep_eval_every_n" in cfg, (
+            "deep_eval_every_n missing from _yaml_cfg — check health: section in "
+            "a100_qwen.yaml and extraction in _load_config_yaml()."
+        )
+        assert cfg["deep_eval_every_n"] > 0, (
+            f"deep_eval_every_n should be > 0 for a100_qwen, got {cfg['deep_eval_every_n']}"
+        )
+
+    def test_a100_qwen_extracts_deep_eval_prompts(self):
+        """health.deep_eval_prompts must reach _yaml_cfg."""
+        cfg = _load_config_yaml("a100_qwen")
+        assert "deep_eval_prompts" in cfg
+        assert cfg["deep_eval_prompts"] >= 128, (
+            f"deep_eval_prompts should be ≥128 for paper-quality SE, got {cfg['deep_eval_prompts']}"
+        )
+
 
 # ── Layer 2: _yaml_cfg → train_hparams ───────────────────────────────────────
 
@@ -291,6 +312,8 @@ _CANARY = {
     "early_stop_patience": 3,
     "slow_val_every": 250,       # dual-val: run slow check every N steps
     "slow_val_n": 77,            # dual-val: number of prompts for slow val
+    "deep_eval_every_n": 500,    # three-tier: deep eval cadence (canary >0 so flags are forwarded)
+    "deep_eval_prompts": 128,    # three-tier: prompts for deep eval
     "eval_n_prompts_gsm8k": 77,
 }
 
@@ -316,6 +339,8 @@ _NOT_TRAINER_FLAGS = {
     "early_stop_patience",  # forwarded as --early_stop_patience
     "slow_val_every",       # forwarded as --slow_val_every (conditional on >0)
     "slow_val_n",           # forwarded as --slow_val_n (with slow_val_every)
+    "deep_eval_every_n",    # forwarded as --deep_eval_every_n (conditional on >0)
+    "deep_eval_prompts",    # forwarded as --deep_eval_prompts (with deep_eval_every_n)
     "val_dataset",          # forwarded as --val_dataset (path resolved)
     "train_dataset",        # forwarded as --dataset (path resolved, last-value-wins)
     "device",               # forwarded as --device
@@ -356,6 +381,10 @@ _KEY_TO_FLAG = {
     # Canary sets slow_val_every=250 (>0), so both flags must appear.
     "slow_val_every":       "--slow_val_every",
     "slow_val_n":           "--slow_val_n",
+    # deep_eval: conditional — only forwarded when deep_eval_every_n > 0.
+    # Canary sets deep_eval_every_n=500 (>0), so both flags must appear.
+    "deep_eval_every_n":    "--deep_eval_every_n",
+    "deep_eval_prompts":    "--deep_eval_prompts",
     # train_dataset and val_dataset have special forwarding (path resolution):
     # train_dataset  → last --dataset in cmd
     # val_dataset    → --val_dataset with _data(filename) resolution

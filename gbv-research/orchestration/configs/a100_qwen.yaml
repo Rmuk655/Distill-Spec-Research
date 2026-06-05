@@ -85,6 +85,17 @@ health:
   slow_val_every: 500
   slow_val_n: 100
   early_stop_patience: 5
+  # ── Deep eval ─────────────────────────────────────────────────────────────
+  # Highest-confidence within-training signal.  256 prompts × 1.5s ≈ 6.4 min/check.
+  # 4 checks over 4000 steps × 6.4 min = 25.6 min overhead.
+  # SE≈0.014 → detects >2.8% differences — paper-quality.
+  # Saves ckpt_best_deep.  Not used for early stopping (only fast val does that).
+  # Three-tier summary over 4000 steps:
+  #   fast val   (n=30,  every 100):  40 checks × 45s   = 30 min  → early stopping
+  #   slow val   (n=100, every 500):   8 checks × 2.5min = 20 min  → checkpoint selection
+  #   deep eval  (n=256, every 1000):  4 checks × 6.4min = 26 min  → paper-quality signal
+  deep_eval_every_n: 1000
+  deep_eval_prompts: 256
   ppl_check_every: 500
 
 checkpointing:
