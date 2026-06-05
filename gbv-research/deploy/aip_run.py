@@ -350,6 +350,14 @@ def main():
     storage_root = _resolve_storage_root(args)
     os.makedirs(storage_root, exist_ok=True)
     print(f"storage : {storage_root}")
+    # SQLite on Sensei FS/Lustre often fails with disk I/O errors — default DB to
+    # local RAM disk on Pluto unless SPECDIST_DB_PATH is already set.
+    if (not os.environ.get("SPECDIST_DB_PATH", "").strip()
+            and storage_root.startswith("/sensei-fs")):
+        _local_db = os.path.join(os.path.expanduser("~"), "ram", "specdist", "results.db")
+        os.makedirs(os.path.dirname(_local_db), exist_ok=True)
+        os.environ["SPECDIST_DB_PATH"] = _local_db
+        print(f"results.db: {_local_db}  (local SQLite — Sensei FS for checkpoints only)")
 
     # HF model cache: honour a pre-set HF_HOME (e.g. local RAM disk on Pluto)
     # so we do not re-download ~18 GB into Sensei FS when models already live

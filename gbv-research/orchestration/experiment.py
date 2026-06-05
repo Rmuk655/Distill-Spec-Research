@@ -3830,7 +3830,10 @@ def main():
         os.makedirs(_storage_root, exist_ok=True)
         # All persistent artifacts under the one root
         _effective_ckpt_root = args.ckpt_root or os.path.join(_storage_root, "checkpoints")
-        _effective_db_path   = os.path.join(_storage_root, "results.db")
+        # SQLite on Sensei FS/Lustre often hits disk I/O errors when quota is tight.
+        # Honour a pre-set SPECDIST_DB_PATH (e.g. local RAM disk on Pluto).
+        _db_from_env = os.environ.get("SPECDIST_DB_PATH", "").strip()
+        _effective_db_path   = _db_from_env or os.path.join(_storage_root, "results.db")
         _effective_logs_dir  = os.path.join(_storage_root, "logs")
         _effective_state_dir = _storage_root
         os.makedirs(_effective_logs_dir, exist_ok=True)
