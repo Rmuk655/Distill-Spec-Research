@@ -234,6 +234,13 @@ def parse_args() -> argparse.Namespace:
                    help="Fraction of training data held out for validation.")
     p.add_argument("--val_every", type=int, default=50,
                    help="Compute validation loss every N steps (0 to disable).")
+    p.add_argument("--slow_val_every", type=int, default=0,
+                   help="Run a larger val check every N steps (0 = disabled). "
+                        "Uses slow_val_n prompts. Saves ckpt_best_slow when it improves. "
+                        "Final checkpoint selection prefers ckpt_best_slow over ckpt_best.")
+    p.add_argument("--slow_val_n", type=int, default=100,
+                   help="Number of prompts for the slow val check (default 100). "
+                        "SE≈0.017 → reliable enough for checkpoint selection.")
     p.add_argument("--max_train_prompts", type=int, default=0,
                    help="Cap training dataset to this many prompts (0 = no cap). "
                         "Smoke mode passes 20 — enough for 10 steps with shuffle variety, "
@@ -1037,6 +1044,7 @@ def main() -> None:
     _best_val_loss        = (_resumed_best_val if _resuming and _resumed_best_val is not None
                              else float("inf"))
     _val_no_improve_count = (_resumed_no_improve if _resuming else 0)
+    _best_slow_val_loss   = float("inf")   # updated by slow val; guards ckpt_best_slow
     _current_ppl          = None
     _baseline_ppl         = None
     _stop_training        = False
@@ -1474,6 +1482,49 @@ def main() -> None:
                       f"{_val_no_improve_count} consecutive checks.  Stopping.")
                 _stop_training = True
                 break
+
+        # ── Slow validation (larger, for checkpoint selection) ────────────────
+        # Runs every slow_val_every steps with slow_val_n prompts (default 100).
+        # Saves ckpt_best_slow when it improves.  NOT used for early stopping —
+        # early stopping uses the cheap fast val (30 prompts) to avoid 2.5 min
+        # pauses every 100 steps.  The eval pipeline merges ckpt_best_slow (which
+        # has lower noise, SE≈0.017) rather than ckpt_best (fast val, SE≈0.031).
+        # For tree losses: slow val also uses fkl proxy — same as fast val but
+        # with 3x more prompts → cleaner estimate of language-quality trend.
+        if (val_prompts and args.slow_val_every > 0
+                and (step + 1) % args.slow_val_every == 0):
+            _sv_n = max(1, args.slow_val_n)
+            _sv_loss, _sv_aw = _compute_val_loss(
+                draft_model, target_model, val_prompts, _tok_cache,
+                tokenizer, args, device, family, max_prompts=_sv_n,
+            )
+            _val_is_proxy = args.loss in TREE_LOSS_NAMES
+            _sv_tag = "slow_val(fkl-proxy)" if _val_is_proxy else "slow_val"
+            print(f"Step {step+1:4d}/{args.steps} | {_sv_tag} (n={_sv_n}): {_sv_loss:.4f}")
+
+            if _sv_loss < _best_slow_val_loss:
+                _best_slow_val_loss = _sv_loss
+                _sv_best_dir = os.path.join(args.output, "ckpt_best_slow")
+                _save_checkpoint(
+                    draft_model, optimizer, step + 1, args.output,
+                    losses, accept_weights, no_lora=args.no_lora)
+                shutil.copytree(
+                    os.path.join(args.output, "ckpt_latest"),
+                    _sv_best_dir, dirs_exist_ok=True)
+                print(f"  [slow_best] New best slow_val {_sv_loss:.4f} at step {step+1} "
+                      f"→ {_sv_best_dir}")
+            else:
+                print(f"  [slow_val]  No improvement (best={_best_slow_val_loss:.4f})")
+
+            if _wandb:
+                _sv_log = {
+                    "train_step":              step + 1,
+                    "train/slow_val_loss":     _sv_loss,
+                    "train/slow_val_best":     _best_slow_val_loss,
+                }
+                if _sv_aw is not None:
+                    _sv_log["val/slow_accept_weight"] = _sv_aw
+                _wandb.log(_sv_log)
 
     # ── Final checkpoint ──────────────────────────────────────────────────────
     final_step = min(start_step + len(losses), args.steps)

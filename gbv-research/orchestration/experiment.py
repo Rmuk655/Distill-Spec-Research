@@ -373,6 +373,12 @@ def _load_config_yaml(config_name: str) -> dict:
             # we run validation and the perplexity health check during training.
             "val_every":            health.get("val_every", 50),
             "ppl_threshold":        health.get("ppl_threshold", 1.25),
+            # Dual-val: slow val runs every slow_val_every steps with slow_val_n
+            # prompts and saves ckpt_best_slow (used for final checkpoint selection).
+            # early_stop_patience uses the cheap fast val (val_every).
+            "slow_val_every":       health.get("slow_val_every", 0),
+            "slow_val_n":           health.get("slow_val_n", 100),
+            "early_stop_patience":  health.get("early_stop_patience", 0),
             # Logging cadence — how often trainer.py logs train metrics to W&B.
             "log_every":            logging_cfg.get("log_every", 10),
             # Regularization: grad clip + LoRA dropout.
@@ -1222,6 +1228,11 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         # ── Newly wired trainer hyperparams ───────────────────────────────────
         "--seed",            str(_h.get("seed", 42)),
         "--val_every",       str(_h.get("val_every", 50)),
+        # slow_val: only pass when enabled (slow_val_every > 0) to avoid adding
+        # dead flags to every trainer invocation on configs that don't use dual-val.
+        *( ["--slow_val_every", str(_h["slow_val_every"]),
+            "--slow_val_n",    str(_h.get("slow_val_n", 100))]
+           if _h.get("slow_val_every", 0) > 0 else [] ),
         # val_dataset: if YAML dataset.eval is set, pass it as --val_dataset so
         # the trainer does NOT fall back to val_split=0.1 (10% of 6726 = 672 prompts
         # = 23 min per val check).  A small dedicated val file (gsm8k_10.jsonl → ~3 min,
@@ -3746,6 +3757,11 @@ def main():
         # via _train_hargs in build_steps().
         "seed":                 _yaml_cfg.get("seed", 42),
         "val_every":            _yaml_cfg.get("val_every", 50),
+        # Dual-val: slow val for checkpoint selection, fast val for early stopping.
+        # YAML: health.slow_val_every / health.slow_val_n / health.early_stop_patience.
+        "slow_val_every":       _yaml_cfg.get("slow_val_every", 0),
+        "slow_val_n":           _yaml_cfg.get("slow_val_n", 100),
+        "early_stop_patience":  _yaml_cfg.get("early_stop_patience", 0),
         "grad_clip":            _yaml_cfg.get("grad_clip", 1.0),
         "lora_dropout":         _yaml_cfg.get("lora_dropout", 0.05),
         "ebe_kl_weight":        _yaml_cfg.get("ebe_kl_weight", 0.1),

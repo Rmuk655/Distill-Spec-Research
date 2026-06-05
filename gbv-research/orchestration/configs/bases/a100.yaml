@@ -60,14 +60,17 @@ logging:
 
 health:
   nan_action: stop              # A100 sessions are stable; stop on NaN rather than skipping
-  early_stop_patience: 5
   ppl_threshold: 1.25
-  # val_every=50: 40 checks over 2000 steps → smooth trend curves (40 points).
-  # Val cost = 30 prompts × 1.5s = 45s/check → 40 × 45s = 30 min total.
-  # vs flat training: 7 min (val dominates — acceptable for trend visibility)
-  # vs tree training: 27 min (60 min total — fine)
-  # Do NOT increase to 200: only 10 points, curves look like connect-the-dots.
-  val_every: 50
+  # Dual-val is configured per leaf config (a100_qwen.yaml) because the optimal
+  # cadence depends on model family speed (Qwen3-8B vs LLaMA-3B vs GPT-2 etc.).
+  # Defaults here: fast val every 100 steps, no slow val, no early stop.
+  # Override in leaf config:
+  #   health:
+  #     val_every: 100           # fast (30 prompts)
+  #     slow_val_every: 500      # slow (100 prompts)
+  #     slow_val_n: 100
+  #     early_stop_patience: 5
+  val_every: 100
 
 evaluation:
   # Full 9-verifier matrix for the loss-verifier alignment result (paper main result).

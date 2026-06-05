@@ -25,7 +25,17 @@ models:
   target: Qwen/Qwen3-8B         # 16 GB BF16; fits A100 with ~20 GB to spare
 
 training:
-  steps: 2000                   # A100 is ~4x faster; 2000 steps ≈ 15-20 min training
+  # steps=4000, grad_accum=8 → exactly 500 optimizer updates.
+  # Math: 4000 grad-steps / 8 = 500 opt-steps.  A100 at ~0.4s/step ≈ 27 min training.
+  # This applies to ALL losses; tree losses are slower per step (~0.8s with K=4 paths)
+  # so tree training ≈ 53 min.  500 opt-steps is the minimum for reliable convergence
+  # signal on both flat and tree losses (warmup ends at opt-step 50 → 450 useful steps).
+  steps: 4000
+  # grad_accum=8: lower than previous 16 → 2× more frequent parameter updates.
+  # For tree losses this matters: each opt-step uses K×batch_size gradient estimates
+  # (K=4 paths × 1 prompt = 4 trajectory samples); more frequent updates = less stale.
+  # Flat losses: no difference in theory, marginally faster wall-clock (8 < 16 syncs).
+  grad_accum: 8
   # lr: default 3e-5 is fine for kl / rev_kl / jsd / traversal_tree and other losses.
   # bv_tree / gbv_tree: the BV block-acceptance integral (h_i denominator) amplifies
   # gradients vs per-token KL; tree_losses.py clamps for stability but training is
@@ -34,22 +44,18 @@ training:
   #   python orchestration/experiment.py --config a100_qwen --losses gbv_tree --lr 1e-5 --train_only --yes
   # (aip_run.py does not forward --lr; use experiment.py for bv_tree/gbv_tree runs.)
   lr: 3.0e-5
-  warmup_steps: 200             # 10% of 2000 steps; DistillSpec/EAGLE convention
-  grad_accum: 16
+  warmup_steps: 400             # 10% of 4000 steps = 50 opt-steps; DistillSpec/EAGLE convention
   lora_r: 16                    # larger rank for wider teacher-student gap (8B→0.6B)
   lora_alpha: 32
   max_new_tokens: 128
   # grad_clip for tree losses: tree losses have inherently larger gradient norms than
   # flat losses because path weights (Π α_i) amplify the ∂log q/∂θ term.
   # For Qwen3 pair (baseline α≈0.93/token): w_path ≈ 0.55–1.0 → grad_norms 30–100.
-  # grad_clip=1.0 (flat-loss default) clips to ~1/50 of nominal LR = effective LR ~6e-8.
   # grad_clip=5.0 allows larger steps while still preventing catastrophic updates.
-  # Flat losses still benefit from 1.0 — this only affects tree loss training steps.
-  # To override for a specific loss: --grad_clip 5.0 on the CLI.
+  # Flat losses still benefit from 1.0 — override per loss on CLI if needed.
   grad_clip: 5.0
   teacher_temperature: 0.8
   seed: 42
-  grad_clip: 1.0
   lora_dropout: 0.05
   ebe_kl_weight: 0.1
   jsd_alpha: 0.5
@@ -59,7 +65,26 @@ logging:
   run_label: "8B-a100"
 
 health:
+  # ── Dual-val design ──────────────────────────────────────────────────────────
+  # Fast val (30 prompts, every 100 steps):
+  #   - Cheap: 30 × 1.5s = 45s/check → 40 checks × 45s = 30 min over 4000 steps
+  #   - Drives early_stop_patience=5: stop if no improvement for 5 × 100 = 500 steps
+  #   - SE≈0.031 (±3.1%) — good enough to detect plateau, noisy for final selection
+  #   - Saves ckpt_best (fast-val best, not used for eval merging)
+  #
+  # Slow val (100 prompts, every 500 steps):
+  #   - 100 × 1.5s = 2.5 min/check → 8 checks × 2.5 min = 20 min over 4000 steps
+  #   - SE≈0.017 (±1.7%) — reliable for final checkpoint selection
+  #   - Saves ckpt_best_slow → eval pipeline merges THIS, not ckpt_best
+  #   - NOT used for early stopping (avoids 2.5 min pauses every 100 steps)
+  #
+  # Early stop: patience=5 fast-val checks without improvement → stop training.
+  # But final checkpoint = ckpt_best_slow (best slow-val step), not early-stop step.
+  # This decouples "when to stop" from "which checkpoint to evaluate".
   val_every: 100
+  slow_val_every: 500
+  slow_val_n: 100
+  early_stop_patience: 5
   ppl_check_every: 500
 
 checkpointing:

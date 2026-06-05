@@ -92,6 +92,8 @@ def _build_train_hparams(yaml_cfg: dict) -> dict:
         "online_ebe_lr":                              yaml_cfg.get("online_ebe_lr", 1e-4),
         "seed":                                       yaml_cfg.get("seed", 42),
         "val_every":                                  yaml_cfg.get("val_every", 50),
+        "slow_val_every":                             yaml_cfg.get("slow_val_every", 0),
+        "slow_val_n":                                 yaml_cfg.get("slow_val_n", 100),
         "grad_clip":                                  yaml_cfg.get("grad_clip", 1.0),
         "lora_dropout":                               yaml_cfg.get("lora_dropout", 0.05),
         "ebe_kl_weight":                              yaml_cfg.get("ebe_kl_weight", 0.1),
@@ -218,6 +220,37 @@ class TestLayer1YamlExtraction:
             f"Expected model_family='gpt2', got {cfg.get('model_family')!r}"
         )
 
+    def test_a100_qwen_extracts_slow_val_every(self):
+        """a100_qwen.yaml health.slow_val_every must reach _yaml_cfg."""
+        cfg = _load_config_yaml("a100_qwen")
+        assert "slow_val_every" in cfg, (
+            "slow_val_every missing from _yaml_cfg — check health: section in "
+            "a100_qwen.yaml and the extraction code in _yaml_cfg_to_hparams()."
+        )
+        assert cfg["slow_val_every"] > 0, (
+            f"slow_val_every should be > 0, got {cfg['slow_val_every']}"
+        )
+
+    def test_a100_qwen_extracts_slow_val_n(self):
+        """a100_qwen.yaml health.slow_val_n must reach _yaml_cfg."""
+        cfg = _load_config_yaml("a100_qwen")
+        assert "slow_val_n" in cfg
+        assert cfg["slow_val_n"] >= 100, (
+            f"slow_val_n should be ≥100 for a100_qwen, got {cfg['slow_val_n']}"
+        )
+
+    def test_a100_qwen_extracts_early_stop_patience(self):
+        """health.early_stop_patience was previously a propagation bug — guard it."""
+        cfg = _load_config_yaml("a100_qwen")
+        assert "early_stop_patience" in cfg, (
+            "early_stop_patience missing from _yaml_cfg — was a propagation bug "
+            "(extracted in _yaml_cfg_to_hparams but not in train_hparams dict). "
+            "Check health: section extraction in _load_config_yaml()."
+        )
+        assert cfg["early_stop_patience"] > 0, (
+            f"a100_qwen sets early_stop_patience: 5, got {cfg['early_stop_patience']}"
+        )
+
 
 # ── Layer 2: _yaml_cfg → train_hparams ───────────────────────────────────────
 
@@ -256,6 +289,8 @@ _CANARY = {
     "online_lr":        0.0011,
     "online_ebe_lr":    0.00011,
     "early_stop_patience": 3,
+    "slow_val_every": 250,       # dual-val: run slow check every N steps
+    "slow_val_n": 77,            # dual-val: number of prompts for slow val
     "eval_n_prompts_gsm8k": 77,
 }
 
@@ -279,6 +314,8 @@ _NOT_TRAINER_FLAGS = {
     "ppl_threshold",        # forwarded as --ppl_threshold
     "log_every",            # forwarded as --log_every
     "early_stop_patience",  # forwarded as --early_stop_patience
+    "slow_val_every",       # forwarded as --slow_val_every (conditional on >0)
+    "slow_val_n",           # forwarded as --slow_val_n (with slow_val_every)
     "val_dataset",          # forwarded as --val_dataset (path resolved)
     "train_dataset",        # forwarded as --dataset (path resolved, last-value-wins)
     "device",               # forwarded as --device
@@ -315,6 +352,10 @@ _KEY_TO_FLAG = {
     "wandb_group":      "--wandb_group",
     "run_label":        "--run_label",
     "early_stop_patience": "--early_stop_patience",
+    # slow_val: conditional — only forwarded when slow_val_every > 0.
+    # Canary sets slow_val_every=250 (>0), so both flags must appear.
+    "slow_val_every":       "--slow_val_every",
+    "slow_val_n":           "--slow_val_n",
     # train_dataset and val_dataset have special forwarding (path resolution):
     # train_dataset  → last --dataset in cmd
     # val_dataset    → --val_dataset with _data(filename) resolution
