@@ -25,54 +25,84 @@ set -euo pipefail
 
 CONFIG="${1:-a10_qwen}"
 
-# ── Locate the repo ───────────────────────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GBV_DIR="$(dirname "$SCRIPT_DIR")"          # gbv-research/
-REPO_DIR="$(dirname "$GBV_DIR")"            # Distill-Spec-Research/
+# =============================================================================
+# EVERYTHING on Sensei FS — truly one-time-ever setup.
+#
+# After this script runs once, all state (repo, venv, models, checkpoints, DB)
+# lives in /sensei-fs/users/rkrishna/. On a new session you only need:
+#   source ~/.specdist_env
+#
+# Sensei FS (/sensei-fs/users/rkrishna) — 500 GB quota:
+#   Distill-Spec-Research/   → git repo  (~200 MB + history)
+#   specdist/venv/           → Python venv (~8 GB, torch + transformers)
+#   specdist/hf_cache/       → Qwen3-8B + 0.6B (~18 GB, cached forever)
+#   specdist/checkpoints/    → trained LoRA adapters (~130 GB over full run)
+#   specdist/results.db      → eval database (~50 MB)
+#   specdist/logs/           → pipeline logs (~5 GB)
+#   ─────────────────────────────────────────────────────────────────────
+#   Total:  ~161 GB / 500 GB  ✅
+#
+# NFS venv: Python import on first subprocess call is ~5-10s from NFS vs ~1s
+# local. Over 17 training runs × 20-30 min each, this is <1% overhead — fine.
+# =============================================================================
 
-# ── Storage root ──────────────────────────────────────────────────────────────
-# Research data (checkpoints, results.db, logs, HF model cache) → Sensei FS.
-# Sensei FS is persistent Lustre-backed storage at /sensei-fs/users/rkrishna.
-# Quota: 500 GB.  Expected usage: ~153 GB (checkpoints ~130, HF cache ~18, DB ~5).
-#
-# What goes in Sensei vs local:
-#   Sensei:    checkpoints, results.db, logs, pipeline state, hf_cache (persists models)
-#   Local HOME: venv only (NFS is 5-10× slower for thousands of pip package files)
-#
-# Priority: STORAGE_ROOT env var > Sensei FS > $HOME/specdist > repo/db/
-SENSEI_SPECDIST="/sensei-fs/users/rkrishna/specdist"
-if [ -n "${STORAGE_ROOT:-}" ]; then
-    STORAGE="${STORAGE_ROOT}"
-elif [ -d "/sensei-fs/users/rkrishna" ] && [ -w "/sensei-fs/users/rkrishna" ]; then
+SENSEI_BASE="/sensei-fs/users/rkrishna"
+SENSEI_REPO="${SENSEI_BASE}/Distill-Spec-Research"
+SENSEI_SPECDIST="${SENSEI_BASE}/specdist"
+REPO_URL="https://github.com/Rmuk655/Distill-Spec-Research.git"
+
+# ── Determine which repo directory we're running from ─────────────────────────
+# If already running from Sensei repo, use it. Otherwise clone to Sensei first.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GBV_DIR="$(dirname "$SCRIPT_DIR")"
+REPO_DIR="$(dirname "$GBV_DIR")"
+
+# ── Use Sensei FS if available, fall back to $HOME ────────────────────────────
+if [ -d "${SENSEI_BASE}" ] && [ -w "${SENSEI_BASE}" ]; then
     STORAGE="${SENSEI_SPECDIST}"
-    echo "  [storage] Sensei FS detected → using ${STORAGE}"
+    USE_SENSEI=1
+elif [ -n "${STORAGE_ROOT:-}" ]; then
+    STORAGE="${STORAGE_ROOT}"
+    USE_SENSEI=0
 elif [ -w "$HOME" ]; then
     STORAGE="$HOME/specdist"
-    echo "  [storage] Sensei FS not available → using \$HOME/specdist"
+    USE_SENSEI=0
+    echo "  [storage] Sensei FS not available — using \$HOME/specdist (not persistent across machines)"
 else
     STORAGE="${GBV_DIR}/db"
+    USE_SENSEI=0
 fi
 
-# HF model cache: in Sensei so models persist across sessions (no re-download).
-# Qwen3-8B (~17 GB) + Qwen3-0.6B (~1.2 GB) = ~18 GB total → well within 500 GB quota.
 HF_CACHE="${STORAGE}/hf_cache"
-
-# Venv: ALWAYS local ($HOME), never NFS.
-# Python imports from NFS are 5-10× slower than local SSD.
-LOCAL_HOME_SPECDIST="$HOME/specdist"
-mkdir -p "${LOCAL_HOME_SPECDIST}"
-VENV_HOME="${LOCAL_HOME_SPECDIST}/venv"
+VENV_DIR="${STORAGE}/venv"
 
 echo "========================================================================"
-echo "  SpecDist GPU Setup"
+echo "  SpecDist GPU Setup  (truly one-time-ever on Sensei FS)"
 echo "  Config  : ${CONFIG}"
-echo "  Repo    : ${GBV_DIR}"
-echo "  Storage : ${STORAGE}  (checkpoints, DB, logs, HF cache)"
-echo "  Venv    : ${VENV_HOME}  (local, fast imports)"
+echo "  Storage : ${STORAGE}"
+echo "  Venv    : ${VENV_DIR}"
+echo "  HF cache: ${HF_CACHE}"
 echo "========================================================================"
 echo ""
 
 mkdir -p "${STORAGE}" "${HF_CACHE}"
+
+# ── [0] Clone repo to Sensei if not already there ─────────────────────────────
+if [ "${USE_SENSEI:-0}" = "1" ] && [ ! -d "${SENSEI_REPO}/.git" ]; then
+    echo "[0/5] Cloning repo to Sensei FS (one-time-ever)..."
+    git clone "${REPO_URL}" "${SENSEI_REPO}"
+    GBV_DIR="${SENSEI_REPO}/gbv-research"
+    REPO_DIR="${SENSEI_REPO}"
+    echo "      Repo now at: ${SENSEI_REPO}"
+    echo "      Future sessions: cd ${SENSEI_REPO}/gbv-research"
+elif [ "${USE_SENSEI:-0}" = "1" ]; then
+    echo "[0/5] Repo already at Sensei: ${SENSEI_REPO}"
+    # Update REPO_DIR to Sensei path so remaining steps use Sensei repo
+    GBV_DIR="${SENSEI_REPO}/gbv-research"
+    REPO_DIR="${SENSEI_REPO}"
+else
+    echo "[0/5] Not on Sensei — using repo at: ${REPO_DIR}"
+fi
 
 # ── Pull latest code ──────────────────────────────────────────────────────────
 # Inject GITHUB_TOKEN only into a clean HTTPS URL.  If origin already contains
