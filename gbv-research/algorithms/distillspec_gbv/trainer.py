@@ -947,9 +947,19 @@ def main() -> None:
                 "attn_impl":         _ATTN_IMPL,
                 "max_train_prompts": getattr(args, "max_train_prompts", 0),
             }
+            # Always check for wandb_run.json, even when not resuming a training
+            # checkpoint.  wandb_run.json is written immediately after wandb.init()
+            # (before the first model checkpoint at step save_every), so a run that
+            # dies between step 0 and step save_every would have wandb_run.json but
+            # no ckpt_latest — gating on _resuming silently creates a new W&B run,
+            # splitting the training curve across two dashboard entries.
+            # Decoupling W&B resume from checkpoint resume fixes this:
+            #   • _resuming=True  → load training state from ckpt_latest
+            #   • wandb_run.json present → resume the W&B run (independent)
+            # Pass --fresh_wandb to force a new run (e.g. intentional fresh start).
             _saved_wandb = (
                 _load_wandb_run_meta(args.output)
-                if _resuming and not args.fresh_wandb
+                if not args.fresh_wandb
                 else None
             )
             _init_kw: dict = {
@@ -973,9 +983,20 @@ def main() -> None:
                           f"!= --wandb_project {args.wandb_project!r}")
                 print(f"  [wandb] Resuming run {_saved_wandb['run_id']} "
                       f"(from {_WANDB_RUN_META})")
+                # Attempt resume; if the run is no longer resumable (e.g. marked
+                # Finished by W&B when the machine was killed cleanly), fall back to
+                # a fresh run rather than aborting training entirely.
+                try:
+                    _wandb = _w.init(**_init_kw)
+                except Exception as _we:
+                    print(f"  [wandb] Resume failed ({type(_we).__name__}: {_we}); "
+                          f"starting a new run instead.")
+                    _init_kw.pop("id", None)
+                    _init_kw["resume"] = "allow"
+                    _wandb = _w.init(**_init_kw)
             else:
                 _init_kw["resume"] = "allow"
-            _wandb = _w.init(**_init_kw)
+                _wandb = _w.init(**_init_kw)
             if _wandb and getattr(_wandb, "id", None):
                 _save_wandb_run_meta(
                     args.output,
