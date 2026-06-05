@@ -3826,6 +3826,16 @@ def main():
                      or os.environ.get("SPECDIST_STORAGE_ROOT")
                      or _yaml_cfg.get("storage_root"))
 
+    # Pluto: never use Sensei FS for checkpoints unless explicitly forced.
+    _gbv_db = os.path.join(_GBV_RESEARCH, "db")
+    if (_storage_root
+            and str(_storage_root).replace("\\", "/").startswith("/sensei-fs")
+            and os.path.isdir("/home/colligo/ram")
+            and os.environ.get("SPECDIST_USE_SENSEI", "").strip() not in ("1", "true", "yes")):
+        print(f"  [storage] Ignoring Sensei FS root {_storage_root!r} — "
+              f"using local {_gbv_db}")
+        _storage_root = _gbv_db
+
     if _storage_root:
         os.makedirs(_storage_root, exist_ok=True)
         # All persistent artifacts under the one root

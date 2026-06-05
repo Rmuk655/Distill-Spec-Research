@@ -119,8 +119,9 @@ Legacy / full-pipeline:
                    help="Comma-separated loss names to run "
                         "(default: all). E.g. 'kl' or 'kl,kl_tree'")
     p.add_argument("--storage_root", default=None,
-                   help="Root directory for checkpoints, results.db, logs. "
-                        "Defaults to STORAGE_ROOT env var or <repo>/db/")
+                   help="Root for checkpoints/, results.db, logs. "
+                        "On Pluto defaults to gbv-research/db/ (local RAM). "
+                        "Sensei FS paths are ignored unless SPECDIST_USE_SENSEI=1.")
     p.add_argument("--no_smoke",       action="store_true",
                    help="Skip preflight smoke test")
     p.add_argument("--resume",         action="store_true",
@@ -239,24 +240,48 @@ def _auth():
         print("HF     : HF_TOKEN not set (not needed for Qwen3)")
 
 
-def _resolve_storage_root(args):
-    """Determine storage root: CLI arg > STORAGE_ROOT env var > Sensei FS > $HOME/specdist > repo/db/.
+def _is_sensei_path(path: str) -> bool:
+    return bool(path) and path.replace("\\", "/").startswith("/sensei-fs")
 
-    Sensei FS (/sensei-fs/users/rkrishna) is AIP/Pluto's persistent Lustre-backed
-    storage (500 GB quota, backed up to S3). Checkpoints, results.db, logs, and
-    the HF model cache all go there so they survive session restarts and machine
-    reallocations.  Venv stays in $HOME (local, not NFS — faster imports).
+
+def _pluto_ram_storage() -> str | None:
+    """Default storage on Pluto: local RAM disk under /home/colligo/ram.
+
+    Uses gbv-research/db/ so checkpoints land in db/checkpoints/ (same path as
+    training when STORAGE_ROOT was unset).  Sensei FS is NOT used — quota is tight
+    and SQLite checkpoints do not belong on Lustre.
     """
+    _ram = "/home/colligo/ram"
+    if os.path.isdir(_ram):
+        return os.path.join(_GBV_DIR, "db")
+    return None
+
+
+def _resolve_storage_root(args):
+    """Determine storage root: CLI > STORAGE_ROOT env > Pluto RAM > repo/db/.
+
+    On Pluto (/home/colligo/ram present), Sensei FS paths are ignored even when
+    STORAGE_ROOT=/sensei-fs/... is set in the shell — checkpoints, logs, and DB
+    stay on local disk.  Set SPECDIST_USE_SENSEI=1 to force Sensei (not recommended).
+    """
+    _ram_default = _pluto_ram_storage() or os.path.join(_GBV_DIR, "db")
+    _force_sensei = os.environ.get("SPECDIST_USE_SENSEI", "").strip() in ("1", "true", "yes")
+
+    def _maybe_redirect(path: str, source: str) -> str:
+        if _force_sensei or not _is_sensei_path(path):
+            return path
+        print(f"[storage] {source} points at Sensei FS ({path}) — "
+              f"using local RAM storage instead: {_ram_default}")
+        print(f"[storage] (set SPECDIST_USE_SENSEI=1 to override)")
+        return _ram_default
+
     if args.storage_root:
-        return args.storage_root
+        return _maybe_redirect(args.storage_root, "--storage_root")
     env = os.environ.get("STORAGE_ROOT", "")
     if env:
-        return env
-    # Prefer Sensei FS (persistent across sessions)
-    _sensei = "/sensei-fs/users/rkrishna/specdist"
-    if os.path.isdir("/sensei-fs/users/rkrishna") and os.access("/sensei-fs/users/rkrishna", os.W_OK):
-        return _sensei
-    # Fallback: local $HOME/specdist (lost on machine reallocation)
+        return _maybe_redirect(env, "STORAGE_ROOT")
+    if _pluto_ram_storage():
+        return _ram_default
     _home_specdist = os.path.join(os.path.expanduser("~"), "specdist")
     if os.access(os.path.expanduser("~"), os.W_OK):
         return _home_specdist
@@ -353,14 +378,12 @@ def main():
     storage_root = _resolve_storage_root(args)
     os.makedirs(storage_root, exist_ok=True)
     print(f"storage : {storage_root}")
-    # SQLite on Sensei FS/Lustre often fails with disk I/O errors — default DB to
-    # local RAM disk on Pluto unless SPECDIST_DB_PATH is already set.
-    if (not os.environ.get("SPECDIST_DB_PATH", "").strip()
-            and storage_root.startswith("/sensei-fs")):
-        _local_db = os.path.join(os.path.expanduser("~"), "ram", "specdist", "results.db")
-        os.makedirs(os.path.dirname(_local_db), exist_ok=True)
-        os.environ["SPECDIST_DB_PATH"] = _local_db
-        print(f"results.db: {_local_db}  (local SQLite — Sensei FS for checkpoints only)")
+    # results.db lives under storage_root (local on Pluto); override only if set.
+    if not os.environ.get("SPECDIST_DB_PATH", "").strip():
+        _db = os.path.join(storage_root, "results.db")
+        os.makedirs(os.path.dirname(_db) or ".", exist_ok=True)
+        os.environ["SPECDIST_DB_PATH"] = _db
+        print(f"results.db: {_db}")
 
     # HF model cache: honour a pre-set HF_HOME (e.g. local RAM disk on Pluto)
     # so we do not re-download ~18 GB into Sensei FS when models already live
