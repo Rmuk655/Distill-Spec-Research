@@ -92,7 +92,11 @@ evaluation:
   #   Per-loss eval time: ~8–14 h (45 cells × ~12–20 min each)
   #
   # Base defaults = finalization-safe values.  Paper values live as comments.
-  modes: [alpha, bv, gbv, traversal]   # paper: add naive, nss, specinfer, spectr, khisti, bv, gbv, traversal
+  # All 9 verifiers always: the loss-verifier alignment (which verifier gains most
+  # from which training objective) is a core finding, not just a paper artifact.
+  # e.g. traversal_tree may benefit traversal verifier most, but naive or nss
+  # could surprise — you won't see that without running all 9.
+  modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
   K_values: [3]
   temperatures: [1.0]
   L: 8
