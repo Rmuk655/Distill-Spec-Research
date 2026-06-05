@@ -146,10 +146,16 @@ Legacy / full-pipeline:
                         "without deleting old ones. Old rows are preserved; new "
                         "rows get a different run_tag. Always set --experiment_tag "
                         "alongside this so you can distinguish runs in W&B/dashboard.")
-    p.add_argument("--lr",         type=float, default=None,
+    p.add_argument("--lr",           type=float, default=None,
                    help="Learning rate override (passed to experiment.py --lr). "
                         "bv_tree / gbv_tree auto-set to 1e-5 if omitted.")
-    p.add_argument("--lora_r",     type=int,   default=None,
+    p.add_argument("--train_steps",  type=int,   default=None,
+                   help="Override training steps from config (passed to experiment.py --train_steps). "
+                        "Use for Phase-2 continuation, e.g. --train_steps 5000.")
+    p.add_argument("--warmup_steps", type=int,   default=None,
+                   help="Override LR warmup gradient-steps from config "
+                        "(passed to experiment.py --warmup_steps).")
+    p.add_argument("--lora_r",       type=int,   default=None,
                    help="LoRA rank override (passed to experiment.py --lora_r).")
     return p, p.parse_args()
 
@@ -375,6 +381,10 @@ def main():
         cmd += ["--from", args.from_step]
     if args.lr is not None:
         cmd += ["--lr", str(args.lr)]
+    if args.train_steps is not None:
+        cmd += ["--train_steps", str(args.train_steps)]
+    if args.warmup_steps is not None:
+        cmd += ["--warmup_steps", str(args.warmup_steps)]
     if args.lora_r is not None:
         cmd += ["--lora_r", str(args.lora_r)]
 

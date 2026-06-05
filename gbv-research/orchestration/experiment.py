@@ -3541,6 +3541,10 @@ def main():
                    help="Override per-loss training step count. "
                         "Overrides the smoke (50) / full (1000) default. "
                         "Example: --train_steps 200 for a quick ablation run.")
+    p.add_argument("--warmup_steps", type=int, default=None,
+                   help="Override LR warmup gradient-steps (passed to trainer --warmup_steps). "
+                        "Default from YAML. Use with --train_steps for Phase-2 continuation, "
+                        "e.g. --train_steps 5000 --warmup_steps 100.")
     p.add_argument("--lr", type=float, default=None,
                    help="Learning rate for all training runs (overrides YAML config). "
                         "Default from YAML: laptop=3e-5, server=3e-5. "
@@ -3793,7 +3797,9 @@ def main():
         # the YAML value is read into _yaml_cfg but never reaches the trainer.
         "max_train_prompts":    _yaml_cfg.get("max_train_prompts", 0),
         # warmup_steps: explicit LR warmup. None → trainer defaults to 10% of steps.
-        "warmup_steps":         _yaml_cfg.get("warmup_steps", None),
+        # CLI --warmup_steps overrides YAML.
+        "warmup_steps":         args.warmup_steps if args.warmup_steps is not None
+                                else _yaml_cfg.get("warmup_steps", None),
         # omp_threads: PyTorch CPU thread count for server_gpt2 runs.
         "omp_threads":          _yaml_cfg.get("omp_threads", 0),
         # train_dataset: YAML dataset.train override (e.g. wikitext for GPT-2 configs).
