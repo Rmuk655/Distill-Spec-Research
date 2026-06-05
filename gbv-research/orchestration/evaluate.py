@@ -1964,21 +1964,29 @@ def main():
                 )
                 for (m, k, t), be in batch_res.items():
                     _be_cache[(ds, m, k, t)] = be
-            elif _hw == "laptop":
-                # Run one GPU subprocess per mode so each exits cleanly (releasing
-                # VRAM) before the next starts — prevents allocator fragmentation
-                # that hard-crashes the GPU driver (0xC000013A) mid-batch.
-                # If a mode's GPU subprocess produces no results (OOM or crash),
-                # retry that specific mode on CPU so the pipeline still completes.
-                print(f"  [BE batch] hw_tier=laptop -> one GPU subprocess per mode "
-                      f"(serial isolation; VRAM-wait between modes; CPU fallback on VRAM exhaustion)")
-                # Local helper: poll until enough VRAM is free (or give up after
-                # `timeout_s`).  On Windows the GPU driver takes 1-3 s to reclaim
-                # VRAM after a subprocess exits; launching the next one too early
-                # causes a native 0xC000013A abort.  2700 MB headroom matches the
-                # validated alpha floor for the 0.5B+0.6B pair (2000 was too tight —
-                # naive still crashed deep in the pipeline once fragmentation built up).
+            else:
+                # GPU path — all tiers (laptop, a100, l40s, etc.): one subprocess per mode.
+                #
+                # Why per-mode even on A100 (40 GB VRAM)?
+                #   A monolithic batch subprocess uses a single shared timeout scaled by
+                #   n_prompts × n_modes.  But verifier modes have wildly different speeds:
+                #     alpha / nss / specinfer : ~6 s/prompt  (simple accept sequence scan)
+                #     bv / gbv / traversal    : ~25 s/prompt (tree expansion required)
+                #   In a 9-mode batch the slow tree modes time out mid-run, leaving 6/9
+                #   results missing.  Per-mode subprocesses give each mode its own timeout
+                #   and make partial failures individually retryable (--skip_existing on
+                #   restart skips already-saved modes).
+                #
+                # VRAM isolation (laptop only):
+                #   On laptop-class GPUs (≤8 GB) consecutive subprocesses crash the driver
+                #   (native 0xC000013A) if VRAM is not fully reclaimed between runs.
+                #   A100/L40S have enough VRAM that this never occurs — no wait needed.
+                _need_vram_wait = (_hw == "laptop")
+
                 def _wait_for_vram(mode_name, need_mb=2700, timeout_s=30):
+                    """Poll until ≥ need_mb VRAM is free.  No-op on non-laptop tiers."""
+                    if not _need_vram_wait:
+                        return
                     try:
                         import torch as _t, time as _time
                         if not _t.cuda.is_available():
@@ -1994,6 +2002,14 @@ def main():
                     except Exception:
                         pass
 
+                _tier_label = (
+                    "hw_tier=laptop (VRAM-wait + CPU fallback)"
+                    if _hw == "laptop"
+                    else f"hw_tier={_hw} (per-mode subprocess; no VRAM-wait needed)"
+                )
+                print(f"  [BE batch] {_tier_label} -> one GPU subprocess per mode "
+                      f"(serial isolation; each mode individually retryable on restart)")
+
                 for _mode in modes_list:
                     _wait_for_vram(_mode)
                     _mode_res = run_be_batch(
@@ -2004,12 +2020,10 @@ def main():
                         load_in_4bit=getattr(args, "load_in_4bit", False),
                     )
                     if not _mode_res:
-                        # GPU subprocess produced no results — almost always a
-                        # transient native VRAM abort (0xC000013A) from fragmentation
-                        # accumulated deep in the pipeline.  Before the 30x-slower CPU
-                        # path, give the GPU ONE more chance with fully-cleared VRAM
-                        # and a longer settle — this recovers most transient crashes
-                        # at ~6 s/prompt instead of ~340 s/prompt.
+                        # GPU subprocess produced no results — on laptop this is almost
+                        # always a transient VRAM abort; on A100 it signals a real failure
+                        # (OOM, NaN, model load error).  Give the GPU one more chance with
+                        # fully-cleared VRAM before falling back to the slower CPU path.
                         print(f"  [BE batch] mode={_mode}: GPU subprocess failed "
                               f"-> clearing VRAM and retrying ONCE on GPU")
                         _wait_for_vram(_mode, need_mb=2700, timeout_s=20)
@@ -2031,18 +2045,12 @@ def main():
                             _device="cpu",
                             load_in_4bit=getattr(args, "load_in_4bit", False),
                         )
-                    for (m, k, t), be in _mode_res.items():
-                        _be_cache[(ds, m, k, t)] = be
-            else:
-                batch_res = run_be_batch(
-                    args.student, args.teacher, data_path,
-                    modes_list, Ks_list, Ts_list,
-                    args.L, args.max_tokens,
-                    _device="cuda",
-                    load_in_4bit=getattr(args, "load_in_4bit", False),
-                )
-                for (m, k, t), be in batch_res.items():
-                    _be_cache[(ds, m, k, t)] = be
+                    if _mode_res:
+                        for (m, k, t), be in _mode_res.items():
+                            _be_cache[(ds, m, k, t)] = be
+                    else:
+                        print(f"  [BE batch] mode={_mode}: all attempts failed — "
+                              f"skipping (will show as missing in eval summary)")
         print(f"  BE pre-batch done: {len(_be_cache)} result(s) cached.\n")
 
     # ── Pre-load models for alpha evaluation (shared across all datasets) ───
