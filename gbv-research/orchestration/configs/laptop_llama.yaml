@@ -55,7 +55,7 @@ checkpointing:
   milestone_every: 500
 
 evaluation:
-  temperatures: [1.0]
+  teacher_temps: [1.0]
 
 experiment:
   exclude_losses: [ebe, ebe_single, ebe_tree,

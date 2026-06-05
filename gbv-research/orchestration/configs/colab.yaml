@@ -95,7 +95,7 @@ evaluation:
   # (A100 expands to 9 — see a100.yaml — for the full alignment matrix.)
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
-  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
+  teacher_temps: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
   L: 8
   n_prompts: 50                 # 50 prompts per dataset — mid-quality results on Colab T4� reliable trend direction on T4
 

@@ -86,7 +86,7 @@ evaluation:
   # Expand to full sweep once a loss shows promise.
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]
-  temperatures: [1.0]
+  teacher_temps: [1.0]
   n_prompts: 50               # 50 prompts — trend direction; A100 uses 1319 for paper
 
 experiment:

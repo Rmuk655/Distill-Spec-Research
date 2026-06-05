@@ -131,7 +131,7 @@ health:
 evaluation:
   modes: [bv, gbv, traversal]   # tree-matched non-OT subset (forced for *_tree anyway)
   K_values: [3]                 # K=3 only (K=5 reserved for the A100 confirmation)
-  temperatures: [1.0]           # T=1.0 — paper standard
+  teacher_temps: [1.0]           # T=1.0 — paper standard
   L: 8                          # must match tree_training.tree_L
   n_prompts: 100                # free-tier sanity size (full 1319 is A100-only)
 

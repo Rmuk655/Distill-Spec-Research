@@ -71,7 +71,7 @@ checkpointing:
 
 evaluation:
   n_prompts: 3          # cap so bv/gbv cells finish within 0.5h subprocess timeout
-  temperatures: [1.0]
+  teacher_temps: [1.0]
 
 experiment:
   exclude_losses: [ebe, ebe_single, ebe_tree,

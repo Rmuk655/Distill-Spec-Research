@@ -98,7 +98,7 @@ evaluation:
   # _TREE_NON_OT = "bv,gbv,traversal"; these modes apply to flat-loss eval.
   modes: [bv, gbv, traversal, specinfer, naive]
   K_values: [3]                 # K=3 only on free tier; K=5 is reserved for A100
-  temperatures: [1.0]           # T=1.0 — DistillSpec/EAGLE paper standard
+  teacher_temps: [1.0]           # T=1.0 — DistillSpec/EAGLE paper standard
   L: 8                          # must match tree_training.tree_L used during training
   n_prompts: 100                # free-tier exploration size (full 1319 is A100-only)
 

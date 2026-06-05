@@ -100,11 +100,12 @@ evaluation:
   # could surprise — you won't see that without running all 9.
   modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
   K_values: [3]
-  temperatures: [1.0]
+  # ── Eval temperatures (NOT training teacher_temperature — see training.* in leaf YAML) ──
+  # teacher_temps: teacher verification during BE/alpha eval (runner p_temp).  Paper: [1.0].
+  # draft_temp:    draft proposal sampling during BE eval (runner q_temp).  Usually 1.0.
+  teacher_temps: [1.0]
+  draft_temp: 1.0
   L: 8
-  # Draft sampling temperature in BE verifier (runner.py --q_temp).  Independent of
-  # training teacher_temperature (0.8).  Paper standard: 1.0 at eval.
-  q_temp: 1.0
   # Tokens generated per prompt during alpha/BE eval (NOT training max_new_tokens).
   max_tokens: 50                     # full runs (--no_smoke): enough for GSM8K short answers
   max_tokens_smoke: 30               # smoke: fast path verification

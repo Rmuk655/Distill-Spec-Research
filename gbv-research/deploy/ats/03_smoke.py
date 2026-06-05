@@ -146,7 +146,8 @@ def main():
             "--datasets",      "gsm8k",
             "--modes",         "alpha",  # alpha only = fast (no BE subprocess)
             "--K",             "3",
-            "--temperature",   "1.0",
+            "--teacher_temps", "1.0",
+            "--draft_temp",    "1.0",
             "--n",             "2",
             "--max_tokens",    "16",
             "--hw_tier",       "laptop",

@@ -51,13 +51,13 @@ There is no `pipeline.py` — the orchestrator is `orchestration/experiment.py`.
 | `evaluation.eval_datasets` | `--datasets` | gsm8k* → Phase 3; rest → Phase 4 |
 | `evaluation.modes` | `--modes` | |
 | `evaluation.K_values` | `--K` | |
-| `evaluation.temperatures` | `--temperature` | |
+| `evaluation.teacher_temps` | `--teacher_temps` | Legacy YAML: `temperatures`; CLI alias: `--temperature` |
 | `evaluation.n_prompts` | `--n` | Secondary datasets |
 | `evaluation.n_prompts_gsm8k` | `--n` | Phase 3 gsm8k count |
 | `evaluation.max_tokens` | `--max_tokens` | Full eval (default 50 in bases) |
 | `evaluation.max_tokens_smoke` | `--max_tokens` | Smoke only (default 30) |
 | `evaluation.L` | `--L` | Draft depth at eval (match `tree_L`; evaluate.py default 8) |
-| `evaluation.q_temp` | `--q_temp` | Draft sampling temp in BE verifier (default 1.0) |
+| `evaluation.draft_temp` | `--draft_temp` | Draft proposal temp at eval (default 1.0). Legacy: `q_temp` / `--q_temp` |
 | `evaluation.tree_eval_modes` | tree-loss `--modes` (A100) | Full 8-verifier alignment matrix |
 | `evaluation.tree_eval_modes_subset` | tree-loss `--modes` (T4/colab) | Non-OT subset when `hw_tier != a100` |
 | `evaluation.exclude_modes_when_4bit` | filters `--modes` | Default `[alpha]` when `load_in_4bit: true` |

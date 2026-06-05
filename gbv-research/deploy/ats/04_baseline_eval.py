@@ -66,7 +66,8 @@ def main():
         "--datasets",      "gsm8k",
         "--modes",         args.modes,
         "--K",             "3",
-        "--temperature",   "1.0",
+        "--teacher_temps", "1.0",
+        "--draft_temp",    "1.0",
         "--n",             str(args.n),
         "--max_tokens",    "50",
         "--hw_tier",       "laptop",   # GPT-2 = small-model tier

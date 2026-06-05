@@ -81,7 +81,7 @@ health:
 evaluation:
   modes: [alpha, bv, gbv, traversal, specinfer, naive]   # all 6 verifier algorithms
   K_values: [3]                 # K=3 only: single representative value
-  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE paper standard
+  teacher_temps: [1.0]           # T=1.0: DistillSpec/EAGLE paper standard
   L: 8
   n_prompts: 200    # larger than baseline (50) for reliable verifier comparison numbers
 

@@ -91,7 +91,7 @@ evaluation:
   # K=3, T=0.8, n=10: fastest possible reliable indication of loss ranking.
   modes: [bv, gbv]
   K_values: [3]
-  temperatures: [1.0]           # T=1.0: paper standard; training teacher_temperature=0.8 is separate
+  teacher_temps: [1.0]           # T=1.0: paper standard; training teacher_temperature=0.8 is separate
   L: 8
   n_prompts: 20                 # 20 prompts — quick trend check direction
 

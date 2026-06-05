@@ -258,8 +258,11 @@ def parse_args() -> argparse.Namespace:
                    help="Max milestone checkpoints to keep on disk.")
     p.add_argument("--merge_only", action="store_true",
                    help="Merge LoRA adapter and exit (no training).")
+    p.add_argument("--cleanup_only", action="store_true",
+                   help="Delete ckpt_step_*, ckpt_latest/, optimizer.pt under --adapter "
+                        "(post-merge disk reclaim).  No merge or training.")
     p.add_argument("--adapter", default=None,
-                   help="Path to LoRA adapter for --merge_only.")
+                   help="Checkpoint root for --merge_only / --cleanup_only.")
 
     # ── Logging / W&B ────────────────────────────────────────────────────────
     p.add_argument("--log_every", type=int, default=10)
@@ -413,6 +416,90 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
     merged.save_pretrained(out)
     transformers.AutoTokenizer.from_pretrained(draft_model_id).save_pretrained(out)
     print(f"Merged → {out}")
+    cleanup_training_artifacts(adapter_path)
+
+
+_POST_MERGE_CLEANUP_MARKER = ".post_merge_cleanup_done"
+
+
+def _checkpoint_root(adapter_path: str) -> str:
+    """Normalise an adapter or checkpoint path to the training output root."""
+    norm = adapter_path.rstrip("/\\")
+    base = os.path.basename(norm)
+    if base in ("ckpt_best", "ckpt_best_slow", "ckpt_latest") or base.startswith("ckpt_step_"):
+        return os.path.dirname(norm)
+    return norm
+
+
+def cleanup_training_artifacts(adapter_path: str, *, force: bool = False) -> list[str]:
+    """Remove training-only artifacts after LoRA merge succeeds.
+
+    Always deletes milestone dirs (``ckpt_step_*``), ``ckpt_latest/``, and all
+    ``optimizer.pt`` files.
+
+    When ``<ckpt_root>_merged/config.json`` exists (eval-ready), also deletes
+    ``ckpt_best/``, ``ckpt_best_slow/``, root LoRA adapter files, and
+    ``training_state.json`` — the merged model is the only artifact eval needs.
+
+    Idempotent: writes ``.post_merge_cleanup_done`` so repeated pipeline runs
+    skip the walk unless *force* is True.
+    """
+    ckpt_root = _checkpoint_root(adapter_path)
+    if not os.path.isdir(ckpt_root):
+        return []
+
+    marker = os.path.join(ckpt_root, _POST_MERGE_CLEANUP_MARKER)
+    if not force and os.path.isfile(marker):
+        return []
+
+    merged_ready = os.path.isfile(os.path.join(ckpt_root + "_merged", "config.json"))
+
+    removed: list[str] = []
+    _adapter_files = ("adapter_model.safetensors", "adapter_model.bin",
+                      "adapter_config.json", "README.md")
+    try:
+        for name in os.listdir(ckpt_root):
+            full = os.path.join(ckpt_root, name)
+            if name.startswith("ckpt_step_") and os.path.isdir(full):
+                shutil.rmtree(full, ignore_errors=True)
+                removed.append(f"{name}/")
+            elif name == "ckpt_latest" and os.path.isdir(full):
+                shutil.rmtree(full, ignore_errors=True)
+                removed.append("ckpt_latest/")
+            elif merged_ready and name in ("ckpt_best", "ckpt_best_slow") and os.path.isdir(full):
+                shutil.rmtree(full, ignore_errors=True)
+                removed.append(f"{name}/")
+            elif merged_ready and name in _adapter_files and os.path.isfile(full):
+                os.remove(full)
+                removed.append(name)
+            elif merged_ready and name == "training_state.json" and os.path.isfile(full):
+                os.remove(full)
+                removed.append(name)
+
+        for root, _dirs, files in os.walk(ckpt_root):
+            if "optimizer.pt" not in files:
+                continue
+            opt = os.path.join(root, "optimizer.pt")
+            try:
+                os.remove(opt)
+                removed.append(os.path.relpath(opt, ckpt_root))
+            except OSError as exc:
+                print(f"[cleanup] could not remove {opt}: {exc}")
+    except OSError as exc:
+        print(f"[cleanup] warning: partial cleanup under {ckpt_root}: {exc}")
+
+    try:
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    except OSError as exc:
+        print(f"[cleanup] warning: could not write marker under {ckpt_root}: {exc}")
+
+    if removed:
+        print(f"[cleanup] removed training artifacts under {ckpt_root}: "
+              f"{', '.join(removed)}")
+    else:
+        print(f"[cleanup] nothing to remove under {ckpt_root}")
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +786,19 @@ def main() -> None:
             f"{args.loss}-{family.name}-{args.steps}steps"
         )
 
+    if args.cleanup_only:
+        if not args.adapter:
+            print("[FATAL] --cleanup_only requires --adapter <checkpoint_root>",
+                  file=sys.stderr)
+            sys.exit(1)
+        cleanup_training_artifacts(args.adapter, force=True)
+        return
+
     if args.merge_only:
+        if not args.adapter:
+            print("[FATAL] --merge_only requires --adapter <checkpoint_root>",
+                  file=sys.stderr)
+            sys.exit(1)
         merge_lora_and_save(args.draft, args.adapter)
         return
 

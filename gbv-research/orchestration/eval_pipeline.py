@@ -362,8 +362,8 @@ def main():
                    help="Comma-separated modes: alpha,specinfer,gbv,traversal,bv")
     p.add_argument("--K", default="1", help="Comma-separated K values, e.g. 1,3,5")
     p.add_argument("--L", type=int, default=5)
-    p.add_argument("--temperature", default="1.0",
-                   help="Comma-separated temperatures, e.g. 0.6,1.0")
+    p.add_argument("--teacher_temps", "--temperature", dest="teacher_temps", default="1.0",
+                   help="Comma-separated teacher verification temps at eval. Legacy: --temperature")
     p.add_argument("--n", type=int, default=30, help="Prompts per dataset")
     p.add_argument("--max_tokens", type=int, default=60)
     p.add_argument("--target", default=TARGET_MODEL)
@@ -393,7 +393,7 @@ def main():
         datasets = args.datasets.split(",")
         modes = args.modes.split(",")
         Ks = [int(k) for k in args.K.split(",")]
-        temps = [float(t) for t in args.temperature.split(",")]
+        temps = [float(t) for t in args.teacher_temps.split(",")]
 
     python_exe = sys.executable
 

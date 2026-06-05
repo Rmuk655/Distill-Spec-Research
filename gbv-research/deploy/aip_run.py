@@ -351,9 +351,18 @@ def main():
     os.makedirs(storage_root, exist_ok=True)
     print(f"storage : {storage_root}")
 
-    # HF cache inside storage root so models persist across restarts
-    hf_cache = os.path.join(storage_root, "hf_cache")
-    os.makedirs(hf_cache, exist_ok=True)
+    # HF model cache: honour a pre-set HF_HOME (e.g. local RAM disk on Pluto)
+    # so we do not re-download ~18 GB into Sensei FS when models already live
+    # under ~/ram/specdist/hf_cache.  Checkpoints/DB/logs still use storage_root.
+    _hf_from_env = os.environ.get("HF_HOME", "").strip()
+    if _hf_from_env:
+        hf_cache = _hf_from_env
+        os.makedirs(hf_cache, exist_ok=True)
+        print(f"HF cache : {hf_cache}  (HF_HOME env — not using storage_root/hf_cache)")
+    else:
+        hf_cache = os.path.join(storage_root, "hf_cache")
+        os.makedirs(hf_cache, exist_ok=True)
+        print(f"HF cache : {hf_cache}  (under storage_root)")
     os.environ["HF_HOME"]            = hf_cache
     os.environ["TRANSFORMERS_CACHE"] = hf_cache
     for flag in ("TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE", "HF_HUB_OFFLINE"):

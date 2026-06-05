@@ -82,7 +82,7 @@ evaluation:
   # ("this work"), and traversal — so every verifier branch is exercised.
   modes: [naive, bv, gbv, traversal]
   K_values: [3]
-  temperatures: [1.0]
+  teacher_temps: [1.0]
   L: 8
   n_prompts: 5                   # 5 prompts — fast crash check, not a measurement
 

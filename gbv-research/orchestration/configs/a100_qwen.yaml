@@ -54,6 +54,8 @@ training:
   # grad_clip=5.0 allows larger steps while still preventing catastrophic updates.
   # Flat losses still benefit from 1.0 — override per loss on CLI if needed.
   grad_clip: 5.0
+  # Training only — softens teacher logits during distillation.  Eval uses
+  # evaluation.teacher_temps / draft_temp in bases/a100.yaml (usually 1.0 / 1.0).
   teacher_temperature: 0.8
   seed: 42
   lora_dropout: 0.05

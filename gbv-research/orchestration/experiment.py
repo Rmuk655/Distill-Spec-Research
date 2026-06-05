@@ -457,8 +457,16 @@ def _load_config_yaml(config_name: str) -> dict:
         eval_cfg = data.get("evaluation", {})
         if eval_cfg.get("K_values"):
             out["eval_K_values"] = eval_cfg["K_values"]    # list[int], e.g. [3] or [1,3,5,8]
-        if eval_cfg.get("temperatures"):
-            out["eval_temps"] = eval_cfg["temperatures"]   # list[float], e.g. [0.8] or [0.6,1.0]
+        # teacher_temps: eval teacher verification temps (runner p_temp).  Legacy alias: temperatures.
+        _teacher_temps = eval_cfg.get("teacher_temps") or eval_cfg.get("temperatures")
+        if _teacher_temps:
+            out["eval_teacher_temps"] = _teacher_temps   # list[float], e.g. [1.0] or [0.6,1.0]
+        # draft_temp: eval draft proposal temp (runner q_temp).  Legacy alias: q_temp.
+        _draft_temp = eval_cfg.get("draft_temp")
+        if _draft_temp is None and eval_cfg.get("q_temp") is not None:
+            _draft_temp = eval_cfg["q_temp"]
+        if _draft_temp is not None:
+            out["eval_draft_temp"] = float(_draft_temp)
         if eval_cfg.get("modes"):
             out["eval_modes"] = eval_cfg["modes"]          # list[str], e.g. ["bv","gbv","traversal"]
         if eval_cfg.get("n_prompts"):
@@ -475,8 +483,6 @@ def _load_config_yaml(config_name: str) -> dict:
             out["eval_datasets"] = eval_cfg["eval_datasets"]            # list[str] — Phase 3 gsm8k* + Phase 4 rest
         if eval_cfg.get("L"):
             out["eval_L"] = int(eval_cfg["L"])                          # draft block depth at eval (match tree_L)
-        if eval_cfg.get("q_temp") is not None:
-            out["eval_q_temp"] = float(eval_cfg["q_temp"])            # draft sampling temp in BE verifier
         if eval_cfg.get("tree_eval_modes"):
             out["tree_eval_modes_full"] = eval_cfg["tree_eval_modes"]   # A100 full tree-loss matrix
         if eval_cfg.get("tree_eval_modes_subset"):
@@ -620,6 +626,33 @@ def _ckpt(name):
 
 def _data(name): return os.path.join(_GBV_RESEARCH, "core", "datasets", "raw", name)
 def _merged(name): return _ckpt(name + "_merged")
+
+
+def _adapter_path_from_merge_cmd(step: dict) -> str | None:
+    """Extract --adapter path from a merge_* pipeline step."""
+    cmd = step.get("cmd") or []
+    try:
+        idx = cmd.index("--adapter")
+        return str(cmd[idx + 1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _cleanup_after_merge_step(step: dict) -> None:
+    """Drop resume-only checkpoints once the merged model artifact exists."""
+    if not step.get("id", "").startswith("merge_"):
+        return
+    adapter = _adapter_path_from_merge_cmd(step)
+    if not adapter:
+        return
+    done_check = step.get("done_check")
+    if done_check and not os.path.exists(done_check):
+        return
+    try:
+        from algorithms.distillspec_gbv.trainer import cleanup_training_artifacts
+        cleanup_training_artifacts(adapter)
+    except Exception as exc:
+        print(f"  [cleanup] warning: could not clean {adapter}: {exc}")
 
 
 # ── Model-pair tag for checkpoint namespacing ─────────────────────────────────
@@ -917,7 +950,7 @@ def _check_teacher_fits_vram(target: str, load_in_4bit: bool, args) -> None:
 
 def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
               modes="alpha,specinfer,gbv,traversal",
-              Ks="3", temps="1.0", n=10, max_tokens=50, L=8, q_temp=1.0,
+              Ks="3", teacher_temps="1.0", n=10, max_tokens=50, L=8, draft_temp=1.0,
               task_score=False, experiment_tag=None, train_steps=0, hw_tier="laptop",
               wandb_group=None, wandb_project="distillspec",
               loss_name=None, model_family="qwen", device="auto",
@@ -948,11 +981,11 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
         "--datasets", datasets,
         "--modes", modes,
         "--K", Ks,
-        "--temperature", temps,
+        "--teacher_temps", teacher_temps,
         "--n", str(n),
         "--max_tokens", str(max_tokens),
         "--L", str(L),
-        "--q_temp", str(q_temp),
+        "--draft_temp", str(draft_temp),
         "--skip_fetch",
         "--hw_tier", hw_tier,
         # Forward the model family so the BE verifier subprocess uses the right
@@ -1172,8 +1205,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     _n_gsm8k = _n
     if _h.get("eval_K_values"):
         _Ks = ",".join(str(k) for k in _h["eval_K_values"])
-    if _h.get("eval_temps"):
-        _temps = ",".join(str(t) for t in _h["eval_temps"])
+    _teacher_temps_cfg = _h.get("eval_teacher_temps") or _h.get("eval_temps")
+    if _teacher_temps_cfg:
+        _temps = ",".join(str(t) for t in _teacher_temps_cfg)
     if not smoke:
         if _h.get("eval_modes"):
             # Still enforce exclude_modes_when_4bit even if YAML lists those modes.
@@ -1230,7 +1264,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             str(_h.get("unstable_early_stop_patience", 3)),
         ]
     _eval_L = int(_h.get("eval_L", _h.get("tree_L", 8)))
-    _eval_q_temp = float(_h.get("eval_q_temp", 1.0))
+    _eval_draft_temp = float(_h.get("eval_draft_temp", _h.get("eval_q_temp", 1.0)))
 
     # Online adapt knobs (online_serve.py) — YAML online_adapt: section.
     _online_K = int(_h.get("online_K", 4))
@@ -1467,8 +1501,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _Ks_this = Ks_override if Ks_override is not None else _Ks
         _ds = datasets if datasets is not None else _gsm8k_dataset
         cmd = _eval_cmd(student_path, label, target,
-                        datasets=_ds, modes=_eval_modes, Ks=_Ks_this, temps=_temps,
-                        n=_n_this, max_tokens=_max_tok, L=_eval_L, q_temp=_eval_q_temp,
+                        datasets=_ds, modes=_eval_modes, Ks=_Ks_this,
+                        teacher_temps=_temps, draft_temp=_eval_draft_temp,
+                        n=_n_this, max_tokens=_max_tok, L=_eval_L,
                         task_score=task_score, experiment_tag=experiment_tag,
                         train_steps=ts,
                         loss_name=label,
@@ -2901,8 +2936,23 @@ def save_state(state):
     # Retry up to 5 times with exponential backoff; fall back to a direct
     # non-atomic write if all retries fail (still better than crashing).
     _tmp = STATE_FILE + ".tmp"
-    with open(_tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+    try:
+        with open(_tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except OSError as exc:
+        if getattr(exc, "errno", None) == 122:  # EDQUOT — disk quota exceeded
+            print(
+                "\n[FATAL] Disk quota exceeded — cannot write pipeline state.\n"
+                "  Free space under your storage root, then re-run.\n"
+                "  Quick fix on Pluto:\n"
+                "    python deploy/reclaim_checkpoint_disk.py \\\n"
+                "      --storage-root /sensei-fs/users/rkrishna/specdist\n"
+                "  Report only:\n"
+                "    python deploy/reclaim_checkpoint_disk.py --report \\\n"
+                "      --storage-root /sensei-fs/users/rkrishna/specdist\n",
+                file=sys.stderr,
+            )
+        raise
     for _attempt in range(5):
         try:
             os.replace(_tmp, STATE_FILE)
@@ -3883,10 +3933,11 @@ def main():
     # Previously only profiles/* were wired; laptop/kaggle/a100/colab evaluation:
     # sections were silently ignored, causing eval to fall back to hardcoded defaults
     # (n=10 prompts regardless of YAML).  Now every config YAML can control eval cost.
-    for _ek in ("eval_modes", "eval_K_values", "eval_temps",
+    for _ek in ("eval_modes", "eval_K_values", "eval_teacher_temps", "eval_temps",
                 "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
                 "eval_task_batch", "eval_datasets", "eval_L",
-                "eval_max_tokens", "eval_max_tokens_smoke", "eval_q_temp",
+                "eval_max_tokens", "eval_max_tokens_smoke",
+                "eval_draft_temp", "eval_q_temp",
                 "tree_eval_modes_full", "tree_eval_modes_subset",
                 "exclude_modes_when_4bit",
                 "unstable_nan_action", "unstable_early_stop_patience",
@@ -4382,6 +4433,8 @@ def main():
                     # ensures every code path is exercised regardless of prior runs.
                     pass
                 else:
+                    if sid.startswith("merge_"):
+                        _cleanup_after_merge_step(step)
                     print(f"  {TICK} [{sid}] already done — skipping")
                     continue
 

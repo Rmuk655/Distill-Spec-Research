@@ -70,7 +70,7 @@ health:
 evaluation:
   modes: [alpha, bv, gbv, traversal, specinfer, naive]
   K_values: [3]                 # K=3 only: single representative value for comparative eval
-  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE paper standard
+  teacher_temps: [1.0]           # T=1.0: DistillSpec/EAGLE paper standard
   L: 8
   n_prompts: 50
 

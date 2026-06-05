@@ -261,8 +261,10 @@ def parse_args():
     ap.add_argument("--K", type=int, default=3, help="Number of draft paths")
     ap.add_argument("--max_new_tokens", type=int, default=128, help="Maximum number of new tokens to generate")
     ap.add_argument("--mode", type=str, default="gbv", choices=["naive", "nss", "specinfer", "spectr", "bv", "gbv", "traversal"], help="Verification algorithm to use")
-    ap.add_argument("--p_temp", type=float, default=1.0, help="Target model sampling temperature")
-    ap.add_argument("--q_temp", type=float, default=1.0, help="Draft model sampling temperature")
+    ap.add_argument("--p_temp", type=float, default=1.0,
+                    help="Single teacher verification temperature (use --teacher_temps for a sweep)")
+    ap.add_argument("--draft_temp", "--q_temp", dest="draft_temp", type=float, default=1.0,
+                    help="Draft proposal temperature at eval. Legacy alias: --q_temp")
     ap.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     ap.add_argument("--dtype", type=str, default="auto", choices=["auto", "fp16", "bf16", "fp32"])
     ap.add_argument("--seed", type=int, default=123)
@@ -273,9 +275,9 @@ def parse_args():
                          "Overrides --mode when provided.")
     ap.add_argument("--Ks",     type=str, default=None,
                     help="Comma-separated K values, e.g. '1,3,5'. Overrides --K when provided.")
-    ap.add_argument("--p_temps", type=str, default=None,
-                    help="Comma-separated target temperatures, e.g. '0.6,1.0'. "
-                         "Overrides --p_temp when provided.")
+    ap.add_argument("--teacher_temps", "--p_temps", dest="teacher_temps", type=str, default=None,
+                    help="Comma-separated teacher verification temps at eval, e.g. '1.0'. "
+                         "Overrides --p_temp when provided. Legacy alias: --p_temps")
     ap.add_argument("--compile", action="store_true",
                     help="Apply torch.compile(mode='reduce-overhead', dynamic=True) to the "
                          "draft model to cut Python→CUDA dispatch overhead.  Draft-only: "
@@ -338,7 +340,8 @@ if __name__ == "__main__":
     # --modes / --Ks / --p_temps (comma-separated) override --mode / --K / --p_temp.
     modes_list  = [m.strip() for m in args.modes.split(",")]    if args.modes   else [args.mode]
     Ks_list     = [int(k)    for k in args.Ks.split(",")]       if args.Ks      else [args.K]
-    temps_list  = [float(t)  for t in args.p_temps.split(",")]  if args.p_temps else [args.p_temp]
+    temps_list  = ([float(t) for t in args.teacher_temps.split(",")]
+                   if args.teacher_temps else [args.p_temp])
     combos      = [(mode, K, T) for mode in modes_list for K in Ks_list for T in temps_list]
 
     # Load models once — shared across all combos.
@@ -358,7 +361,8 @@ if __name__ == "__main__":
         print(f"  [shard {args.shard_i}/{args.n_shards}] Using {len(prompts)} prompt(s) "
               f"(interleaved slice [{args.shard_i}::{args.n_shards}])")
     print(f"Loaded {len(prompts)} prompt(s) | {len(combos)} combo(s) | "
-          f"p={args.p_model}, q={args.q_model}, L={args.L}, q_temp={args.q_temp}")
+          f"p={args.p_model}, q={args.q_model}, L={args.L}, "
+          f"teacher_temps={temps_list}, draft_temp={args.draft_temp}")
 
     # Run every (mode, K, T) combo — models stay loaded throughout.
     _is_tty = sys.stdout.isatty()
@@ -376,7 +380,7 @@ if __name__ == "__main__":
                 p_model=p_model, q_model=q_model, tok=tok,
                 prompt=prompt, verification_algo=mode,
                 eos_token_id=None, max_new_tokens=args.max_new_tokens,
-                K=K, L=args.L, p_temp=p_temp, q_temp=args.q_temp,
+                K=K, L=args.L, p_temp=p_temp, q_temp=args.draft_temp,
                 family=_family,
             )
 

@@ -51,7 +51,7 @@ checkpointing:
   milestone_every: 100
 
 evaluation:
-  temperatures: [0.6]
+  teacher_temps: [0.6]
 
 experiment:
   # ebe / ebe_single removed: off-policy flat losses, not the paper contribution.

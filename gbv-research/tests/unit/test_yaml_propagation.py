@@ -120,9 +120,9 @@ def _build_train_hparams(yaml_cfg: dict) -> dict:
         "run_label":                                  yaml_cfg.get("run_label", "test"),
     }
     # eval keys forwarded as-is
-    for ek in ("eval_modes", "eval_K_values", "eval_temps",
+    for ek in ("eval_modes", "eval_K_values", "eval_teacher_temps", "eval_temps",
                "eval_n_prompts", "eval_n_prompts_gsm8k", "eval_max_tokens",
-               "eval_datasets", "eval_L", "eval_q_temp",
+               "eval_datasets", "eval_L", "eval_draft_temp", "eval_q_temp",
                "eval_max_tokens", "eval_max_tokens_smoke",
                "tree_eval_modes_full", "tree_eval_modes_subset",
                "exclude_modes_when_4bit",
@@ -287,9 +287,10 @@ class TestLayer1YamlExtraction:
         assert cfg.get("eval_max_tokens") == 50
         assert cfg.get("eval_max_tokens_smoke") == 30
 
-    def test_a100_qwen_inherits_eval_q_temp_from_base(self):
+    def test_a100_qwen_inherits_eval_draft_temp_from_base(self):
         cfg = _load_config_yaml("a100_qwen")
-        assert cfg.get("eval_q_temp") == 1.0
+        assert cfg.get("eval_draft_temp") == 1.0
+        assert cfg.get("eval_teacher_temps") == [1.0]
 
     def test_a100_qwen_inherits_online_adapt_from_base(self):
         cfg = _load_config_yaml("a100_qwen")
@@ -365,7 +366,10 @@ _NOT_TRAINER_FLAGS = {
     "eval_n_prompts_gsm8k", # eval key, not a trainer flag
     "eval_modes",           # eval key
     "eval_K_values",        # eval key
-    "eval_temps",           # eval key
+    "eval_teacher_temps",   # eval key
+    "eval_temps",           # legacy eval key alias
+    "eval_draft_temp",      # eval key
+    "eval_q_temp",          # legacy eval key alias
     "eval_n_prompts",       # eval key
     "eval_max_tokens",      # eval key
     "eval_datasets",        # eval key
@@ -630,8 +634,11 @@ class TestLayer3EvalCmd:
             f"--max_tokens={val!r}; expected 50 from evaluation.max_tokens in bases/a100.yaml"
         )
 
-    def test_eval_q_temp_from_yaml(self, a100_eval_cmd):
-        assert _cmd_value(a100_eval_cmd, "--q_temp") == "1.0"
+    def test_eval_draft_temp_from_yaml(self, a100_eval_cmd):
+        assert _cmd_value(a100_eval_cmd, "--draft_temp") == "1.0"
+
+    def test_eval_teacher_temps_from_yaml(self, a100_eval_cmd):
+        assert _cmd_value(a100_eval_cmd, "--teacher_temps") == "1.0"
 
     def test_eval_max_tokens_smoke_from_yaml(self):
         yaml_cfg = _load_config_yaml("a100_qwen")

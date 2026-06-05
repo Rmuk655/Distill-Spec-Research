@@ -117,7 +117,7 @@ evaluation:
   modes: [bv, gbv, traversal, specinfer, naive]
   exclude_modes_when_4bit: [alpha]   # redundant with modes list; documents 4-bit safety rule
   K_values: [3]
-  temperatures: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
+  teacher_temps: [1.0]           # T=1.0: DistillSpec/EAGLE/Medusa paper standard for fair comparison
   L: 8
   n_prompts: 100                # 100 prompts per dataset — paper-quality results on Kaggle T4� reliable trend direction on T4
 

@@ -202,8 +202,8 @@ leaf config overrides them. Wired in `experiment.py` → `evaluate.py` CLI.
 | `modes` | `--modes` | 9 verifiers | Which verifiers to sweep |
 | `K_values` | `--K` | `[3]` | Block size at eval |
 | `L` | `--L` | 8 | Draft depth per verification round (must match `tree_L` for tree losses) |
-| `q_temp` | `--q_temp` | 1.0 | **Draft** sampling temp in BE verifier (`runner.py`); not `teacher_temperature` |
-| `temperatures` | `--temperature` | `[1.0]` | **Teacher/target** temp (`p_temp`) per BE combo |
+| `draft_temp` | `--draft_temp` | 1.0 | **Draft** proposal temp at eval (`runner.py` `q_temp`); not `teacher_temperature` |
+| `teacher_temps` | `--teacher_temps` | `[1.0]` | **Teacher** verification temp (`p_temp`) per BE combo. Legacy: `temperatures` / `--temperature` |
 | `task_batch` | `--task_batch` | 32 (A100) / 4 (laptop) | Parallel prompts for **task_score** only |
 | `tree_eval_modes` | tree-loss `--modes` | 8-verifier matrix | A100 tree-loss alignment sweep |
 | `exclude_modes_when_4bit` | filters `--modes` | `[alpha]` | Drop modes that OOM with NF4 teacher |
@@ -216,9 +216,10 @@ leaf config overrides them. Wired in `experiment.py` → `evaluate.py` CLI.
 used to fall back to **5**, which understates tree-verifier BE (bv/gbv/traversal). Re-run
 with `--force_eval` if any saved rows used `L=5`.
 
-**`q_temp` vs `teacher_temperature`:** Training `teacher_temperature: 0.8` affects teacher
-logits during distillation only. At eval, BE uses `q_temp` (draft path sampling, default 1.0)
-and `temperatures` (teacher verification, `p_temp`). Both are now YAML-controlled.
+**`draft_temp` / `teacher_temps` vs `teacher_temperature`:** Training `teacher_temperature: 0.8`
+softens teacher logits during distillation only. At eval, BE uses `draft_temp` (draft proposals,
+default 1.0) and `teacher_temps` (teacher verification, `p_temp`). Both are YAML-controlled in
+`bases/a100.yaml` / `bases/laptop.yaml`.
 
 **Why 50 (full) / 30 (smoke)?** GSM8K answers are usually short; 50 tokens is enough
 to measure acceptance/BE without 4× eval cost. Smoke uses 30 to keep the fast path under
@@ -269,7 +270,44 @@ Query from `results.db` or W&B dashboard. All rows must use the same `gsm8k_eval
 
 ---
 
-## 4. Phase-2 continuation (converged but plateauing)
+## 4. Post-merge disk cleanup (automatic)
+
+After each **merge** step succeeds, the pipeline deletes resume-only artifacts under
+the checkpoint root:
+
+- `ckpt_step_*/` (milestone snapshots)
+- `ckpt_latest/` (crash-resume dir)
+- all `optimizer.pt` files (including under `ckpt_best/` / `ckpt_best_slow/`)
+
+**Kept for eval:** `*_merged/` only (plus tiny `wandb_run.json`).
+
+When `*_merged/config.json` exists, cleanup also removes root LoRA files and
+`ckpt_best/` / `ckpt_best_slow/` — eval loads the merged model, not the adapter.
+
+Cleanup is idempotent (marker: `.post_merge_cleanup_done`).
+
+**Disk quota full on Pluto?** Reclaim space across all merged-ready losses:
+
+```bash
+python deploy/reclaim_checkpoint_disk.py --report \
+  --storage-root /sensei-fs/users/rkrishna/specdist
+
+python deploy/reclaim_checkpoint_disk.py \
+  --storage-root /sensei-fs/users/rkrishna/specdist
+```
+
+Single checkpoint dir:
+
+```bash
+python -m algorithms.distillspec_gbv.trainer \
+  --cleanup_only --adapter checkpoints/kl_tree-gsm8k-q0.6b-q8b
+```
+
+To **resume training** after cleanup, seed `ckpt_latest` from `ckpt_best` first (see §5).
+
+---
+
+## 5. Phase-2 continuation (converged but plateauing)
 
 When val loss flattens before `steps` completes (e.g. kl_tree best=0.4389 at step 1200):
 
@@ -291,7 +329,7 @@ schedule from warmup** (scheduler state is not saved). For clean Phase 2, delete
 
 ---
 
-## 5. Multi-model portability
+## 6. Multi-model portability
 
 Current production pair: **Qwen3-0.6B → Qwen3-8B** (`a100_qwen.yaml`).
 
@@ -315,7 +353,7 @@ change, not a rewrite.
 
 ---
 
-## 6. Known broken / disabled losses
+## 7. Known broken / disabled losses
 
 Do not tune hyperparameters for these until fixed — see [`ISSUES.md`](ISSUES.md):
 
@@ -326,7 +364,7 @@ Do not tune hyperparameters for these until fixed — see [`ISSUES.md`](ISSUES.m
 
 ---
 
-## 7. Quick reference commands
+## 8. Quick reference commands
 
 ```bash
 # Train one loss
@@ -344,7 +382,7 @@ python orchestration/experiment.py --config a100_qwen --dry_run --losses kl,rev_
 
 ---
 
-## 8. Decision checklist for researchers
+## 9. Decision checklist for researchers
 
 Before changing a hyperparameter, ask:
 
