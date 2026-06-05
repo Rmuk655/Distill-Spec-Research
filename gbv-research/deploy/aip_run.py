@@ -132,8 +132,11 @@ Legacy / full-pipeline:
                    help="Eval only — skip all training and merge steps. "
                         "Requires pre-built merged models. "
                         "Use --eval instead for the simpler single-loss interface.")
-    p.add_argument("--from_step",      default=None,
-                   help="Start at this pipeline step id, e.g. train_trav_tree_gsm8k")
+    p.add_argument("--from_step", "--from", dest="from_step", default=None,
+                   help="Start at this pipeline step id, e.g. merge_rev_kl_gsm8k "
+                        "(alias: --from; passed to experiment.py as --from)")
+    p.add_argument("--yes", action="store_true",
+                   help="No-op for compatibility — aip_run always passes --yes to experiment.py")
     p.add_argument("--dry_run",        action="store_true",
                    help="Print the experiment.py command without running it")
     p.add_argument("--experiment_tag", default=None,
