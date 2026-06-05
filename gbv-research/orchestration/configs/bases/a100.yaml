@@ -73,15 +73,32 @@ health:
   val_every: 100
 
 evaluation:
-  # Full 9-verifier matrix for the loss-verifier alignment result (paper main result).
-  # Override modes in leaf config if only a subset is needed.
-  modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+  # ── TWO PHASES — override in leaf config when switching ──────────────────────
+  #
+  # FINALIZATION (current default — ranking losses, not paper numbers):
+  #   eval_datasets: [gsm8k]                    ← 1 dataset only
+  #   modes: [alpha, bv, gbv, traversal]         ← 4 modes (leaf override)
+  #   n_prompts_gsm8k: 100                       ← 100 prompts (leaf override)
+  #   Per-loss eval time: ~1–1.5 h  (4 cells × ~15–20 min each)
+  #   Why: multi-dataset (alpaca/math500/humaneval/mtbench) adds 5× more cells.
+  #        naive/nss/spectr/khisti add 5 more modes.  Neither helps rank losses.
+  #        Those 5 datasets are for the paper's generalization claim — run them
+  #        once per TOP-3 loss after finalization, not for every candidate.
+  #
+  # PAPER CONFIRMATION (Stage 2B — after top-3 losses chosen):
+  #   eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
+  #   modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+  #   n_prompts_gsm8k: 1319                      ← full test set
+  #   Per-loss eval time: ~8–14 h (45 cells × ~12–20 min each)
+  #
+  # Base defaults = finalization-safe values.  Paper values live as comments.
+  modes: [alpha, bv, gbv, traversal]   # paper: add naive, nss, specinfer, spectr, khisti, bv, gbv, traversal
   K_values: [3]
   temperatures: [1.0]
   L: 8
   n_prompts: 100
-  n_prompts_gsm8k: 1319         # full GSM8K test set for paper numbers
-  eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
+  n_prompts_gsm8k: 100               # paper: 1319 (full GSM8K test set)
+  eval_datasets: [gsm8k]             # paper: [gsm8k, alpaca, math500, humaneval, mtbench]
   # task_score batch size: how many prompts to generate simultaneously.
   # Roofline: optimal ≈ FLOPs_peak / (params_bytes × HBM_BW)
   # A100-40GB + Qwen3-0.6B BF16: 312e12 / (1.2e9 × 2039e9) ≈ 127 → use 32 (safe margin)

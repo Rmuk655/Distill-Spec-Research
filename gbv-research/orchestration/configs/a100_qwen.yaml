@@ -106,40 +106,22 @@ logging:
   # Override on CLI: python deploy/aip_run.py --experiment_tag my_tag
   experiment_tag: KrishnanRIITHServer
 
-# ── Training — paper confirmation hyperparams ──────────────────────────────
-# CURRENT (exploration, Stage 2A):  steps=2000, lr=3e-5, tree_K=4
+# ── Eval scope: FINALIZATION vs PAPER CONFIRMATION ───────────────────────────
+# Finalization defaults are now in bases/a100.yaml (eval_datasets, modes, n_prompts).
+# bases/a100.yaml currently = finalization-safe values (see comments there).
 #
-# Switch to these for Stage 2B (paper confirmation on top 4-5 losses):
-#   steps: 5000      # 312 opt-steps at grad_accum=16 → fuller convergence
-#                    # Math: 2000 steps = 125 opt-steps (same as laptop!); 5000 = 312
-#   lr: 5.0e-5       # Compensates for lora_r=16 doubling trainable params vs r=8
-#                    # (effective per-param LR halved at same lr → need 5/3e-5)
-#   tree_K: 6        # Reduces cumprod variance: Var(Π α_i) ∝ 1/K
-#                    # At baseline α≈0.93/tok: 6 paths give 6× more gradient samples
+# FINALIZATION (current — bases/a100.yaml defaults apply):
+#   eval_datasets: [gsm8k]             1 dataset, no multi-dataset sweep
+#   modes: [alpha, bv, gbv, traversal] 4 verifiers only
+#   n_prompts_gsm8k: 100               ~1–1.5 h per loss
 #
-# To apply: update the training: section below and run clean_restart for that loss.
-# ── Eval scope ────────────────────────────────────────────────────────────────
-# TWO PHASES — change these settings when switching phases:
-#
-# EXPLORATION (current): rank all 17 losses quickly, pick top 4-5 winners.
-#   n_prompts_gsm8k: 100      → ~40 min/eval  × 17 losses = ~11 h total
-#   modes: 4 essential verifiers only
-#
-# PAPER CONFIRMATION (after winners chosen): full eval on top losses only.
-#   n_prompts_gsm8k: 1319     → ~14-17h/eval × 5 losses  = ~70-85 h total
-#   modes: all 9 verifiers (full loss-verifier alignment matrix)
-#
-# To switch to paper mode: change n_prompts_gsm8k → 1319, uncomment full modes.
+# PAPER CONFIRMATION — override in this file when top-3 losses are chosen:
+#   evaluation:
+#     eval_datasets: [gsm8k, alpaca, math500, humaneval, mtbench]
+#     modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+#     n_prompts_gsm8k: 1319
 # ─────────────────────────────────────────────────────────────────────────────
-evaluation:
-  # EXPLORATION: 100 prompts, 4 core verifiers (~40 min/eval)
-  n_prompts_gsm8k: 100
-  modes: [alpha, bv, gbv, traversal]
-  K_values: [3]
-  temperatures: [1.0]
-  # PAPER (uncomment when confirming top losses):
-  # n_prompts_gsm8k: 1319
-  # modes: [alpha, naive, nss, specinfer, spectr, khisti, bv, gbv, traversal]
+# No evaluation: override needed here — bases/a100.yaml has the right finalization defaults.
 
 experiment:
   pipeline_ordering: per_loss   # train → merge → eval per loss; results appear incrementally
