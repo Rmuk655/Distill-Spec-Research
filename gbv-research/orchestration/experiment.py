@@ -379,10 +379,6 @@ def _load_config_yaml(config_name: str) -> dict:
             "slow_val_every":       health.get("slow_val_every", 0),
             "slow_val_n":           health.get("slow_val_n", 100),
             "early_stop_patience":  health.get("early_stop_patience", 0),
-            # Deep eval: highest-confidence within-training signal (SE≈0.014 at 256 prompts).
-            # Saves ckpt_best_deep.  Not used for early stopping.
-            "deep_eval_every_n":    health.get("deep_eval_every_n", 0),
-            "deep_eval_prompts":    health.get("deep_eval_prompts", 256),
             # Logging cadence — how often trainer.py logs train metrics to W&B.
             "log_every":            logging_cfg.get("log_every", 10),
             # Regularization: grad clip + LoRA dropout.
@@ -1237,10 +1233,6 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         *( ["--slow_val_every", str(_h["slow_val_every"]),
             "--slow_val_n",    str(_h.get("slow_val_n", 100))]
            if _h.get("slow_val_every", 0) > 0 else [] ),
-        # deep_eval: only forward when enabled (deep_eval_every_n > 0).
-        *( ["--deep_eval_every_n",  str(_h["deep_eval_every_n"]),
-            "--deep_eval_prompts",  str(_h.get("deep_eval_prompts", 256))]
-           if _h.get("deep_eval_every_n", 0) > 0 else [] ),
         # val_dataset: if YAML dataset.eval is set, pass it as --val_dataset so
         # the trainer does NOT fall back to val_split=0.1 (10% of 6726 = 672 prompts
         # = 23 min per val check).  A small dedicated val file (gsm8k_10.jsonl → ~3 min,
@@ -3770,8 +3762,6 @@ def main():
         "slow_val_every":       _yaml_cfg.get("slow_val_every", 0),
         "slow_val_n":           _yaml_cfg.get("slow_val_n", 100),
         "early_stop_patience":  _yaml_cfg.get("early_stop_patience", 0),
-        "deep_eval_every_n":    _yaml_cfg.get("deep_eval_every_n", 0),
-        "deep_eval_prompts":    _yaml_cfg.get("deep_eval_prompts", 256),
         "grad_clip":            _yaml_cfg.get("grad_clip", 1.0),
         "lora_dropout":         _yaml_cfg.get("lora_dropout", 0.05),
         "ebe_kl_weight":        _yaml_cfg.get("ebe_kl_weight", 0.1),

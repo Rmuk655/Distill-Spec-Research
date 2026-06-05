@@ -65,37 +65,27 @@ logging:
   run_label: "8B-a100"
 
 health:
-  # ── Dual-val design ──────────────────────────────────────────────────────────
+  # ── Two-tier val design (fast gating + reliable selection) ───────────────────
   # Fast val (30 prompts, every 100 steps):
-  #   - Cheap: 30 × 1.5s = 45s/check → 40 checks × 45s = 30 min over 4000 steps
-  #   - Drives early_stop_patience=5: stop if no improvement for 5 × 100 = 500 steps
-  #   - SE≈0.031 (±3.1%) — good enough to detect plateau, noisy for final selection
-  #   - Saves ckpt_best (fast-val best, not used for eval merging)
+  #   - 30 × 1.5s = 45s/check → 40 checks × 45s = 30 min over 4000 steps
+  #   - SE≈0.031: good enough to detect plateau/improvement, noisy for ranking
+  #   - Drives early_stop_patience=5 (stop after 5 consecutive no-improve checks)
+  #   - Saves ckpt_best (fast-val best — not used for eval merging)
   #
   # Slow val (100 prompts, every 500 steps):
   #   - 100 × 1.5s = 2.5 min/check → 8 checks × 2.5 min = 20 min over 4000 steps
-  #   - SE≈0.017 (±1.7%) — reliable for final checkpoint selection
+  #   - SE≈0.017: reliable for final checkpoint selection
   #   - Saves ckpt_best_slow → eval pipeline merges THIS, not ckpt_best
-  #   - NOT used for early stopping (avoids 2.5 min pauses every 100 steps)
+  #   - Also feeds early_stop_patience so noisy fast-val bounces don't decide alone
   #
-  # Early stop: patience=5 fast-val checks without improvement → stop training.
-  # But final checkpoint = ckpt_best_slow (best slow-val step), not early-stop step.
-  # This decouples "when to stop" from "which checkpoint to evaluate".
+  # Total val overhead: 30 + 20 = 50 min over 4000 steps (acceptable vs 53 min tree train).
+  # Rationale: 30-prompt val is a cheap gating metric ("better / not better");
+  # 100-prompt slow val is the real ranking metric. Do not over-interpret fast-val
+  # changes < 0.003 — that is noise at n=30. Trust the slow-val trend instead.
   val_every: 100
   slow_val_every: 500
   slow_val_n: 100
   early_stop_patience: 5
-  # ── Deep eval ─────────────────────────────────────────────────────────────
-  # Highest-confidence within-training signal.  256 prompts × 1.5s ≈ 6.4 min/check.
-  # 4 checks over 4000 steps × 6.4 min = 25.6 min overhead.
-  # SE≈0.014 → detects >2.8% differences — paper-quality.
-  # Saves ckpt_best_deep.  Not used for early stopping (only fast val does that).
-  # Three-tier summary over 4000 steps:
-  #   fast val   (n=30,  every 100):  40 checks × 45s   = 30 min  → early stopping
-  #   slow val   (n=100, every 500):   8 checks × 2.5min = 20 min  → checkpoint selection
-  #   deep eval  (n=256, every 1000):  4 checks × 6.4min = 26 min  → paper-quality signal
-  deep_eval_every_n: 1000
-  deep_eval_prompts: 256
   ppl_check_every: 500
 
 checkpointing:
