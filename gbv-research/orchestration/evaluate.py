@@ -2270,8 +2270,15 @@ def main():
             def _round(v, d=4):
                 try: return round(float(v), d)
                 except: return None
+            # loss_name: the training objective this model was distilled with.
+            # "baseline" when no training was done (reference run).
+            # This is the primary key for cross-run comparison — without it the
+            # table just shows verifier metrics with no way to tell which trained
+            # model produced them (the run name is not visible inside the table).
+            _loss_col = getattr(args, "loss_name", None) or "baseline"
             _tbl_rows = [
                 [
+                    _loss_col,
                     r.get("dataset", ""),
                     r.get("mode", ""),
                     r.get("K", 1),
@@ -2288,7 +2295,8 @@ def main():
             ]
             if _tbl_rows:
                 _eval_tbl = _wmod_final.Table(
-                    columns=["dataset", "mode", "K", "temperature",
+                    columns=["loss_name",
+                             "dataset", "mode", "K", "temperature",
                              "block_eff", "alpha_mean", "alpha_ci95",
                              "throughput_tok_s", "ms_per_tok",
                              "task_score", "perplexity"],
