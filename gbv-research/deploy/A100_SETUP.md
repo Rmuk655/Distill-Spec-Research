@@ -15,23 +15,23 @@ Flat `ebe` / `ebe_single` are excluded by default in `orchestration/configs/base
 # 1. Secrets (replace with real values)
 export WANDB_API_KEY="your-key-from-wandb.ai/authorize"
 export GITHUB_TOKEN="ghp_..."          # only if repo is private
-export STORAGE_ROOT=~/ram/specdist     # checkpoints, logs, results.db persist here
+export STORAGE_ROOT=/sensei-fs/users/rkrishna/specdist     # checkpoints, logs, results.db persist here
 
 # 2. Clone repo
-cd ~/ram
+cd /sensei-fs/users/rkrishna
 git clone https://github.com/Rmuk655/Distill-Spec-Research.git
 
 # 3. Install deps, auth, GPU check (creates $STORAGE_ROOT/venv if missing)
-bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+bash /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 ### After pulling doc/code fixes from GitHub
 
 ```bash
-git -C ~/ram/Distill-Spec-Research pull
+git -C /sensei-fs/users/rkrishna/Distill-Spec-Research pull
 
-# Re-run setup (reuses existing venv at ~/ram/specdist/venv, refreshes deps + ~/.specdist_env)
-bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+# Re-run setup (reuses existing venv at /sensei-fs/users/rkrishna/specdist/venv, refreshes deps + ~/.specdist_env)
+bash /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 
 source ~/.specdist_env
 cd "$GBV_DIR"
@@ -49,7 +49,7 @@ cd "$GBV_DIR"
 ## Smoke test (run first)
 
 ```bash
-cd ~/ram/Distill-Spec-Research/gbv-research
+cd /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research
 python deploy/aip_run.py --config a100_qwen
 ```
 
@@ -82,8 +82,8 @@ python deploy/aip_run.py --config a100_qwen --losses traversal_tree --from_step 
 **Force re-train** (delete checkpoint + reset state first):
 
 ```bash
-rm -rf ~/ram/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b
-rm -rf ~/ram/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b_merged
+rm -rf /sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b
+rm -rf /sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b_merged
 # Reset train/merge/eval steps in pipeline state (or use deploy/rerun_loss.sh)
 python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
 ```
@@ -91,7 +91,7 @@ python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only
 Check what the pipeline thinks is done:
 
 ```bash
-python orchestration/experiment.py --config a100_qwen --status --storage_root ~/ram/specdist
+python orchestration/experiment.py --config a100_qwen --status --storage_root /sensei-fs/users/rkrishna/specdist
 ```
 
 Step IDs for `traversal_tree` (not `traversal`):
@@ -102,7 +102,7 @@ Step IDs for `traversal_tree` (not `traversal`):
 | Merge | `merge_trav_tree_gsm8k` |
 | Eval | `eval_trav_tree_gsm8k` |
 
-Checkpoint dir: `~/ram/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b`
+Checkpoint dir: `/sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b`
 
 Other losses:
 
@@ -118,7 +118,7 @@ The BV block-acceptance integral amplifies gradients compared with `kl_tree` or 
 
 ```bash
 python orchestration/experiment.py --config a100_qwen \
-  --losses bv_tree --lr 1e-5 --train_only --yes --storage_root ~/ram/specdist
+  --losses bv_tree --lr 1e-5 --train_only --yes --storage_root /sensei-fs/users/rkrishna/specdist
 ```
 
 Same pattern for `gbv_tree`. `deploy/aip_run.py` does not pass `--lr` through — call `experiment.py` as above (or add `--lr` to your own wrapper).
@@ -128,7 +128,7 @@ Same pattern for `gbv_tree`. `deploy/aip_run.py` does not pass `--lr` through �
 **Monitor:**
 
 ```bash
-tail -f ~/ram/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
+tail -f /sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
 python orchestration/experiment.py --config a100_qwen --status
 ```
 
@@ -190,20 +190,20 @@ Default A100 eval modes (in `bases/a100.yaml`): `alpha`, `naive`, `nss`, `specin
 
 | What | Path (typical on Pluto) |
 |------|-------------------------|
-| Pipeline stdout | `~/ram/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
-| Per-step errors | `~/ram/specdist/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log` |
-| Training (trainer) | `~/ram/specdist/logs/<loss>-gsm8k-q0.6b-q8b/train.log` (if experiment routes there) |
-| W&B local run files | `~/ram/Distill-Spec-Research/gbv-research/db/wandb/wandb/run-<date>-<id>/logs/` |
+| Pipeline stdout | `/sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
+| Per-step errors | `/sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log` |
+| Training (trainer) | `/sensei-fs/users/rkrishna/specdist/logs/<loss>-gsm8k-q0.6b-q8b/train.log` (if experiment routes there) |
+| W&B local run files | `/sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/db/wandb/wandb/run-<date>-<id>/logs/` |
 | W&B dashboard | URL printed as `[wandb] https://wandb.ai/...` in pipeline or train log |
 
-W&B stores under the **repo** (`gbv-research/db/wandb/`), not under `STORAGE_ROOT`, unless you set `WANDB_DIR` yourself. Checkpoints and `results.db` use `STORAGE_ROOT` (`~/ram/specdist`).
+W&B stores under the **repo** (`gbv-research/db/wandb/`), not under `STORAGE_ROOT`, unless you set `WANDB_DIR` yourself. Checkpoints and `results.db` use `STORAGE_ROOT` (`/sensei-fs/users/rkrishna/specdist`).
 
 ```bash
 # Tail pipeline
-tail -f ~/ram/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
+tail -f /sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
 
 # Tail one W&B run (replace run id)
-tail -f ~/ram/Distill-Spec-Research/gbv-research/db/wandb/wandb/run-20260604_062658-1zvnc3xf/logs/debug.log
+tail -f /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/db/wandb/wandb/run-20260604_062658-1zvnc3xf/logs/debug.log
 ```
 
 ---
@@ -217,7 +217,7 @@ This happens when `origin` was set twice with `GITHUB_TOKEN` embedded:
 **Fix once (from repo root):**
 
 ```bash
-cd ~/ram/Distill-Spec-Research
+cd /sensei-fs/users/rkrishna/Distill-Spec-Research
 
 # Remove embedded credentials — use plain HTTPS URL
 git remote set-url origin https://github.com/Rmuk655/Distill-Spec-Research.git
@@ -233,7 +233,7 @@ git pull
 Re-run setup only after fixing the remote (setup script now strips old credentials before re-injecting):
 
 ```bash
-bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+bash /sensei-fs/users/rkrishna/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 **Security:** If a token appeared in a terminal log or chat, revoke it at GitHub → Settings → Developer settings → Personal access tokens and create a new one.

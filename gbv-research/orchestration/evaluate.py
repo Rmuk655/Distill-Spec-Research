@@ -2002,11 +2002,15 @@ def main():
                 _need_vram_wait = (_hw == "laptop")
 
                 # Detect available GPUs for parallel mode execution.
+                # Hard cap at 3: Pluto is a shared machine — don't monopolise more
+                # than 3 GPUs even if more are visible.  Override by setting the
+                # env var SPECDIST_MAX_EVAL_GPUS (e.g. =1 to force serial).
+                _MAX_EVAL_GPUS = int(os.environ.get("SPECDIST_MAX_EVAL_GPUS", "3"))
                 _n_gpus = 1
                 if _device == "cuda":
                     try:
                         import torch as _tc
-                        _n_gpus = max(1, _tc.cuda.device_count())
+                        _n_gpus = min(_MAX_EVAL_GPUS, max(1, _tc.cuda.device_count()))
                     except Exception:
                         pass
 
