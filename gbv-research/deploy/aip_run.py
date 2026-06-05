@@ -1,7 +1,13 @@
 """
 aip_run.py — SpecDist pipeline launcher for GPU compute environments.
 
-Usage (run from the repo root or any directory):
+Simple per-loss workflow (recommended):
+    python deploy/aip_run.py --loss kl --train       # train kl only
+    python deploy/aip_run.py --loss kl --eval        # eval kl only (skips baseline)
+    python deploy/aip_run.py --loss kl               # full pipeline: train + eval
+    python deploy/aip_run.py --loss bv_tree --train  # auto-applies --lr 1e-5
+
+Full pipeline / legacy usage:
     python deploy/aip_run.py                          # smoke test first
     python deploy/aip_run.py --config a10_qwen        # A10G 24 GB
     python deploy/aip_run.py --config a100_qwen       # A100 40 GB
@@ -56,12 +62,35 @@ _GBV_DIR    = os.path.dirname(_DEPLOY_DIR)          # gbv-research/
 _REPO_DIR   = os.path.dirname(_GBV_DIR)             # Distill-Spec-Research/
 
 
+# Tree losses that use a full-vocab BV integral — gradients are amplified
+# so the recommended learning rate is 1e-5 (vs the default 3e-5).
+_HIGH_GRAD_LOSSES = {"bv_tree", "gbv_tree"}
+
+# Losses whose eval GSM8K step ID differs from the default eval_{loss}_gsm8k pattern.
+_LOSS_TO_EVAL_STEP = {
+    "traversal_tree": "eval_trav_tree_gsm8k",
+    "specinfer_tree": "eval_si_tree_gsm8k",
+    "spectr_tree":    "eval_st_tree_gsm8k",
+}
+
+
+def _eval_step_id(loss: str) -> str:
+    """Return the GSM8K eval step ID for a given loss name."""
+    return _LOSS_TO_EVAL_STEP.get(loss, f"eval_{loss}_gsm8k")
+
+
 def _parse_args():
     p = argparse.ArgumentParser(
         description="SpecDist pipeline launcher",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Simple per-loss workflow:
+  python deploy/aip_run.py --loss kl --train          # train kl only
+  python deploy/aip_run.py --loss kl --eval           # eval kl (skips baseline)
+  python deploy/aip_run.py --loss kl                  # full: train + eval
+  python deploy/aip_run.py --loss bv_tree --train     # auto-applies --lr 1e-5
+
+Legacy / full-pipeline:
   python deploy/aip_run.py                            # smoke then full (a10_qwen)
   python deploy/aip_run.py --config a100_qwen         # A100 paper run
   python deploy/aip_run.py --config a10_qwen --losses kl
@@ -74,6 +103,18 @@ Examples:
                    help="Config name (default: a10_qwen). "
                         "Options: a10_qwen, a100_qwen, kaggle, colab, colab_lite, "
                         "server_gpt2, laptop_qwen, laptop_gpt2")
+    # ── Simplified single-loss interface ─────────────────────────────────────
+    p.add_argument("--loss",        default=None,
+                   help="Single loss to run (alias for --losses with one value). "
+                        "E.g. --loss kl  or  --loss bv_tree")
+    p.add_argument("--train",       action="store_true",
+                   help="Train only (alias for --train_only). "
+                        "Use with --loss: python deploy/aip_run.py --loss kl --train")
+    p.add_argument("--eval",        action="store_true",
+                   help="Eval only (alias for --eval_only). "
+                        "Automatically skips baseline when a single --loss is given. "
+                        "Use with --loss: python deploy/aip_run.py --loss kl --eval")
+    # ── Legacy / full-pipeline flags ─────────────────────────────────────────
     p.add_argument("--losses",      default=None,
                    help="Comma-separated loss names to run "
                         "(default: all). E.g. 'kl' or 'kl,kl_tree'")
@@ -87,6 +128,10 @@ Examples:
     p.add_argument("--train_only",     action="store_true",
                    help="Train + merge only (skip baseline and post-train eval). "
                         "Use with --losses traversal_tree to train one loss.")
+    p.add_argument("--eval_only",      action="store_true",
+                   help="Eval only — skip all training and merge steps. "
+                        "Requires pre-built merged models. "
+                        "Use --eval instead for the simpler single-loss interface.")
     p.add_argument("--from_step",      default=None,
                    help="Start at this pipeline step id, e.g. train_trav_tree_gsm8k")
     p.add_argument("--dry_run",        action="store_true",
@@ -101,7 +146,12 @@ Examples:
                         "without deleting old ones. Old rows are preserved; new "
                         "rows get a different run_tag. Always set --experiment_tag "
                         "alongside this so you can distinguish runs in W&B/dashboard.")
-    return p.parse_args()
+    p.add_argument("--lr",         type=float, default=None,
+                   help="Learning rate override (passed to experiment.py --lr). "
+                        "bv_tree / gbv_tree auto-set to 1e-5 if omitted.")
+    p.add_argument("--lora_r",     type=int,   default=None,
+                   help="LoRA rank override (passed to experiment.py --lora_r).")
+    return p, p.parse_args()
 
 
 def _gpu_info():
@@ -226,12 +276,53 @@ def _warn_stale_trainers():
 
 
 def main():
-    args = parse_args = _parse_args()
+    p, args = _parse_args()
+
+    # ── Resolve convenience aliases ───────────────────────────────────────────
+    # --loss X   → --losses X  (singular convenience)
+    if args.loss and args.losses:
+        p.error("Pass --loss or --losses, not both.")
+    if args.loss:
+        args.losses = args.loss
+
+    # --train / --eval mutual exclusivity (mirrors experiment.py --train_only / --eval_only)
+    if args.train and args.eval:
+        p.error("Pass at most one of --train / --eval.")
+    if args.train and args.train_only:
+        p.error("Pass at most one of --train / --train_only (they are the same thing).")
+    if args.eval and args.eval_only:
+        p.error("Pass at most one of --eval / --eval_only (they are the same thing).")
+
+    # Normalize to the legacy flags that experiment.py understands
+    if args.train:
+        args.train_only = True
+    if args.eval:
+        args.eval_only = True
+
+    # Auto-apply --lr 1e-5 for BV-integral losses that amplify gradients
+    if args.losses and args.lr is None:
+        _single = args.losses.strip().split(",")[0].strip()  # check first loss
+        if _single in _HIGH_GRAD_LOSSES and "," not in args.losses:
+            args.lr = 1e-5
+            print(f"[aip_run] Auto-setting --lr 1e-5 for {_single} "
+                  f"(BV integral amplifies gradients; override with --lr)")
+
+    # Auto-skip baseline when eval_only + single loss:
+    # --eval --loss kl  →  --from eval_kl_gsm8k  (skip eval_baseline_gsm8k)
+    if args.eval_only and args.losses and "," not in args.losses and not args.from_step:
+        _single_loss = args.losses.strip()
+        args.from_step = _eval_step_id(_single_loss)
+        print(f"[aip_run] --eval with single loss '{_single_loss}': "
+              f"skipping baseline, --from {args.from_step}")
 
     print("=" * 68)
     print(f"  SpecDist Pipeline")
     print(f"  config  : {args.config}")
     print(f"  losses  : {args.losses or 'all'}")
+    if args.train_only:
+        print(f"  mode    : train only")
+    elif args.eval_only:
+        print(f"  mode    : eval only (from: {args.from_step or 'start'})")
     print("=" * 68)
 
     _warn_stale_trainers()   # warn (not kill) if stale subprocesses are found
@@ -267,8 +358,14 @@ def main():
         cmd.append("--force_eval")
     if args.train_only:
         cmd.append("--train_only")
+    if args.eval_only:
+        cmd.append("--eval_only")
     if args.from_step:
         cmd += ["--from", args.from_step]
+    if args.lr is not None:
+        cmd += ["--lr", str(args.lr)]
+    if args.lora_r is not None:
+        cmd += ["--lora_r", str(args.lora_r)]
 
     no_smoke = args.no_smoke or args.resume
     if not no_smoke:

@@ -265,6 +265,9 @@ def parse_args() -> argparse.Namespace:
                         "'4B-T4' -> '4B-T4-kl_qwen_500steps'. "
                         "Set via logging.run_label in the YAML config.")
     p.add_argument("--no_wandb",      action="store_true")
+    p.add_argument("--fresh_wandb",   action="store_true",
+                   help="Start a new W&B run even when resuming from checkpoint. "
+                        "Default: reuse run id from <output>/wandb_run.json if present.")
 
     # ── Health checks ────────────────────────────────────────────────────────
     p.add_argument("--nan_action", default="stop",
@@ -353,8 +356,29 @@ def _resolve_adapter_dir(output_dir: str) -> str:
 
 
 def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
-    """Merge a LoRA adapter into the base model and save to <adapter_path>_merged/."""
+    """Merge a LoRA adapter into the base model and save to <adapter_path>_merged/.
+
+    Output directory is always computed from the CHECKPOINT ROOT (the path passed
+    as adapter_path), never from a subdirectory like ckpt_best/ or ckpt_latest/.
+    This ensures the pipeline's done_check (which looks for <ckpt_root>_merged/)
+    is satisfied regardless of which subdirectory holds the actual adapter weights.
+
+    Example:
+        adapter_path = /ckpts/kl-gsm8k-q0.6b-q8b          → out = …/kl-gsm8k-q0.6b-q8b_merged/
+        adapter_path = /ckpts/kl-gsm8k-q0.6b-q8b/ckpt_best → out = …/kl-gsm8k-q0.6b-q8b_merged/
+    """
     adapter_dir = _resolve_adapter_dir(adapter_path)
+
+    # Normalise: if the user passed .../ckpt_best or .../ckpt_latest as the
+    # adapter path, compute the output relative to the parent (checkpoint root).
+    _norm = adapter_path.rstrip("/\\")
+    _basename = os.path.basename(_norm)
+    if _basename in ("ckpt_best", "ckpt_latest"):
+        _out_base = os.path.dirname(_norm)
+        print(f"[merge] adapter_path ends in '{_basename}'; "
+              f"writing merged model to parent: {_out_base}_merged/")
+    else:
+        _out_base = _norm
 
     print(f"Loading base: {draft_model_id}")
     base = transformers.AutoModelForCausalLM.from_pretrained(
@@ -378,7 +402,7 @@ def merge_lora_and_save(draft_model_id: str, adapter_path: str) -> None:
 
     model  = PeftModel.from_pretrained(base, adapter_dir, config=lora_config)
     merged = model.merge_and_unload()
-    out    = adapter_path + "_merged"
+    out    = _out_base + "_merged"
     merged.save_pretrained(out)
     transformers.AutoTokenizer.from_pretrained(draft_model_id).save_pretrained(out)
     print(f"Merged → {out}")
@@ -433,6 +457,50 @@ def _save_checkpoint(
             while len(milestones) > max_checkpoints:
                 shutil.rmtree(os.path.join(output_dir, milestones.pop(0)),
                               ignore_errors=True)
+
+
+_WANDB_RUN_META = "wandb_run.json"
+
+
+def _wandb_run_meta_path(output_dir: str) -> str:
+    return os.path.join(output_dir, _WANDB_RUN_META)
+
+
+def _load_wandb_run_meta(output_dir: str) -> dict | None:
+    """Return saved W&B run metadata, or None if missing / invalid."""
+    path = _wandb_run_meta_path(output_dir)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+        if data and data.get("run_id"):
+            return data
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _save_wandb_run_meta(
+    output_dir: str,
+    *,
+    run_id: str,
+    run_name: str | None,
+    project: str,
+    entity: str | None,
+) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+    with open(_wandb_run_meta_path(output_dir), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "run_id": run_id,
+                "run_name": run_name,
+                "project": project,
+                "entity": entity,
+            },
+            f,
+            indent=2,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -855,34 +923,60 @@ def main() -> None:
             _run_name = f"{_label_prefix}{args.loss}_{family.name}_{_teacher_short(args.target)}_{args.steps}steps"
             _is_smoke = (args.steps <= 10)
             _run_mode = "smoke" if _is_smoke else "full"
-            _wandb = _w.init(
-                project=args.wandb_project, entity=args.wandb_entity,
-                group=args.wandb_group or None,
-                job_type="train",
-                name=_run_name,
-                tags=[args.loss, "train", "phase1",
-                      getattr(args, "hw_tier", "unknown"),
-                      f"seed{args.seed}",
-                      _run_mode],   # "smoke" or "full" for easy filtering
-                config={
-                    "loss":              args.loss,
-                    "hw_tier":           getattr(args, "hw_tier", "unknown"),
-                    "run_mode":          _run_mode,
-                    "steps":             args.steps,
-                    "lr":                args.lr,
-                    "grad_accum":        args.grad_accum,
-                    "batch_size":        getattr(args, "batch_size", 1),
-                    "lora_r":            args.lora_r,
-                    "teacher_temp":      args.teacher_temp,
-                    "seed":              args.seed,
-                    "family":            family.name,
-                    "draft":             args.draft,
-                    "target":            args.target,
-                    "attn_impl":         _ATTN_IMPL,
-                    "max_train_prompts": getattr(args, "max_train_prompts", 0),
-                },
-                resume="allow",
+            _wandb_cfg = {
+                "loss":              args.loss,
+                "hw_tier":           getattr(args, "hw_tier", "unknown"),
+                "run_mode":          _run_mode,
+                "steps":             args.steps,
+                "lr":                args.lr,
+                "grad_accum":        args.grad_accum,
+                "batch_size":        getattr(args, "batch_size", 1),
+                "lora_r":            args.lora_r,
+                "teacher_temp":      args.teacher_temp,
+                "seed":              args.seed,
+                "family":            family.name,
+                "draft":             args.draft,
+                "target":            args.target,
+                "attn_impl":         _ATTN_IMPL,
+                "max_train_prompts": getattr(args, "max_train_prompts", 0),
+            }
+            _saved_wandb = (
+                _load_wandb_run_meta(args.output)
+                if _resuming and not args.fresh_wandb
+                else None
             )
+            _init_kw: dict = {
+                "project":  args.wandb_project,
+                "entity":   args.wandb_entity,
+                "group":    args.wandb_group or None,
+                "job_type": "train",
+                "name":     (_saved_wandb.get("run_name") if _saved_wandb else None) or _run_name,
+                "tags":     [args.loss, "train", "phase1",
+                            getattr(args, "hw_tier", "unknown"),
+                            f"seed{args.seed}",
+                            _run_mode],
+                "config":   _wandb_cfg,
+            }
+            if _saved_wandb:
+                _init_kw["id"] = _saved_wandb["run_id"]
+                _init_kw["resume"] = "must"
+                _saved_proj = _saved_wandb.get("project")
+                if _saved_proj and _saved_proj != args.wandb_project:
+                    print(f"  [wandb] Warning: checkpoint project {_saved_proj!r} "
+                          f"!= --wandb_project {args.wandb_project!r}")
+                print(f"  [wandb] Resuming run {_saved_wandb['run_id']} "
+                      f"(from {_WANDB_RUN_META})")
+            else:
+                _init_kw["resume"] = "allow"
+            _wandb = _w.init(**_init_kw)
+            if _wandb and getattr(_wandb, "id", None):
+                _save_wandb_run_meta(
+                    args.output,
+                    run_id=_wandb.id,
+                    run_name=getattr(_wandb, "name", None) or _run_name,
+                    project=args.wandb_project,
+                    entity=args.wandb_entity,
+                )
             # Use training step as x-axis for all train metrics.
             # This ensures charts show step 0-1000, not W&B's internal 0-N counter.
             _w.define_metric("train_step")
