@@ -101,8 +101,12 @@ evaluation:
   temperatures: [1.0]
   L: 8
   n_prompts: 100
-  n_prompts_gsm8k: 100               # paper: 1319 (full GSM8K test set)
-  eval_datasets: [gsm8k]             # paper: [gsm8k, alpaca, math500, humaneval, mtbench]
+  n_prompts_gsm8k: 100               # paper: 1119 (all non-val test prompts)
+  # gsm8k_eval = eval pool: items[200:300] of seed=42 shuffled 1319-item test set.
+  # gsm8k      = val pool:  items[0:100]  — used during training for checkpoint selection.
+  # These two never overlap → no checkpoint-selection bias in reported eval numbers.
+  # paper: [gsm8k_eval, alpaca, math500, humaneval, mtbench] with n_prompts_gsm8k: 1119
+  eval_datasets: [gsm8k_eval]
   # task_score batch size: how many prompts to generate simultaneously.
   # Roofline: optimal ≈ FLOPs_peak / (params_bytes × HBM_BW)
   # A100-40GB + Qwen3-0.6B BF16: 312e12 / (1.2e9 × 2039e9) ≈ 127 → use 32 (safe margin)

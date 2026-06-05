@@ -171,18 +171,78 @@ _GSM8K_FALLBACK = [
 ]
 
 def fetch_gsm8k(n=30, force=False):
+    """GSM8K test split — VAL POOL (items[0:n], isolated seed=42).
+
+    Used for validation during training: gsm8k_30.jsonl (fast val / early stopping)
+    and gsm8k_100.jsonl (slow val / checkpoint selection).  These prompts are
+    explicitly EXCLUDED from the eval pool (see fetch_gsm8k_eval).
+
+    Uses an isolated random.Random(42) so results are deterministic regardless of
+    the order in which downloader functions are called or how many other random
+    operations have occurred since module import.
+    """
     path = os.path.join(DATA_DIR, f"gsm8k_{n}.jsonl")
     if os.path.exists(path) and not force:
-        print(f"  GSM8K({n}) already exists, skipping. Use --force to re-download.")
+        print(f"  GSM8K val({n}) already exists, skipping. Use --force to re-download.")
         return path
-    print("Fetching GSM8K...")
-    # Save answer alongside prompt for task accuracy scoring
-    items = _hf_load("gsm8k", "test", "question", config="main", n=n,
+    print("Fetching GSM8K (val pool)...")
+    # Load all 1319 test items, shuffle with isolated RNG, take first n.
+    items = _hf_load("gsm8k", "test", "question", config="main", n=None,
                      extra_fields=["answer"])
     if not items:
         print("  Using fallback GSM8K problems")
         items = [{"prompt": p} for p in _GSM8K_FALLBACK[:n]]
-    save_jsonl(path, items)
+        save_jsonl(path, items)
+        return path
+    _rng = random.Random(42)   # isolated — does not affect global random state
+    _rng.shuffle(items)
+    save_jsonl(path, items[:n])
+    return path
+
+
+# _GSM8K_VAL_POOL_SIZE: number of items reserved for validation files
+# (gsm8k_30.jsonl + gsm8k_100.jsonl).  fetch_gsm8k_eval skips this many items
+# from the front of the shuffled test set so val and eval never overlap.
+# Must be ≥ max(n) passed to fetch_gsm8k.  Currently max is 100 (slow val).
+_GSM8K_VAL_POOL_SIZE = 200   # 100 buffer beyond the largest val file
+
+
+def fetch_gsm8k_eval(n=100, force=False):
+    """GSM8K test split — EVAL POOL (items[VAL_POOL:VAL_POOL+n], isolated seed=42).
+
+    These prompts are GUARANTEED not to overlap with gsm8k_30.jsonl or
+    gsm8k_100.jsonl (the val files used during training for checkpoint selection).
+    This is the file used for post-training evaluation of all models.
+
+    For finalization (n=100): items[200:300] of the shuffled 1319-item test set.
+    For paper (n=1319): use fetch_gsm8k_eval(n=1319) → items[200:1319] = 1119 items.
+    All models (baseline, kl, traversal_tree, …) are evaluated on the SAME file
+    so loss-to-loss comparisons are valid.
+
+    Val-pool separation diagram (1319 test items, seed=42 shuffle):
+      [0 ──── 99]  gsm8k_100.jsonl    (slow val / checkpoint selection)
+      [0 ──── 29]  gsm8k_30.jsonl     (fast val / early stopping)
+      [100 ─ 199]  buffer             (unused — extra separation)
+      [200 ─ 299]  gsm8k_eval_100.jsonl  ← this file (finalization eval)
+      [200 ─ 1318] gsm8k_eval_1119.jsonl ← paper eval (all non-val prompts)
+    """
+    _n_capped = min(n, 1319 - _GSM8K_VAL_POOL_SIZE)   # max 1119 non-val items
+    path = os.path.join(DATA_DIR, f"gsm8k_eval_{_n_capped}.jsonl")
+    if os.path.exists(path) and not force:
+        print(f"  GSM8K eval({_n_capped}) already exists, skipping. Use --force to re-download.")
+        return path
+    print("Fetching GSM8K (eval pool)...")
+    items = _hf_load("gsm8k", "test", "question", config="main", n=None,
+                     extra_fields=["answer"])
+    if not items:
+        print("  Using fallback GSM8K problems (eval pool)")
+        fallback = [{"prompt": p} for p in _GSM8K_FALLBACK]
+        save_jsonl(path, fallback[:_n_capped])
+        return path
+    _rng = random.Random(42)   # same seed as fetch_gsm8k → same shuffle order
+    _rng.shuffle(items)
+    eval_items = items[_GSM8K_VAL_POOL_SIZE : _GSM8K_VAL_POOL_SIZE + _n_capped]
+    save_jsonl(path, eval_items)
     return path
 
 
@@ -642,7 +702,7 @@ def fetch_wikitext_train(force=False):
 # Main
 # ---------------------------------------------------------------------------
 
-ALL_DATASETS = ["diverse50", "gsm8k", "humaneval", "math500", "mtbench", "alpaca"]
+ALL_DATASETS = ["diverse50", "gsm8k", "gsm8k_eval", "humaneval", "math500", "mtbench", "alpaca"]
 TRAIN_DATASETS = ["gsm8k_train", "math_train", "alpaca_train", "wikitext_train"]
 
 def fetch_all(n=30, force=False, datasets=None, train=False):
@@ -654,6 +714,8 @@ def fetch_all(n=30, force=False, datasets=None, train=False):
         paths["diverse50"] = write_diverse50(force=force)
     if "gsm8k" in datasets:
         paths["gsm8k"] = fetch_gsm8k(n=n, force=force)
+    if "gsm8k_eval" in datasets:
+        paths["gsm8k_eval"] = fetch_gsm8k_eval(n=n, force=force)
     if "humaneval" in datasets:
         paths["humaneval"] = fetch_humaneval(force=force)
     if "math500" in datasets:
@@ -677,13 +739,18 @@ def fetch_all(n=30, force=False, datasets=None, train=False):
 
 def get_dataset_path(name: str, n: int = 30) -> str:
     """Return JSONL path for a dataset (creating it if needed)."""
+    # gsm8k      → val pool  (items[0:n], seed=42) — used during training val/checkpoint selection
+    # gsm8k_eval → eval pool (items[200:200+n], seed=42) — used for post-training evaluation
+    # These two pools are non-overlapping by construction (see fetch_gsm8k_eval docstring).
+    _eval_n = min(n, 1319 - _GSM8K_VAL_POOL_SIZE)
     mapping = {
-        "diverse50": os.path.join(DATA_DIR, "diverse50.jsonl"),
-        "gsm8k":     os.path.join(DATA_DIR, f"gsm8k_{n}.jsonl"),
-        "humaneval": os.path.join(DATA_DIR, "humaneval.jsonl"),
-        "math500":   os.path.join(DATA_DIR, f"math500_{n}.jsonl"),
-        "mtbench":   os.path.join(DATA_DIR, "mtbench_80.jsonl"),
-        "alpaca":    os.path.join(DATA_DIR, f"alpaca_{n}.jsonl"),
+        "diverse50":   os.path.join(DATA_DIR, "diverse50.jsonl"),
+        "gsm8k":       os.path.join(DATA_DIR, f"gsm8k_{n}.jsonl"),
+        "gsm8k_eval":  os.path.join(DATA_DIR, f"gsm8k_eval_{_eval_n}.jsonl"),
+        "humaneval":   os.path.join(DATA_DIR, "humaneval.jsonl"),
+        "math500":     os.path.join(DATA_DIR, f"math500_{n}.jsonl"),
+        "mtbench":     os.path.join(DATA_DIR, "mtbench_80.jsonl"),
+        "alpaca":      os.path.join(DATA_DIR, f"alpaca_{n}.jsonl"),
     }
     path = mapping.get(name)
     if path and not os.path.exists(path):
