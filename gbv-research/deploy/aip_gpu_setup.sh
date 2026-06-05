@@ -31,23 +31,44 @@ GBV_DIR="$(dirname "$SCRIPT_DIR")"          # gbv-research/
 REPO_DIR="$(dirname "$GBV_DIR")"            # Distill-Spec-Research/
 
 # ── Storage root ──────────────────────────────────────────────────────────────
-# Priority: STORAGE_ROOT env var > $HOME/specdist > repo/db/
+# Research data (checkpoints, results.db, logs, HF model cache) → Sensei FS.
+# Sensei FS is persistent Lustre-backed storage at /sensei-fs/users/rkrishna.
+# Quota: 500 GB.  Expected usage: ~153 GB (checkpoints ~130, HF cache ~18, DB ~5).
+#
+# What goes in Sensei vs local:
+#   Sensei:    checkpoints, results.db, logs, pipeline state, hf_cache (persists models)
+#   Local HOME: venv only (NFS is 5-10× slower for thousands of pip package files)
+#
+# Priority: STORAGE_ROOT env var > Sensei FS > $HOME/specdist > repo/db/
+SENSEI_SPECDIST="/sensei-fs/users/rkrishna/specdist"
 if [ -n "${STORAGE_ROOT:-}" ]; then
     STORAGE="${STORAGE_ROOT}"
+elif [ -d "/sensei-fs/users/rkrishna" ] && [ -w "/sensei-fs/users/rkrishna" ]; then
+    STORAGE="${SENSEI_SPECDIST}"
+    echo "  [storage] Sensei FS detected → using ${STORAGE}"
 elif [ -w "$HOME" ]; then
     STORAGE="$HOME/specdist"
+    echo "  [storage] Sensei FS not available → using \$HOME/specdist"
 else
     STORAGE="${GBV_DIR}/db"
 fi
 
+# HF model cache: in Sensei so models persist across sessions (no re-download).
+# Qwen3-8B (~17 GB) + Qwen3-0.6B (~1.2 GB) = ~18 GB total → well within 500 GB quota.
 HF_CACHE="${STORAGE}/hf_cache"
-VENV_HOME="${STORAGE}/venv"
+
+# Venv: ALWAYS local ($HOME), never NFS.
+# Python imports from NFS are 5-10× slower than local SSD.
+LOCAL_HOME_SPECDIST="$HOME/specdist"
+mkdir -p "${LOCAL_HOME_SPECDIST}"
+VENV_HOME="${LOCAL_HOME_SPECDIST}/venv"
 
 echo "========================================================================"
 echo "  SpecDist GPU Setup"
 echo "  Config  : ${CONFIG}"
 echo "  Repo    : ${GBV_DIR}"
-echo "  Storage : ${STORAGE}"
+echo "  Storage : ${STORAGE}  (checkpoints, DB, logs, HF cache)"
+echo "  Venv    : ${VENV_HOME}  (local, fast imports)"
 echo "========================================================================"
 echo ""
 

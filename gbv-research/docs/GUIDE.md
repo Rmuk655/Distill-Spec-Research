@@ -286,6 +286,23 @@ With `milestone_every=200` (10 milestones over 2000 steps), each eval_checkpoint
 
 ---
 
+#### Storage layout (Sensei FS)
+
+AIP/Pluto provides **Sensei FS** (`/sensei-fs/users/rkrishna`) — persistent Lustre-backed storage, 500 GB quota, backed up to S3. Data survives session restarts and machine reallocations.
+
+| Data | Location | Persists? | Size |
+|------|----------|-----------|------|
+| Checkpoints (LoRA + merged) | `/sensei-fs/users/rkrishna/specdist/checkpoints/` | ✅ Yes | ~130 GB |
+| `results.db` | `/sensei-fs/users/rkrishna/specdist/results.db` | ✅ Yes | ~50 MB |
+| Logs | `/sensei-fs/users/rkrishna/specdist/logs/` | ✅ Yes | ~5 GB |
+| HF model cache (Qwen3-8B etc.) | `/sensei-fs/users/rkrishna/specdist/hf_cache/` | ✅ Yes | ~18 GB |
+| Python venv | `$HOME/specdist/venv` (local, not NFS) | machine-local | ~5 GB |
+| **Total Sensei** | | | **~153 GB / 500 GB** ✅ |
+
+> **Do NOT copy HF model files manually** — they download automatically on first use and are cached in `hf_cache/`. Copying them again doubles the quota usage.
+
+The setup script auto-detects Sensei FS and uses it. `aip_run.py` does the same.
+
 #### One-time setup
 
 ```bash
@@ -295,12 +312,13 @@ bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 The setup script handles everything:
-1. Creates venv at `$HOME/specdist/venv` (local disk — NFS is slow for pip packages)
-2. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
-3. Downloads `gsm8k_train.jsonl` (7473 prompts) before offline flags are set
-4. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY`
-5. Adds `source ~/.specdist_env` to `~/.bashrc`
-6. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+1. Auto-detects Sensei FS → sets storage root to `/sensei-fs/users/rkrishna/specdist`
+2. Creates venv at `$HOME/specdist/venv` (local disk — NFS is 5-10× slower for pip imports)
+3. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
+4. Downloads `gsm8k_train.jsonl` (7473 prompts) before offline flags are set
+5. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY` and `STORAGE_ROOT`
+6. Adds `source ~/.specdist_env` to `~/.bashrc` — persistent across sessions
+7. Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 
 > **Always `source ~/.specdist_env` before running** — or `aip_run.py` auto-detects system Python and re-executes itself under the venv.
 
