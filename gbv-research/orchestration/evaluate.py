@@ -2007,12 +2007,11 @@ def main():
                 # env var SPECDIST_MAX_EVAL_GPUS (e.g. =1 to force serial).
                 _MAX_EVAL_GPUS = int(os.environ.get("SPECDIST_MAX_EVAL_GPUS", "3"))
                 _n_gpus = 1
-                if _device == "cuda":
-                    try:
-                        import torch as _tc
-                        _n_gpus = min(_MAX_EVAL_GPUS, max(1, _tc.cuda.device_count()))
-                    except Exception:
-                        pass
+                try:
+                    import torch as _tc
+                    _n_gpus = min(_MAX_EVAL_GPUS, max(1, _tc.cuda.device_count()))
+                except Exception:
+                    pass
 
                 def _wait_for_vram(mode_name, need_mb=2700, timeout_s=30, gpu_idx=0):
                     """Poll until ≥ need_mb VRAM is free on gpu_idx.  No-op on non-laptop."""
