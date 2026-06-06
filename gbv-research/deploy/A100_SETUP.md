@@ -329,6 +329,65 @@ for tag in results_db.distinct_values('experiment_tag'):
 "
 ```
 
+### Loss × verifier matrix — best (model, verifier) BE
+
+Each eval inserts **one DB row per (trained model, verifier)** — not one averaged BE.
+A full Phase 3 eval for one loss produces ~9 BE rows (`bv`, `gbv`, `traversal`, `nss`, …)
+plus one `alpha` row (acceptance rate + optional GSM8K EM).
+
+**Primary tool:** `db/analyze_results.py` — prints the loss × verifier matrix and
+picks the global best `(draft_label, mode)` pair in **Recommendations**.
+
+```bash
+cd "$GBV_DIR"
+python db/analyze_results.py              # full hypothesis-focused report
+python db/analyze_results.py --out report.md
+python db/analyze_results.py --section metrics   # α + best BE + GSM8K EM table
+python db/analyze_results.py --section be        # loss × verifier matrix
+python db/analyze_results.py --section hypotheses
+python db/analyze_results.py --section gaps      # missing alpha / verifier modes
+python db/analyze_results.py --experiment_tag KrishnanRIITHServer --dataset gsm8k
+```
+
+The report **does not** compare raw training losses across objectives (removed misleading
+"reduction %" table). Use `--section training` for val-loss trajectories only.
+
+**Example** (Pluto, partial finalization — some losses/modes still missing):
+
+```text
+## Block Efficiency Analysis
+
+### Block Efficiency by Mode, K, and Draft
+
+| Mode      | K | baseline | jsd    | kl     | l1     | rev_kl | Best (EBE vs BASE %) |
+| bv        | 3 |   3.6683 | 4.6960 | 4.4573 | 4.3975 | 4.7799 |               +30.3% |
+| gbv       | 3 |   3.6229 | 4.4454 | 4.3035 | 4.2688 | 4.0980 |               +22.7% |
+| traversal | 3 |   3.9605 |      — |      — |      — | 4.9851 |               +25.9% |
+
+## Recommendations
+
+- **Best block efficiency:** 4.9851 (rev_kl, traversal, K=3, gsm8k_eval)
+```
+
+**How to read this:**
+
+| Section | Answers |
+| -------- | -------- |
+| **Block Efficiency by Mode, K, and Draft** | For each verifier (row), BE per trained model (columns). Find which loss wins under which verifier. |
+| **K Sensitivity** | Best K per model × verifier (finalization fixes K=3). |
+| **Recommendations → Best block efficiency** | Global winner: `(draft_label, mode, K, dataset)` with highest BE in the whole DB. |
+| `—` in a cell | That eval cell was never saved (partial run, or `--skip_existing` skipped it). |
+
+**Loss–verifier alignment** is a core paper finding: e.g. `jsd` may peak under `bv` (4.70)
+while `rev_kl` peaks under `traversal` (4.99) — a single `gbv` column cannot show that.
+
+The quick α / BE / EM snippet below hardcodes **`mode='gbv'`** for BE as a fast snapshot
+only. Use `analyze_results.py` when choosing the best model **and** verifier.
+
+`analyze_results.py` reads **all rows** in `results.db` (no `experiment_tag` filter).
+To compare one experimental session only, filter first or use the per-tag Python snippet
+in the next subsection.
+
 ### Compare two tags for one loss (block efficiency)
 
 ```bash
@@ -347,7 +406,10 @@ for r in rows:
 "
 ```
 
-### Paper metrics table (α, BE, GSM8K EM) — one `experiment_tag`
+### Quick snapshot (α, BE@gbv, GSM8K EM) — one `experiment_tag`
+
+One-line sanity check only — **BE column is GBV only**, not best verifier per model.
+For the full loss × verifier table use `python db/analyze_results.py` (above).
 
 Filter by **`experiment_tag` only** (do not filter `dataset` until you know what is
 in your DB). Rows from smoke runs or older configs may use `gsm8k`; current A100
@@ -418,9 +480,14 @@ sqlite3 "$GBV_DIR/db/results.db" \
 
 ### Markdown report (all data in DB)
 
+Same as [Loss × verifier matrix](#loss--verifier-matrix--best-model-verifier-be) above.
+Useful flags:
+
 ```bash
 python db/analyze_results.py --out report.md
-python db/analyze_results.py --section be --compare rev_kl,gbv_tree
+python db/analyze_results.py --section be
+python db/analyze_results.py --section be --compare rev_kl,jsd,kl,l1
+python db/analyze_results.py --section recommend   # best (model, verifier) only
 ```
 
 ### Dashboard (optional)

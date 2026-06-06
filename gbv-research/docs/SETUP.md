@@ -732,6 +732,12 @@ sqlite3 /home/colligo/specdist/results.db \
   "SELECT draft_label, mode, block_eff FROM runs ORDER BY ts DESC LIMIT 10;"
 ```
 
+**Best (model, verifier) block efficiency?** Run `python db/analyze_results.py` from
+`gbv-research/` — see the **Block Efficiency by Mode, K, and Draft** table and
+**Recommendations** (e.g. `rev_kl + traversal`). The quick α/BE/EM snippet uses
+`gbv` only; full details in [GUIDE.md § 8d](GUIDE.md#8d-generating-a-results-report-analyze_resultspy)
+and [A100_SETUP.md](../deploy/A100_SETUP.md).
+
 **Paper metrics table (α / BE / GSM8K EM) empty or mostly `-`?** See
 [deploy/A100_SETUP.md § Troubleshooting results.db](../deploy/A100_SETUP.md#troubleshooting-resultsdb-table-shows--for-most-losses).
 Common causes: wrong `dataset` filter (`gsm8k` vs `gsm8k_eval`), `--eval --loss X`

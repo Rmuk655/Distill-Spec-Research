@@ -408,7 +408,7 @@ To use all 8 GPUs (dedicated machine only): `export SPECDIST_ALL_GPUS=1`
 - **SIGTERM from using all 8 GPUs**: scheduler claimed all 8 A100s on shared node. Fixed: defaults to GPU 0 when CUDA_VISIBLE_DEVICES unset.
 - **parallel runs killing each other**: --losses X --train_only used config-level lock → killed sibling loss runs. Fixed: per-loss lock files.
 
-**Decision gate**: after Stage 2A, rank losses by `BE/gbv` in W&B. Losses where `BE > baseline BE (3.77)` are candidates for Stage 2B. Use `analyze_results.py` to generate the paper comparison table.
+**Decision gate**: after Stage 2A, rank losses using the **loss × verifier matrix** from `python db/analyze_results.py` (not a single `gbv` column — best BE may be `rev_kl + traversal` while `jsd + bv` wins elsewhere). Losses that beat baseline BE under their best verifier are candidates for Stage 2B.
 
 ---
 
@@ -1473,39 +1473,108 @@ python core/datasets/downloader.py --datasets gsm8k --n 30
 
 ## 8d. Generating a Results Report (analyze_results.py)
 
-`paper/analyze_results.py` reads from `db/results.db` and generates a statistical
-comparison of all evaluation runs.
+`db/analyze_results.py` reads `results.db` and generates the **primary paper view**:
+which **(trained model, verifier)** pair achieves the best block efficiency (BE).
+
+### Why not a single BE column?
+
+The DB stores **one row per eval cell**: `(draft_label, mode, dataset, K, temperature)`.
+A full A100 Phase 3 eval saves ~9 BE rows per loss (one per verifier) plus one `alpha` row.
+The quick Pluto sanity-check snippet hardcodes `mode='gbv'` for BE — that is **not**
+averaging across verifiers, but it also **hides** the best verifier per model.
+
+Use `analyze_results.py` to answer: *"Does `rev_kl` win under `traversal` while `jsd`
+wins under `bv`?"* — the loss–verifier alignment table.
 
 ### Usage
 
 ```bash
-# Run from gbv-research/
+cd gbv-research/
 
-# Print Markdown report to terminal
-python paper/analyze_results.py
+# Full report (alpha + BE matrix + convergence + recommendations)
+python db/analyze_results.py
 
-# Save to file (for the paper or a PR)
-python paper/analyze_results.py --out report.md
+# Save for the paper or a PR
+python db/analyze_results.py --out report.md
 
-# Paper runs only (a100 tier)
-python paper/analyze_results.py --draft_labels baseline,kl1000-gsm8k,ebe1000-gsm8k
+# Block-efficiency section only (loss × verifier matrix)
+python db/analyze_results.py --section be
 
-# Filter by dataset
-python paper/analyze_results.py --dataset gsm8k --out gsm8k_report.md
+# Limit compared drafts (baseline is always the anchor)
+python db/analyze_results.py --section be --compare rev_kl,jsd,kl,l1
+
+# Global best (model, verifier) pair only
+python db/analyze_results.py --section recommend
+```
+
+On Pluto:
+
+```bash
+source ~/.specdist_env && cd "$GBV_DIR"
+python db/analyze_results.py
 ```
 
 ### What it reports
 
-- Mean alpha ± 95% CI for each model × dataset × mode combination
-- Block efficiency mean and standard deviation
-- **Statistical tests**: Welch t-test (unequal-variance), Cohen's d effect size, 95% CI on the difference
-- A "winner" row for each pair: does EBE significantly beat KL? (p < 0.05 threshold)
+| Section | Content |
+| -------- | -------- |
+| **Eval Conditions** | dataset, K, L, T, n, train_steps, lr, lora_r, hw_tier, experiment_tag per cell |
+| **Paper Metrics** | α + **best BE (and which verifier)** + GSM8K EM; flags missing alpha rows |
+| **Loss × Verifier matrix** | Full BE table; per-verifier ranking (bv / gbv / traversal) |
+| **Hypothesis checks** | H1 traversal vs specinfer; H2 rev_kl vs kl; H4/H5 when data exists |
+| **Data gaps** | Which losses have BE but no alpha; missing verifier modes |
+| **Training health** | **Val loss only** — does *not* compare train loss across objectives |
+| **Narrative** | α-vs-BE gap interpretation; novelty framing; next experiments |
+| **Recommendations** | Best `(model, verifier)` with full eval conditions |
+
+```bash
+# Filter one session
+python db/analyze_results.py --experiment_tag KrishnanRIITHServer --dataset gsm8k
+
+# Single sections
+python db/analyze_results.py --section metrics
+python db/analyze_results.py --section hypotheses
+python db/analyze_results.py --section gaps
+```
+
+**Removed / deprecated:** cross-objective train-loss "reduction %" table (KL vs JSD vs
+rev_kl scales are incomparable; early grad-step snapshots are noisy). Use W&B val loss
+or `--section training` for within-loss convergence.
+
+A `—` cell means that `(model, verifier)` eval was never saved (partial run or skipped).
+
+### Example interpretation (partial finalization run)
+
+```text
+| Mode      | K | baseline | jsd    | kl     | rev_kl |
+| bv        | 3 |   3.6683 | 4.6960 | 4.4573 | 4.7799 |
+| gbv       | 3 |   3.6229 | 4.4454 | 4.3035 | 4.0980 |
+| traversal | 3 |   3.9605 |      — |      — | 4.9851 |
+
+Recommendations:
+- Best block efficiency: 4.9851 (rev_kl, traversal, K=3, gsm8k_eval)
+```
+
+Read as: **`rev_kl` trained draft + `traversal` verifier** is the current global BE
+winner; **`jsd` peaks under `bv`** (4.70), not `gbv` (4.45). Ranking losses by
+`gbv` alone would under-rank `jsd`.
+
+### Quick snapshot vs full matrix
+
+| Tool | Use when |
+| ------ | -------- |
+| `python db/analyze_results.py` | Choosing best **model + verifier**; paper tables |
+| Per-tag Python snippet (see `deploy/A100_SETUP.md`) | Fast α / BE@gbv / GSM8K EM for one `experiment_tag` |
+| W&B `eval_summary_table` artifact | Per-run pivot after each `evaluate.py` invocation |
+
+`analyze_results.py` scans **all** rows in `results.db` (no `experiment_tag` filter).
+Filter by tag in SQL or a custom script when comparing one session only.
 
 ### When to run it
 
-- After Phase 3 completes (first complete results for kl1000 and ebe1000 on GSM8K)
-- After Phase 4 completes (cross-dataset results)
-- When preparing paper tables
+- After each loss completes Phase 3 eval (incremental ranking)
+- After Phase 4 (cross-dataset robustness section populates)
+- Before Stage 2B / paper confirmation — to pick top losses **and** their best verifiers
 
 ---
 
