@@ -478,14 +478,15 @@ def cleanup_training_artifacts(adapter_path: str, *, force: bool = False) -> lis
                 removed.append(name)
 
         for root, _dirs, files in os.walk(ckpt_root):
-            if "optimizer.pt" not in files:
-                continue
-            opt = os.path.join(root, "optimizer.pt")
-            try:
-                os.remove(opt)
-                removed.append(os.path.relpath(opt, ckpt_root))
-            except OSError as exc:
-                print(f"[cleanup] could not remove {opt}: {exc}")
+            for _aux in ("optimizer.pt", "scheduler.pt"):
+                if _aux not in files:
+                    continue
+                _aux_path = os.path.join(root, _aux)
+                try:
+                    os.remove(_aux_path)
+                    removed.append(os.path.relpath(_aux_path, ckpt_root))
+                except OSError as exc:
+                    print(f"[cleanup] could not remove {_aux_path}: {exc}")
     except OSError as exc:
         print(f"[cleanup] warning: partial cleanup under {ckpt_root}: {exc}")
 
@@ -512,7 +513,7 @@ def _save_checkpoint(
     losses: list, accept_weights: list,
     milestone: bool = False, max_checkpoints: int = 5,
     best_val_loss: float = None, val_no_improve_count: int = None,
-    no_lora: bool = False,
+    no_lora: bool = False, scheduler=None,
 ) -> None:
     """
     Save crash-safe checkpoint to <output_dir>/ckpt_latest/.
@@ -527,6 +528,8 @@ def _save_checkpoint(
         draft_model.save_pretrained(ckpt_dir)
 
     torch.save(optimizer.state_dict(), os.path.join(ckpt_dir, "optimizer.pt"))
+    if scheduler is not None:
+        torch.save(scheduler.state_dict(), os.path.join(ckpt_dir, "scheduler.pt"))
 
     state = {
         "step": step,
@@ -981,6 +984,21 @@ def main() -> None:
         opt_path = os.path.join(ckpt_latest, "optimizer.pt")
         if os.path.exists(opt_path):
             optimizer.load_state_dict(torch.load(opt_path, map_location=device))
+        # Restore LR schedule position — without this, resume restarts warmup from 0
+        # even though training continues at start_step (visible as a V-shape in train/lr).
+        _sched_path = os.path.join(ckpt_latest, "scheduler.pt")
+        if os.path.exists(_sched_path):
+            scheduler.load_state_dict(torch.load(_sched_path, map_location=device))
+            print(f"[RESUME] LR scheduler restored from checkpoint "
+                  f"(lr={scheduler.get_last_lr()[0]:.2e})")
+        else:
+            # Backward compat: older checkpoints lack scheduler.pt — fast-forward
+            # by the number of optimizer steps completed before the interrupt.
+            _completed_opt = start_step // _ga
+            for _ in range(_completed_opt):
+                scheduler.step()
+            print(f"[RESUME] LR scheduler fast-forwarded {_completed_opt} opt-steps "
+                  f"(no scheduler.pt in checkpoint; lr={scheduler.get_last_lr()[0]:.2e})")
         print(f"\n[RESUME] Continuing from step {start_step + 1}/{args.steps}")
     else:
         os.makedirs(args.output, exist_ok=True)
@@ -1322,7 +1340,8 @@ def main() -> None:
             import traceback; traceback.print_exc()
             if args.nan_action == "stop":
                 _save_checkpoint(draft_model, optimizer, step + 1, args.output,
-                                 losses, accept_weights, no_lora=args.no_lora)
+                                 losses, accept_weights, no_lora=args.no_lora,
+                                 scheduler=scheduler)
                 _stop_training = True
                 break
             losses.append(float("nan"))
@@ -1334,7 +1353,8 @@ def main() -> None:
             _nan_count += 1
             if args.nan_action == "stop":
                 _save_checkpoint(draft_model, optimizer, step + 1, args.output,
-                                 losses, accept_weights, no_lora=args.no_lora)
+                                 losses, accept_weights, no_lora=args.no_lora,
+                                 scheduler=scheduler)
                 _stop_training = True
                 break
             elif args.nan_action == "skip":
@@ -1475,6 +1495,7 @@ def main() -> None:
                 best_val_loss=_best_val_loss,
                 val_no_improve_count=_val_no_improve_count,
                 no_lora=args.no_lora,
+                scheduler=scheduler,
             )
             print(f"  [ckpt] step {step+1}/{args.steps} → {args.output}/ckpt_latest")
 
@@ -1499,7 +1520,8 @@ def main() -> None:
                 best_dir = os.path.join(args.output, "ckpt_best")
                 _save_checkpoint(
                     draft_model, optimizer, step + 1, args.output,
-                    losses, accept_weights, no_lora=args.no_lora)
+                    losses, accept_weights, no_lora=args.no_lora,
+                    scheduler=scheduler)
                 shutil.copytree(
                     os.path.join(args.output, "ckpt_latest"),
                     best_dir, dirs_exist_ok=True)
@@ -1628,7 +1650,8 @@ def main() -> None:
                 _sv_best_dir = os.path.join(args.output, "ckpt_best_slow")
                 _save_checkpoint(
                     draft_model, optimizer, step + 1, args.output,
-                    losses, accept_weights, no_lora=args.no_lora)
+                    losses, accept_weights, no_lora=args.no_lora,
+                    scheduler=scheduler)
                 shutil.copytree(
                     os.path.join(args.output, "ckpt_latest"),
                     _sv_best_dir, dirs_exist_ok=True)
@@ -1656,6 +1679,7 @@ def main() -> None:
         best_val_loss=_best_val_loss,
         val_no_improve_count=_val_no_improve_count,
         no_lora=args.no_lora,
+        scheduler=scheduler,
     )
     # Save final adapter to the output root so that:
     #   1. experiment.py done_check (adapter_config.json at root) passes
