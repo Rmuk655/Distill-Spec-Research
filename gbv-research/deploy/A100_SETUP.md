@@ -8,39 +8,32 @@ Flat `ebe` / `ebe_single` are excluded by default (off-policy on teacher rollout
 
 ---
 
-## Storage layout
+## Storage layout (Pluto — default)
 
-Two tiers — keep them separate:
+On Pluto, checkpoints, `results.db`, and pipeline logs use **local RAM disk** under the repo (Sensei FS is ignored unless `SPECDIST_USE_SENSEI=1` — quota is tight and SQLite on Lustre is unreliable).
 
-| What | Where | Why |
-|------|-------|-----|
-| git repo, venv, HF model weights | `/home/colligo/ram/` | Large local quota; reproducible from scratch |
-| W&B local files, pipeline logs | `/home/colligo/ram/specdist/` | Ephemeral — not worth Sensei quota |
-| **Checkpoints, results.db, merged models** | **`/sensei-fs/users/rkrishna/specdist/`** | Irreplaceable mid-run — must survive session timeouts |
+| What | Path | Why |
+|------|------|-----|
+| git repo, venv | `/home/colligo/ram/Distill-Spec-Research/` | Reproducible from GitHub |
+| HF model cache | `/home/colligo/ram/specdist/hf_cache` | Set `HF_HOME` here; large downloads |
+| W&B local files | `/home/colligo/ram/specdist/wandb` | Set `WANDB_DIR` here |
+| **Checkpoints, merged models, results.db, logs** | **`.../gbv-research/db/`** | Single tree; survives normal sessions |
 
-Rule of thumb: **if you can re-create it in < 30 min, it goes in `/home/colligo/ram`**.
+Concrete paths (after `source ~/.specdist_env`):
 
----
+| Artifact | Path |
+|----------|------|
+| Checkpoints | `$GBV_DIR/db/checkpoints/` |
+| Merged models | `$GBV_DIR/db/checkpoints/<loss>-gsm8k-q0.6b-q8b_merged/` |
+| Results DB | `$GBV_DIR/db/results.db` |
+| Pipeline log | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
+| BE progress | `$GBV_DIR/db/logs/.../be_progress_*.log` |
 
-## Sensei FS quota
+Rule of thumb: **if you can re-create it in < 30 min, it goes in `/home/colligo/ram/specdist` or HF cache; irreplaceable training artifacts go in `gbv-research/db/`.**
 
-If you hit "Disk quota exceeded" on Sensei, check actual usage:
+### Sensei FS (optional — not recommended on Pluto)
 
-```bash
-# Lustre filesystems (most likely on Pluto):
-lfs quota -u rkrishna /sensei-fs
-
-# Generic NFS quota:
-quota -s
-
-# Fallback — byte count in your directory (may undercount if quota tracks inodes):
-du -sh /sensei-fs/users/rkrishna/
-```
-
-> **Note:** `du` showing only ~14 MB while quota is exceeded means the quota is
-> tracked at the filesystem level (inode count or project quota), not raw bytes.
-> `lfs quota` is the authoritative command on Lustre. Ask the Sensei platform team
-> for the exact quota command if none of the above work.
+Only if you explicitly set `SPECDIST_USE_SENSEI=1`. Check quota with `lfs quota -u rkrishna /sensei-fs`.
 
 ---
 
@@ -55,27 +48,25 @@ export GITHUB_TOKEN="ghp_..."   # only if repo is private
 git clone https://github.com/Rmuk655/Distill-Spec-Research.git \
     /home/colligo/ram/Distill-Spec-Research
 
-# 3. Run setup — clones repo to /home/colligo/ram, puts checkpoints on Sensei FS
+# 3. Run setup — venv + ~/.specdist_env with paths
 bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
-`aip_gpu_setup.sh` writes `~/.specdist_env` with all paths. Source it in every new SSH session:
+`aip_gpu_setup.sh` writes `~/.specdist_env`. Source it in every new SSH session:
 
 ```bash
 source ~/.specdist_env
 cd "$GBV_DIR"
+export HF_HOME=/home/colligo/ram/specdist/hf_cache
+export WANDB_DIR=/home/colligo/ram/specdist/wandb
 ```
 
 ### After pulling updates from GitHub
 
 ```bash
 git -C /home/colligo/ram/Distill-Spec-Research pull
-
-# Re-run setup (reuses existing venv, refreshes deps + ~/.specdist_env)
 bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
-
-source ~/.specdist_env
-cd "$GBV_DIR"
+source ~/.specdist_env && cd "$GBV_DIR"
 ```
 
 ---
@@ -91,6 +82,111 @@ Smoke runs a short pipeline check (~10–20 min). If it passes, run full trainin
 
 ---
 
+## Research workflow (one loss → variations → next loss)
+
+This is the default workflow for research / ML engineering on this project:
+
+1. **Pick one loss** (e.g. `rev_kl`, `gbv_tree`).
+2. **Train + merge once** for that loss (checkpoint is reused across eval variations).
+3. **Run eval one or more times** with different **`--experiment_tag`** values — each tag is one experimental condition (verifier set, `L`, `n`, code version, LR ablation after re-train, etc.).
+4. **Compare** within the loss (filter by `experiment_tag`) or across losses (filter by `draft_label` / `loss_name`).
+5. **Move to the next loss** and repeat.
+
+`experiment_tag` is stored on **every eval cell** in `results.db` (column `experiment_tag`, indexed) and in **W&B** (run `config.experiment_tag` + tag). Use it as the primary handle for “which variation was this?”
+
+### Naming convention (recommended)
+
+Use predictable tags so filtering is easy:
+
+```text
+{loss}_{what_changed}
+
+Examples:
+  rev_kl_baseline          # default YAML eval (9 verifiers, L=8, n=100)
+  rev_kl_L5                # evaluation.L=5 in YAML, then re-eval
+  rev_kl_verifiers_bv_gbv  # evaluation.modes: [bv, gbv] only
+  rev_kl_code_ef4a865      # after a git pull / bugfix, --force re-eval
+  gbv_tree_lr1e5           # trained with lr override
+```
+
+YAML default tag (`logging.experiment_tag` in `a100_qwen.yaml`) applies when you omit `--experiment_tag`. **Always pass `--experiment_tag` explicitly when comparing variations** so auto-generated hostname tags do not collide confusingly.
+
+### Phase 1 — train + merge one loss
+
+```bash
+python deploy/aip_run.py --config a100_qwen --loss rev_kl --train --no_smoke
+```
+
+Or train + eval in one go with a baseline tag:
+
+```bash
+python deploy/aip_run.py --config a100_qwen --loss rev_kl --no_smoke \
+  --experiment_tag rev_kl_baseline
+```
+
+`bv_tree` / `gbv_tree` — use lower LR (`1e-5`); `aip_run.py` auto-applies for single-loss runs, or call `experiment.py --lr 1e-5` directly.
+
+### Phase 2 — eval variations (same checkpoint, different tags)
+
+**Add verifiers without redoing finished modes** (default: skip cells already in DB):
+
+```bash
+# First run: modes [bv, gbv] in YAML (or default 9 modes)
+python deploy/aip_run.py --config a100_qwen --loss rev_kl --eval --no_smoke \
+  --experiment_tag rev_kl_bv_gbv
+
+# Second run: add traversal — only missing modes run; bv/gbv skipped if already saved
+# (use a NEW tag if this is a distinct experiment condition you want to compare)
+python deploy/aip_run.py --config a100_qwen --loss rev_kl --eval --no_smoke \
+  --experiment_tag rev_kl_bv_gbv_traversal
+```
+
+**Re-run the same cells** (new DB rows, old rows kept) — e.g. after a code fix or hyperparameter change:
+
+```bash
+python deploy/aip_run.py --config a100_qwen --loss rev_kl --eval --force --no_smoke \
+  --experiment_tag rev_kl_L8_rerun_v2
+```
+
+**Surgical eval** (one loss, custom modes — bypasses pipeline YAML):
+
+```bash
+python orchestration/evaluate.py \
+  --student db/checkpoints/rev_kl-gsm8k-q0.6b-q8b_merged \
+  --teacher Qwen/Qwen3-8B \
+  --student_label rev_kl \
+  --datasets gsm8k_eval \
+  --modes bv,gbv,traversal \
+  --K 3 --n 100 --L 8 \
+  --hw_tier a100 \
+  --experiment_tag rev_kl_verifier_slice \
+  --skip_existing
+```
+
+### Phase 3 — next loss
+
+```bash
+python deploy/aip_run.py --config a100_qwen --loss gbv_tree --train --no_smoke
+python deploy/aip_run.py --config a100_qwen --loss gbv_tree --eval --no_smoke \
+  --experiment_tag gbv_tree_baseline
+```
+
+### Flags cheat sheet
+
+| Goal | Command flags |
+|------|----------------|
+| One loss only | `--loss rev_kl` or `--losses rev_kl` |
+| Train only | `--train` / `--train_only` |
+| Eval only (skip baseline) | `--eval` / `--eval_only` |
+| Resume after crash | `--resume` (skips done pipeline steps + DB cells) |
+| Re-run eval cells | `--force` (alias `--force_eval`) + **new** `--experiment_tag` |
+| Label this variation | `--experiment_tag <name>` (required for comparisons) |
+| Start mid-pipeline | `--from merge_rev_kl_gsm8k` |
+
+**`--resume` + `--force`:** skips smoke and done train/merge steps, but **re-runs eval steps** and **all eval cells** (new rows). Use with a fresh `--experiment_tag`.
+
+---
+
 ## Training (one loss at a time)
 
 `--losses` alone runs **baseline eval** first, then train/merge/eval for that loss. If a checkpoint already exists, training is skipped.
@@ -98,30 +194,32 @@ Smoke runs a short pipeline check (~10–20 min). If it passes, run full trainin
 **Train only (no baseline, no eval):**
 
 ```bash
-python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
+python deploy/aip_run.py --config a100_qwen --loss traversal_tree --train --no_smoke
 ```
 
 **Train + merge + eval for one loss:**
 
 ```bash
-python deploy/aip_run.py --config a100_qwen --losses traversal_tree --no_smoke
+python deploy/aip_run.py --config a100_qwen --loss traversal_tree --no_smoke \
+  --experiment_tag trav_tree_baseline
 ```
 
 **Start at the training step (skip baseline):**
 
 ```bash
-python deploy/aip_run.py --config a100_qwen --losses traversal_tree --from_step train_trav_tree_gsm8k --no_smoke
+python deploy/aip_run.py --config a100_qwen --loss traversal_tree \
+  --from train_trav_tree_gsm8k --no_smoke
 ```
 
 **Force re-train** (delete checkpoint + reset state first):
 
 ```bash
-rm -rf /sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b
-rm -rf /sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b_merged
-python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
+rm -rf "$GBV_DIR/db/checkpoints/trav_tree-gsm8k-q0.6b-q8b"
+rm -rf "$GBV_DIR/db/checkpoints/trav_tree-gsm8k-q0.6b-q8b_merged"
+python deploy/aip_run.py --config a100_qwen --loss traversal_tree --train --no_smoke
 ```
 
-Check what the pipeline thinks is done:
+Check pipeline state:
 
 ```bash
 python orchestration/experiment.py --config a100_qwen --status
@@ -135,31 +233,12 @@ Step IDs for `traversal_tree`:
 | Merge | `merge_trav_tree_gsm8k` |
 | Eval | `eval_trav_tree_gsm8k` |
 
-Checkpoint dir: `/sensei-fs/users/rkrishna/specdist/checkpoints/trav_tree-gsm8k-q0.6b-q8b`
-
-Other losses:
-
-```bash
-python deploy/aip_run.py --config a100_qwen --losses kl --train_only --no_smoke
-python deploy/aip_run.py --config a100_qwen --losses naive_tree --train_only --no_smoke
-python deploy/aip_run.py --config a100_qwen --losses traversal_tree --train_only --no_smoke
-```
-
-### `bv_tree` / `gbv_tree` — use a lower learning rate
-
-The BV block-acceptance integral amplifies gradients compared with `kl_tree` or flat KL. YAML still uses `lr: 3e-5` for the full sweep; override on the CLI for these two:
-
-```bash
-python orchestration/experiment.py --config a100_qwen \
-  --losses bv_tree --lr 1e-5 --train_only --yes
-```
-
-Same pattern for `gbv_tree`. `deploy/aip_run.py` does not pass `--lr` through — call `experiment.py` directly as above.
+Checkpoint dir: `$GBV_DIR/db/checkpoints/trav_tree-gsm8k-q0.6b-q8b`
 
 **Monitor:**
 
 ```bash
-tail -f /sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
+tail -f "$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log"
 python orchestration/experiment.py --config a100_qwen --status
 ```
 
@@ -170,10 +249,8 @@ python orchestration/experiment.py --config a100_qwen --status
 Do **not** use `clean_restart` if you want to keep checkpoints.
 
 ```bash
-source ~/.specdist_env
-cd "$GBV_DIR"
+source ~/.specdist_env && cd "$GBV_DIR"
 
-# Stop old job (if still running)
 pkill -TERM -f "experiment.py --config a100_qwen"
 sleep 5
 pkill -9 -f "experiment.py --config a100_qwen"   # only if still alive
@@ -181,7 +258,131 @@ pkill -9 -f "experiment.py --config a100_qwen"   # only if still alive
 python deploy/aip_run.py --config a100_qwen --resume
 ```
 
-Training resumes from `ckpt_latest` + `training_state.json` on Sensei FS. W&B run also resumes (same dashboard URL) because `wandb_run.json` is saved alongside the checkpoint.
+- **Pipeline step** (`eval_rev_kl_gsm8k` in `pipeline_state_*.json`): if marked **done**, that whole eval subprocess is skipped.
+- **Eval cell** (one row in `results.db`): if present and `--skip_existing` (default), that `(loss, dataset, mode, K, T)` combo is skipped inside a running eval.
+
+If eval was **interrupted** mid-run, the step stays **failed/pending**, `--resume` re-launches eval, and only **missing cells** run.
+
+Training resumes from `ckpt_latest` + `training_state.json`. W&B training run resumes via `wandb_run.json` beside the checkpoint.
+
+---
+
+## Evaluation
+
+Eval runs automatically after train+merge. Default modes (in `bases/a100.yaml`): `alpha`, `naive`, `nss`, `specinfer`, `spectr`, `khisti`, `bv`, `gbv`, `traversal`.
+
+Eval uses up to **3 GPUs in parallel** by default. Override:
+
+```bash
+SPECDIST_MAX_EVAL_GPUS=1 python deploy/aip_run.py ...   # force serial
+```
+
+Results are written to **`results.db` and W&B as each verifier mode finishes** (not only at end of run).
+
+---
+
+## Comparing results (filter by `experiment_tag`)
+
+Every eval cell stores:
+
+| Field | Use for |
+|-------|---------|
+| `experiment_tag` | **Which variation / run condition** |
+| `draft_label` | **Which loss** (`rev_kl`, `gbv_tree`, …) |
+| `mode` | Verifier algorithm (`bv`, `gbv`, `traversal`, …) |
+| `dataset`, `K`, `temperature`, `n_prompts` | Eval slice |
+| `block_eff`, `alpha_mean`, `task_score` | Metrics |
+| `run_tag` | Unique row id (timestamp); auto-generated |
+
+### List tags and row counts
+
+```bash
+cd "$GBV_DIR"
+python -c "
+import sys; sys.path.insert(0, 'db'); import results_db
+from collections import Counter
+rows = results_db.query_runs()
+for tag in results_db.distinct_values('experiment_tag'):
+    n = sum(1 for r in rows if r.get('experiment_tag') == tag)
+    losses = sorted({r['draft_label'] for r in rows if r.get('experiment_tag') == tag})
+    print(f'{tag}: {n} rows  losses={losses}')
+"
+```
+
+### Compare two tags for one loss (block efficiency)
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'db'); import results_db
+TAGS = ['rev_kl_baseline', 'rev_kl_L5']
+LOSS = 'rev_kl'
+rows = [r for r in results_db.query_runs()
+        if r.get('draft_label') == LOSS
+        and r.get('experiment_tag') in TAGS
+        and r.get('block_eff') is not None]
+rows.sort(key=lambda r: (r['experiment_tag'], r['mode'], r['dataset']))
+print(f\"{'tag':<28} {'mode':<12} {'dataset':<10} {'K':>2} {'BE':>8}\")
+for r in rows:
+    print(f\"{r.get('experiment_tag',''):<28} {r['mode']:<12} {r['dataset']:<10} {r['K']:>2} {r['block_eff']:>8.4f}\")
+"
+```
+
+### Compare across losses (one tag)
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'db'); import results_db
+TAG = 'iith_wk3_baseline'   # same tag used for every loss in that week
+rows = [r for r in results_db.query_runs()
+        if r.get('experiment_tag') == TAG and r.get('mode') == 'gbv'
+        and r.get('dataset') == 'gsm8k_eval' and r.get('K') == 3]
+for r in sorted(rows, key=lambda x: x['draft_label']):
+    print(f\"{r['draft_label']:<16} BE={r.get('block_eff', 0):.4f}  alpha={r.get('alpha_mean')}\")
+"
+```
+
+### SQLite (direct)
+
+```bash
+sqlite3 "$GBV_DIR/db/results.db" \
+  "SELECT experiment_tag, draft_label, mode, dataset, K, block_eff
+   FROM runs WHERE experiment_tag LIKE 'rev_kl%' ORDER BY experiment_tag, mode;"
+```
+
+### W&B
+
+- Each eval invocation creates a W&B run with `config.experiment_tag` and tag `experiment_tag`.
+- **Compare variations:** W&B → Runs → filter/group by `experiment_tag` or `tags`.
+- **Compare losses:** filter by `config.student_label` / `config.loss_name`.
+- Per-cell metrics also land in `wandb.summary` as eval completes (e.g. `BE/gsm8k_eval/gbv/K3`).
+
+### Markdown report (all data in DB)
+
+```bash
+python db/analyze_results.py --out report.md
+python db/analyze_results.py --section be --compare rev_kl,gbv_tree
+```
+
+### Dashboard (optional)
+
+```bash
+python OSD/viz_server.py   # sibling OSD repo — reads results.db, supports experiment_tag filter
+```
+
+---
+
+## Where logs live
+
+| What | Path |
+|------|------|
+| Pipeline stdout | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
+| Per-step errors | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log` |
+| W&B local run files | `/home/colligo/ram/specdist/wandb/wandb/run-<date>-<id>/logs/` |
+| W&B dashboard | URL printed as `[wandb] https://wandb.ai/...` in pipeline log |
+
+```bash
+tail -f "$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log"
+```
 
 ---
 
@@ -204,60 +405,13 @@ python orchestration/clean_restart.py --config a100_qwen
 
 ---
 
-## Evaluation
-
-Eval runs automatically after train+merge. To re-eval only:
-
-```bash
-python deploy/aip_run.py --config a100_qwen --resume
-```
-
-Default modes (in `bases/a100.yaml`): `alpha`, `naive`, `nss`, `specinfer`, `spectr`, `khisti`, `bv`, `gbv`, `traversal`.
-
-Eval uses up to **3 GPUs in parallel** by default (shared machine — polite limit). Override:
-
-```bash
-SPECDIST_MAX_EVAL_GPUS=1 python deploy/aip_run.py ...   # force serial
-SPECDIST_MAX_EVAL_GPUS=2 python deploy/aip_run.py ...   # lighter footprint
-```
-
----
-
-## Where logs live
-
-| What | Path |
-|------|------|
-| Pipeline stdout | `/sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
-| Per-step errors | `/sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log` |
-| W&B local run files | `/home/colligo/ram/specdist/wandb/wandb/run-<date>-<id>/logs/` |
-| W&B dashboard | URL printed as `[wandb] https://wandb.ai/...` in pipeline log |
-
-```bash
-# Tail pipeline
-tail -f /sensei-fs/users/rkrishna/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
-
-# Tail W&B local log (replace run id)
-tail -f /home/colligo/ram/specdist/wandb/wandb/run-<id>/logs/debug.log
-```
-
----
-
 ## Git pull: fix "URL rejected: Bad hostname"
 
 ```bash
 cd /home/colligo/ram/Distill-Spec-Research
-
-# Remove embedded credentials — use plain HTTPS URL
 git remote set-url origin https://github.com/Rmuk655/Distill-Spec-Research.git
-
-# Public repo: pull without token in URL
 git pull
-```
-
-Re-run setup after fixing the remote:
-
-```bash
-bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+bash gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 ---
@@ -267,4 +421,6 @@ bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.s
 | Doc | Use when |
 |-----|----------|
 | [deploy/README.md](README.md) | All providers (Colab, Kaggle, Modal, …) |
-| [deploy/ats/README.md](ats/README.md) | **CPU-only** server (no GPU) — GPT-2 pair, parallel training |
+| [docs/HYPERPARAMETERS_AND_DATA.md](../docs/HYPERPARAMETERS_AND_DATA.md) | Eval temps, datasets, `--force` examples |
+| [orchestration/configs/profiles/a100_verifier_sweep.yaml](../orchestration/configs/profiles/a100_verifier_sweep.yaml) | Eval-only all-verifier sweep across losses |
+| [deploy/ats/README.md](ats/README.md) | **CPU-only** server (no GPU) — GPT-2 pair |

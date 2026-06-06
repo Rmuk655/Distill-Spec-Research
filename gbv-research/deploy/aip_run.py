@@ -144,12 +144,11 @@ Legacy / full-pipeline:
                    help="Human-readable tag for this session's eval results "
                         "(default: auto-generated from hostname+timestamp). "
                         "E.g. --experiment_tag rmukundServer")
-    p.add_argument("--force_eval", action="store_true",
-                   help="Force re-evaluation even when results exist in DB. "
-                        "Use when re-training a loss to add NEW comparison rows "
-                        "without deleting old ones. Old rows are preserved; new "
-                        "rows get a different run_tag. Always set --experiment_tag "
-                        "alongside this so you can distinguish runs in W&B/dashboard.")
+    p.add_argument("--force", "--force_eval", dest="force_eval", action="store_true",
+                   help="Force re-evaluation: re-run eval steps and all eval cells "
+                        "even when results exist in DB. Old rows preserved; new rows "
+                        "get a fresh run_tag. With --resume: skips done train/merge "
+                        "but re-runs eval. Set --experiment_tag to distinguish runs.")
     p.add_argument("--lr",           type=float, default=None,
                    help="Learning rate override (passed to experiment.py --lr). "
                         "bv_tree / gbv_tree auto-set to 1e-5 if omitted.")
@@ -436,6 +435,17 @@ def main():
         cmd.append("--smoke")
         print("\nRunning smoke test first...")
         print("(pass --no_smoke to skip)\n")
+
+    if args.resume and args.force_eval:
+        print(
+            "\n  --resume + --force: resume pipeline (no smoke, skip done train/merge) "
+            "but re-run eval steps and all eval cells — new DB/W&B rows, old rows kept.\n"
+        )
+    elif args.resume:
+        print(
+            "\n  --resume: skip smoke and pipeline steps already marked done; "
+            "eval cells already in results.db are skipped (use --force to redo).\n"
+        )
 
     if args.dry_run:
         print("\nDry run — command that would execute:")

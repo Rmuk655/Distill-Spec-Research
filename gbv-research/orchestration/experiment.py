@@ -957,9 +957,8 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
               force_rerun=False, omp_threads=0, task_batch=0):
     """Eval command.
 
-    Passes --skip_existing by default so session restarts never duplicate DB rows.
-    Set force_rerun=True (smoke mode) to omit --skip_existing so every eval cell
-    actually executes, confirming the full code path even when results are cached.
+    evaluate.py skips DB cells by default (--skip_existing).  Pass force_rerun=True
+    (smoke or --force) to append --force so every eval cell re-runs and writes new rows.
 
     Defaults (laptop): n=10 prompts, max_tokens=50.  Run with n=30/max_tokens=100
     on Colab/server T4 for paper-quality results.
@@ -997,7 +996,9 @@ def _eval_cmd(student_path, label, teacher, datasets="gsm8k_eval",
     ]
     if omp_threads > 0:
         cmd += ["--omp_threads", str(omp_threads)]
-    if not force_rerun:
+    if force_rerun:
+        cmd.append("--force")
+    else:
         cmd.append("--skip_existing")
     if train_steps:
         cmd += ["--train_steps", str(train_steps)]
@@ -3591,12 +3592,13 @@ def main():
                         "Always force-reruns every step (ignores state — immune to OneDrive races). "
                         "Time: ~15-25 min on laptop. "
                         "Use --restart to force-clean a non-smoke run.")
-    p.add_argument("--force_eval", action="store_true",
-                   help="Force re-evaluation even when results already exist in DB "
-                        "(bypass --skip_existing).  Use when re-training a specific "
-                        "loss to ADD new comparison rows without deleting old ones. "
-                        "Old rows are preserved; new rows get a new run_tag. "
-                        "Combine with --losses kl to re-eval only one loss.")
+    p.add_argument("--force", "--force_eval", dest="force_eval", action="store_true",
+                   help="Force re-evaluation: re-run eval steps and every eval cell "
+                        "even when results exist in DB (passes --force to evaluate.py). "
+                        "Old rows are preserved; new rows get a fresh run_tag. "
+                        "With --resume: still skips done train/merge steps, but "
+                        "re-runs eval steps and all cells.  Combine with --losses kl "
+                        "to re-eval only one loss.")
     p.add_argument("--no_smoke_first", action="store_true",
                    help="Skip the automatic 2-prompt preflight smoke check that normally "
                         "runs before the first eval step on laptop config.  Use this if "
@@ -4445,6 +4447,10 @@ def main():
                     # This makes smoke immune to OneDrive state-file races AND
                     # ensures every code path is exercised regardless of prior runs.
                     pass
+                elif getattr(args, "force_eval", False) and sid.startswith("eval_"):
+                    # --force: re-run eval pipeline steps even on resume; train/merge
+                    # steps marked done are still skipped.
+                    print(f"  [force] [{sid}] re-running eval step (--force)")
                 else:
                     if sid.startswith("merge_"):
                         _cleanup_after_merge_step(step)

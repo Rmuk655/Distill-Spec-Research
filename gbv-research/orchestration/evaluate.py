@@ -990,7 +990,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                  _gpu_id: int = -1,
                  _log_suffix: str = "",
                  _n_shards: int = 1,
-                 _shard_i: int = 0) -> dict:
+                 _shard_i: int = 0,
+                 _persist_ctx: dict | None = None) -> dict:
     """
     Run all (mode, K, temp) combos in ONE GBV subprocess — models load once.
 
@@ -1128,6 +1129,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                     _log_f.flush()
                     sys.stdout.write(line)
                     sys.stdout.flush()
+                    if _persist_ctx is not None:
+                        _try_persist_be_line(line, _persist_ctx)
 
             _tee_thread = threading.Thread(target=_tee, args=(proc.stdout,), daemon=True)
             _tee_thread.start()
@@ -1172,7 +1175,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                 return run_be_batch(student_path, teacher_path, data_path,
                                     modes, Ks, temps, L, max_new_tokens,
                                     draft_temp=draft_temp, _device="cpu",
-                                    load_in_4bit=load_in_4bit)
+                                    load_in_4bit=load_in_4bit,
+                                    _persist_ctx=_persist_ctx)
 
         # Parse tagged output: "Block efficiency (mode=gbv, K=3, T=1.0): 2.345678"
         # Works on partial output — only fully-printed lines are matched.
@@ -1294,6 +1298,112 @@ def _already_run(student_label: str, dataset: str, mode: str, K: int, temperatur
     return True
 
 
+_BE_LINE_RE = re.compile(
+    r"Block efficiency \(mode=(\w+), K=(\d+), T=([\d.]+)\):\s*([\d.]+)"
+)
+
+
+def _wandb_log_eval_result(row: dict) -> None:
+    """Push one eval cell to W&B summary as soon as it is saved (no step axis)."""
+    try:
+        import wandb as _wmod
+        if _wmod.run is None:
+            return
+        ds   = row.get("dataset", "")
+        mode = row.get("mode", "")
+        K    = row.get("K", 1)
+        if row.get("block_eff") is not None:
+            _wmod.summary[f"BE/{ds}/{mode}/K{K}"] = round(float(row["block_eff"]), 4)
+        if row.get("alpha_mean") is not None:
+            _wmod.summary[f"alpha/{ds}"] = round(float(row["alpha_mean"]), 4)
+        if row.get("task_score") is not None:
+            _wmod.summary[f"task_score/{ds}"] = round(float(row["task_score"]), 4)
+        if row.get("perplexity") is not None:
+            _wmod.summary[f"perplexity/{ds}"] = round(float(row["perplexity"]), 2)
+    except Exception:
+        pass
+
+
+def _persist_be_combo(
+    *,
+    dataset: str,
+    mode: str,
+    K: int,
+    temperature: float,
+    block_eff: float,
+    student_label: str,
+    student_path: str,
+    teacher_path: str,
+    n_prompts: int,
+    L: int,
+    experiment_tag: str | None,
+    skip_existing: bool,
+    train_steps: int = 0,
+    hw_tier: str | None = None,
+    results_out: list | None = None,
+    saved_keys: set | None = None,
+) -> dict | None:
+    """Insert one BE cell to DB + W&B immediately.  Idempotent per (ds,mode,K,T)."""
+    key = (dataset, mode, K, round(float(temperature), 4))
+    if saved_keys is not None:
+        if key in saved_keys:
+            return None
+        saved_keys.add(key)
+
+    if skip_existing and _already_run(
+            student_label, dataset, mode, K, temperature,
+            student_path=student_path, n_prompts=n_prompts):
+        run_tag = make_run_tag(student_label, mode, dataset, K, temperature)
+        print(f"    [{run_tag}] SKIP (already in DB)", flush=True)
+        return None
+
+    run_tag = make_run_tag(student_label, mode, dataset, K, temperature)
+    row = dict(
+        run_tag=run_tag,
+        draft_label=student_label,
+        draft_path=student_path,
+        target_path=teacher_path,
+        loss_name=infer_loss_name(student_label),
+        train_steps=train_steps, learning_rate=0.0, lora_rank=0,
+        dataset=dataset, n_prompts=n_prompts,
+        mode=mode, K=K, L=L, temperature=temperature,
+        block_eff=float(block_eff),
+        experiment_tag=experiment_tag,
+    )
+    run_id = results_db.insert_run(row, hw_tier=hw_tier)
+    row["id"] = run_id
+    print(f"    [{run_tag}] block_eff={block_eff:.4f}  -> DB", flush=True)
+    _wandb_log_eval_result(row)
+    if results_out is not None:
+        results_out.append(row)
+    return row
+
+
+def _try_persist_be_line(line: str, ctx: dict) -> None:
+    """Parse a streamed runner.py log line and persist BE result if present."""
+    m = _BE_LINE_RE.search(line)
+    if not m:
+        return
+    _persist_be_combo(
+        dataset=ctx["dataset"],
+        mode=m.group(1),
+        K=int(m.group(2)),
+        temperature=float(m.group(3)),
+        block_eff=float(m.group(4)),
+        student_label=ctx["student_label"],
+        student_path=ctx["student_path"],
+        teacher_path=ctx["teacher_path"],
+        n_prompts=ctx["n_prompts"],
+        L=ctx["L"],
+        experiment_tag=ctx.get("experiment_tag"),
+        skip_existing=ctx.get("skip_existing", False),
+        train_steps=ctx.get("train_steps", 0),
+        hw_tier=ctx.get("hw_tier"),
+        results_out=ctx.get("results_out"),
+        saved_keys=ctx.get("saved_keys"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Load prompts
 # ---------------------------------------------------------------------------
@@ -1394,10 +1504,12 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
               f"{res['throughput']:.2f} tok/s"
               + (f"  task={row.get('task_score'):.3f}" if row.get("task_score") is not None else ""))
         run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
+        row["id"] = run_id
         pp = res["per_prompt"]
         for r in pp:
             r["run_id"] = run_id
         results_db.insert_per_prompt_batch(pp)
+        _wandb_log_eval_result(row)
 
         # ── W&B: eval runs have no time-series; write everything to summary ──
         # Using wandb.summary (not wandb.log) avoids meaningless "step" charts.
@@ -1435,11 +1547,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         row = {**base_row, "block_eff": res["block_eff"]}
         print(f"  block_eff={res['block_eff']:.4f}")
         run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
-
-        # No per-(mode,dataset) W&B summary key here: writing BE/{mode}/{dataset}
-        # produces up to 25 panels (5 modes × 5 datasets) that clutter the run.
-        # The per-mode average (BE/{mode}) is written once at end-of-run in main(),
-        # and full per-(mode,dataset) detail lives in the eval_summary_table.
+        _wandb_log_eval_result(row)
 
     row["id"] = run_id
     return row
@@ -1565,8 +1673,12 @@ def main():
                    help="Run full matrix: all datasets × all modes × K=1,3,5")
     p.add_argument("--skip_fetch", action="store_true",
                    help="Skip dataset download step")
-    p.add_argument("--skip_existing", action="store_true",
-                   help="Skip cells that already have a result in results.db (resume)")
+    p.add_argument("--skip_existing", action="store_true", default=None,
+                   help="Skip cells that already have a result in results.db (default)")
+    p.add_argument("--force", action="store_true",
+                   help="Re-run every eval cell and write new DB/W&B rows even when "
+                        "matching results exist.  Old rows are kept; new rows get a "
+                        "fresh run_tag.  Overrides --skip_existing.")
     p.add_argument("--no_perplexity", dest="perplexity", action="store_false",
                    help="Skip perplexity measurement (perplexity runs by default as "
                         "a quality-preservation check; use --no_perplexity to skip)")
@@ -1634,6 +1746,14 @@ def main():
                         "smoke-test the exact CPU path that runs on the ATS/AIP server.")
     global args
     args = p.parse_args()
+
+    # Default: skip cells already in DB (safe resume).  --force redoes everything.
+    if args.force:
+        if args.skip_existing:
+            print("  [WARN] --force overrides --skip_existing", flush=True)
+        args.skip_existing = False
+    elif args.skip_existing is None:
+        args.skip_existing = True
 
     # Honour the forced device for all eval paths (alpha preload, perplexity, BE).
     global _FORCED_DEVICE
@@ -1768,6 +1888,10 @@ def main():
     print(f"  GPU     : {_gpu_info()}")
     if args.experiment_tag:
         print(f"  Tag     : {args.experiment_tag}")
+    if args.force:
+        print(f"  Resume  : OFF (--force — re-run all cells, new DB/W&B rows)")
+    elif args.skip_existing:
+        print(f"  Resume  : ON  (skip cells already in results.db; pass --force to redo)")
 
     # ── W&B eval run (optional — silently skips if not installed / --no_wandb)
     # What gets logged per eval cell:
@@ -1888,6 +2012,7 @@ def main():
                     notes=f"perplexity={ppl_res['perplexity']:.4f}",
                 )
                 results_db.insert_run(ppl_row, hw_tier=args.hw_tier)
+                _wandb_log_eval_result(ppl_row)
                 # Quality guard: warn if this model's PPL is much worse than the
                 # baseline FOR THE SAME MODEL PAIR (same draft_path + target_path).
                 # Filter by draft_path to avoid cross-family false alarms, e.g.
@@ -1925,6 +2050,10 @@ def main():
     # never compete for VRAM at the same time.
     _alpha_preloaded = None
     _has_alpha = any(mode == "alpha" for _, mode, _, _ in cells)
+
+    # Accumulate results as each cell is persisted (for summary + end-of-run W&B table).
+    all_results: list = []
+    _be_saved_keys: set = set()
 
     # ── Pre-batch all GBV / BE evaluations (one subprocess per dataset) ────
     # Runs BEFORE alpha pre-load so BE subprocess and alpha models never compete
@@ -1983,12 +2112,21 @@ def main():
                 _reason = "--device cpu (CPU-path smoke test)" if _FORCED_DEVICE == "cpu" \
                           else "hw_tier=cpu (CPU-only server)"
                 print(f"  [BE batch] {_reason} -> running BE on CPU")
+                _pctx = dict(
+                    dataset=ds, student_label=student_label,
+                    student_path=args.student, teacher_path=args.teacher,
+                    n_prompts=n_ds, L=args.L, experiment_tag=args.experiment_tag,
+                    skip_existing=args.skip_existing,
+                    train_steps=args.train_steps, hw_tier=args.hw_tier,
+                    results_out=all_results, saved_keys=_be_saved_keys,
+                )
                 batch_res = run_be_batch(
                     args.student, args.teacher, data_path,
                     modes_list, Ks_list, Ts_list,
                     args.L, args.max_tokens, args.draft_temp,
                     _device="cpu",
                     load_in_4bit=False,   # 4-bit requires CUDA; CPU uses full precision
+                    _persist_ctx=_pctx,
                 )
                 for (m, k, t), be in batch_res.items():
                     _be_cache[(ds, m, k, t)] = be
@@ -2056,6 +2194,14 @@ def main():
                     _lsuffix = f"_{_mode}" if _n_gpus > 1 else f"_{_mode}"
 
                     _wait_for_vram(_mode, gpu_idx=max(_gpu, 0))
+                    _pctx = dict(
+                        dataset=ds, student_label=student_label,
+                        student_path=args.student, teacher_path=args.teacher,
+                        n_prompts=n_ds, L=args.L, experiment_tag=args.experiment_tag,
+                        skip_existing=args.skip_existing,
+                        train_steps=args.train_steps, hw_tier=args.hw_tier,
+                        results_out=all_results, saved_keys=_be_saved_keys,
+                    )
                     _res = run_be_batch(
                         args.student, args.teacher, data_path,
                         [_mode], Ks_list, Ts_list,
@@ -2064,6 +2210,7 @@ def main():
                         load_in_4bit=getattr(args, "load_in_4bit", False),
                         _gpu_id=_gpu,
                         _log_suffix=_lsuffix,
+                        _persist_ctx=_pctx,
                     )
                     if not _res:
                         print(f"  [BE batch] mode={_mode}: GPU subprocess failed "
@@ -2077,6 +2224,7 @@ def main():
                             load_in_4bit=getattr(args, "load_in_4bit", False),
                             _gpu_id=_gpu,
                             _log_suffix=_lsuffix + "_retry",
+                            _persist_ctx=_pctx,
                         )
                     if not _res:
                         print(f"  [BE batch] mode={_mode}: GPU retry failed "
@@ -2089,6 +2237,7 @@ def main():
                             load_in_4bit=False,
                             _gpu_id=-1,
                             _log_suffix=_lsuffix + "_cpu",
+                            _persist_ctx=_pctx,
                         )
                     if not _res:
                         print(f"  [BE batch] mode={_mode}: all attempts failed — "
@@ -2218,7 +2367,6 @@ def main():
         _alpha_preloaded = (_device, _dtype, _tok, _s_model, _t_model, _same_models)
 
     # ── Run sequentially ─────────────────────────────────────────────────────
-    all_results = []
     failed_cells = []
     t_start = time.perf_counter()
     for i, (ds, mode, K, T) in enumerate(cells, 1):
@@ -2258,26 +2406,23 @@ def main():
                 print(f" [{run_tag}] WARN: no cached BE result (batch may have failed)")
                 failed_cells.append((ds, mode, K, T, "no cached BE result"))
                 continue
-            row = dict(
-                run_tag=run_tag,
-                draft_label=student_label,
-                draft_path=args.student,
-                target_path=args.teacher,
-                loss_name=infer_loss_name(student_label),
-                train_steps=args.train_steps, learning_rate=0.0, lora_rank=0,
-                dataset=ds, n_prompts=n,
-                mode=mode, K=K, L=args.L, temperature=T,
-                block_eff=be_val,
+            # DB + W&B already written when the runner printed the result line.
+            # Fall back to persist here if streaming save was disabled or missed.
+            row = _persist_be_combo(
+                dataset=ds, mode=mode, K=K, temperature=T, block_eff=be_val,
+                student_label=student_label, student_path=args.student,
+                teacher_path=args.teacher, n_prompts=n, L=args.L,
                 experiment_tag=args.experiment_tag,
+                skip_existing=args.skip_existing,
+                train_steps=args.train_steps, hw_tier=args.hw_tier,
+                results_out=all_results, saved_keys=_be_saved_keys,
             )
-            run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
-            row["id"] = run_id
-            print(f" [{run_tag}] block_eff={be_val:.4f}")
-            all_results.append(row)
-
-            # BE results are aggregated into a single eval_summary_table at end-of-run
-            # (see main() W&B finish block below).  Logging per-cell via wandb.log()
-            # would create separate tiny panels per verifier mode — not useful.
+            _be_key = (ds, mode, K, round(float(T), 4))
+            if row is None and _be_key not in _be_saved_keys and not (
+                    args.skip_existing and _already_run(
+                        student_label, ds, mode, K, T,
+                        student_path=args.student, n_prompts=n)):
+                failed_cells.append((ds, mode, K, T, "BE persist failed"))
 
     # Release pre-loaded alpha models now that all cells are done
     if _alpha_preloaded is not None:
