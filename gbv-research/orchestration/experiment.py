@@ -4195,14 +4195,23 @@ def main():
     global _LOCK_FILE
     _config_slug = args.config.replace("/", "_").replace("\\", "_")
 
-    # Lock scoping: single-loss targeted runs (--losses X --train_only) get a
-    # LOSS-SPECIFIC lock so they never kill each other when running in parallel.
-    # Full pipeline runs (no --losses filter) use the config-level lock so two
-    # full pipelines on the same config don't race.
+    # Lock scoping: ANY run that targets exactly ONE loss via --losses gets a
+    # LOSS-SPECIFIC lock — regardless of train_only / eval_only / full pipeline.
+    # A single targeted `--losses X` run is, by construction, the user running
+    # one loss in isolation; two DIFFERENT single-loss runs must coexist (distinct
+    # lock files) so they don't kill each other. On multi-GPU servers the OS/GPU
+    # scheduler manages VRAM, so deliberately-parallel per-loss runs are expected.
     #
-    # Example safe combination:
-    #   python experiment.py --config a100_qwen --losses kl_tree --train_only
-    #   python experiment.py --config a100_qwen --losses gbv_tree --train_only
+    # The full multi-loss pipeline (no --losses filter, or 2+ losses) still uses
+    # the shared per-config lock .pipeline_lock_{config}, so two full pipelines on
+    # the same config still conflict — that's the intended protection (relevant on
+    # a single-GPU laptop). Launching the IDENTICAL single-loss run twice (same
+    # config + same loss) still shares one lock and still kills the genuine
+    # duplicate, which remains correct.
+    #
+    # Example safe combination (full OR train_only — both coexist):
+    #   python experiment.py --config a100_qwen --losses kl    ← .pipeline_lock_a100_qwen_kl
+    #   python experiment.py --config a100_qwen --losses jsd   ← .pipeline_lock_a100_qwen_jsd
     # Both get separate lock files and coexist without killing each other.
     #
     # Full-pipeline runs still use the shared config lock (only one allowed):
@@ -4210,7 +4219,6 @@ def main():
     _is_single_loss_targeted = (
         args.losses                                    # --losses was given
         and len([l for l in args.losses.split(",") if l.strip()]) == 1  # exactly 1 loss
-        and getattr(args, "train_only", False)         # and it's train-only
     )
     if _is_single_loss_targeted:
         _loss_slug = args.losses.strip().replace(",", "_")
