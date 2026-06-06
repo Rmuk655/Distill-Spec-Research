@@ -992,13 +992,20 @@ def main() -> None:
             print(f"[RESUME] LR scheduler restored from checkpoint "
                   f"(lr={scheduler.get_last_lr()[0]:.2e})")
         else:
-            # Backward compat: older checkpoints lack scheduler.pt — fast-forward
-            # by the number of optimizer steps completed before the interrupt.
+            # Backward compat: older checkpoints lack scheduler.pt — sync
+            # last_epoch to the number of optimizer steps already completed.
+            # (Looping scheduler.step() here triggers PyTorch's "step before
+            # optimizer.step()" warning and is unnecessary — optimizer.pt
+            # already carries the correct lr in param_groups.)
             _completed_opt = start_step // _ga
-            for _ in range(_completed_opt):
-                scheduler.step()
-            print(f"[RESUME] LR scheduler fast-forwarded {_completed_opt} opt-steps "
-                  f"(no scheduler.pt in checkpoint; lr={scheduler.get_last_lr()[0]:.2e})")
+            if _completed_opt > 0:
+                scheduler.last_epoch = _completed_opt
+                for _pg, _lr in zip(optimizer.param_groups, scheduler.get_lr()):
+                    _pg["lr"] = _lr
+            _lr_now = (optimizer.param_groups[0]["lr"]
+                       if optimizer.param_groups else args.lr)
+            print(f"[RESUME] LR scheduler synced to opt-step {_completed_opt} "
+                  f"(no scheduler.pt in checkpoint; lr={_lr_now:.2e})")
         print(f"\n[RESUME] Continuing from step {start_step + 1}/{args.steps}")
     else:
         os.makedirs(args.output, exist_ok=True)
