@@ -732,4 +732,13 @@ sqlite3 /home/colligo/specdist/results.db \
   "SELECT draft_label, mode, block_eff FROM runs ORDER BY ts DESC LIMIT 10;"
 ```
 
+**Paper metrics table (α / BE / GSM8K EM) empty or mostly `-`?** See
+[deploy/A100_SETUP.md § Troubleshooting results.db](../deploy/A100_SETUP.md#troubleshooting-resultsdb-table-shows--for-most-losses).
+Common causes: wrong `dataset` filter (`gsm8k` vs `gsm8k_eval`), `--eval --loss X`
+skipping baseline, or `--skip_existing` blocking α rows under your `experiment_tag`.
+
+**MATH-500 task_score needs gold answers** — run once after setup or git pull:
+`python core/datasets/downloader.py --datasets math500 --n 100 --force`
+(also automatic in `deploy/aip_gpu_setup.sh` when `math500_*.jsonl` lacks `"answer"`).
+
 **Then check W&B** — filter by Group = `a100-qwen`, Tag = `KrishnanRIITHServer`. If 0 runs: W&B auth failed in subprocesses (see "W&B shows None" above).
