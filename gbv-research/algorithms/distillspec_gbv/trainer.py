@@ -513,7 +513,7 @@ def _save_checkpoint(
     losses: list, accept_weights: list,
     milestone: bool = False, max_checkpoints: int = 5,
     best_val_loss: float = None, val_no_improve_count: int = None,
-    no_lora: bool = False, scheduler=None,
+    no_lora: bool = False, scheduler=None, initial_loss: float = None,
 ) -> None:
     """
     Save crash-safe checkpoint to <output_dir>/ckpt_latest/.
@@ -539,6 +539,8 @@ def _save_checkpoint(
     if best_val_loss is not None:
         state["best_val_loss"]      = best_val_loss
         state["val_no_improve_count"] = val_no_improve_count
+    if initial_loss is not None:
+        state["initial_loss"] = initial_loss
     with open(os.path.join(output_dir, "training_state.json"), "w") as f:
         json.dump(state, f)
 
@@ -960,6 +962,7 @@ def main() -> None:
 
     start_step, losses, accept_weights = 0, [], []
     _resumed_best_val, _resumed_no_improve = None, 0
+    _initial_loss = None   # step-1 train loss; persisted for slow-convergence alert
 
     if _resuming:
         with open(state_path, encoding="utf-8-sig") as f:
@@ -970,6 +973,8 @@ def main() -> None:
         _raw_bvl       = saved.get("best_val_loss")
         _resumed_best_val   = float(_raw_bvl) if _raw_bvl is not None else None
         _resumed_no_improve = int(saved.get("val_no_improve_count", 0))
+        _raw_il = saved.get("initial_loss")
+        _initial_loss = float(_raw_il) if _raw_il is not None else None
         if not args.no_lora:
             _tmp = PeftModel.from_pretrained(draft_base, ckpt_latest, is_trainable=True)
             # strict=False: _tmp wraps draft_base in a new adapter layer while
@@ -1348,7 +1353,7 @@ def main() -> None:
             if args.nan_action == "stop":
                 _save_checkpoint(draft_model, optimizer, step + 1, args.output,
                                  losses, accept_weights, no_lora=args.no_lora,
-                                 scheduler=scheduler)
+                                 scheduler=scheduler, initial_loss=_initial_loss)
                 _stop_training = True
                 break
             losses.append(float("nan"))
@@ -1356,12 +1361,14 @@ def main() -> None:
 
         # NaN / Inf guard
         loss_val = loss.item()
+        if _initial_loss is None and math.isfinite(loss_val):
+            _initial_loss = loss_val
         if not math.isfinite(loss_val):
             _nan_count += 1
             if args.nan_action == "stop":
                 _save_checkpoint(draft_model, optimizer, step + 1, args.output,
                                  losses, accept_weights, no_lora=args.no_lora,
-                                 scheduler=scheduler)
+                                 scheduler=scheduler, initial_loss=_initial_loss)
                 _stop_training = True
                 break
             elif args.nan_action == "skip":
@@ -1503,6 +1510,7 @@ def main() -> None:
                 val_no_improve_count=_val_no_improve_count,
                 no_lora=args.no_lora,
                 scheduler=scheduler,
+                initial_loss=_initial_loss,
             )
             print(f"  [ckpt] step {step+1}/{args.steps} → {args.output}/ckpt_latest")
 
@@ -1528,7 +1536,7 @@ def main() -> None:
                 _save_checkpoint(
                     draft_model, optimizer, step + 1, args.output,
                     losses, accept_weights, no_lora=args.no_lora,
-                    scheduler=scheduler)
+                    scheduler=scheduler, initial_loss=_initial_loss)
                 shutil.copytree(
                     os.path.join(args.output, "ckpt_latest"),
                     best_dir, dirs_exist_ok=True)
@@ -1594,8 +1602,10 @@ def main() -> None:
                     _opt_total = max(1, (args.steps + _ga_now - 1) // _ga_now)
                     _check_at_grad = int(0.30 * _opt_total) * _ga_now   # 30% of opt steps
                     _check_at_grad = max(_ga_now * 5, _check_at_grad)   # at least 5 opt steps
-                    if _cur_step == _check_at_grad:
-                        _initial_loss = losses[0] if losses else v_loss
+                    if _cur_step == _check_at_grad and _initial_loss is not None:
+                        # Use persisted step-1 loss, NOT losses[0] — on resume
+                        # losses[0] is from the truncated history window (~step 700)
+                        # and produces false "negative drop" alerts at the 30% gate.
                         _drop_pct = (_initial_loss - _cur_ema) / max(_initial_loss, 1e-8) * 100
                         if _drop_pct < 10:
                             _wandb.alert(
@@ -1658,7 +1668,7 @@ def main() -> None:
                 _save_checkpoint(
                     draft_model, optimizer, step + 1, args.output,
                     losses, accept_weights, no_lora=args.no_lora,
-                    scheduler=scheduler)
+                    scheduler=scheduler, initial_loss=_initial_loss)
                 shutil.copytree(
                     os.path.join(args.output, "ckpt_latest"),
                     _sv_best_dir, dirs_exist_ok=True)
@@ -1687,6 +1697,7 @@ def main() -> None:
         val_no_improve_count=_val_no_improve_count,
         no_lora=args.no_lora,
         scheduler=scheduler,
+        initial_loss=_initial_loss,
     )
     # Save final adapter to the output root so that:
     #   1. experiment.py done_check (adapter_config.json at root) passes
