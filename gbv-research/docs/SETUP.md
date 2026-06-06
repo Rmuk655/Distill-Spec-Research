@@ -572,6 +572,43 @@ python orchestration/experiment.py --config server \
 
 ---
 
+### Training crashed — restart from checkpoint
+
+**Symptom**: SSH dropped, OOM, or kill mid-training. W&B local logs may be at e.g. `.../wandb/wandb/run-20260605_211309-.../logs` but training stopped.
+
+**Do not** use `clean_restart` if you want to keep progress.
+
+**Fix**:
+
+```bash
+source ~/.specdist_env && cd "$GBV_DIR"   # or your gbv-research path
+
+# 1. Kill orphaned pipeline (optional)
+pkill -TERM -f "experiment.py --config a100_qwen"
+
+# 2. Confirm checkpoint trio exists (kl example)
+ls db/checkpoints/kl-gsm8k-q0.6b-q8b/ckpt_latest/adapter_config.json \
+   db/checkpoints/kl-gsm8k-q0.6b-q8b/training_state.json \
+   db/checkpoints/kl-gsm8k-q0.6b-q8b/wandb_run.json
+
+# 3. Resume training at the train step
+python deploy/aip_run.py --config a100_qwen --loss kl \
+  --from train_kl_gsm8k --no_smoke
+```
+
+**Success looks like**:
+
+```text
+[RESUME] Continuing from step 2801/4000
+[wandb] Resuming run eyp9xg22 (from wandb_run.json)
+```
+
+Trainer reloads **weights + optimizer + step** from `ckpt_latest/` and `training_state.json`. W&B continues the **same run** via `wandb_run.json` in the checkpoint dir (not the `run-.../logs` folder under `WANDB_DIR`).
+
+Other losses: swap `kl` / `train_kl_gsm8k` / `kl-gsm8k-q0.6b-q8b` for your loss (see [deploy/A100_SETUP.md](../deploy/A100_SETUP.md) FAQ table).
+
+---
+
 ### W&B shows `[wandb] None` in training logs
 
 **Cause**: `WANDB_API_KEY` is not set as an environment variable in subprocess scope. `wandb login` saves to `~/.netrc` but trainer.py subprocesses don't reliably read from there.

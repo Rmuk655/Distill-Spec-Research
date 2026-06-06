@@ -416,6 +416,81 @@ bash gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 
 ---
 
+## FAQ
+
+### Training crashed — how do I restart from the checkpoint?
+
+**Do not** run `clean_restart` — that wipes pipeline state. Training resume is automatic as long as the checkpoint directory is intact.
+
+**1. Kill any orphaned job** (SSH disconnect, OOM kill, Ctrl-C):
+
+```bash
+source ~/.specdist_env && cd "$GBV_DIR"
+
+pkill -TERM -f "experiment.py --config a100_qwen"
+sleep 5
+pkill -9 -f "experiment.py --config a100_qwen"   # only if still alive
+```
+
+**2. Confirm checkpoint files exist** (example: `kl` on `a100_qwen`):
+
+```bash
+CKPT="$GBV_DIR/db/checkpoints/kl-gsm8k-q0.6b-q8b"
+ls -la "$CKPT/ckpt_latest/adapter_config.json" \
+       "$CKPT/training_state.json" \
+       "$CKPT/wandb_run.json"
+```
+
+| File | Purpose |
+|------|---------|
+| `ckpt_latest/` | Latest LoRA weights (rolling save) |
+| `training_state.json` | Optimizer + global step (e.g. step 2801/4000) |
+| `wandb_run.json` | W&B run id so training continues on the **same dashboard run** |
+
+**3. Restart training** — pick the loss and training step id:
+
+```bash
+python deploy/aip_run.py --config a100_qwen --loss kl \
+  --from train_kl_gsm8k --no_smoke
+```
+
+Equivalent if you were already mid-pipeline:
+
+```bash
+python deploy/aip_run.py --config a100_qwen --loss kl --resume --no_smoke
+```
+
+**4. Verify resume in the log** — you should see:
+
+```text
+[RESUME] Continuing from step 2801/4000
+[wandb] Resuming run eyp9xg22 (from wandb_run.json)
+```
+
+W&B local files live under `$WANDB_DIR` (e.g. `/home/colligo/ram/specdist/wandb/wandb/run-.../logs/`). That path is just the **local cache**. Resume uses `wandb_run.json` **inside the checkpoint dir**, not the log folder path.
+
+**Step IDs** (use with `--from`):
+
+| Loss | Train step id | Checkpoint dir |
+|------|---------------|----------------|
+| `kl` | `train_kl_gsm8k` | `kl-gsm8k-q0.6b-q8b/` |
+| `rev_kl` | `train_rev_kl_gsm8k` | `rev_kl-gsm8k-q0.6b-q8b/` |
+| `gbv_tree` | `train_gbv_tree_gsm8k` | `gbv_tree-gsm8k-q0.6b-q8b/` |
+| `traversal_tree` | `train_trav_tree_gsm8k` | `trav_tree-gsm8k-q0.6b-q8b/` |
+
+List all step ids: `python orchestration/experiment.py --config a100_qwen --dry_run --losses kl`
+
+**`[RECOVER] … Reset to 'pending'`** after a crash is normal — the pipeline re-runs interrupted steps; training still resumes from `ckpt_latest`.
+
+**Start over from step 0** (only if you intend to discard progress):
+
+```bash
+rm -rf "$GBV_DIR/db/checkpoints/kl-gsm8k-q0.6b-q8b"
+python deploy/aip_run.py --config a100_qwen --loss kl --train --no_smoke
+```
+
+---
+
 ## Related docs
 
 | Doc | Use when |
