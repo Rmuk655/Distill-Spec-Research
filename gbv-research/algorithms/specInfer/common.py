@@ -39,7 +39,32 @@ def target_sample_from_distribution(target_distribution, draft_distribution):
 ########################### Utility ########################
 
 
+def cache_seq_len(past_key_values) -> int:
+    """Sequence length of cached KV states across transformers 4.x–5.x APIs."""
+    if hasattr(past_key_values, "get_seq_length"):
+        return int(past_key_values.get_seq_length())
+    if hasattr(past_key_values, "key_cache") and past_key_values.key_cache:
+        return int(past_key_values.key_cache[0].shape[-2])
+    return int(past_key_values[0][0].shape[2])
+
+
+def _is_layers_cache(past_key_values) -> bool:
+    return hasattr(past_key_values, "layers") and hasattr(past_key_values, "get_seq_length")
+
+
 def slice_past_key_values(past_key_values, start_idx, slice_len):
+    # Transformers 5.x: DynamicCache stores per-layer keys/values in .layers[].
+    if _is_layers_cache(past_key_values):
+        import copy
+        new_cache = copy.deepcopy(past_key_values)
+        end_idx = start_idx + slice_len
+        for layer in new_cache.layers:
+            if getattr(layer, "is_initialized", False) and getattr(layer, "keys", None) is not None:
+                if layer.keys.numel() > 0:
+                    layer.keys = layer.keys[..., start_idx:end_idx, :]
+                    layer.values = layer.values[..., start_idx:end_idx, :]
+        return new_cache
+
     # Transformers >= 4.36 returns DynamicCache objects instead of plain tuples.
     # Crop and return a DynamicCache so the next forward() call doesn't fail
     # with "'tuple' object has no attribute 'get_seq_length'".
@@ -105,6 +130,11 @@ def slice_mqa_past_key_values(past_key_values, start_idx, slice_len):
 
 
 def crop_past_key_values(past_key_values, max_len):
+    if _is_layers_cache(past_key_values) and hasattr(past_key_values, "crop"):
+        import copy
+        new_cache = copy.deepcopy(past_key_values)
+        new_cache.crop(max_len)
+        return new_cache
     return slice_past_key_values(past_key_values, 0, max_len)
 
 

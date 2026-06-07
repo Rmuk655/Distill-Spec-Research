@@ -187,7 +187,7 @@ python orchestration/experiment.py --config a10_qwen --yes \
 
 ### Stage 2 — A100 (exploration → paper confirmation)
 
-**Hardware**: AIP/Pluto A100-SXM4-40GB (Colligo). Shared 8-GPU node — only GPU 0 is allocated to your job unless `CUDA_VISIBLE_DEVICES` is set by the cluster.
+**Hardware**: A100 A100-SXM4-40GB (A100). Shared 8-GPU node — only GPU 0 is allocated to your job unless `CUDA_VISIBLE_DEVICES` is set by the cluster.
 
 **Two A100 configs — run both for the paper:**
 
@@ -274,7 +274,7 @@ Paper requires alpha/BE vs training step (not just final numbers). Infrastructur
 # After training finishes, sweep milestone checkpoints (n=20 prompts, ~5 min/checkpoint):
 python deploy/eval_checkpoints.py \
     --config a100_qwen --loss gbv_tree \
-    --storage_root /home/colligo/ram/specdist \
+    --storage_root "$GBV_DIR/db" \
     --n 20 --modes "alpha,gbv"
 
 # Generates checkpoint_evals table in DB + W&B metrics:
@@ -286,34 +286,29 @@ With `milestone_every=200` (10 milestones over 2000 steps), each eval_checkpoint
 
 ---
 
-#### Storage layout (Sensei FS)
+#### Storage layout (A100 server)
 
-AIP/Pluto provides **Sensei FS** (`/sensei-fs/users/rkrishna`) — persistent Lustre-backed storage, 500 GB quota, backed up to S3. Data survives session restarts and machine reallocations.
+See [deploy/A100_SETUP.md](../deploy/A100_SETUP.md) for the canonical layout. Summary:
 
-| Data | Location | Persists? | Size |
-|------|----------|-----------|------|
-| Checkpoints (LoRA + merged) | `/sensei-fs/users/rkrishna/specdist/checkpoints/` | ✅ Yes | ~130 GB |
-| `results.db` | `/sensei-fs/users/rkrishna/specdist/results.db` | ✅ Yes | ~50 MB |
-| Logs | `/sensei-fs/users/rkrishna/specdist/logs/` | ✅ Yes | ~5 GB |
-| HF model cache (Qwen3-8B etc.) | `/sensei-fs/users/rkrishna/specdist/hf_cache/` | ✅ Yes | ~18 GB |
-| Python venv | `$HOME/specdist/venv` (local, not NFS) | machine-local | ~5 GB |
-| **Total Sensei** | | | **~153 GB / 500 GB** ✅ |
+| Data | Location | Size (typical) |
+|------|----------|----------------|
+| Checkpoints, merged models, `results.db`, logs | `$GBV_DIR/db/` | ~130 GB |
+| HF model cache | `$HOME/specdist/hf_cache/` | ~18 GB |
+| Python venv, W&B local files | `$HOME/specdist/` | ~13 GB |
 
-> **Do NOT copy HF model files manually** — they download automatically on first use and are cached in `hf_cache/`. Copying them again doubles the quota usage.
-
-The setup script auto-detects Sensei FS and uses it. `aip_run.py` does the same.
+> **Do NOT copy HF model files manually** — they download on first use and are cached in `hf_cache/`.
 
 #### One-time setup
 
 ```bash
 export WANDB_API_KEY="your-key-from-wandb.ai/authorize"   # REQUIRED before setup
-git clone https://github.com/Rmuk655/Distill-Spec-Research.git ~/ram/Distill-Spec-Research
-bash ~/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+git clone https://github.com/Rmuk655/Distill-Spec-Research.git ~/Distill-Spec-Research
+bash ~/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 The setup script handles everything:
-1. Auto-detects Sensei FS → sets storage root to `/sensei-fs/users/rkrishna/specdist`
-2. Creates venv at `$HOME/specdist/venv` (local disk — NFS is 5-10× slower for pip imports)
+1. Sets storage root to `$GBV_DIR/db` (checkpoints + results.db)
+2. Creates venv at `$HOME/specdist/venv`
 3. Installs all ML deps (torch cu128, transformers 5.x, peft, bitsandbytes, wandb)
 4. Downloads `gsm8k_train.jsonl` (7473 prompts) before offline flags are set
 5. Writes `~/.specdist_env` with all env vars including `WANDB_API_KEY` and `STORAGE_ROOT`
@@ -328,7 +323,7 @@ The setup script handles everything:
 
 ```bash
 source ~/.specdist_env   # if new terminal
-cd ~/ram/Distill-Spec-Research/gbv-research
+cd ~/Distill-Spec-Research/gbv-research
 
 # Full exploration (all 15 losses):
 python deploy/aip_run.py --config a100_qwen
@@ -351,14 +346,14 @@ bash deploy/rerun_loss.sh kl_tree my_tag
 
 **Monitor:**
 ```bash
-tail -f /home/colligo/ram/specdist/logs/a100_qwen-q0.6b-q8b/pipeline_output.log
+tail -f "$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log"
 # W&B: https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec
 # Key W&B columns: BE/gbv, BE/traversal, alpha/gsm8k
 ```
 
 ---
 
-#### Shared-cluster operational notes (AIP/Pluto)
+#### Shared-cluster operational notes (A100)
 
 **Session time limit (~2h)**: each GPU session expires. Long evals get SIGTERMed.  
 **Fix**: run ONE loss per session for eval. Training is fast (~20 min); eval is the bottleneck.
@@ -379,14 +374,14 @@ To use all 8 GPUs (dedicated machine only): `export SPECDIST_ALL_GPUS=1`
 
 ---
 
-**Verified on AIP/Pluto A100-SXM4-40GB (June 2026):**
+**Verified on A100-SXM4-40GB (June 2026):**
 
 | Check | Status |
 |---|---|
 | 2 eval slots on 40GB | ✅ EVAL_VRAM_GB=19 → 2×19=38 GB |
 | W&B from trainer subprocesses | ✅ WANDB_API_KEY in ~/.specdist_env |
-| specInfer auto-disabled on transformers 5.x | ✅ SPECDIST_DISABLE_SPECINFER=1 set at startup |
-| Inline alpha fallback correctness | ✅ identical values to specInfer, ~20% slower |
+| specInfer on transformers 5.x | ✅ bundled `algorithms/specInfer/` supports DynamicCache `.layers` API |
+| draft-verify alpha fallback | ✅ used only when specInfer unavailable (CPU / import failure) |
 | BE batch timeout | ✅ scales with n_prompts × combos (was hardcoded 2h) |
 | tqdm verbosity | ✅ mininterval=60s (one line/min in logs) |
 | HF loading bars | ✅ suppressed in trainer.py, evaluate.py, runner.py |
@@ -402,13 +397,13 @@ To use all 8 GPUs (dedicated machine only): `export SPECDIST_ALL_GPUS=1`
 **Known issues fixed (June 2026):**
 - **grad_accum not reaching trainer**: was silently defaulting to 4 (125→500 optimizer steps). Fixed: wired to `train_hparams` dict.
 - **task_score CPU fallback (~7 hours)**: loaded second copy of 8B model while alpha models were resident → OOM → CPU. Fixed: reuses preloaded alpha student. Now prints a loud `[WARNING]` banner if CPU fallback occurs.
-- **specInfer DynamicCache TypeError**: `isinstance` failed cross-module. Fixed: `SPECDIST_DISABLE_SPECINFER=1` auto-set for transformers ≥5.x.
+- **specInfer DynamicCache on transformers 5.x**: `key_cache` removed; fixed via `.layers[].keys` cropping in bundled specInfer.
 - **BE batch timeout (2h hardcoded)**: killed 14h eval at 9%. Fixed: scales with prompts × combos.
 - **convergence alert miscalibrated**: fired at grad-step 200 (12 optimizer updates = peak LR). Fixed: fires at 30% of optimizer steps. Tree losses get threshold 50 (not 10) — path weights naturally amplify norms.
 - **SIGTERM from using all 8 GPUs**: scheduler claimed all 8 A100s on shared node. Fixed: defaults to GPU 0 when CUDA_VISIBLE_DEVICES unset.
 - **parallel runs killing each other**: --losses X --train_only used config-level lock → killed sibling loss runs. Fixed: per-loss lock files.
 
-**Decision gate**: after Stage 2A, rank losses by `BE/gbv` in W&B. Losses where `BE > baseline BE (3.77)` are candidates for Stage 2B. Use `analyze_results.py` to generate the paper comparison table.
+**Decision gate**: after Stage 2A, rank losses using the **loss × verifier matrix** from `python db/analyze_results.py` (not a single `gbv` column — best BE may be `rev_kl + traversal` while `jsd + bv` wins elsewhere). Losses that beat baseline BE under their best verifier are candidates for Stage 2B.
 
 ---
 
@@ -1473,39 +1468,108 @@ python core/datasets/downloader.py --datasets gsm8k --n 30
 
 ## 8d. Generating a Results Report (analyze_results.py)
 
-`paper/analyze_results.py` reads from `db/results.db` and generates a statistical
-comparison of all evaluation runs.
+`db/analyze_results.py` reads `results.db` and generates the **primary paper view**:
+which **(trained model, verifier)** pair achieves the best block efficiency (BE).
+
+### Why not a single BE column?
+
+The DB stores **one row per eval cell**: `(draft_label, mode, dataset, K, temperature)`.
+A full A100 Phase 3 eval saves ~9 BE rows per loss (one per verifier) plus one `alpha` row.
+The quick A100 sanity-check snippet hardcodes `mode='gbv'` for BE — that is **not**
+averaging across verifiers, but it also **hides** the best verifier per model.
+
+Use `analyze_results.py` to answer: *"Does `rev_kl` win under `traversal` while `jsd`
+wins under `bv`?"* — the loss–verifier alignment table.
 
 ### Usage
 
 ```bash
-# Run from gbv-research/
+cd gbv-research/
 
-# Print Markdown report to terminal
-python paper/analyze_results.py
+# Full report (alpha + BE matrix + convergence + recommendations)
+python db/analyze_results.py
 
-# Save to file (for the paper or a PR)
-python paper/analyze_results.py --out report.md
+# Save for the paper or a PR
+python db/analyze_results.py --out report.md
 
-# Paper runs only (a100 tier)
-python paper/analyze_results.py --draft_labels baseline,kl1000-gsm8k,ebe1000-gsm8k
+# Block-efficiency section only (loss × verifier matrix)
+python db/analyze_results.py --section be
 
-# Filter by dataset
-python paper/analyze_results.py --dataset gsm8k --out gsm8k_report.md
+# Limit compared drafts (baseline is always the anchor)
+python db/analyze_results.py --section be --compare rev_kl,jsd,kl,l1
+
+# Global best (model, verifier) pair only
+python db/analyze_results.py --section recommend
+```
+
+On A100:
+
+```bash
+source ~/.specdist_env && cd "$GBV_DIR"
+python db/analyze_results.py
 ```
 
 ### What it reports
 
-- Mean alpha ± 95% CI for each model × dataset × mode combination
-- Block efficiency mean and standard deviation
-- **Statistical tests**: Welch t-test (unequal-variance), Cohen's d effect size, 95% CI on the difference
-- A "winner" row for each pair: does EBE significantly beat KL? (p < 0.05 threshold)
+| Section | Content |
+| -------- | -------- |
+| **Eval Conditions** | dataset, K, L, T, n, train_steps, lr, lora_r, hw_tier, experiment_tag per cell |
+| **Paper Metrics** | α + **best BE (and which verifier)** + GSM8K EM; flags missing alpha rows |
+| **Loss × Verifier matrix** | Full BE table; per-verifier ranking (bv / gbv / traversal) |
+| **Hypothesis checks** | H1 traversal vs specinfer; H2 rev_kl vs kl; H4/H5 when data exists |
+| **Data gaps** | Which losses have BE but no alpha; missing verifier modes |
+| **Training health** | **Val loss only** — does *not* compare train loss across objectives |
+| **Narrative** | α-vs-BE gap interpretation; novelty framing; next experiments |
+| **Recommendations** | Best `(model, verifier)` with full eval conditions |
+
+```bash
+# Filter one session
+python db/analyze_results.py --experiment_tag KrishnanRIITHServer --dataset gsm8k
+
+# Single sections
+python db/analyze_results.py --section metrics
+python db/analyze_results.py --section hypotheses
+python db/analyze_results.py --section gaps
+```
+
+**Removed / deprecated:** cross-objective train-loss "reduction %" table (KL vs JSD vs
+rev_kl scales are incomparable; early grad-step snapshots are noisy). Use W&B val loss
+or `--section training` for within-loss convergence.
+
+A `—` cell means that `(model, verifier)` eval was never saved (partial run or skipped).
+
+### Example interpretation (partial finalization run)
+
+```text
+| Mode      | K | baseline | jsd    | kl     | rev_kl |
+| bv        | 3 |   3.6683 | 4.6960 | 4.4573 | 4.7799 |
+| gbv       | 3 |   3.6229 | 4.4454 | 4.3035 | 4.0980 |
+| traversal | 3 |   3.9605 |      — |      — | 4.9851 |
+
+Recommendations:
+- Best block efficiency: 4.9851 (rev_kl, traversal, K=3, gsm8k_eval)
+```
+
+Read as: **`rev_kl` trained draft + `traversal` verifier** is the current global BE
+winner; **`jsd` peaks under `bv`** (4.70), not `gbv` (4.45). Ranking losses by
+`gbv` alone would under-rank `jsd`.
+
+### Quick snapshot vs full matrix
+
+| Tool | Use when |
+| ------ | -------- |
+| `python db/analyze_results.py` | Choosing best **model + verifier**; paper tables |
+| Per-tag Python snippet (see `deploy/A100_SETUP.md`) | Fast α / BE@gbv / GSM8K EM for one `experiment_tag` |
+| W&B `eval_summary_table` artifact | Per-run pivot after each `evaluate.py` invocation |
+
+`analyze_results.py` scans **all** rows in `results.db` (no `experiment_tag` filter).
+Filter by tag in SQL or a custom script when comparing one session only.
 
 ### When to run it
 
-- After Phase 3 completes (first complete results for kl1000 and ebe1000 on GSM8K)
-- After Phase 4 completes (cross-dataset results)
-- When preparing paper tables
+- After each loss completes Phase 3 eval (incremental ranking)
+- After Phase 4 (cross-dataset robustness section populates)
+- Before Stage 2B / paper confirmation — to pick top losses **and** their best verifiers
 
 ---
 

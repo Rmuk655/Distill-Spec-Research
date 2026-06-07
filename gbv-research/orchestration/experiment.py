@@ -2945,12 +2945,12 @@ def save_state(state):
             print(
                 "\n[FATAL] Disk quota exceeded — cannot write pipeline state.\n"
                 "  Free space under your storage root, then re-run.\n"
-                "  Quick fix on Pluto:\n"
+                "  Quick fix on A100:\n"
                 "    python deploy/reclaim_checkpoint_disk.py \\\n"
-                "      --storage-root /sensei-fs/users/rkrishna/specdist\n"
+                "      --storage-root $HOME/specdist\n"
                 "  Report only:\n"
                 "    python deploy/reclaim_checkpoint_disk.py --report \\\n"
-                "      --storage-root /sensei-fs/users/rkrishna/specdist\n",
+                "      --storage-root $HOME/specdist\n",
                 file=sys.stderr,
             )
         raise
@@ -3828,13 +3828,14 @@ def main():
                      or os.environ.get("SPECDIST_STORAGE_ROOT")
                      or _yaml_cfg.get("storage_root"))
 
-    # Pluto: never use Sensei FS for checkpoints unless explicitly forced.
+    # A100: redirect remote NFS storage roots to gbv-research/db/ unless forced.
     _gbv_db = os.path.join(_GBV_RESEARCH, "db")
+    _a100_repo = os.path.join(os.path.expanduser("~"), "Distill-Spec-Research", "gbv-research")
     if (_storage_root
             and str(_storage_root).replace("\\", "/").startswith("/sensei-fs")
-            and os.path.isdir("/home/colligo/ram")
+            and os.path.isdir(_a100_repo)
             and os.environ.get("SPECDIST_USE_SENSEI", "").strip() not in ("1", "true", "yes")):
-        print(f"  [storage] Ignoring Sensei FS root {_storage_root!r} — "
+        print(f"  [storage] Ignoring remote NFS root {_storage_root!r} — "
               f"using local {_gbv_db}")
         _storage_root = _gbv_db
 
@@ -3842,8 +3843,8 @@ def main():
         os.makedirs(_storage_root, exist_ok=True)
         # All persistent artifacts under the one root
         _effective_ckpt_root = args.ckpt_root or os.path.join(_storage_root, "checkpoints")
-        # SQLite on Sensei FS/Lustre often hits disk I/O errors when quota is tight.
-        # Honour a pre-set SPECDIST_DB_PATH (e.g. local RAM disk on Pluto).
+        # SQLite on local storage/Lustre often hits disk I/O errors when quota is tight.
+        # Honour a pre-set SPECDIST_DB_PATH (e.g. gbv-research/db/ on A100).
         _db_from_env = os.environ.get("SPECDIST_DB_PATH", "").strip()
         _effective_db_path   = _db_from_env or os.path.join(_storage_root, "results.db")
         _effective_logs_dir  = os.path.join(_storage_root, "logs")

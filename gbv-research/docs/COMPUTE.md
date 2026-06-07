@@ -22,7 +22,7 @@ This doc is the **what-to-run-where-and-when** plan. Setup instructions are in t
 
 | Source | Specs | Purpose |
 |---|---|---|
-| **ATS Cloud** (Adobe internal) | 128 GB RAM, 2-socket CPU, no GPU | GPT-2 parallel convergence runs — free, unattended |
+| **ATS Cloud** (internal) | 128 GB RAM, 2-socket CPU, no GPU | GPT-2 parallel convergence runs — free, unattended |
 
 **What runs here:** GPT-2 family only (`server_gpt2` config). Proves that loss objectives converge
 and method beats forward_kl **on a small scale**. Never paper results — 4.3× teacher/student gap

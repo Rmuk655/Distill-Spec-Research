@@ -2,6 +2,7 @@ import torch
 from typing import List
 from specInfer.common import (InputAndCache,
                               OutputAndCache,
+                              cache_seq_len,
                               crop_past_key_values,
                               crop_mqa_past_key_values,
                               crop_past_key_values_seq2seq,
@@ -223,10 +224,7 @@ class SmallModelKVCacheProposer(Proposer):
             # transformers is loaded via different sys.modules paths.
             pkv = proposer_output.past_key_values
             try:
-                if hasattr(pkv, 'key_cache'):
-                    total_generated_len = pkv.key_cache[0].shape[-2] + 1
-                else:
-                    total_generated_len = pkv[0][0].shape[2] + 1
+                total_generated_len = cache_seq_len(pkv) + 1
             except (AttributeError, IndexError, TypeError):
                 total_generated_len = pkv[0][0].shape[2] + 1
             proposer_key_values = crop_func(pkv,

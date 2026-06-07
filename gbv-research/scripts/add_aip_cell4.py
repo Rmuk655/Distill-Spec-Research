@@ -54,10 +54,10 @@ import os, subprocess, sys
 
 # -- Edit these (must match Cell 0) -------------------------------------------
 _LDAP        = os.environ.get("USER", "YOUR_LDAP_HERE")
-SENSEI_ROOT  = f"/sensei-fs-3/users/{_LDAP}"
-REPO_DIR     = f"{SENSEI_ROOT}/Distill-Spec-Research"
+STORAGE_HOME = os.path.expanduser("~")
+REPO_DIR     = f"{STORAGE_HOME}/Distill-Spec-Research"
 GBV_DIR      = f"{REPO_DIR}/gbv-research"
-STORAGE_ROOT = f"{SENSEI_ROOT}/specdist"
+STORAGE_ROOT = f"{GBV_DIR}/db"
 
 # FAMILY: which model pair to train
 #   "gpt2"  — distilgpt2 (82M) → gpt2-medium (355M)  — CPU, no VRAM

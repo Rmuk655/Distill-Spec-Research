@@ -113,7 +113,7 @@ sys.path.insert(0, _HERE)
 #
 # 2. OSD/distill/ (sibling repo fallback) — kept for backward compat.
 #    OSD is the original Online Speculative Decoding codebase (Liu et al. 2023).
-#    Populated by: git clone https://github.com/LiuXiaoxuanPKU/OSD ~/ram/OSD
+#    Populated by: git clone https://github.com/LiuXiaoxuanPKU/OSD ~/OSD
 _BUNDLED_SPECINFER = os.path.join(_PARENT, "algorithms")  # contains specinfer/ package
 _OSD_DIR = os.path.join(os.path.dirname(_PARENT), "OSD")
 sys.path.insert(0, os.path.join(_OSD_DIR, "distill"))     # fallback: sibling OSD repo
@@ -755,8 +755,7 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     # Alpha values are IDENTICAL — inline fallback is ~20% slower only.
     _specinfer_env_disabled = os.environ.get("SPECDIST_DISABLE_SPECINFER", "0") == "1"
     _use_specinfer = _SPECINFER_AVAILABLE and device == "cuda" and not _specinfer_env_disabled
-    if _specinfer_env_disabled and device == "cuda":
-        print("  [alpha] specInfer disabled via SPECDIST_DISABLE_SPECINFER=1 — using inline fallback.")
+    _alpha_via_specinfer = False
     if _use_specinfer:
         generator = _SpecInferGenerator(
             small_model=student_model, large_model=teacher_model,
@@ -766,13 +765,18 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
     else:
         generator = None
         global _SPECINFER_FALLBACK_WARNED
-        if not _SPECINFER_FALLBACK_WARNED:
-            reason = ("running on CPU — specInfer requires CUDA"
-                      if device != "cuda" else
-                      "not found (git submodule update --init --recursive to fix)")
-            print(f"  [alpha] specInfer skipped — {reason}; using inline fallback "
-                  "(warned once per session)")
-            _SPECINFER_FALLBACK_WARNED = True
+        if not _SPECINFER_FALLBACK_WARNED and not _specinfer_env_disabled:
+            if device != "cuda":
+                reason = "running on CPU — specInfer requires CUDA"
+            elif not _SPECINFER_AVAILABLE:
+                reason = ("bundled specInfer import failed — "
+                          "check algorithms/specInfer/ is present")
+            else:
+                reason = None
+            if reason:
+                print(f"  [alpha] specInfer unavailable ({reason}); "
+                      f"using draft-verify fallback (warned once per session)")
+                _SPECINFER_FALLBACK_WARNED = True
 
     for i, item in enumerate(prompts):
         prompt = item["prompt"] if isinstance(item, dict) else item
@@ -801,13 +805,12 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
                 total_tokens += gen_tokens
                 total_time += elapsed
                 alpha = float(output.alpha_sum) / output.sample_steps if output.sample_steps > 0 else 0.0
+                _alpha_via_specinfer = True
             except (AttributeError, TypeError) as _spec_err:
-                # specInfer KV-cache API mismatch (e.g. DynamicCache object is not
-                # subscriptable in newer transformers).  Switch all remaining prompts
-                # to the inline fallback — same alpha values, no crash.
+                # specInfer KV-cache API mismatch — switch remaining prompts to draft-verify.
                 if i == 0:
-                    print(f"  [alpha] specInfer incompatible with this transformers version "
-                          f"({type(_spec_err).__name__}: {_spec_err}); using inline fallback.")
+                    print(f"  [alpha] specInfer error ({type(_spec_err).__name__}: {_spec_err}); "
+                          f"using draft-verify fallback.")
                 _SPECINFER_AVAILABLE = False
                 generator = None
                 _use_specinfer = False   # ← CRITICAL: also update local var so fallback runs
@@ -923,11 +926,8 @@ def run_alpha(student_path: str, teacher_path: str, student_label: str,
         draft_latency_ms=(sum(draft_times)/len(draft_times)*1000) if draft_times else None,
         verify_latency_ms=(sum(verify_times)/len(verify_times)*1000) if verify_times else None,
         per_prompt=per_prompt_rows,
-        # Which acceptance-measurement path produced these alphas.  When specInfer
-        # is incompatible with the installed transformers version, alpha is computed
-        # by the inline draft-propose/target-verify fallback — a DIFFERENT algorithm.
-        # Recorded so alpha rows are never silently misattributed to "true specInfer".
-        alpha_method=("specinfer" if _SPECINFER_AVAILABLE else "inline_fallback"),
+        # Which acceptance-measurement path produced these alphas.
+        alpha_method=("specinfer" if _alpha_via_specinfer else "draft_verify"),
     )
 
 
@@ -1472,8 +1472,7 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         row["notes"] = (f"alpha_method={_amethod}"
                         + (f"; {row['notes']}" if row.get("notes") else ""))
         if _amethod != "specinfer":
-            print(f"  [alpha] measured via {_amethod} (NOT true specInfer) — "
-                  f"tagged in DB notes")
+            print(f"  [alpha] measured via {_amethod} (tagged in DB notes)")
 
         # Task accuracy (GSM8K / HumanEval only)
         if task_score and (_is_gsm8k_scored_dataset(dataset) or dataset == "humaneval"):
@@ -2157,7 +2156,7 @@ def main():
                 _need_vram_wait = (_hw == "laptop")
 
                 # Detect available GPUs for parallel mode execution.
-                # Hard cap at 3: Pluto is a shared machine — don't monopolise more
+                # Hard cap at 3: shared A100 node — don't monopolise more
                 # than 3 GPUs even if more are visible.  Override by setting the
                 # env var SPECDIST_MAX_EVAL_GPUS (e.g. =1 to force serial).
                 _MAX_EVAL_GPUS = int(os.environ.get("SPECDIST_MAX_EVAL_GPUS", "3"))

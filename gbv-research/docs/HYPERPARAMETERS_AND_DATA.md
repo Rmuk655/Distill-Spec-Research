@@ -286,14 +286,14 @@ When `*_merged/config.json` exists, cleanup also removes root LoRA files and
 
 Cleanup is idempotent (marker: `.post_merge_cleanup_done`).
 
-**Disk quota full on Pluto?** Reclaim space across all merged-ready losses:
+**Disk quota full on A100?** Reclaim space across all merged-ready losses:
 
 ```bash
 python deploy/reclaim_checkpoint_disk.py --report \
-  --storage-root /sensei-fs/users/rkrishna/specdist
+  --storage-root $HOME/specdist
 
 python deploy/reclaim_checkpoint_disk.py \
-  --storage-root /sensei-fs/users/rkrishna/specdist
+  --storage-root $HOME/specdist
 ```
 
 Single checkpoint dir:
@@ -315,7 +315,7 @@ When val loss flattens before `steps` completes (e.g. kl_tree best=0.4389 at ste
 2. For more improvement, continue from best weights with fresh optimizer + lower lr:
 
 ```bash
-# On Pluto — seed ckpt_latest from best, drop stale Adam state
+# On A100 — seed ckpt_latest from best, drop stale Adam state
 cp -a checkpoints/kl_tree-.../ckpt_best/. checkpoints/kl_tree-.../ckpt_latest/
 rm checkpoints/kl_tree-.../ckpt_latest/optimizer.pt
 

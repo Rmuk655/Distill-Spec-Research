@@ -14,10 +14,7 @@ including WandB credentials, first smoke test, and dashboard.
 git clone https://github.com/Rmuk655/Distill-Spec-Research.git
 cd Distill-Spec-Research
 
-# Initialize submodules (required for full specInfer alpha eval).
-# Without this, alpha eval uses an inline fallback and logs a warning:
-#   "[alpha] specInfer skipped — not found (git submodule update ...)"
-# The fallback gives correct alpha values but is not the full implementation.
+# Optional: OSD submodule (bundled algorithms/specInfer/ is the primary alpha path).
 git submodule update --init --recursive
 ```
 
@@ -568,7 +565,7 @@ python orchestration/experiment.py --config server \
 
 ## Troubleshooting FAQ
 
-> All issues below were encountered and fixed on AIP/Pluto A100-SXM4-40GB (June 2026).
+> All issues below were encountered and fixed on A100 A100-SXM4-40GB (June 2026).
 
 ---
 
@@ -670,7 +667,7 @@ print(f'Saved {len(prompts)} prompts')
 
 **Fix** (already in codebase): `proposer.py` and `verifier.py` updated to use `cache.key_cache[i]` for `DynamicCache`. Also fixed: the fallback `UnboundLocalError: alpha` when specInfer throws.
 
-**Result**: specInfer now works natively on transformers 5.x. If you see the DynamicCache error, pull latest code.
+**Result**: bundled specInfer supports transformers 5.x `DynamicCache.layers` API. If you see a DynamicCache error, pull latest code.
 
 ---
 
@@ -702,14 +699,10 @@ print(f'Saved {len(prompts)} prompts')
 
 ### Dashboard not accessible from browser
 
-**For AIP/Pluto platform**: Replace the port in your current VS Code URL:
-- Current: `pluto-prod-rkrishna-rama100gpu-1-0:20000.jobs.colligo.dev`
-- Dashboard: `pluto-prod-rkrishna-rama100gpu-1-0:5000.jobs.colligo.dev`
-
 Run the dashboard with `--host 0.0.0.0` and the correct database:
 ```bash
 python dashboard/training_dashboard.py \
-  --root /home/colligo/specdist \
+  --root "$GBV_DIR/db" \
   --host 0.0.0.0 \
   --port 5000
 ```
@@ -728,7 +721,7 @@ ssh -L 5000:localhost:5000 user@server-hostname
 
 **Check results.db first** — data is always saved locally even if W&B fails:
 ```bash
-sqlite3 /home/colligo/specdist/results.db \
+sqlite3 "$GBV_DIR/db/results.db" \
   "SELECT draft_label, mode, block_eff FROM runs ORDER BY ts DESC LIMIT 10;"
 ```
 

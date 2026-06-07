@@ -120,8 +120,8 @@ Legacy / full-pipeline:
                         "(default: all). E.g. 'kl' or 'kl,kl_tree'")
     p.add_argument("--storage_root", default=None,
                    help="Root for checkpoints/, results.db, logs. "
-                        "On Pluto defaults to gbv-research/db/ (local RAM). "
-                        "Sensei FS paths are ignored unless SPECDIST_USE_SENSEI=1.")
+                        "On A100 defaults to gbv-research/db/ (local storage). "
+                        "Remote NFS paths are redirected to local storage unless SPECDIST_USE_SENSEI=1.")
     p.add_argument("--no_smoke",       action="store_true",
                    help="Skip preflight smoke test")
     p.add_argument("--resume",         action="store_true",
@@ -243,44 +243,43 @@ def _is_sensei_path(path: str) -> bool:
     return bool(path) and path.replace("\\", "/").startswith("/sensei-fs")
 
 
-def _pluto_ram_storage() -> str | None:
-    """Default storage on Pluto: local RAM disk under /home/colligo/ram.
+def _a100_local_storage() -> str | None:
+    """Default storage on the IIT Hyderabad A100 server: gbv-research/db/.
 
     Uses gbv-research/db/ so checkpoints land in db/checkpoints/ (same path as
-    training when STORAGE_ROOT was unset).  Sensei FS is NOT used — quota is tight
-    and SQLite checkpoints do not belong on Lustre.
+    training when STORAGE_ROOT was unset).
     """
-    _ram = "/home/colligo/ram"
-    if os.path.isdir(_ram):
+    _home = os.path.expanduser("~")
+    _marker = os.path.join(_home, "Distill-Spec-Research", "gbv-research")
+    if os.path.isdir(_marker):
         return os.path.join(_GBV_DIR, "db")
     return None
 
 
 def _resolve_storage_root(args):
-    """Determine storage root: CLI > STORAGE_ROOT env > Pluto RAM > repo/db/.
+    """Determine storage root: CLI > STORAGE_ROOT env > A100 local > repo/db/.
 
-    On Pluto (/home/colligo/ram present), Sensei FS paths are ignored even when
-    STORAGE_ROOT=/sensei-fs/... is set in the shell — checkpoints, logs, and DB
-    stay on local disk.  Set SPECDIST_USE_SENSEI=1 to force Sensei (not recommended).
+    On the A100 server (repo at ~/Distill-Spec-Research), checkpoints, logs, and DB
+    stay under gbv-research/db/ unless STORAGE_ROOT overrides.
     """
-    _ram_default = _pluto_ram_storage() or os.path.join(_GBV_DIR, "db")
+    _local_default = _a100_local_storage() or os.path.join(_GBV_DIR, "db")
     _force_sensei = os.environ.get("SPECDIST_USE_SENSEI", "").strip() in ("1", "true", "yes")
 
     def _maybe_redirect(path: str, source: str) -> str:
         if _force_sensei or not _is_sensei_path(path):
             return path
-        print(f"[storage] {source} points at Sensei FS ({path}) — "
-              f"using local RAM storage instead: {_ram_default}")
+        print(f"[storage] {source} points at remote NFS ({path}) — "
+              f"using local storage instead: {_local_default}")
         print(f"[storage] (set SPECDIST_USE_SENSEI=1 to override)")
-        return _ram_default
+        return _local_default
 
     if args.storage_root:
         return _maybe_redirect(args.storage_root, "--storage_root")
     env = os.environ.get("STORAGE_ROOT", "")
     if env:
         return _maybe_redirect(env, "STORAGE_ROOT")
-    if _pluto_ram_storage():
-        return _ram_default
+    if _a100_local_storage():
+        return _local_default
     _home_specdist = os.path.join(os.path.expanduser("~"), "specdist")
     if os.access(os.path.expanduser("~"), os.W_OK):
         return _home_specdist
@@ -377,16 +376,15 @@ def main():
     storage_root = _resolve_storage_root(args)
     os.makedirs(storage_root, exist_ok=True)
     print(f"storage : {storage_root}")
-    # results.db lives under storage_root (local on Pluto); override only if set.
+    # results.db lives under storage_root (local on A100); override only if set.
     if not os.environ.get("SPECDIST_DB_PATH", "").strip():
         _db = os.path.join(storage_root, "results.db")
         os.makedirs(os.path.dirname(_db) or ".", exist_ok=True)
         os.environ["SPECDIST_DB_PATH"] = _db
         print(f"results.db: {_db}")
 
-    # HF model cache: honour a pre-set HF_HOME (e.g. local RAM disk on Pluto)
-    # so we do not re-download ~18 GB into Sensei FS when models already live
-    # under ~/ram/specdist/hf_cache.  Checkpoints/DB/logs still use storage_root.
+    # HF model cache: honour a pre-set HF_HOME (e.g. ~/specdist/hf_cache on A100).
+    # Checkpoints/DB/logs still use storage_root.
     _hf_from_env = os.environ.get("HF_HOME", "").strip()
     if _hf_from_env:
         hf_cache = _hf_from_env
@@ -467,22 +465,6 @@ def main():
         except OSError: pass
     if _pyc_count:
         print(f"  [startup] Cleared {_pyc_count} stale .pyc / __pycache__ entries.")
-
-    # ── Pre-launch: disable specInfer if transformers ≥5.x ────────────────
-    # DynamicCache internal state (_seen_tokens etc.) changed in transformers 5.x
-    # making our specInfer KV-cache surgery invalid.  The inline alpha fallback
-    # gives IDENTICAL values at ~20% lower speed.  Disable automatically so the
-    # eval never wastes time attempting a doomed specInfer call.
-    import importlib.util as _ilu
-    try:
-        import transformers as _tf
-        _tf_ver = tuple(int(x) for x in _tf.__version__.split(".")[:2])
-        if _tf_ver >= (5, 0):
-            os.environ.setdefault("SPECDIST_DISABLE_SPECINFER", "1")
-            print(f"  [startup] transformers {_tf.__version__} ≥ 5.x detected — "
-                  f"specInfer disabled (SPECDIST_DISABLE_SPECINFER=1); using inline alpha fallback.")
-    except Exception:
-        pass
 
     print(f"\nLaunching: {' '.join(cmd[-6:])}")
     result = subprocess.run(cmd, cwd=_GBV_DIR)

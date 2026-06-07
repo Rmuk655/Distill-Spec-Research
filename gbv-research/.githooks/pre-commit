@@ -38,9 +38,9 @@ if [ -n "$VIRTUAL_ENV" ] && [ -f "$VIRTUAL_ENV/bin/python" ]; then
     PYTHON="$VIRTUAL_ENV/bin/python"
 fi
 
-# 2. AIP/Pluto server venv
-if [ -z "$PYTHON" ] && [ -f "/home/colligo/specdist/venv/bin/python" ]; then
-    PYTHON="/home/colligo/specdist/venv/bin/python"
+# 2. A100 server venv
+if [ -z "$PYTHON" ] && [ -f "/home/krishnan/specdist/venv/bin/python" ]; then
+    PYTHON="/home/krishnan/specdist/venv/bin/python"
 fi
 
 # 3. System python3 / python
