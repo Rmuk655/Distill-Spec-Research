@@ -189,10 +189,15 @@ def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
     teacher_logits) on the generated portion only.
     """
     with torch.no_grad():
-        # Teacher rollout — argmax for stable training data; could be sampled.
+        # Teacher rollout — argmax (do_sample=False) for stable training data.
+        # Drop `temperature` because it's silently ignored when do_sample=False
+        # (HF warns about it).  Pass an explicit attention_mask of all-ones
+        # because we set pad_token=eos_token, and HF cannot infer the mask
+        # in that case for a single un-padded prompt.
+        attn_mask = torch.ones_like(prompt_ids)
         gen = teacher.generate(
-            prompt_ids, max_new_tokens=max_new_tokens,
-            do_sample=False, temperature=teacher_temp,
+            prompt_ids, attention_mask=attn_mask,
+            max_new_tokens=max_new_tokens, do_sample=False,
             pad_token_id=teacher.config.eos_token_id,
             use_cache=True,
         )
