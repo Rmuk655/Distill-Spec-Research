@@ -65,7 +65,7 @@ See **[A100_SETUP.md](A100_SETUP.md)** for the full workflow. Minimal version:
 
 ```bash
 export WANDB_API_KEY="..."
-export STORAGE_ROOT=~/ram/specdist
+export STORAGE_ROOT=~/specdist
 git clone https://github.com/Rmuk655/Distill-Spec-Research.git
 bash Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 cd Distill-Spec-Research/gbv-research

@@ -22,7 +22,7 @@ This doc is the **what-to-run-where-and-when** plan. Setup instructions are in t
 
 | Source | Specs | Purpose |
 |---|---|---|
-| **ATS Cloud** (Adobe internal) | 128 GB RAM, 2-socket CPU, no GPU | GPT-2 parallel convergence runs — free, unattended |
+| **ATS Cloud** (internal) | 128 GB RAM, 2-socket CPU, no GPU | GPT-2 parallel convergence runs — free, unattended |
 
 **What runs here:** GPT-2 family only (`server_gpt2` config). Proves that loss objectives converge
 and method beats forward_kl **on a small scale**. Never paper results — 4.3× teacher/student gap
@@ -171,6 +171,19 @@ python orchestration/experiment.py --config a100_qwen --yes
 
 The `--losses <name>` flag does: baseline (once) → train → merge → eval for that loss only.
 Running multiple times with different `--losses` builds up results incrementally.
+**Hyperparam / retrain without wiping the whole pipeline:**
+
+```bash
+# New training hyperparams in YAML → new db/checkpoints/.../{hparam_id}/ automatically
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --yes
+
+# Same hyperparams, intentional re-train + merge for selected losses only
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --force_train --yes
+```
+
+Eval-only sweeps (`draft_temp`, eval `K`/`L`): use `--force_eval`. Full wipe: `clean_restart.py` (not routine). See [`HYPERPARAMETERS_AND_DATA.md`](HYPERPARAMETERS_AND_DATA.md) §10.
+
+
 
 ---
 

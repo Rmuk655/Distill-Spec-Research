@@ -97,7 +97,7 @@ checkpointing:
   #   milestone_every: 500  →  4 points  (too sparse — connect-the-dots)
   #   milestone_every: 200  →  10 points (good for paper — smooth, trend clear)
   # Storage cost: each milestone ≈ 1.2 GB (0.6B LoRA weights). 10 milestones = 12 GB/loss.
-  # With 17 losses: 17 × 12 GB = 204 GB. On Pluto/specdist this is acceptable.
+  # With 17 losses: 17 × 12 GB = 204 GB. On A100/specdist this is acceptable.
   # After the convergence sweep (deploy/eval_checkpoints.py), old milestones can be pruned.
   milestone_every: 200
 

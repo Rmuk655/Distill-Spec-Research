@@ -787,9 +787,17 @@ def load_models(args: argparse.Namespace, device: torch.device):
         elif not hasattr(torch, "compile"):
             log.warning("--compile skipped: PyTorch < 2.0")
         else:
-            log.info("Compiling draft model (one-time ~60 s)...")
-            draft_model = torch.compile(draft_model, mode="reduce-overhead")
-            log.info("  Done.")
+            try:
+                log.info("Compiling draft model (one-time ~60 s)...")
+                draft_model = torch.compile(draft_model, mode="reduce-overhead")
+                log.info("  Done.")
+            except Exception as _compile_err:
+                log.warning(
+                    "--compile skipped: %s. "
+                    "On Linux containers install python3-dev (Python.h) or set "
+                    "hardware.compile: false in YAML.",
+                    _compile_err,
+                )
 
     return target_model, draft_model
 

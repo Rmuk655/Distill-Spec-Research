@@ -158,7 +158,7 @@ Four families are registered in `core/model_families/FAMILY_REGISTRY`:
 - `laptop_llama` — LLaMA 1B→3B, GPU, research-grade signal (3× gap, HF gated)
 - `server_gpt2` — GPT-2, CPU-only, ATS Cloud convergence run (no GPU needed)
 
-### ATS Cloud (Adobe internal — CPU only, free)
+### ATS Cloud (internal — CPU only, free)
 - 128 GB RAM, 2-socket CPU, no GPU
 - Use for: parallel GPT-2 training seeds (8 parallel jobs, ~1-2 hr for all losses)
 - NOT for: LLaMA/Qwen training (needs GPU)

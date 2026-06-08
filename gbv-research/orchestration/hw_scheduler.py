@@ -101,7 +101,7 @@ class HWProfile:
 
         CUDA_VISIBLE_DEVICES handling (shared-cluster safety):
         ─────────────────────────────────────────────────────
-        On a shared HPC cluster (AIP/Pluto, SLURM, etc.) the cluster scheduler
+        On a shared HPC cluster (A100, SLURM, etc.) the cluster scheduler
         sets CUDA_VISIBLE_DEVICES to restrict which GPUs the job may use.
         PyTorch respects this: device_count() counts only visible GPUs.
 
@@ -131,7 +131,7 @@ class HWProfile:
         # PyTorch device_count() already respects that.
         # If CUDA_VISIBLE_DEVICES is NOT set on a multi-GPU machine, ALL visible
         # GPUs are used — which is correct if you own them (e.g. interactive
-        # multi-GPU session on Pluto). If you want to restrict manually:
+        # multi-GPU session on A100). If you want to restrict manually:
         #   export CUDA_VISIBLE_DEVICES=0    # only GPU 0
         #   export CUDA_VISIBLE_DEVICES=0,1  # GPUs 0 and 1
         _cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "<not set — using all visible>")
