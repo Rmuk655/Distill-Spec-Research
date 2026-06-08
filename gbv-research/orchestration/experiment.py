@@ -19,13 +19,18 @@ Usage:
     python experiment.py --from STEP_ID         # resume from a specific step
     python experiment.py --dry_run              # print plan without running
     python experiment.py --status               # print current status and exit
+    python experiment.py --losses kl_tree --force_train --yes
+                                                # re-train one loss (wipes only its ckpt)
+    # Change tree_K in YAML → new hparam_id dir under the loss folder; no manual deletion needed
 """
 
 import argparse
 import atexit
+import hashlib
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -429,6 +434,8 @@ def _load_config_yaml(config_name: str) -> dict:
             out["online_early_stop_patience"] = int(online_cfg["early_stop_patience"])
         if online_cfg.get("ebe_block_len") is not None:
             out["online_ebe_block_len"] = int(online_cfg["ebe_block_len"])
+        if online_cfg.get("steps") is not None:
+            out["online_steps"] = int(online_cfg["steps"])
         # tree_training section — hyperparameters for tree-structured distillation losses.
         # Used when --loss is one of {kl_tree, bv_tree, gbv_tree, traversal_tree}.
         # trainer.py accepts --tree_K (number of i.i.d. draft paths) and
@@ -639,7 +646,7 @@ def _adapter_path_from_merge_cmd(step: dict) -> str | None:
 
 
 def _cleanup_after_merge_step(step: dict) -> None:
-    """Drop resume-only checkpoints once the merged model artifact exists."""
+    """Drop training-only checkpoints once the merged model artifact exists."""
     if not step.get("id", "").startswith("merge_"):
         return
     adapter = _adapter_path_from_merge_cmd(step)
@@ -650,7 +657,9 @@ def _cleanup_after_merge_step(step: dict) -> None:
         return
     try:
         from algorithms.distillspec_gbv.trainer import cleanup_training_artifacts
-        cleanup_training_artifacts(adapter)
+        removed = cleanup_training_artifacts(adapter)
+        if removed:
+            print(f"  [cleanup] removed training artifacts: {adapter}")
     except Exception as exc:
         print(f"  [cleanup] warning: could not clean {adapter}: {exc}")
 
@@ -736,6 +745,233 @@ def _run_tag(draft: str, target: str, load_in_4bit: bool) -> str:
     d = _short(draft)
     t = _short(target) + ("nf4" if load_in_4bit else "")
     return f"{d}-{t}"
+
+
+# ── Training hyperparam fingerprint (checkpoint namespace) ─────────────────────
+#
+# Eval-only keys are intentionally excluded from fingerprints — they affect
+# evaluate.py only and must NOT create new checkpoint dirs when swept:
+#   eval_K_values, eval_L, eval_draft_temp, eval_task_batch, eval_modes, …
+#
+# To add a new TRAINING hyperparam tomorrow: append its train_hparams key to the
+# appropriate profile list in _FINGERPRINT_PROFILE_KEYS below.
+#
+# Checkpoint layout (per loss + model-pair tag):
+#   db/checkpoints/{loss}-gsm8k-{pair_tag}/{hparam_id}/           adapter
+#   db/checkpoints/{loss}-gsm8k-{pair_tag}/{hparam_id}/hparams.json
+#   db/checkpoints/{loss}-gsm8k-{pair_tag}/{hparam_id}_merged/    merged weights
+
+_FINGERPRINT_PROFILE_KEYS: dict[str, list[str]] = {
+    # Offline flat losses (kl, ebe, rev_kl, jsd, l1, ebe_single)
+    "offline": [
+        "lr", "lora_r", "teacher_temp", "steps",
+    ],
+    # Offline tree losses — tree_K/tree_L affect trainer.py only
+    "tree": [
+        "lr", "lora_r", "teacher_temp", "steps", "tree_K", "tree_L",
+    ],
+    # Online flat adapt (online_serve.py forward_kl)
+    "online": [
+        "lora_r", "lora_alpha", "online_steps", "online_K", "online_update_every",
+        "online_lr", "max_new_tokens",
+    ],
+    # Online EBE adapt — separate LR / block / early-stop knobs
+    "online_ebe": [
+        "lora_r", "lora_alpha", "online_steps", "online_K", "online_update_every",
+        "online_ebe_lr", "online_ebe_block_len", "online_milestone_every",
+        "online_early_stop_patience", "max_new_tokens",
+    ],
+    # Online tree adapt — online_adapt.K plus tree_training tree_K/tree_L
+    "online_tree": [
+        "lora_r", "lora_alpha", "online_steps", "online_K", "online_update_every",
+        "online_lr", "tree_K", "tree_L", "max_new_tokens",
+    ],
+}
+
+_FINGERPRINT_DEFAULTS: dict[str, object] = {
+    "tree_K":                      4,
+    "tree_L":                      8,
+    "lr":                          3e-5,
+    "lora_r":                      8,
+    "lora_alpha":                  16,
+    "teacher_temp":                0.8,
+    "online_K":                    4,
+    "online_update_every":         4,
+    "online_lr":                   3e-4,
+    "online_ebe_lr":               1e-4,
+    "online_ebe_block_len":        4,
+    "online_milestone_every":      50,
+    "online_early_stop_patience":  3,
+    "max_new_tokens":              64,
+}
+
+# Loss dirs that keep the legacy flat layout (no hparam_id nesting).
+_HPARAM_NEST_EXEMPT: frozenset[str] = frozenset({"eagle-head"})
+
+
+def _ckpt_profile_for(loss_dir_name: str) -> str:
+    """Map a loss checkpoint base name to a fingerprint profile."""
+    if "online" in loss_dir_name:
+        if "tree" in loss_dir_name:
+            return "online_tree"
+        if "ebe" in loss_dir_name:
+            return "online_ebe"
+        return "online"
+    if "_tree" in loss_dir_name:
+        return "tree"
+    return "offline"
+
+
+def _training_fingerprint(
+    h: dict,
+    profile: str,
+    *,
+    effective_steps: int,
+    online_steps: int,
+    online_max_tok: int,
+) -> tuple[str, dict]:
+    """Return ``(hparam_id, canonical_dict)`` for a training profile.
+
+    *hparam_id* is the first 8 hex chars of SHA-256 over canonical JSON.
+    """
+    keys = _FINGERPRINT_PROFILE_KEYS[profile]
+    canonical: dict[str, object] = {"profile": profile}
+    for key in keys:
+        if key == "steps":
+            canonical[key] = effective_steps
+        elif key == "online_steps":
+            canonical[key] = online_steps
+        elif key == "max_new_tokens":
+            canonical[key] = online_max_tok
+        else:
+            canonical[key] = h.get(key, _FINGERPRINT_DEFAULTS.get(key))
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    hparam_id = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    return hparam_id, canonical
+
+
+def _build_fingerprint_ids(
+    h: dict,
+    *,
+    effective_steps: int,
+    online_steps: int,
+    online_max_tok: int,
+) -> dict[str, str]:
+    """Pre-compute hparam_id for every profile used in build_steps()."""
+    return {
+        profile: _training_fingerprint(
+            h, profile,
+            effective_steps=effective_steps,
+            online_steps=online_steps,
+            online_max_tok=online_max_tok,
+        )[0]
+        for profile in _FINGERPRINT_PROFILE_KEYS
+    }
+
+
+def _training_hparam_suffix(h: dict, *, effective_steps: int) -> str:
+    """Legacy helper — returns ``/{hparam_id}`` for offline flat-loss fingerprint."""
+    hparam_id, _ = _training_fingerprint(
+        h, "offline", effective_steps=effective_steps,
+        online_steps=500, online_max_tok=64,
+    )
+    return f"/{hparam_id}"
+
+
+def _attach_hparam_sidecars(steps: list[dict], h: dict, *,
+                            effective_steps: int, online_steps: int,
+                            online_max_tok: int) -> None:
+    """Annotate train/adapt steps with canonical hparams for hparams.json sidecars."""
+    for step in steps:
+        sid = step.get("id", "")
+        if not (sid.startswith("train_") or (sid.startswith("online_") and "adapt" in sid)):
+            continue
+        cmd = step.get("cmd", [])
+        if "--output" not in cmd:
+            continue
+        out_dir = cmd[cmd.index("--output") + 1]
+        loss_base = os.path.basename(os.path.dirname(out_dir))
+        if loss_base in _HPARAM_NEST_EXEMPT:
+            continue
+        profile = _ckpt_profile_for(loss_base)
+        _, canonical = _training_fingerprint(
+            h, profile,
+            effective_steps=effective_steps,
+            online_steps=online_steps,
+            online_max_tok=online_max_tok,
+        )
+        step["_hparam_sidecar"] = canonical
+
+
+def _write_hparams_sidecar(step: dict) -> None:
+    """Write ``hparams.json`` beside a training checkpoint before the subprocess runs."""
+    canonical = step.get("_hparam_sidecar")
+    if not canonical:
+        return
+    cmd = step.get("cmd", [])
+    if "--output" not in cmd:
+        return
+    out_dir = cmd[cmd.index("--output") + 1]
+    os.makedirs(out_dir, exist_ok=True)
+    meta_path = os.path.join(out_dir, "hparams.json")
+    if os.path.exists(meta_path):
+        return
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(canonical, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def _step_owning_loss(sid: str) -> str | None:
+    """Loss that owns this step ID (longest matching prefix in _LOSS_STEP_PREFIXES)."""
+    best_name, best_len = None, -1
+    for name, prefixes in _LOSS_STEP_PREFIXES.items():
+        for pfx in prefixes:
+            if sid.startswith(pfx) and len(pfx) > best_len:
+                best_name, best_len = name, len(pfx)
+    return best_name
+
+
+def _is_train_or_merge_step(sid: str) -> bool:
+    return (
+        sid.startswith("train_")
+        or sid.startswith("merge_")
+        or (sid.startswith("online_") and "adapt" in sid)
+    )
+
+
+def _force_train_loss_set(force_train: bool, losses_to_run: list | None) -> set[str]:
+    if not force_train:
+        return set()
+    return set(losses_to_run) if losses_to_run else set(ALL_LOSSES)
+
+
+def _should_force_train_step(sid: str, force_losses: set[str]) -> bool:
+    if not force_losses or not _is_train_or_merge_step(sid):
+        return False
+    owner = _step_owning_loss(sid)
+    return owner in force_losses if owner else False
+
+
+def _wipe_force_train_artifacts(step: dict) -> None:
+    """Remove checkpoint / merged dirs before a --force_train re-run."""
+    sid = step.get("id", "")
+    cmd = step.get("cmd", [])
+    if sid.startswith("train_") or ("adapt" in sid and sid.startswith("online_")):
+        if "--output" not in cmd:
+            return
+        out_dir = cmd[cmd.index("--output") + 1]
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir, ignore_errors=True)
+            print(f"  [force_train] removed training checkpoint: {out_dir}")
+        return
+    if sid.startswith("merge_"):
+        dc = step.get("done_check")
+        if not dc:
+            return
+        merged_dir = os.path.dirname(dc)
+        if os.path.isdir(merged_dir):
+            shutil.rmtree(merged_dir, ignore_errors=True)
+            print(f"  [force_train] removed merged model: {merged_dir}")
 
 
 def _auto_download_models(*model_ids: str) -> None:
@@ -1383,6 +1619,10 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # hardware.compile: true (server/A100 Linux).  Both scripts skip compile
     # automatically on Windows and PyTorch < 2.0 so this is always safe to pass.
     _compile_flag = ["--compile"] if _h.get("compile") else []
+    # online_serve: do not pass --compile.  torch.compile triggers Triton CUDA
+    # kernel builds on the first forward (baseline alpha); containers without
+    # python3-dev (Python.h) spam fatal errors and hang indefinitely.
+    _online_compile_flag: list = []
 
     # Tree-loss extra args — only appended to tree-loss training commands.
     # tree_K: number of i.i.d. draft paths sampled per training step.
@@ -1398,7 +1638,9 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
     # of whatever training.steps is set in the tier's YAML.
     if _h.get("train_steps") is not None and not smoke:
         _steps = _h["train_steps"]
-        _online_steps = _h["train_steps"]
+    # Online adapt uses served-prompt count, NOT offline gradient steps.
+    if _h.get("online_steps") is not None and not smoke:
+        _online_steps = _h["online_steps"]
 
     # ── Checkpoint directory resolver ─────────────────────────────────────────
     # --ckpt_root overrides the default gbv-research/db/checkpoints/ location.
@@ -1465,6 +1707,39 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
         _base_merged = _merged
         _ckpt   = lambda n, _t=_pair_tag: _base_ckpt(f"{n}-{_t}")      # noqa: E731
         _merged = lambda n, _t=_pair_tag: _base_merged(f"{n}-{_t}")    # noqa: E731
+
+    # Training-hyperparam checkpoint namespace: nested hparam_id dir per profile.
+    #   kl-gsm8k-q0.6b-q8b/{hparam_id}/          adapter
+    #   kl-gsm8k-q0.6b-q8b/{hparam_id}_merged/   merged model
+    # Full hyperparams live in {hparam_id}/hparams.json (written at train time).
+    _fingerprint_ids = _build_fingerprint_ids(
+        _h,
+        effective_steps=_steps,
+        online_steps=_online_steps,
+        online_max_tok=_online_max_tok,
+    )
+    _base_ckpt2 = _ckpt
+
+    def _ckpt(n, _ids=_fingerprint_ids, _f=_base_ckpt2):               # noqa: E731
+        base = _f(n)
+        if n in _HPARAM_NEST_EXEMPT:
+            return base
+        hparam_id = _ids[_ckpt_profile_for(n)]
+        return os.path.join(base, hparam_id)
+
+    def _merged(n, _ids=_fingerprint_ids, _f=_base_ckpt2):              # noqa: E731
+        base = _f(n)
+        if n in _HPARAM_NEST_EXEMPT:
+            return base + "_merged"
+        hparam_id = _ids[_ckpt_profile_for(n)]
+        return os.path.join(base, hparam_id + "_merged")
+
+    _offline_id = _fingerprint_ids["offline"]
+    _tree_id = _fingerprint_ids["tree"]
+    print(
+        f"  [pipeline] Checkpoint hparam_id offline={_offline_id} tree={_tree_id} "
+        f"(nested under each loss dir; see hparams.json)"
+    )
 
     # Labels that use online_steps (smaller budget, online distillation).
     _ONLINE_LABELS = {"online", "online_ebe", "online_ebe_single"}
@@ -1799,7 +2074,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 # _online_max_tok: 30 smoke / YAML value full run (laptop=80, server=128, colab=64)
                 "--max_new_tokens", str(_online_max_tok),
                 *_online_hargs,   # --lora_r, --lora_alpha — must match offline training runs
-            ] + _4bit + _compile_flag,
+            ] + _4bit + _online_compile_flag,
             "done_check": os.path.join(_ckpt("online-gsm8k"), "adapter_config.json"),
             "retryable": True,
         },
@@ -1849,7 +2124,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 # (eval_every=50 steps by default), stop and keep ckpt_latest as-is.
                 "--early_stop_patience", str(_online_early_stop),
                 *_online_hargs,   # --lora_r, --lora_alpha — must match offline training runs
-            ] + _4bit + _compile_flag,
+            ] + _4bit + _online_compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-gsm8k"), "adapter_config.json"),
             "retryable": True,
         },
@@ -1885,7 +2160,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--milestone_every", str(_online_milestone),
                 "--early_stop_patience", str(_online_early_stop),
                 *_online_hargs,
-            ] + _4bit + _compile_flag,
+            ] + _4bit + _online_compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-single-gsm8k"), "adapter_config.json"),
             "retryable": True,
         },
@@ -2265,7 +2540,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--lr", str(_h.get("online_lr", 3e-4)),
                 "--max_new_tokens", str(_online_max_tok),
                 *_online_hargs,
-            ] + _4bit + _compile_flag,
+            ] + _4bit + _online_compile_flag,
             "done_check": os.path.join(_ckpt("online-kl-tree-gsm8k"), "adapter_config.json"),
             "retryable": True,
         },
@@ -2295,7 +2570,7 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
                 "--lr", str(_h.get("online_lr", 3e-4)),
                 "--max_new_tokens", str(_online_max_tok),
                 *_online_hargs,
-            ] + _4bit + _compile_flag,
+            ] + _4bit + _online_compile_flag,
             "done_check": os.path.join(_ckpt("online-ebe-tree-gsm8k"), "adapter_config.json"),
             "retryable": True,
         },
@@ -2913,6 +3188,13 @@ def build_steps(draft, target, experiment_tag=None, smoke=False, eagle=False,
             s for s in _steps_list
             if not _is_loss_step(s["id"]) or _loss_selected(s["id"])
         ]
+
+    _attach_hparam_sidecars(
+        _steps_list, _h,
+        effective_steps=_steps,
+        online_steps=_online_steps,
+        online_max_tok=_online_max_tok,
+    )
     return _steps_list
 
 # ---------------------------------------------------------------------------
@@ -2997,15 +3279,20 @@ def step_status(step, state):
     Returns 'done' / 'pending' / 'failed' / 'running'.
     done_check file takes priority: if the output artifact exists, always 'done'.
     Also checks OSD/checkpoints/ as a fallback for legacy artifacts.
+    When done_check is set but the artifact is missing, stale state['done'] is
+    ignored so hyperparam path changes (checkpoint suffix) can re-run train.
     """
     dc = step.get("done_check")
-    if dc and os.path.exists(dc):
-        return "done"
-    # Check OSD legacy checkpoints as fallback
     if dc:
+        if os.path.exists(dc):
+            return "done"
         osd_dc = _osd_equivalent(dc)
         if osd_dc and os.path.exists(osd_dc):
             return "done"
+        recorded = state["steps"].get(step["id"], {}).get("status", "pending")
+        if recorded == "done":
+            return "pending"
+        return recorded
     recorded = state["steps"].get(step["id"], {}).get("status", "pending")
     return recorded
 
@@ -3332,6 +3619,8 @@ def run_step(step, state, dry_run=False):
     mark_step(state, sid, "running")
     t0 = time.time()
 
+    _write_hparams_sidecar(step)
+
     env = os.environ.copy()
     # PYTHONPATH: ensure gbv-research/ is importable from every subprocess.
     # trainer.py does `from core.model_families import ...` and
@@ -3599,6 +3888,12 @@ def main():
                         "With --resume: still skips done train/merge steps, but "
                         "re-runs eval steps and all cells.  Combine with --losses kl "
                         "to re-eval only one loss.")
+    p.add_argument("--force_train", action="store_true",
+                   help="Force re-training: re-run train + merge for the selected "
+                        "--losses (or all losses if --losses omitted).  Wipes only "
+                        "that loss's suffix-aware checkpoint/merged dirs first — "
+                        "other losses are untouched.  Changing training hyperparams "
+                        "in YAML already writes to a new suffixed dir automatically.")
     p.add_argument("--no_smoke_first", action="store_true",
                    help="Skip the automatic 2-prompt preflight smoke check that normally "
                         "runs before the first eval step on laptop config.  Use this if "
@@ -4438,6 +4733,9 @@ def main():
     # AND the group has more than one runnable step AND we are not in dry_run.
     _PARALLEL_GROUPS = {1, 3}   # training=1  post-train-eval=3
 
+    _force_train_losses = _force_train_loss_set(
+        getattr(args, "force_train", False), _losses_to_run)
+
     n_run = 0
     for _gid in sorted(_by_group.keys()):
         _group_steps = _by_group[_gid]
@@ -4456,6 +4754,10 @@ def main():
                     # This makes smoke immune to OneDrive state-file races AND
                     # ensures every code path is exercised regardless of prior runs.
                     pass
+                elif _should_force_train_step(sid, _force_train_losses):
+                    print(f"  [force_train] [{sid}] re-running train/merge step")
+                    _wipe_force_train_artifacts(step)
+                    mark_step(state, sid, "pending", "force_train")
                 elif getattr(args, "force_eval", False) and sid.startswith("eval_"):
                     # --force: re-run eval pipeline steps even on resume; train/merge
                     # steps marked done are still skipped.

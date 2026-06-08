@@ -143,6 +143,33 @@ Total val overhead ≈ 50 min over 4000 steps (acceptable vs ~27 min flat traini
 | Eval `K` | 3 | Verifier block size at eval (matches paper convention) |
 | Eval `L` | 8 | Max draft length per verification round |
 
+
+### 2.6 Training vs eval hyperparams (checkpoint namespace)
+
+**Training** knobs live under `training:` in YAML (`lr`, `steps`, `lora_r`, `teacher_temperature`, `tree_K`, `tree_L`, …). They flow into `train_hparams` and affect **trainer.py** only.
+
+**Eval-only** knobs live under `evaluation:` (`K_values`, `L`, `draft_temp`, `teacher_temps`, `task_batch`, `modes`, …). They flow into **evaluate.py** only. Changing them does **not** create a new checkpoint directory or require retraining.
+
+| Knob | YAML section | Affects training? | Affects eval? |
+|------|--------------|-------------------|---------------|
+| `tree_K`, `tree_L` | `training` | Yes (draft tree in trainer) | No |
+| `K_values`, `L` | `evaluation` | No | Yes (verifier block size / draft depth at eval) |
+| `draft_temp`, `teacher_temps` | `evaluation` | No | Yes (proposal vs verification temperature at BE) |
+| `task_batch` | `evaluation` | No | Yes (parallel prompts for **task_score** only) |
+| `teacher_temperature` | `training` | Yes (distillation softmax) | No (not the same as eval `teacher_temps`) |
+
+**Checkpoint layout** (default; under `$STORAGE_ROOT` or repo `db/`):
+
+```
+db/checkpoints/{loss}-gsm8k-{pair_tag}/{hparam_id}/           # LoRA adapter + resume ckpts
+db/checkpoints/{loss}-gsm8k-{pair_tag}/{hparam_id}/hparams.json
+db/checkpoints/{loss}-gsm8k-{pair_tag}/{hparam_id}_merged/    # merged weights for eval
+```
+
+`{hparam_id}` is the first 8 hex chars of a SHA-256 over canonical training hyperparams (`orchestration/experiment.py`, `_FINGERPRINT_PROFILE_KEYS`). **Edit training YAML → new fingerprint → new `{hparam_id}` subdirectory automatically.** Old runs stay on disk; pipeline state may still mark prior steps "done" until you use `--force_train` or `--from` on the train step.
+
+**Add a new training hyperparam to the fingerprint:** append its `train_hparams` key to the right profile list in `_FINGERPRINT_PROFILE_KEYS` (`offline`, `tree`, `online`, …) and add a default in `_FINGERPRINT_DEFAULTS` if needed. Eval-only keys must **not** be added (see comment block above `_FINGERPRINT_PROFILE_KEYS` in `experiment.py`).
+
 ### 2.5 Checkpointing
 
 | Parameter | Default | Rationale |
@@ -379,6 +406,46 @@ python deploy/aip_run.py --loss kl --eval --force_eval --experiment_tag reeval_v
 # Dry-run pipeline step list
 python orchestration/experiment.py --config a100_qwen --dry_run --losses kl,rev_kl
 ```
+
+---
+
+
+## 10. Pipeline: hyperparam sweeps and retraining
+
+All commands assume `python orchestration/experiment.py --config a100_qwen --yes` (add `--storage_root` on A100/Kaggle if not using repo `db/`).
+
+### Flag cheat sheet
+
+| Flag / tool | What it does |
+|-------------|--------------|
+| **(default resume)** | Skips steps marked done in `pipeline_state_*.json`; eval cells use `--skip_existing` in DB |
+| **`--force` / `--force_eval`** | Re-runs **eval** pipeline steps; passes `--force` to `evaluate.py` (new DB rows, old rows kept). Train/merge still skipped unless combined with `--force_train` |
+| **`--force_train`** | Re-runs **train + merge** for `--losses` (or all losses if omitted). Wipes that loss's current `--output` / merged dirs only, then marks those steps pending |
+| **`--restart`** | Clears pipeline **state** and starts from step 1 (does not delete checkpoints/DB by itself) |
+| **`clean_restart.py`** | Wipes `db/` outputs + resets state for one config — **destructive**; use only for a full reset |
+
+Use **`--force_train`** when YAML hyperparams are unchanged but you want a fresh train (bad run, corrupted ckpt). Use **YAML changes** when sweeping `tree_K`, `lr`, etc. — no manual dir deletion.
+
+### Example commands
+
+```bash
+# tree_K sweep: edit training.tree_K in YAML, then run (new hparam_id dir each value)
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --yes
+
+# Re-train same hyperparams (e.g. after crash mid-merge)
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --force_train --yes
+
+# New LR in YAML targets new dir; force_train only if you need to overwrite THAT dir
+python orchestration/experiment.py --config a100_qwen --losses bv_tree --force_train --yes
+
+# Eval-only sweep (draft_temp, K, L) — no retrain
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --force_eval --yes
+
+# Full config wipe + restart (not for routine hyperparam work)
+python orchestration/clean_restart.py --config a100_qwen
+```
+
+Post-merge cleanup (automatic after each merge): resume artifacts (`ckpt_step_*`, `ckpt_latest`, `optimizer.pt`, often `ckpt_best*`) removed; **`*_merged/` kept** for eval. See §4.
 
 ---
 

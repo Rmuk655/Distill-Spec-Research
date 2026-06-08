@@ -958,8 +958,12 @@ def run_be(student_path: str, teacher_path: str,
         result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                                 errors="replace", timeout=1800, cwd=_PARENT, env=_sub_env)
         out = result.stdout + result.stderr
-        m = re.search(r"Block efficiency[^:]*:\s*([\d.]+)", out)
-        if not m:
+        parsed = _parse_be_results_from_output(out)
+        combo = next(
+            (entry for (m, k, _t), entry in parsed.items() if m == mode and k == K),
+            next(iter(parsed.values())) if len(parsed) == 1 else None,
+        )
+        if not combo:
             oom = "out of memory" in out.lower() or "outofmemory" in out.lower()
             if oom and _device == "cuda":
                 print(f"    [OOM] GBV subprocess ran out of GPU memory — retrying on CPU (slower)")
@@ -972,7 +976,7 @@ def run_be(student_path: str, teacher_path: str,
                   f"(rc={result.returncode}, mode={mode}, K={K}, device={_device}):\n"
                   f"    {err_preview}")
             return None
-        return {"block_eff": float(m.group(1))}
+        return combo
     except subprocess.TimeoutExpired:
         print(f"    [TIMEOUT] GBV subprocess timed out after 30 min "
               f"(mode={mode}, K={K}). Consider reducing --n or --max_tokens.")
@@ -1161,6 +1165,8 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                 # be saved to the DB; on restart --skip_existing will skip them so only
                 # the unfinished combos re-run.
             _tee_thread.join(timeout=10)  # drain any last lines before closing the log
+            if _persist_ctx is not None:
+                _flush_pending_be(_persist_ctx)
 
         # Read back the log for parsing (now the process has exited or been killed)
         with open(_be_log, encoding="utf-8", errors="replace") as f:
@@ -1178,12 +1184,9 @@ def run_be_batch(student_path: str, teacher_path: str, data_path: str,
                                     load_in_4bit=load_in_4bit,
                                     _persist_ctx=_persist_ctx)
 
-        # Parse tagged output: "Block efficiency (mode=gbv, K=3, T=1.0): 2.345678"
-        # Works on partial output — only fully-printed lines are matched.
-        results: dict = {}
-        for m in re.finditer(
-                r"Block efficiency \(mode=(\w+), K=(\d+), T=([\d.]+)\):\s*([\d.]+)", out):
-            results[(m.group(1), int(m.group(2)), float(m.group(3)))] = float(m.group(4))
+        # Parse tagged runner.py output (BE + throughput + cost metrics).
+        # Works on partial output — only fully-printed combo blocks are matched.
+        results: dict = _parse_be_results_from_output(out)
 
         if _timed_out:
             if results:
@@ -1301,6 +1304,58 @@ def _already_run(student_label: str, dataset: str, mode: str, K: int, temperatur
 _BE_LINE_RE = re.compile(
     r"Block efficiency \(mode=(\w+), K=(\d+), T=([\d.]+)\):\s*([\d.]+)"
 )
+_THROUGHPUT_RE = re.compile(r"Throughput \(tokens / second\):\s*([\d.]+)")
+_WALLTIME_RE = re.compile(r"Walltime \(ms / token\):\s*([\d.]+)")
+_TIME_BREAKDOWN_RE = re.compile(
+    r"Time breakdown draft/target \(%\):\s*([\d.]+)\s*/\s*([\d.]+)"
+)
+_AVG_TREE_NODES_RE = re.compile(r"Avg tree nodes per target call:\s*([\d.]+)")
+_PEAK_KV_RE = re.compile(r"Peak KV target/draft \(MB\):\s*([\d.]+)\s*/\s*([\d.]+)")
+
+
+def _enrich_be_combo_from_lines(entry: dict, lines: list[str]) -> None:
+    """Fill optional cost metrics from the lines following a BE header."""
+    for line in lines:
+        m = _THROUGHPUT_RE.search(line)
+        if m:
+            entry["throughput"] = float(m.group(1))
+            continue
+        m = _WALLTIME_RE.search(line)
+        if m:
+            entry["ms_per_tok"] = float(m.group(1))
+            continue
+        m = _TIME_BREAKDOWN_RE.search(line)
+        if m:
+            entry["draft_time_pct"] = float(m.group(1))
+            entry["target_time_pct"] = float(m.group(2))
+            continue
+        m = _AVG_TREE_NODES_RE.search(line)
+        if m:
+            entry["avg_tree_nodes"] = float(m.group(1))
+            continue
+        m = _PEAK_KV_RE.search(line)
+        if m:
+            entry["peak_kv_target_mb"] = float(m.group(1))
+            entry["peak_kv_draft_mb"] = float(m.group(2))
+
+
+def _parse_be_results_from_output(out: str) -> dict:
+    """Parse all (mode, K, T) combo blocks from runner.py stdout.
+
+    Returns {(mode, K, temp): {block_eff, throughput, ...}}.
+    """
+    results: dict = {}
+    lines = out.splitlines()
+    i = 0
+    while i < len(lines):
+        m = _BE_LINE_RE.search(lines[i])
+        if m:
+            key = (m.group(1), int(m.group(2)), float(m.group(3)))
+            entry = {"block_eff": float(m.group(4))}
+            _enrich_be_combo_from_lines(entry, lines[i + 1:i + 6])
+            results[key] = entry
+        i += 1
+    return results
 
 
 def _wandb_log_eval_result(row: dict) -> None:
@@ -1314,6 +1369,16 @@ def _wandb_log_eval_result(row: dict) -> None:
         K    = row.get("K", 1)
         if row.get("block_eff") is not None:
             _wmod.summary[f"BE/{ds}/{mode}/K{K}"] = round(float(row["block_eff"]), 4)
+        if row.get("throughput") is not None:
+            _wmod.summary[f"throughput/{ds}/{mode}/K{K}"] = round(float(row["throughput"]), 2)
+        if row.get("ms_per_tok") is not None:
+            _wmod.summary[f"ms_per_tok/{ds}/{mode}/K{K}"] = round(float(row["ms_per_tok"]), 2)
+        if row.get("avg_tree_nodes") is not None:
+            _wmod.summary[f"avg_tree_nodes/{ds}/{mode}/K{K}"] = round(float(row["avg_tree_nodes"]), 2)
+        if row.get("draft_time_pct") is not None:
+            _wmod.summary[f"draft_time_pct/{ds}/{mode}/K{K}"] = round(float(row["draft_time_pct"]), 1)
+        if row.get("target_time_pct") is not None:
+            _wmod.summary[f"target_time_pct/{ds}/{mode}/K{K}"] = round(float(row["target_time_pct"]), 1)
         if row.get("alpha_mean") is not None:
             _wmod.summary[f"alpha/{ds}"] = round(float(row["alpha_mean"]), 4)
         if row.get("task_score") is not None:
@@ -1342,6 +1407,13 @@ def _persist_be_combo(
     hw_tier: str | None = None,
     results_out: list | None = None,
     saved_keys: set | None = None,
+    throughput: float | None = None,
+    ms_per_tok: float | None = None,
+    avg_tree_nodes: float | None = None,
+    draft_time_pct: float | None = None,
+    target_time_pct: float | None = None,
+    peak_kv_target_mb: float | None = None,
+    peak_kv_draft_mb: float | None = None,
 ) -> dict | None:
     """Insert one BE cell to DB + W&B immediately.  Idempotent per (ds,mode,K,T)."""
     key = (dataset, mode, K, round(float(temperature), 4))
@@ -1370,26 +1442,42 @@ def _persist_be_combo(
         block_eff=float(block_eff),
         experiment_tag=experiment_tag,
     )
+    for _col, _val in (
+        ("throughput", throughput),
+        ("ms_per_tok", ms_per_tok),
+        ("avg_tree_nodes", avg_tree_nodes),
+        ("draft_time_pct", draft_time_pct),
+        ("target_time_pct", target_time_pct),
+        ("peak_kv_target_mb", peak_kv_target_mb),
+        ("peak_kv_draft_mb", peak_kv_draft_mb),
+    ):
+        if _val is not None:
+            row[_col] = float(_val)
     run_id = results_db.insert_run(row, hw_tier=hw_tier)
     row["id"] = run_id
-    print(f"    [{run_tag}] block_eff={block_eff:.4f}  -> DB", flush=True)
+    _extra = ""
+    if throughput is not None:
+        _extra = f"  {throughput:.1f} tok/s"
+    if ms_per_tok is not None:
+        _extra += f"  {ms_per_tok:.1f} ms/tok"
+    print(f"    [{run_tag}] block_eff={block_eff:.4f}{_extra}  -> DB", flush=True)
     _wandb_log_eval_result(row)
     if results_out is not None:
         results_out.append(row)
     return row
 
 
-def _try_persist_be_line(line: str, ctx: dict) -> None:
-    """Parse a streamed runner.py log line and persist BE result if present."""
-    m = _BE_LINE_RE.search(line)
-    if not m:
+def _flush_pending_be(ctx: dict) -> None:
+    """Persist the in-flight BE combo once all runner.py metric lines arrived."""
+    pending = ctx.pop("_pending_be", None)
+    if not pending or pending.get("block_eff") is None:
         return
     _persist_be_combo(
         dataset=ctx["dataset"],
-        mode=m.group(1),
-        K=int(m.group(2)),
-        temperature=float(m.group(3)),
-        block_eff=float(m.group(4)),
+        mode=pending["mode"],
+        K=pending["K"],
+        temperature=pending["temperature"],
+        block_eff=pending["block_eff"],
         student_label=ctx["student_label"],
         student_path=ctx["student_path"],
         teacher_path=ctx["teacher_path"],
@@ -1401,7 +1489,55 @@ def _try_persist_be_line(line: str, ctx: dict) -> None:
         hw_tier=ctx.get("hw_tier"),
         results_out=ctx.get("results_out"),
         saved_keys=ctx.get("saved_keys"),
+        throughput=pending.get("throughput"),
+        ms_per_tok=pending.get("ms_per_tok"),
+        avg_tree_nodes=pending.get("avg_tree_nodes"),
+        draft_time_pct=pending.get("draft_time_pct"),
+        target_time_pct=pending.get("target_time_pct"),
+        peak_kv_target_mb=pending.get("peak_kv_target_mb"),
+        peak_kv_draft_mb=pending.get("peak_kv_draft_mb"),
     )
+
+
+def _try_persist_be_line(line: str, ctx: dict) -> None:
+    """Parse a streamed runner.py log line; flush one DB row per combo."""
+    m = _BE_LINE_RE.search(line)
+    if m:
+        _flush_pending_be(ctx)
+        ctx["_pending_be"] = {
+            "mode": m.group(1),
+            "K": int(m.group(2)),
+            "temperature": float(m.group(3)),
+            "block_eff": float(m.group(4)),
+        }
+        return
+
+    pending = ctx.get("_pending_be")
+    if not pending:
+        return
+
+    m = _THROUGHPUT_RE.search(line)
+    if m:
+        pending["throughput"] = float(m.group(1))
+        return
+    m = _WALLTIME_RE.search(line)
+    if m:
+        pending["ms_per_tok"] = float(m.group(1))
+        return
+    m = _TIME_BREAKDOWN_RE.search(line)
+    if m:
+        pending["draft_time_pct"] = float(m.group(1))
+        pending["target_time_pct"] = float(m.group(2))
+        return
+    m = _AVG_TREE_NODES_RE.search(line)
+    if m:
+        pending["avg_tree_nodes"] = float(m.group(1))
+        return
+    m = _PEAK_KV_RE.search(line)
+    if m:
+        pending["peak_kv_target_mb"] = float(m.group(1))
+        pending["peak_kv_draft_mb"] = float(m.group(2))
+        _flush_pending_be(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -1544,8 +1680,16 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         if res is None:
             return {}
         row = {**base_row, "block_eff": res["block_eff"]}
-        print(f"  block_eff={res['block_eff']:.4f}")
+        for _col in ("throughput", "ms_per_tok", "avg_tree_nodes",
+                     "draft_time_pct", "target_time_pct",
+                     "peak_kv_target_mb", "peak_kv_draft_mb"):
+            if res.get(_col) is not None:
+                row[_col] = res[_col]
+        _tp = f"  {res['throughput']:.1f} tok/s" if res.get("throughput") else ""
+        _ms = f"  {res['ms_per_tok']:.1f} ms/tok" if res.get("ms_per_tok") else ""
+        print(f"  block_eff={res['block_eff']:.4f}{_tp}{_ms}")
         run_id = results_db.insert_run(row, hw_tier=args.hw_tier)
+        row["id"] = run_id
         _wandb_log_eval_result(row)
 
     row["id"] = run_id
@@ -2128,7 +2272,7 @@ def main():
                     _persist_ctx=_pctx,
                 )
                 for (m, k, t), be in batch_res.items():
-                    _be_cache[(ds, m, k, t)] = be
+                    _be_cache[(ds, m, k, t)] = be  # full metrics dict
             else:
                 # GPU path — all tiers (laptop, a100, l40s, etc.): one subprocess per mode.
                 #
@@ -2400,21 +2544,29 @@ def main():
                                                      student_path=args.student, n_prompts=args.n):
                 print(f" [{run_tag}] SKIP (already in DB)")
                 continue
-            be_val = _be_cache.get((ds, mode, K, T))
-            if be_val is None:
+            be_metrics = _be_cache.get((ds, mode, K, T))
+            if be_metrics is None:
                 print(f" [{run_tag}] WARN: no cached BE result (batch may have failed)")
                 failed_cells.append((ds, mode, K, T, "no cached BE result"))
                 continue
             # DB + W&B already written when the runner printed the result line.
             # Fall back to persist here if streaming save was disabled or missed.
             row = _persist_be_combo(
-                dataset=ds, mode=mode, K=K, temperature=T, block_eff=be_val,
+                dataset=ds, mode=mode, K=K, temperature=T,
+                block_eff=be_metrics["block_eff"],
                 student_label=student_label, student_path=args.student,
                 teacher_path=args.teacher, n_prompts=n, L=args.L,
                 experiment_tag=args.experiment_tag,
                 skip_existing=args.skip_existing,
                 train_steps=args.train_steps, hw_tier=args.hw_tier,
                 results_out=all_results, saved_keys=_be_saved_keys,
+                throughput=be_metrics.get("throughput"),
+                ms_per_tok=be_metrics.get("ms_per_tok"),
+                avg_tree_nodes=be_metrics.get("avg_tree_nodes"),
+                draft_time_pct=be_metrics.get("draft_time_pct"),
+                target_time_pct=be_metrics.get("target_time_pct"),
+                peak_kv_target_mb=be_metrics.get("peak_kv_target_mb"),
+                peak_kv_draft_mb=be_metrics.get("peak_kv_draft_mb"),
             )
             _be_key = (ds, mode, K, round(float(T), 4))
             if row is None and _be_key not in _be_saved_keys and not (

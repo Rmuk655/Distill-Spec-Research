@@ -136,6 +136,7 @@ tree_training:
   tree_L: 8
 
 online_adapt:
+  steps: 500               # served prompts per online run (≠ offline training.steps)
   K: 4
   update_every: 4
   milestone_every: 50      # online_ebe / online_ebe_single checkpoint cadence

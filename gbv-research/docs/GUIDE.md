@@ -1270,6 +1270,22 @@ python orchestration/experiment.py --config profiles/a100_my_loss --yes \
   --storage_root /content/drive/MyDrive/specdist
 ```
 
+
+### Hyperparameter runs and `--force_train`
+
+Training hyperparams (`tree_K`/`tree_L`, `lr`, `steps`, LoRA, …) are fingerprinted into `db/checkpoints/{loss}-gsm8k-{pair}/{hparam_id}/` with an `hparams.json` sidecar; eval knobs (`evaluation.K_values`, `L`, `draft_temp`, `task_batch`, …) affect **evaluate.py only**. Details, flag matrix, and examples: [`HYPERPARAMETERS_AND_DATA.md`](HYPERPARAMETERS_AND_DATA.md) §2.6 and §10.
+
+```bash
+# Sweep tree_K in YAML — each value gets its own hparam_id subdir
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --yes
+
+# Re-run train+merge for one loss (same YAML hyperparams)
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --force_train --yes
+
+# Re-eval after changing evaluation: draft_temp / K / L (no retrain)
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --force_eval --yes
+```
+
 ### Eval-only (re-evaluate existing checkpoints, no training)
 ```bash
 # Via YAML: set experiment: eval_only: true  (see a100_verifier_sweep.yaml)

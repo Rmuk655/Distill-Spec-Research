@@ -171,6 +171,19 @@ python orchestration/experiment.py --config a100_qwen --yes
 
 The `--losses <name>` flag does: baseline (once) → train → merge → eval for that loss only.
 Running multiple times with different `--losses` builds up results incrementally.
+**Hyperparam / retrain without wiping the whole pipeline:**
+
+```bash
+# New training hyperparams in YAML → new db/checkpoints/.../{hparam_id}/ automatically
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --yes
+
+# Same hyperparams, intentional re-train + merge for selected losses only
+python orchestration/experiment.py --config a100_qwen --losses kl_tree --force_train --yes
+```
+
+Eval-only sweeps (`draft_temp`, eval `K`/`L`): use `--force_eval`. Full wipe: `clean_restart.py` (not routine). See [`HYPERPARAMETERS_AND_DATA.md`](HYPERPARAMETERS_AND_DATA.md) §10.
+
+
 
 ---
 

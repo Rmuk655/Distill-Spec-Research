@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS runs (
     throughput      REAL,               -- tok/sec
     ms_per_tok      REAL,
     peak_vram_mb    REAL,
+    avg_tree_nodes  REAL,               -- mean draft-tree nodes per target call (BE modes)
+    draft_time_pct  REAL,               -- % wall time in draft model (BE modes)
+    target_time_pct REAL,               -- % wall time in target model (BE modes)
+    peak_kv_target_mb REAL,             -- peak target KV cache (MB) during BE eval
+    peak_kv_draft_mb  REAL,             -- peak draft KV cache (MB) during BE eval
     task_score      REAL,               -- exact match / pass@1 (0–1); NULL if not measured
     perplexity      REAL,               -- student model perplexity on dataset; NULL if not measured
     draft_latency_ms REAL,              -- avg draft model inference time per block (ms)
@@ -169,6 +174,11 @@ def _connect() -> sqlite3.Connection:
         ("seed",              "INTEGER", None),
         ("git_sha",           "TEXT", None),
         ("wandb_url",         "TEXT", None),
+        ("avg_tree_nodes",    "REAL", None),
+        ("draft_time_pct",    "REAL", None),
+        ("target_time_pct",   "REAL", None),
+        ("peak_kv_target_mb", "REAL", None),
+        ("peak_kv_draft_mb",  "REAL", None),
     ]:
         try:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {typedef}")
@@ -209,6 +219,8 @@ def insert_run(row: dict, hw_tier: str = "laptop") -> int:
         "alpha_mean", "alpha_std", "alpha_ci95",
         "block_eff", "block_eff_std",
         "throughput", "ms_per_tok", "peak_vram_mb",
+        "avg_tree_nodes", "draft_time_pct", "target_time_pct",
+        "peak_kv_target_mb", "peak_kv_draft_mb",
         "task_score", "perplexity", "draft_latency_ms", "verify_latency_ms", "notes",
         "experiment_tag", "hw_tier",
         "seed", "git_sha", "wandb_url",
