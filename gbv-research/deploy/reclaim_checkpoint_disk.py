@@ -5,13 +5,13 @@ Reclaim disk under specdist storage after merge.
 Scans checkpoints/ for training dirs whose *_merged/ sibling is eval-ready,
 then drops resume-only artifacts (ckpt_step_*, ckpt_latest/, LoRA adapters, etc.).
 
-Typical use on Pluto when Sensei FS quota is full:
+Typical use on A100 when local storage quota is full:
 
     python deploy/reclaim_checkpoint_disk.py \\
-        --storage-root /sensei-fs/users/rkrishna/specdist
+        --storage-root $HOME/specdist
 
     python deploy/reclaim_checkpoint_disk.py --report \\
-        --storage-root /sensei-fs/users/rkrishna/specdist
+        --storage-root $HOME/specdist
 
     python deploy/reclaim_checkpoint_disk.py --dry-run --force
 """

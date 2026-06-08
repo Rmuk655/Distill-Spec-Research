@@ -3,6 +3,7 @@ import torch
 from typing import Tuple
 from specInfer.common import (InputAndCache,
                               OutputAndCache,
+                              cache_seq_len,
                               crop_past_key_values,
                               crop_mqa_past_key_values,
                               crop_past_key_values_seq2seq,
@@ -120,7 +121,7 @@ class Verifier:
             # avoid class-identity mismatch across different sys.modules import paths.
             pkv = verifier_output.past_key_values
             try:
-                _seq_len = pkv.key_cache[0].shape[-2] if hasattr(pkv, 'key_cache') else pkv[0][0].shape[2]
+                _seq_len = cache_seq_len(pkv)
             except (AttributeError, IndexError, TypeError):
                 _seq_len = pkv[0][0].shape[2]
             verifier_generated_len = _seq_len - (

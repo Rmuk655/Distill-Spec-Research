@@ -1,4 +1,4 @@
-# A100 setup — IIT Hyderabad GPU server (Pluto)
+# A100 setup — IIT Hyderabad GPU server
 
 **Hardware:** NVIDIA A100 (40 GB typical)  
 **Model pair:** Qwen3-0.6B draft → Qwen3-8B teacher (BF16, no 4-bit)  
@@ -8,9 +8,17 @@ Flat `ebe` / `ebe_single` are excluded by default (off-policy on teacher rollout
 
 ---
 
-## Storage layout (Pluto — default)
+## Storage layout (A100 — default)
 
-On Pluto, checkpoints, `results.db`, and pipeline logs use **local RAM disk** under the repo (Sensei FS is ignored unless `SPECDIST_USE_SENSEI=1` — quota is tight and SQLite on Lustre is unreliable).
+On the A100 server, checkpoints, `results.db`, and pipeline logs use **local storage** under `gbv-research/db/` in the repo tree.
+
+
+| What                                             | Path                                       | Why                                   |
+| ------------------------------------------------ | ------------------------------------------ | ------------------------------------- |
+| git repo, venv                                   | `$HOME/Distill-Spec-Research/` | Reproducible from GitHub              |
+| HF model cache                                   | `$HOME/specdist/hf_cache`      | Set `HF_HOME` here; large downloads   |
+| W&B local files                                  | `$HOME/specdist/wandb`         | Set `WANDB_DIR` here                  |
+| **Checkpoints, merged models, results.db, logs** | `**.../gbv-research/db/`**                 | Single tree; survives normal sessions |
 
 
 | What                                             | Path                                       | Why                                   |
@@ -33,11 +41,19 @@ Concrete paths (after `source ~/.specdist_env`):
 | BE progress   | `$GBV_DIR/db/logs/.../be_progress_*.log`                   |
 
 
-Rule of thumb: **if you can re-create it in < 30 min, it goes in `/home/colligo/ram/specdist` or HF cache; irreplaceable training artifacts go in `gbv-research/db/`.**
+Concrete paths (after `source ~/.specdist_env`):
 
-### Sensei FS (optional — not recommended on Pluto)
 
-Only if you explicitly set `SPECDIST_USE_SENSEI=1`. Check quota with `lfs quota -u rkrishna /sensei-fs`.
+| Artifact      | Path                                                       |
+| ------------- | ---------------------------------------------------------- |
+| Checkpoints   | `$GBV_DIR/db/checkpoints/`                                 |
+| Merged models | `$GBV_DIR/db/checkpoints/<loss>-gsm8k-q0.6b-q8b_merged/`   |
+| Results DB    | `$GBV_DIR/db/results.db`                                   |
+| Pipeline log  | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
+| BE progress   | `$GBV_DIR/db/logs/.../be_progress_*.log`                   |
+
+
+Rule of thumb: **if you can re-create it in < 30 min, it goes in `$HOME/specdist` or HF cache; irreplaceable training artifacts go in `gbv-research/db/`.**
 
 ---
 
@@ -50,10 +66,10 @@ export GITHUB_TOKEN="ghp_..."   # only if repo is private
 
 # 2. Bootstrap clone (only if repo not yet on local storage)
 git clone https://github.com/Rmuk655/Distill-Spec-Research.git \
-    /home/colligo/ram/Distill-Spec-Research
+    $HOME/Distill-Spec-Research
 
 # 3. Run setup — venv + ~/.specdist_env with paths
-bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+bash $HOME/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 ```
 
 `aip_gpu_setup.sh` writes `~/.specdist_env`. Source it in every new SSH session:
@@ -61,8 +77,18 @@ bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.s
 ```bash
 source ~/.specdist_env
 cd "$GBV_DIR"
-export HF_HOME=/home/colligo/ram/specdist/hf_cache
-export WANDB_DIR=/home/colligo/ram/specdist/wandb
+export HF_HOME=$HOME/specdist/hf_cache
+export WANDB_DIR=$HOME/specdist/wandb
+```
+
+**Eval datasets** (gsm8k_eval, humaneval, math500, …) are fetched automatically by
+`aip_gpu_setup.sh`. **MATH-500** is re-fetched with `--force` when the on-disk JSONL
+has no `"answer"` field (older prompts-only files cannot be scored). Manual one-liner
+after a git pull that adds MATH-500 task_score:
+
+```bash
+cd "$GBV_DIR"
+python core/datasets/downloader.py --datasets math500 --n 100 --force
 ```
 
 **Eval datasets** (gsm8k_eval, humaneval, math500, …) are fetched automatically by
@@ -78,8 +104,8 @@ python core/datasets/downloader.py --datasets math500 --n 100 --force
 ### After pulling updates from GitHub
 
 ```bash
-git -C /home/colligo/ram/Distill-Spec-Research pull
-bash /home/colligo/ram/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
+git -C $HOME/Distill-Spec-Research pull
+bash $HOME/Distill-Spec-Research/gbv-research/deploy/aip_gpu_setup.sh a100_qwen
 source ~/.specdist_env && cd "$GBV_DIR"
 ```
 
@@ -353,6 +379,7 @@ The report **does not** compare raw training losses across objectives (removed m
 "reduction %" table). Use `--section training` for val-loss trajectories only.
 
 **Example** (Pluto, partial finalization — some losses/modes still missing):
+**Example** (A100, partial finalization — some losses/modes still missing):
 
 ```text
 ## Block Efficiency Analysis
@@ -445,6 +472,22 @@ print('gsm8k* datasets :', dss)
 "
 ```
 
+"
+```
+
+Optional: restrict to one dataset once you know the name:
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'db'); import results_db
+rows = results_db.query_runs()
+tags = sorted({r.get('experiment_tag') for r in rows if r.get('experiment_tag')})
+dss  = sorted({r.get('dataset') for r in rows if r.get('dataset') and 'gsm8k' in r.get('dataset')})
+print('experiment_tags:', tags[:10], '...')
+print('gsm8k* datasets :', dss)
+"
+```
+
 ### Troubleshooting results.db (table shows `-` for most losses)
 
 | Symptom | Cause | Fix |
@@ -506,6 +549,7 @@ python OSD/viz_server.py   # sibling OSD repo — reads results.db, supports exp
 | Pipeline stdout     | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log`     |
 | Per-step errors     | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log`     |
 | W&B local run files | `/home/colligo/ram/specdist/wandb/wandb/run-<date>-<id>/logs/` |
+| W&B local run files | `$HOME/specdist/wandb/wandb/run-<date>-<id>/logs/` |
 | W&B dashboard       | URL printed as `[wandb] https://wandb.ai/...` in pipeline log  |
 
 
@@ -537,7 +581,7 @@ python orchestration/clean_restart.py --config a100_qwen
 ## Git pull: fix "URL rejected: Bad hostname"
 
 ```bash
-cd /home/colligo/ram/Distill-Spec-Research
+cd $HOME/Distill-Spec-Research
 git remote set-url origin https://github.com/Rmuk655/Distill-Spec-Research.git
 git pull
 bash gbv-research/deploy/aip_gpu_setup.sh a100_qwen
@@ -598,7 +642,7 @@ python deploy/aip_run.py --config a100_qwen --loss kl --resume --no_smoke
 [wandb] Resuming run eyp9xg22 (from wandb_run.json)
 ```
 
-W&B local files live under `$WANDB_DIR` (e.g. `/home/colligo/ram/specdist/wandb/wandb/run-.../logs/`). That path is just the **local cache**. Resume uses `wandb_run.json` **inside the checkpoint dir**, not the log folder path.
+W&B local files live under `$WANDB_DIR` (e.g. `$HOME/specdist/wandb/wandb/run-.../logs/`). That path is just the **local cache**. Resume uses `wandb_run.json` **inside the checkpoint dir**, not the log folder path.
 
 **Step IDs** (use with `--from`):
 

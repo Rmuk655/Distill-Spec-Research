@@ -17,13 +17,13 @@ Usage (run AFTER training finishes, BEFORE the final merged eval):
     python deploy/eval_checkpoints.py \\
         --config a100_qwen \\
         --loss kl \\
-        --storage_root /home/colligo/specdist
+        --storage_root /home/krishnan/specdist
 
     # Or for all losses after a full training run:
     for loss in kl rev_kl jsd l1 kl_tree gbv_tree traversal_tree; do
         python deploy/eval_checkpoints.py \\
             --config a100_qwen --loss $loss \\
-            --storage_root /home/colligo/specdist
+            --storage_root /home/krishnan/specdist
     done
 
 Output in W&B run:

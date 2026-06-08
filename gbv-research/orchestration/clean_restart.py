@@ -412,7 +412,7 @@ def _state_glob(config_slug: str, storage_root: str = ""):
 
     Looks in two places:
       1. orchestration/ (default, local dev)
-      2. storage_root/ (when --storage_root is set, e.g. /home/colligo/specdist)
+      2. storage_root/ (when --storage_root is set, e.g. /home/krishnan/specdist)
          experiment.py writes state files there when --storage_root is passed.
 
     State files encode the model-pair tag:
@@ -533,7 +533,7 @@ When to use what:
                         "Default: laptop_qwen")
     p.add_argument("--storage_root", default=None,
                    help="Persistent storage root used when the pipeline ran "
-                        "(e.g. /home/colligo/specdist). When set, state files, "
+                        "(e.g. /home/krishnan/specdist). When set, state files, "
                         "results.db, checkpoints, and logs are looked up there "
                         "instead of the default db/ directory inside the repo. "
                         "Must match the --storage_root passed to experiment.py.")

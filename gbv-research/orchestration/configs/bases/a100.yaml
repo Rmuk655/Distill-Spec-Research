@@ -52,7 +52,7 @@ checkpointing:
   # storage_root is NOT set here — pass --storage_root on CLI or via STORAGE_ROOT env var.
   # e.g.  export STORAGE_ROOT=~/specdist  or  --storage_root /path/to/persistent/storage
   # Colab: /content/drive/MyDrive/specdist
-  # AIP/Pluto: ~/specdist  (set by aip_gpu_setup.sh)
+  # A100: ~/specdist  (set by aip_gpu_setup.sh)
 
 logging:
   log_every: 10
@@ -136,6 +136,7 @@ tree_training:
   tree_L: 8
 
 online_adapt:
+  steps: 500               # served prompts per online run (≠ offline training.steps)
   K: 4
   update_every: 4
   milestone_every: 50      # online_ebe / online_ebe_single checkpoint cadence

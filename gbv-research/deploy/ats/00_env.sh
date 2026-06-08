@@ -12,7 +12,7 @@
 export WANDB_API_KEY="PASTE_YOUR_WANDB_KEY_HERE"   # https://wandb.ai/authorize
 export WANDB_ENTITY="rkrishnaiyer"                  # your W&B username
 export WANDB_PROJECT="distillspec"
-# export WANDB_BASE_URL="https://adobesensei.wandb.io"  # uncomment for Adobe W&B
+# export WANDB_BASE_URL="https://wandb.wandb.io"  # uncomment for  W&B
 
 # ── No GPU — tell PyTorch explicitly so all fallbacks use CPU cleanly ─────────
 export CUDA_VISIBLE_DEVICES=""
