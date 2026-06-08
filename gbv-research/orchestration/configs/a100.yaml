@@ -1,3 +1,0 @@
-# a100 — IIT Hyderabad / generic A100 entry point (alias for a100_qwen)
-# Usage: python deploy/aip_run.py --config a100
-_base: a100_qwen
