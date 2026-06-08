@@ -127,7 +127,7 @@ python dashboard/training_dashboard.py
 For paper statistics and significance tests:
 
 ```bash
-python paper/analyze_results.py --out report.md
+python db/analyze_results.py --out report.md
 ```
 
 ---

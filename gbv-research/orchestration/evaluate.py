@@ -476,6 +476,93 @@ def score_gsm8k(generated: str, gold_answer_text: str) -> float:
         return 1.0 if gold.strip() == pred.strip() else 0.0
 
 
+def _is_math500_scored_dataset(dataset: str) -> bool:
+    """True for MATH-500 eval sets (math500, math500_30, …)."""
+    return dataset == "math500" or dataset.startswith("math500")
+
+
+def _is_task_scored_dataset(dataset: str) -> bool:
+    """Datasets where run_task_score computes accuracy / pass@1."""
+    return (_is_gsm8k_scored_dataset(dataset)
+            or dataset == "humaneval"
+            or _is_math500_scored_dataset(dataset))
+
+
+def _extract_last_boxed(text: str) -> str | None:
+    """Extract the last \\boxed{...} or \\boxed ... answer from MATH-style text."""
+    if not text:
+        return None
+    found = []
+    i = 0
+    while i < len(text):
+        start = text.find("\\boxed", i)
+        if start < 0:
+            break
+        if start + 7 <= len(text) and text[start:start + 7] == "\\boxed ":
+            rest = text[start + 7:]
+            end = rest.find("$")
+            found.append(rest[:end].strip() if end >= 0 else rest.strip())
+            i = start + 7
+            continue
+        if start + 7 <= len(text) and text[start:start + 7] == "\\boxed{":
+            depth = 0
+            j = start + 6
+            while j < len(text):
+                ch = text[j]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        found.append(text[start + 7:j])
+                        j += 1
+                        break
+                j += 1
+            i = j
+            continue
+        i = start + 1
+    return found[-1] if found else None
+
+
+def _normalize_math_answer(ans: str) -> str:
+    """Lightweight normalizer for MATH \\boxed{} answer comparison."""
+    if not ans:
+        return ""
+    ans = ans.strip()
+    ans = re.sub(r"\\text\{([^}]*)\}", r"\1", ans)
+    ans = re.sub(r"\\mbox\{([^}]*)\}", r"\1", ans)
+    ans = ans.replace("\\,", "").replace("\\!", "").replace("$", "")
+    ans = ans.replace("{", "").replace("}", "")
+    ans = "".join(ans.split())
+    return ans.lower()
+
+
+def _math_answers_equal(pred: str, gold: str) -> bool:
+    """Compare two MATH answers after normalization; numeric fallback."""
+    p = _normalize_math_answer(pred)
+    g = _normalize_math_answer(gold)
+    if not p or not g:
+        return False
+    if p == g:
+        return True
+    try:
+        return abs(float(p.replace(",", "")) - float(g.replace(",", ""))) < 1e-6
+    except ValueError:
+        return False
+
+
+def score_math500(generated: str, gold_solution: str) -> float:
+    """Return 1.0 if generated output matches the gold MATH \\boxed{} answer."""
+    gold = _extract_last_boxed(gold_solution or "")
+    if gold is None:
+        gold = (gold_solution or "").strip()
+    pred = _extract_last_boxed(generated or "")
+    if pred is None:
+        nums = re.findall(r"-?[\d,]+\.?\d*", generated or "")
+        pred = nums[-1] if nums else ""
+    return 1.0 if _math_answers_equal(pred, gold) else 0.0
+
+
 def score_humaneval(prompt: str, generated: str, test_code: str,
                     entry_point: str = "", timeout: int = 10) -> float:
     """Return 1.0 if generated code passes HumanEval test cases (pass@1)."""
@@ -522,16 +609,17 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
     Generate full responses with the student model (greedy, no SD) and
     compute task accuracy. Used as a quality-preservation sanity check.
 
-    GSM8K  → exact match on final numerical answer
+    GSM8K     → exact match on final numerical answer
+    MATH-500  → pass@1 via \\boxed{} answer extraction (hendrycks/MATH)
     HumanEval → pass@1 via code execution
-    Other  → None (not scored)
+    Other     → None (not scored)
 
     preloaded_student / preloaded_tokenizer: pass the already-resident model
     from the alpha-eval preload to avoid loading a SECOND copy while the
     teacher is still occupying VRAM (was causing OOM → silent CPU fallback
     → task_score taking 7+ hours instead of 2-3 minutes).
     """
-    if not _is_gsm8k_scored_dataset(dataset) and dataset != "humaneval":
+    if not _is_task_scored_dataset(dataset):
         return {"task_score": None, "scored": 0}
 
     import torch
@@ -629,6 +717,8 @@ def run_task_score(student_path: str, dataset: str, prompts: list,
             generated = tokenizer.decode(gen, skip_special_tokens=True)
             if _is_gsm8k_scored_dataset(dataset):
                 scores.append(score_gsm8k(generated, _golds[idx]))
+            elif _is_math500_scored_dataset(dataset):
+                scores.append(score_math500(generated, _golds[idx]))
             elif dataset == "humaneval":
                 scores.append(score_humaneval(batch_texts[j], generated,
                                               _tests[idx], _eps[idx]))
@@ -1381,10 +1471,29 @@ def _wandb_log_eval_result(row: dict) -> None:
             _wmod.summary[f"target_time_pct/{ds}/{mode}/K{K}"] = round(float(row["target_time_pct"]), 1)
         if row.get("alpha_mean") is not None:
             _wmod.summary[f"alpha/{ds}"] = round(float(row["alpha_mean"]), 4)
+            if row.get("alpha_ci95") is not None:
+                _wmod.summary[f"alpha_ci95/{ds}"] = round(float(row["alpha_ci95"]), 4)
+            if row.get("throughput") is not None:
+                _wmod.summary[f"throughput/{ds}"] = round(float(row["throughput"]), 2)
+            if row.get("ms_per_tok") is not None:
+                _wmod.summary[f"ms_per_tok/{ds}"] = round(float(row["ms_per_tok"]), 2)
         if row.get("task_score") is not None:
             _wmod.summary[f"task_score/{ds}"] = round(float(row["task_score"]), 4)
         if row.get("perplexity") is not None:
             _wmod.summary[f"perplexity/{ds}"] = round(float(row["perplexity"]), 2)
+        if (row.get("throughput") is not None and mode == "alpha" and ds):
+            try:
+                _bl_tps = [
+                    float(_br["throughput"])
+                    for _br in results_db.query_runs(
+                        {"draft_label": "baseline", "mode": "alpha", "dataset": ds})
+                    if _br.get("throughput")
+                ]
+                if _bl_tps:
+                    _wmod.summary[f"speedup/{ds}"] = round(
+                        float(row["throughput"]) / max(_bl_tps), 4)
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1610,30 +1719,39 @@ def run_cell(student_path: str, teacher_path: str, student_label: str,
         if _amethod != "specinfer":
             print(f"  [alpha] measured via {_amethod} (tagged in DB notes)")
 
-        # Task accuracy (GSM8K / HumanEval only)
-        if task_score and (_is_gsm8k_scored_dataset(dataset) or dataset == "humaneval"):
-            print(f"  [task_score] running {dataset} accuracy...")
-            # Pass preloaded student model to avoid loading a second copy while
-            # the teacher is still resident in GPU memory (caused OOM → CPU fallback).
-            _pre_sm = preloaded[3] if preloaded else None
-            _pre_tok = preloaded[2] if preloaded else None
-            ts_res = run_task_score(student_path, dataset, prompts, max_tokens=512,
-                                    preloaded_student=_pre_sm,
-                                    preloaded_tokenizer=_pre_tok)
-            row["task_score"] = ts_res.get("task_score")
-            print(f"  task_score={row['task_score']:.3f} ({ts_res['scored']} samples)")
-            # Quality guard: warn if student is meaningfully worse than the best baseline on record
-            _bl_scores = [
-                r["task_score"] for r in results_db.query_runs(
-                    {"draft_label": "baseline", "dataset": dataset, "mode": "alpha"})
-                if r.get("task_score") is not None
-            ]
-            if _bl_scores and row["task_score"] is not None:
-                _best_bl = max(_bl_scores)
-                if row["task_score"] < _best_bl - 0.05:   # >5 pp drop
-                    _warn(f"task_score={row['task_score']:.3f} is >5pp below "
-                          f"baseline={_best_bl:.3f} on {dataset} — "
-                          f"check for training collapse or wrong model path.")
+        # Task accuracy (GSM8K EM / MATH-500 pass@1 / HumanEval pass@1)
+        if task_score and _is_task_scored_dataset(dataset):
+            _has_gold = any(
+                (p.get("answer") or p.get("test"))
+                for p in prompts if isinstance(p, dict)
+            )
+            if _is_math500_scored_dataset(dataset) and not _has_gold:
+                print(f"  [task_score] SKIP {dataset}: no gold solutions in JSONL. "
+                      f"Re-fetch: python core/datasets/downloader.py --datasets math500 --force")
+            else:
+                print(f"  [task_score] running {dataset} accuracy...")
+                # Pass preloaded student model to avoid loading a second copy while
+                # the teacher is still resident in GPU memory (caused OOM → CPU fallback).
+                _pre_sm = preloaded[3] if preloaded else None
+                _pre_tok = preloaded[2] if preloaded else None
+                _ts_tokens = 1024 if _is_math500_scored_dataset(dataset) else 512
+                ts_res = run_task_score(student_path, dataset, prompts, max_tokens=_ts_tokens,
+                                        preloaded_student=_pre_sm,
+                                        preloaded_tokenizer=_pre_tok)
+                row["task_score"] = ts_res.get("task_score")
+                print(f"  task_score={row['task_score']:.3f} ({ts_res['scored']} samples)")
+                # Quality guard: warn if student is meaningfully worse than the best baseline on record
+                _bl_scores = [
+                    r["task_score"] for r in results_db.query_runs(
+                        {"draft_label": "baseline", "dataset": dataset, "mode": "alpha"})
+                    if r.get("task_score") is not None
+                ]
+                if _bl_scores and row["task_score"] is not None:
+                    _best_bl = max(_bl_scores)
+                    if row["task_score"] < _best_bl - 0.05:   # >5 pp drop
+                        _warn(f"task_score={row['task_score']:.3f} is >5pp below "
+                              f"baseline={_best_bl:.3f} on {dataset} — "
+                              f"check for training collapse or wrong model path.")
 
         print(f"  alpha={res['alpha_mean']:.4f} ±{res['alpha_ci95']:.4f}  "
               f"{res['throughput']:.2f} tok/s"
@@ -2628,15 +2746,52 @@ def main():
             from collections import defaultdict as _dd
             _be_by_mode: dict = _dd(list)
             _alpha_by_ds: dict = _dd(list)
+            _aci_by_ds: dict = _dd(list)
+            _tp_by_ds: dict = _dd(list)
+            _mpt_by_ds: dict = _dd(list)
+            _task_by_ds: dict = _dd(list)
             for r in all_results:
                 if r.get("block_eff") is not None:
                     _be_by_mode[r["mode"]].append(r["block_eff"])
-                if r.get("alpha_mean") is not None and r.get("dataset"):
-                    _alpha_by_ds[r["dataset"]].append(r["alpha_mean"])
+                _ds = r.get("dataset")
+                if r.get("alpha_mean") is not None and _ds:
+                    _alpha_by_ds[_ds].append(r["alpha_mean"])
+                if r.get("alpha_ci95") is not None and _ds:
+                    _aci_by_ds[_ds].append(r["alpha_ci95"])
+                if r.get("throughput") is not None and _ds:
+                    _tp_by_ds[_ds].append(r["throughput"])
+                if r.get("ms_per_tok") is not None and _ds:
+                    _mpt_by_ds[_ds].append(r["ms_per_tok"])
+                if r.get("task_score") is not None and _ds:
+                    _task_by_ds[_ds].append(r["task_score"])
             for _mode, _vals in _be_by_mode.items():
                 _wmod_final.summary[f"BE/{_mode}"] = round(sum(_vals) / len(_vals), 4)
             for _ds, _vals in _alpha_by_ds.items():
                 _wmod_final.summary[f"alpha/{_ds}"] = round(sum(_vals) / len(_vals), 4)
+            for _ds, _vals in _aci_by_ds.items():
+                _wmod_final.summary[f"alpha_ci95/{_ds}"] = round(sum(_vals) / len(_vals), 4)
+            for _ds, _vals in _tp_by_ds.items():
+                _wmod_final.summary[f"throughput/{_ds}"] = round(sum(_vals) / len(_vals), 2)
+            for _ds, _vals in _mpt_by_ds.items():
+                _wmod_final.summary[f"ms_per_tok/{_ds}"] = round(sum(_vals) / len(_vals), 2)
+            for _ds, _vals in _task_by_ds.items():
+                _wmod_final.summary[f"task_score/{_ds}"] = round(sum(_vals) / len(_vals), 4)
+
+            # Speedup vs baseline throughput on the same dataset (alpha mode)
+            _baseline_tp: dict = {}
+            try:
+                for _br in results_db.query_runs({"draft_label": "baseline", "mode": "alpha"}):
+                    _ds = _br.get("dataset")
+                    _tp = _br.get("throughput")
+                    if _ds and _tp:
+                        _baseline_tp[_ds] = max(_baseline_tp.get(_ds, 0.0), float(_tp))
+            except Exception:
+                pass
+            for _ds, _vals in _tp_by_ds.items():
+                _bl_tp = _baseline_tp.get(_ds)
+                if _bl_tp and _bl_tp > 0:
+                    _cur_tp = sum(_vals) / len(_vals)
+                    _wmod_final.summary[f"speedup/{_ds}"] = round(_cur_tp / _bl_tp, 4)
 
             # ── Pivot table: dataset × mode → all metrics side-by-side ──────────
             # This is the PRIMARY eval view in W&B.  Open the run → Artifacts tab

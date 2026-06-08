@@ -725,4 +725,19 @@ sqlite3 "$GBV_DIR/db/results.db" \
   "SELECT draft_label, mode, block_eff FROM runs ORDER BY ts DESC LIMIT 10;"
 ```
 
+**Best (model, verifier) block efficiency?** Run `python db/analyze_results.py` from
+`gbv-research/` — see the **Block Efficiency by Mode, K, and Draft** table and
+**Recommendations** (e.g. `rev_kl + traversal`). The quick α/BE/EM snippet uses
+`gbv` only; full details in [GUIDE.md § 8d](GUIDE.md#8d-generating-a-results-report-analyze_resultspy)
+and [A100_SETUP.md](../deploy/A100_SETUP.md).
+
+**Paper metrics table (α / BE / GSM8K EM) empty or mostly `-`?** See
+[deploy/A100_SETUP.md § Troubleshooting results.db](../deploy/A100_SETUP.md#troubleshooting-resultsdb-table-shows--for-most-losses).
+Common causes: wrong `dataset` filter (`gsm8k` vs `gsm8k_eval`), `--eval --loss X`
+skipping baseline, or `--skip_existing` blocking α rows under your `experiment_tag`.
+
+**MATH-500 task_score needs gold answers** — run once after setup or git pull:
+`python core/datasets/downloader.py --datasets math500 --n 100 --force`
+(also automatic in `deploy/aip_gpu_setup.sh` when `math500_*.jsonl` lacks `"answer"`).
+
 **Then check W&B** — filter by Group = `a100-qwen`, Tag = `KrishnanRIITHServer`. If 0 runs: W&B auth failed in subprocesses (see "W&B shows None" above).
