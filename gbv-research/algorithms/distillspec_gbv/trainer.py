@@ -607,14 +607,27 @@ def _save_wandb_run_meta(
 # Validation / PPL helpers
 # ---------------------------------------------------------------------------
 
+def _trainable_weight_norm(model) -> float:
+    """L2 norm of trainable params — cheap fingerprint that weights changed between val checks."""
+    sq = 0.0
+    for p in model.parameters():
+        if p.requires_grad:
+            n = p.detach().float().norm().item()
+            sq += n * n
+    return sq ** 0.5
+
+
 def _compute_val_loss(
     draft_model, target_model, val_prompts: list, tok_cache: dict,
     tokenizer, args, device: str, family: ModelFamily,
     max_prompts: int = 10,
-) -> tuple[float, float | None]:
+) -> tuple[float, float | None, dict]:
     """
     Compute validation loss on up to max_prompts held-out prompts.
-    Returns (mean_loss, mean_accept_weight_or_None).
+    Returns (mean_loss, mean_accept_weight_or_None, stats_dict).
+
+    stats_dict has n/std/min/max of per-prompt losses so plateau prints can be
+    distinguished from a logging bug (identical .4f with nonzero std or delta).
     """
     sample = val_prompts[:max_prompts]
     val_losses, val_aws = [], []
@@ -679,7 +692,18 @@ def _compute_val_loss(
     draft_model.train()
     mean_loss = sum(val_losses) / len(val_losses) if val_losses else float("nan")
     mean_aw   = sum(val_aws)   / len(val_aws)    if val_aws    else None
-    return mean_loss, mean_aw
+    if len(val_losses) > 1:
+        _var = sum((x - mean_loss) ** 2 for x in val_losses) / (len(val_losses) - 1)
+        _std = _var ** 0.5
+    else:
+        _std = 0.0
+    _stats = {
+        "n":   len(val_losses),
+        "std": _std,
+        "min": min(val_losses) if val_losses else float("nan"),
+        "max": max(val_losses) if val_losses else float("nan"),
+    }
+    return mean_loss, mean_aw, _stats
 
 
 def _compute_ppl(
@@ -1196,6 +1220,8 @@ def main() -> None:
                              else float("inf"))
     _val_no_improve_count = (_resumed_no_improve if _resuming else 0)
     _best_slow_val_loss   = float("inf")   # updated by slow val; guards ckpt_best_slow
+    _last_val_loss        = None           # audit: delta vs previous val check
+    _last_val_wnorm       = None
     _current_ppl          = None
     _baseline_ppl         = None
     _stop_training        = False
@@ -1516,7 +1542,8 @@ def main() -> None:
 
         # ── Validation ───────────────────────────────────────────────────────
         if val_prompts and args.val_every > 0 and (step + 1) % args.val_every == 0:
-            v_loss, v_aw = _compute_val_loss(
+            _wnorm = _trainable_weight_norm(draft_model)
+            v_loss, v_aw, v_stats = _compute_val_loss(
                 draft_model, target_model, val_prompts, _tok_cache,
                 tokenizer, args, device, family, max_prompts=100,
             )
@@ -1527,7 +1554,17 @@ def main() -> None:
             # so the printed value is never mistaken for the tree objective itself.
             _val_is_proxy = args.loss in TREE_LOSS_NAMES
             _val_tag = "val_loss(fkl-proxy)" if _val_is_proxy else "val_loss"
-            print(f"Step {step+1:4d}/{args.steps} | {_val_tag}: {v_loss:.4f}")
+            _v_delta = (v_loss - _last_val_loss) if _last_val_loss is not None else None
+            _wn_delta = (_wnorm - _last_val_wnorm) if _last_val_wnorm is not None else None
+            _last_val_loss = v_loss
+            _last_val_wnorm = _wnorm
+            _delta_s = f"{_v_delta:+.2e}" if _v_delta is not None else "n/a"
+            _wn_s = (f"wnorm_delta={_wn_delta:+.2e}" if _wn_delta is not None
+                     else f"wnorm={_wnorm:.4f}")
+            print(f"Step {step+1:4d}/{args.steps} | {_val_tag}: {v_loss:.4f} "
+                  f"repr={v_loss!r} n={v_stats['n']} std={v_stats['std']:.6f} "
+                  f"range=[{v_stats['min']:.4f},{v_stats['max']:.4f}] "
+                  f"delta={_delta_s} {_wn_s}")
 
             if v_loss < _best_val_loss:
                 _best_val_loss = v_loss
@@ -1559,9 +1596,15 @@ def main() -> None:
                 log = {
                     "train_step":           step + 1,
                     "train/val_loss":       v_loss,
+                    "train/val_loss_std":   v_stats["std"],
+                    "train/val_n_prompts":  v_stats["n"],
                     "train/loss_ema":       _cur_ema,
                     "train/val_train_gap":  _val_gap,
                 }
+                if _v_delta is not None:
+                    log["train/val_loss_delta"] = _v_delta
+                if _wn_delta is not None:
+                    log["train/val_wnorm_delta"] = _wn_delta
                 if v_aw is not None:
                     log["val/accept_weight"] = v_aw
                 _wandb.log(log)
@@ -1654,13 +1697,14 @@ def main() -> None:
         if (val_prompts and args.slow_val_every > 0
                 and (step + 1) % args.slow_val_every == 0):
             _sv_n = max(1, args.slow_val_n)
-            _sv_loss, _sv_aw = _compute_val_loss(
+            _sv_loss, _sv_aw, _sv_stats = _compute_val_loss(
                 draft_model, target_model, val_prompts, _tok_cache,
                 tokenizer, args, device, family, max_prompts=_sv_n,
             )
             _val_is_proxy = args.loss in TREE_LOSS_NAMES
             _sv_tag = "slow_val(fkl-proxy)" if _val_is_proxy else "slow_val"
-            print(f"Step {step+1:4d}/{args.steps} | {_sv_tag} (n={_sv_n}): {_sv_loss:.4f}")
+            print(f"Step {step+1:4d}/{args.steps} | {_sv_tag} (n={_sv_n}): "
+                  f"{_sv_loss:.4f} repr={_sv_loss!r} std={_sv_stats['std']:.6f}")
 
             if _sv_loss < _best_slow_val_loss:
                 _best_slow_val_loss = _sv_loss

@@ -3890,11 +3890,20 @@ if __name__ == "__main__":
     if args.db:
         results_db.DB_PATH = os.path.abspath(args.db)
 
-    # Override log directory (_BE_LOG / _PIPELINE_LOG are module-level; no global needed)
+    # Override log directory.
+    # Must declare global — without it Python creates local shadow variables and the
+    # module-level names read by Flask route handlers (_BE_LOG, _PIPELINE_LOG,
+    # _DB_LOGS_BASE, _DB_LOGS) remain pointing at the default repo paths.
     if args.logs:
-        _logs_dir = os.path.abspath(args.logs)
+        global _BE_LOG, _PIPELINE_LOG, _DB_LOGS, _DB_LOGS_BASE
+        _logs_dir     = os.path.abspath(args.logs)
         _BE_LOG       = os.path.join(_logs_dir, "be_progress.log")
         _PIPELINE_LOG = os.path.join(_logs_dir, "pipeline_output.log")
+        # _DB_LOGS_BASE is used by _list_run_slugs() and _resolve_log_dir() to
+        # enumerate per-run subdirs.  Point it at the root dir so slug scanning
+        # still works when --root is a flat folder (no subdirs → falls back to ".").
+        _DB_LOGS_BASE = _logs_dir
+        _DB_LOGS      = _logs_dir
 
     # Override pipeline-state directory via env var (api_pipeline_status reads it)
     if args.state:

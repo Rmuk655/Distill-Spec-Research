@@ -21,6 +21,26 @@ On the A100 server, checkpoints, `results.db`, and pipeline logs use **local sto
 | **Checkpoints, merged models, results.db, logs** | `**.../gbv-research/db/`**                 | Single tree; survives normal sessions |
 
 
+| What                                             | Path                                       | Why                                   |
+| ------------------------------------------------ | ------------------------------------------ | ------------------------------------- |
+| git repo, venv                                   | `/home/colligo/ram/Distill-Spec-Research/` | Reproducible from GitHub              |
+| HF model cache                                   | `/home/colligo/ram/specdist/hf_cache`      | Set `HF_HOME` here; large downloads   |
+| W&B local files                                  | `/home/colligo/ram/specdist/wandb`         | Set `WANDB_DIR` here                  |
+| **Checkpoints, merged models, results.db, logs** | `**.../gbv-research/db/`**                 | Single tree; survives normal sessions |
+
+
+Concrete paths (after `source ~/.specdist_env`):
+
+
+| Artifact      | Path                                                       |
+| ------------- | ---------------------------------------------------------- |
+| Checkpoints   | `$GBV_DIR/db/checkpoints/`                                 |
+| Merged models | `$GBV_DIR/db/checkpoints/<loss>-gsm8k-q0.6b-q8b_merged/`   |
+| Results DB    | `$GBV_DIR/db/results.db`                                   |
+| Pipeline log  | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log` |
+| BE progress   | `$GBV_DIR/db/logs/.../be_progress_*.log`                   |
+
+
 Concrete paths (after `source ~/.specdist_env`):
 
 
@@ -59,6 +79,16 @@ source ~/.specdist_env
 cd "$GBV_DIR"
 export HF_HOME=$HOME/specdist/hf_cache
 export WANDB_DIR=$HOME/specdist/wandb
+```
+
+**Eval datasets** (gsm8k_eval, humaneval, math500, …) are fetched automatically by
+`aip_gpu_setup.sh`. **MATH-500** is re-fetched with `--force` when the on-disk JSONL
+has no `"answer"` field (older prompts-only files cannot be scored). Manual one-liner
+after a git pull that adds MATH-500 task_score:
+
+```bash
+cd "$GBV_DIR"
+python core/datasets/downloader.py --datasets math500 --n 100 --force
 ```
 
 **Eval datasets** (gsm8k_eval, humaneval, math500, …) are fetched automatically by
@@ -348,6 +378,7 @@ python db/analyze_results.py --experiment_tag KrishnanRIITHServer --dataset gsm8
 The report **does not** compare raw training losses across objectives (removed misleading
 "reduction %" table). Use `--section training` for val-loss trajectories only.
 
+**Example** (Pluto, partial finalization — some losses/modes still missing):
 **Example** (A100, partial finalization — some losses/modes still missing):
 
 ```text
@@ -441,6 +472,22 @@ print('gsm8k* datasets :', dss)
 "
 ```
 
+"
+```
+
+Optional: restrict to one dataset once you know the name:
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'db'); import results_db
+rows = results_db.query_runs()
+tags = sorted({r.get('experiment_tag') for r in rows if r.get('experiment_tag')})
+dss  = sorted({r.get('dataset') for r in rows if r.get('dataset') and 'gsm8k' in r.get('dataset')})
+print('experiment_tags:', tags[:10], '...')
+print('gsm8k* datasets :', dss)
+"
+```
+
 ### Troubleshooting results.db (table shows `-` for most losses)
 
 | Symptom | Cause | Fix |
@@ -501,6 +548,7 @@ python OSD/viz_server.py   # sibling OSD repo — reads results.db, supports exp
 | ------------------- | -------------------------------------------------------------- |
 | Pipeline stdout     | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/pipeline_output.log`     |
 | Per-step errors     | `$GBV_DIR/db/logs/a100_qwen-q0.6b-q8b/step_<id>_error.log`     |
+| W&B local run files | `/home/colligo/ram/specdist/wandb/wandb/run-<date>-<id>/logs/` |
 | W&B local run files | `$HOME/specdist/wandb/wandb/run-<date>-<id>/logs/` |
 | W&B dashboard       | URL printed as `[wandb] https://wandb.ai/...` in pipeline log  |
 

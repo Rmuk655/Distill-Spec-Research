@@ -1491,6 +1491,7 @@ which **(trained model, verifier)** pair achieves the best block efficiency (BE)
 
 The DB stores **one row per eval cell**: `(draft_label, mode, dataset, K, temperature)`.
 A full A100 Phase 3 eval saves ~9 BE rows per loss (one per verifier) plus one `alpha` row.
+The quick Pluto sanity-check snippet hardcodes `mode='gbv'` for BE — that is **not**
 The quick A100 sanity-check snippet hardcodes `mode='gbv'` for BE — that is **not**
 averaging across verifiers, but it also **hides** the best verifier per model.
 
@@ -1507,6 +1508,18 @@ python db/analyze_results.py
 
 # Save for the paper or a PR
 python db/analyze_results.py --out report.md
+
+# Block-efficiency section only (loss × verifier matrix)
+python db/analyze_results.py --section be
+
+# Limit compared drafts (baseline is always the anchor)
+python db/analyze_results.py --section be --compare rev_kl,jsd,kl,l1
+
+# Global best (model, verifier) pair only
+python db/analyze_results.py --section recommend
+```
+
+On Pluto:
 
 # Block-efficiency section only (loss × verifier matrix)
 python db/analyze_results.py --section be

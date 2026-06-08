@@ -155,7 +155,7 @@ python orchestration/experiment.py --config a100_qwen --losses kl --yes   # conf
 ### 0.6 Existing statistical rigor — what EXISTS vs MISSING
 
 **Exists:**
-- **Statistical analysis** (`paper/analyze_results.py`): Welch's two-sample t-test, Cohen's d, `ci95 = 1.96·σ/√n`, significance stars, % change, K-sensitivity tables, cross-dataset CV. Note: p-values use a hand-rolled incomplete-beta approximation — approximate, not scipy-backed; with a single run per cell the test returns `n/a`.
+- **Statistical analysis** (`db/analyze_results.py`): Welch's two-sample t-test, Cohen's d, `ci95 = 1.96·σ/√n`, significance stars, % change, K-sensitivity tables, cross-dataset CV. Note: p-values use a hand-rolled incomplete-beta approximation — approximate, not scipy-backed; with a single run per cell the test returns `n/a`.
 - **W&B logging**: per-run summary metrics (eval/BE/alpha by verifier/dataset), `job_type=train/eval`, `wandb_group` per tier, run name encodes teacher+loss+family+steps. See `deploy/PROGRESSION.md` for the full W&B metric taxonomy and run naming convention.
 - **Automated training alerts** (`trainer.py`): grad_norm > 10, overfit_ratio > 1.3, val plateau, slow convergence at 10% of steps — all fire W&B alerts automatically.
 - **LoRA gradient health**: lora_A/B mean/max/std logged per step to W&B.

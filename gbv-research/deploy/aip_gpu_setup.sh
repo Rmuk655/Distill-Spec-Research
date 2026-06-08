@@ -310,12 +310,34 @@ except Exception as e:
     print("        ds=load_dataset('gsm8k','main',split='train')")
     print("        [open('core/datasets/raw/gsm8k_train.jsonl','w').write(json.dumps({'prompt':i['question']})+chr(10)) for i in ds]\"")
 PYEOF
-    # Also fetch other eval sets (already offline-safe since they use custom downloader)
-    env -u HF_DATASETS_OFFLINE -u HF_HUB_OFFLINE \
-    python "${GBV_DIR}/core/datasets/downloader.py" 2>/dev/null || true
 else
     LINES=$(wc -l < "${DATA_FILE}")
     echo "      gsm8k_train.jsonl: ${LINES} prompts (already present)"
+fi
+
+# ── Eval datasets (Phase 3/4) ─────────────────────────────────────────────────
+# Runs even when gsm8k_train already exists (previously skipped — caused missing
+# gsm8k_eval / humaneval files on resumed setups).
+# math500: older JSONL files were prompts-only; --force re-fetches with gold
+# solutions so Phase 4 task_score (MATH-500 accuracy) works.
+echo "[4b/5] Checking eval datasets..."
+EVAL_RAW="${GBV_DIR}/core/datasets/raw"
+MATH500_FILE="${EVAL_RAW}/math500_30.jsonl"
+_fetch_eval() {
+    env -u HF_DATASETS_OFFLINE -u HF_HUB_OFFLINE -u TRANSFORMERS_OFFLINE \
+        python "${GBV_DIR}/core/datasets/downloader.py" "$@" 2>/dev/null || true
+}
+if [ ! -f "${EVAL_RAW}/gsm8k_eval_100.jsonl" ] && [ ! -f "${EVAL_RAW}/gsm8k_eval_30.jsonl" ]; then
+    echo "      Fetching gsm8k_eval + Phase 4 eval sets..."
+    _fetch_eval --datasets gsm8k_eval,humaneval,math500,mtbench,alpaca --n 100
+else
+    echo "      gsm8k_eval present — skipping bulk eval fetch"
+fi
+if [ ! -f "${MATH500_FILE}" ] || ! head -1 "${MATH500_FILE}" 2>/dev/null | grep -q '"answer"'; then
+    echo "      math500: fetching with gold solutions (--force) for task_score..."
+    _fetch_eval --datasets math500 --n 100 --force
+else
+    echo "      math500_30.jsonl: has gold answers (task_score ready)"
 fi
 
 # ── GPU check ─────────────────────────────────────────────────────────────────

@@ -362,13 +362,19 @@ def fetch_math500(n=30, force=False):
         print(f"  MATH500({n}) already exists, skipping.")
         return path
     print("Fetching MATH-500...")
-    prompts = _hf_load("lighteval/MATH-Hard", "test", "problem", n=n)
-    if not prompts:
-        prompts = _hf_load("hendrycks/competition_math", "test", "problem", n=n)
-    if not prompts:
-        print("  Using fallback MATH problems")
-        prompts = _MATH_FALLBACK[:n]
-    save_jsonl(path, prompts)
+    # Include solution so task_score can grade \\boxed{} answers (MATH pass@1).
+    items = _hf_load("hendrycks/competition_math", "test", "problem",
+                     n=n, extra_fields=["solution"])
+    if not items:
+        items = _hf_load("lighteval/MATH-Hard", "test", "problem",
+                         n=n, extra_fields=["solution"])
+    if items and isinstance(items[0], dict):
+        for item in items:
+            item["answer"] = item.pop("solution", "") or item.get("answer", "")
+    elif not items:
+        print("  Using fallback MATH problems (no gold solutions — task_score unavailable)")
+        items = _MATH_FALLBACK[:n]
+    save_jsonl(path, items)
     return path
 
 
