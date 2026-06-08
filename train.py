@@ -514,8 +514,7 @@ def main():
                     "train/loss":      avg,
                     "train/lr":        scheduler.get_last_lr()[0],
                     "train/grad_norm": grad_norm.item(),
-                    "train_step":      step + 1,
-                })
+                }, step=step + 1)
 
         # Validation + checkpoint best
         if (step + 1) % VAL_EVERY == 0:
@@ -523,7 +522,7 @@ def main():
             print(f"  [val] step={step+1}  val_loss={val_loss:.4f}  "
                   f"best={best_val_loss:.4f}")
             if wandb_run:
-                wandb_run.log({"val/loss": val_loss, "train_step": step + 1})
+                wandb_run.log({"val/loss": val_loss}, step=step + 1)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
