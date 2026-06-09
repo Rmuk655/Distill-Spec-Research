@@ -83,7 +83,7 @@ LORA_DROPOUT    = 0.05
 
 # Validation & checkpointing cadence
 VAL_EVERY       = 100                        # gradient-accum steps between val checks
-VAL_PROMPTS     = 100                        # val loss averaged over this many prompts
+VAL_PROMPTS     = 25                         # val loss averaged over this many prompts
 SAVE_EVERY      = 200                        # ckpt_latest write cadence
 LOG_EVERY       = 10                         # console + W&B step-log cadence
 
@@ -265,7 +265,7 @@ def compute_val_loss(draft, teacher, tokenizer, val_prompts, args):
         # Use forward_kl on a short teacher rollout as a stable cross-loss proxy.
         loss = compute_flat_loss(
             FLAT_LOSSES["forward_kl"], draft, teacher, ids,
-            max_new_tokens=64, teacher_temp=args.teacher_temp,
+            max_new_tokens=32, teacher_temp=args.teacher_temp,
         )
         losses.append(loss.item())
     draft.train()
