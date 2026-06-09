@@ -70,7 +70,7 @@ def speculative_decode_one(p_model, q_model, tokenizer, prompt: str, mode: str,
 
     device = p_model.device
     # Prefill both models' KV caches on the prompt.
-    ctx = torch.tensor(tokenizer.encode(prompt), device=device).unsqueeze(0)
+    ctx = torch.tensor(tokenizer.encode(prompt), device=device, dtype=torch.long).unsqueeze(0)
     init_len = ctx.shape[-1]
     p_out = p_model(ctx, use_cache=True, return_dict=True)
     q_out = q_model(ctx, use_cache=True, return_dict=True)
@@ -215,7 +215,13 @@ def main():
     # Load models — teacher always Qwen3-8B; draft is the checkpoint.
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
-    tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, trust_remote_code=True)
+    # Tokenizer: always load from TEACHER_MODEL, not the checkpoint dir.
+    # save_checkpoint() only saves model weights (model.save_pretrained), NOT tokenizer
+    # files (tokenizer.json etc.).  Loading AutoTokenizer from a path without tokenizer
+    # files can silently fall back to a broken tokenizer whose .encode() returns floats,
+    # causing a RuntimeError in the embedding layer.  Draft + teacher share a vocab
+    # (required for speculative decoding), so TEACHER_MODEL is always the right source.
+    tokenizer = AutoTokenizer.from_pretrained(TEACHER_MODEL, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     q_model = AutoModelForCausalLM.from_pretrained(
