@@ -1,41 +1,21 @@
+# Python
 __pycache__/
 *.pyc
-.env
+*.pyo
 venv/
-wandb/
+.env
+
+# Training artifacts (large; should not be in git)
 checkpoints/
-outputs/
-results/
-.cache/
-.ipynb_checkpoints/
-.DS_Store
-Thumbs.db
-*.pt
-*.bin
-*.ckpt
-*.safetensors
-*.zip
+data_io/raw/
+results.csv
 *.log
 
-# Runtime SQLite databases (re-created on every run)
-**/results.db
+# W&B local files
+wandb/
 
-# Pipeline runtime state (re-created by clean_restart.py on each run)
-gbv-research/orchestration/pipeline_state_*.json
-OSD/pipeline_state_*.json
-
-# OSD/ runtime artifacts (not part of the original OSD codebase)
-OSD/.pipeline_lock
-OSD/checkpoints/
-OSD/data/.cache/
-OSD/be_progress.log
-OSD/pipeline_run.log
-OSD/pipeline_err.log
-OSD/pipeline_output.log
-OSD/pipeline_step_*_error.log
-OSD/viz_server_*.log
-
-.claude/
-Claude/
-# EAGLE reference — untracked; pending submodule conversion (delete dir first, then git submodule add)
-EAGLE/
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
