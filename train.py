@@ -70,7 +70,7 @@ SEED            = 42
 K               = 4                          # number of draft paths
 L               = 8                          # draft block length
 DRAFT_TEMP      = 1.0                        # q_temp for the draft model
-TEACHER_TEMP    = 0.8                        # for flat-loss teacher rollout
+TEACHER_TEMP    = 1.0                        # for flat-loss teacher rollout — DistillSpec (arXiv:2310.08461) uses T=1.0
 MAX_NEW_TOKENS  = 128                        # generated sequence length for flat losses
 
 # LoRA toggle (full fine-tune is default).  Set USE_LORA = True for adapter
@@ -438,7 +438,8 @@ def main():
 
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95))
+    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95),
+                                  weight_decay=0.0)   # DistillSpec uses no regularisation
 
     # LR schedule: linear warmup for WARMUP_STEPS optimizer steps, then cosine
     # decay to LR_MIN_RATIO × peak.  Matches DistillSpec (arXiv:2310.08461) which
