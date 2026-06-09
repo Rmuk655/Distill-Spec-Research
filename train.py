@@ -99,7 +99,7 @@ WANDB_PROJECT   = "distillspec-pipeline"
 
 def _prompt_to_ids(prompt: str, tokenizer, device) -> torch.Tensor:
     """Tokenise a string prompt to [1, plen] LongTensor on the model's device."""
-    return torch.tensor(tokenizer.encode(prompt), device=device).unsqueeze(0)
+    return torch.tensor(tokenizer.encode(prompt), device=device, dtype=torch.long).unsqueeze(0)
 
 
 def _prepare_prompt_cache(model, prompt_ids):
