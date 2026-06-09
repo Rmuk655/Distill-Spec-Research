@@ -62,7 +62,7 @@ TEACHER_MODEL   = "Qwen/Qwen3-8B"
 STEPS           = 4000                       # number of gradient-accum steps
 GRAD_ACCUM      = 8                          # opt-steps = STEPS / GRAD_ACCUM = 500
 LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
-WARMUP_STEPS    = 400                        # 10 % of STEPS = 50 opt-steps
+WARMUP_STEPS    = 50                         # 10 % of opt-steps (STEPS/GRAD_ACCUM=500)
 GRAD_CLIP       = 5.0
 SEED            = 42
 
@@ -440,10 +440,24 @@ def main():
     trainable = [p for p in draft.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95))
 
+    # LR schedule: linear warmup for WARMUP_STEPS optimizer steps, then cosine
+    # decay to LR_MIN_RATIO × peak.  Matches DistillSpec (arXiv:2310.08461) which
+    # uses linear warmup + cosine cooldown.  WARMUP_STEPS counts optimizer steps
+    # (scheduler.step() fires once per GRAD_ACCUM training steps), so
+    # WARMUP_STEPS=50 → 50 × GRAD_ACCUM = 400 training steps = 10 % of 4000.
+    # Previously WARMUP_STEPS was set to 400 (training-step count, not opt-step
+    # count), causing 80 % of the run to be in warmup with LR never reaching peak.
+    LR_MIN_RATIO = 0.1                       # cosine decays to 10 % of peak LR
+    total_opt_steps = args.steps // GRAD_ACCUM
     def lr_lambda(step):
         if step < WARMUP_STEPS:
             return step / max(1, WARMUP_STEPS)
-        return 1.0
+        # Cosine decay from 1.0 → LR_MIN_RATIO over remaining opt-steps
+        progress = (step - WARMUP_STEPS) / max(1, total_opt_steps - WARMUP_STEPS)
+        progress = min(progress, 1.0)
+        import math
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return LR_MIN_RATIO + (1.0 - LR_MIN_RATIO) * cosine
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     # Resume?
