@@ -214,7 +214,7 @@ def _gbv_select_path(q_probs_dict, p_probs_dict, q_paths, L):
         for cpfx, tok in children[cur_pfx]:
             qt = q[tok].item()
             pt = p[tok].item()
-            r  = min(1.0, pt / qt) if qt > 1e-9 else 0.0
+            r  = pt / (qt + torch.finfo(p.dtype).eps)
             if r > best[2]:
                 best = (cpfx, tok, r)
         if best[1] is None:
@@ -271,7 +271,7 @@ def _gbv_skew_dict(q_probs_dict, p_probs_dict, path, L, K):
         # Argsort on p/q ratio (discrete — no grad), then cumsum q under that order.
         with torch.no_grad():
             eps   = torch.finfo(q.dtype).eps
-            ratio = torch.minimum(torch.ones_like(p), p / q.detach().clamp(min=eps))
+            ratio = p / q.detach().clamp(min=eps)
             order = torch.argsort(ratio, stable=True)
             inv   = torch.empty_like(order)
             inv[order] = torch.arange(len(order), device=device)
