@@ -17,8 +17,8 @@ Pipeline:
                      run teacher tree forward (no grad)            → p_probs_dict,
                      run student tree forward (WITH grad)          → q_probs_dict,
                      loss = -E[tau_V](q_probs_dict, p_probs_dict, K, L).
-    3. every VAL_EVERY steps → val_loss on held-out gsm8k_val.jsonl,
-       update best_val_loss, save ckpt_best, log to W&B.
+    3. every VAL_EVERY steps → val/block_eff on gsm8k_val.jsonl,
+       update best_val_block_eff, save ckpt_best, log to W&B.
     4. every SAVE_EVERY  steps → write ckpt_latest + training_state.json.
     5. resume picks up from ckpt_latest if --resume is passed.
 
@@ -50,6 +50,7 @@ from data_io import get_path as dataset_path
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
 from inference_util import iid_draft, target_tree_pass
+from eval import speculative_decode_one   # val block-efficiency (same code path as offline eval)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -70,6 +71,8 @@ SEED            = 42
 K               = 4                          # number of draft paths
 L               = 8                          # draft block length
 DRAFT_TEMP      = 1.0                        # q_temp for the draft model
+VAL_K           = K                          # val tree paths  — change to test different K without touching training
+VAL_L           = L                          # val tree depth  — change to test different L without touching training
 TEACHER_TEMP    = 1.0                        # for flat-loss teacher rollout — DistillSpec (arXiv:2310.08461) uses T=1.0
 MAX_NEW_TOKENS  = 128                        # generated sequence length for flat losses
 
@@ -251,25 +254,32 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
 
 # ---------------------------------------------------------------------------
-# Validation: average per-prompt loss over up to VAL_PROMPTS prompts.
-# Uses forward_kl as the comparable val metric for tree losses (the tree
-# objectives themselves are not directly comparable across loss families).
+# Validation: block efficiency via eval.speculative_decode_one (same code path
+# as offline eval.py).  Verifier mode matched to training loss; traversal for
+# losses with no direct pairing (best general BE, Thomas et al. 2026 Table 2).
 # ---------------------------------------------------------------------------
 
+_LOSS_TO_VERIFIER = {
+    "naive_tree": "naive",      "nss_tree": "nss",
+    "specinfer_tree": "specinfer", "spectr_tree": "spectr", "khisti_tree": "khisti",
+    "bv_tree": "bv",            "gbv_tree": "gbv",         "traversal_tree": "traversal",
+}  # kl_tree / rev_kl_tree / jsd_tree / flat losses fall through to "traversal"
+
+
 @torch.no_grad()
-def compute_val_loss(draft, teacher, tokenizer, val_prompts, args):
+def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
+    """Returns val block efficiency averaged over VAL_PROMPTS prompts."""
+    mode = _LOSS_TO_VERIFIER.get(args.loss, "traversal")
     draft.eval()
-    losses = []
+    total_gen, total_calls = 0, 0
     for prompt in val_prompts[:VAL_PROMPTS]:
-        ids = _prompt_to_ids(prompt, tokenizer, draft.device)
-        # Use forward_kl on a short teacher rollout as a stable cross-loss proxy.
-        loss = compute_flat_loss(
-            FLAT_LOSSES["forward_kl"], draft, teacher, ids,
-            max_new_tokens=32, teacher_temp=args.teacher_temp,
-        )
-        losses.append(loss.item())
+        s = speculative_decode_one(teacher, draft, tokenizer, prompt, mode,
+                                   K=VAL_K, L=VAL_L, max_new_tokens=VAL_L,
+                                   temp=args.teacher_temp)
+        total_gen   += s["gen_tokens"]
+        total_calls += s["target_calls"]
     draft.train()
-    return sum(losses) / max(1, len(losses))
+    return total_gen / max(1, total_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +475,7 @@ def main():
     start_step, train_state = (0, {})
     if args.resume:
         start_step, train_state = try_resume(draft, optimizer, scheduler, output_dir)
-    best_val_loss = train_state.get("best_val_loss", float("inf"))
+    best_val_block_eff = train_state.get("best_val_block_eff", 0.0)
 
     # W&B
     wandb_run = setup_wandb(args, output_dir, resumed=(start_step > 0))
@@ -533,29 +543,29 @@ def main():
 
         # Validation + checkpoint best
         if (step + 1) % VAL_EVERY == 0:
-            val_loss = compute_val_loss(draft, teacher, tokenizer, val_prompts, args)
-            print(f"  [val] step={step+1}  val_loss={val_loss:.4f}  "
-                  f"best={best_val_loss:.4f}")
+            val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+            print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                  f"best={best_val_block_eff:.3f}")
             if wandb_run:
-                wandb_run.log({"val/loss": val_loss}, step=step + 1)
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+                wandb_run.log({"val/block_eff": val_be}, step=step + 1)
+            if val_be > best_val_block_eff:
+                best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
-                                state={"step": step + 1, "val_loss": val_loss,
-                                       "best_val_loss": best_val_loss})
-                print(f"  [val] saved ckpt_best (val_loss={val_loss:.4f})")
+                                state={"step": step + 1, "val_block_eff": val_be,
+                                       "best_val_block_eff": best_val_block_eff})
+                print(f"  [val] saved ckpt_best (block_eff={val_be:.3f})")
 
         # Rolling latest checkpoint
         if (step + 1) % SAVE_EVERY == 0:
             save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                             state={"step": step + 1,
-                                   "best_val_loss": best_val_loss})
+                                   "best_val_block_eff": best_val_block_eff})
 
     # Final save
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_final",
-                    state={"step": args.steps, "best_val_loss": best_val_loss})
+                    state={"step": args.steps, "best_val_block_eff": best_val_block_eff})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
-          f"best_val_loss = {best_val_loss:.4f}")
+          f"best_val_block_eff = {best_val_block_eff:.3f}")
     if wandb_run:
         wandb_run.finish()
 
