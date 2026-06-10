@@ -438,7 +438,7 @@ def main():
 
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95),
+    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
                                   weight_decay=0.0)   # DistillSpec uses no regularisation
 
     # LR schedule: linear warmup for WARMUP_STEPS optimizer steps, then cosine
