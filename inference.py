@@ -55,7 +55,7 @@ def main():
 
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
-    tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(TEACHER_MODEL, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     q_model = AutoModelForCausalLM.from_pretrained(
