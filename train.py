@@ -63,7 +63,7 @@ STEPS           = 4000                       # number of gradient-accum steps
 GRAD_ACCUM      = 8                          # opt-steps = STEPS / GRAD_ACCUM = 500
 LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
 WARMUP_STEPS    = 50                         # 10 % of opt-steps (STEPS/GRAD_ACCUM=500)
-GRAD_CLIP       = 5.0
+GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.08461) — 1.0 is the LLM fine-tuning standard (LLaMA, GPT-3, Qwen3)
 SEED            = 42
 
 # Speculative-decoding shape (used by all *_tree losses)
