@@ -59,12 +59,19 @@ VERIFIER_MODES = ["naive", "nss", "specinfer", "spectr", "khisti",
 # is self-contained and a new-grad reader can follow the whole pipeline.
 # ---------------------------------------------------------------------------
 
+@torch.no_grad()
 def speculative_decode_one(p_model, q_model, tokenizer, prompt: str, mode: str,
                             K: int, L: int, max_new_tokens: int, temp: float):
     """
     Run one prompt through speculative decoding under verifier `mode`.
     Returns a dict of per-prompt stats (target_calls, gen_tokens, total_time,
     tree_nodes).
+
+    @torch.no_grad(): eval never backpropagates.  Without this, draft model
+    softmax outputs carry requires_grad=True into TreeVerifier / node.py, which
+    triggers a UserWarning when node.py converts q[token] to a Python float
+    (float() on a grad-tracked tensor).  no_grad() also removes unnecessary
+    autograd overhead during inference.
     """
     import torch.nn.functional as F
 
