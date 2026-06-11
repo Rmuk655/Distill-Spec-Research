@@ -68,10 +68,10 @@ GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.
 SEED            = 42
 
 # Speculative-decoding shape (used by all *_tree losses)
-K               = 4                          # number of draft paths
+K               = 3                          # number of draft paths — K=3 matches offline eval default (eval.py, results CSV)
 L               = 8                          # draft block length
 DRAFT_TEMP      = 1.0                        # q_temp for the draft model
-VAL_K           = K                          # val tree paths  — change to test different K without touching training
+VAL_K           = K                          # val tree paths — tied to K so training and validation always use the same tree shape
 VAL_L           = L                          # val tree depth  — change to test different L without touching training
 TEACHER_TEMP    = 1.0                        # for flat-loss teacher rollout — DistillSpec (arXiv:2310.08461) uses T=1.0
 MAX_NEW_TOKENS  = 128                        # generated sequence length for flat losses
@@ -274,7 +274,7 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
     total_gen, total_calls = 0, 0
     for prompt in val_prompts[:VAL_PROMPTS]:
         s = speculative_decode_one(teacher, draft, tokenizer, prompt, mode,
-                                   K=VAL_K, L=VAL_L, max_new_tokens=VAL_L,
+                                   K=VAL_K, L=VAL_L, max_new_tokens=MAX_NEW_TOKENS,
                                    temp=args.teacher_temp)
         total_gen   += s["gen_tokens"]
         total_calls += s["target_calls"]
