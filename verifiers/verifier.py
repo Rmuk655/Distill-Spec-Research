@@ -380,7 +380,7 @@ class TreeVerifier:
             p_prime = F.relu(leaf_parent.weight * p - q)
             p_prime_sum = p_prime.sum().item()
             if p_prime_sum > 0:
-                leaf_parent.weight = p_prime_sum / (p_prime_sum + 1.0 - leaf_parent.weight)
+                leaf_parent.weight = p_prime_sum / max(p_prime_sum + 1.0 - leaf_parent.weight, 1e-9)
                 self.p_probs_dict[leaf_parent.rep] = p_prime / p_prime_sum
             else:
                 leaf_parent.weight = 0.0
