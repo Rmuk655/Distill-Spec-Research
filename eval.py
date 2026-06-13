@@ -130,6 +130,8 @@ def parse_args():
                     help="How many prompts from the dataset to evaluate.")
     ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     ap.add_argument("--temp",      type=float, default=DEFAULT_TEMP)
+    ap.add_argument("--device",    default="cuda",
+                    help="CUDA device to use, e.g. cuda:1 (default: auto-select freest GPU)")
     ap.add_argument("--seed",      type=int, default=123)
     ap.add_argument("--output",    default=None,
                     help="Override output CSV path (default: results.csv next to eval.py). "
@@ -147,7 +149,7 @@ def main():
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
     tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                        device="cuda", dtype="bf16")
+                                        device=args.device, dtype="bf16")
 
     data_path = dataset_path(args.dataset)
     prompts   = load_prompts_jsonl(data_path)[:args.n]

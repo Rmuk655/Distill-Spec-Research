@@ -379,8 +379,24 @@ def try_resume(model, optimizer, scheduler, output_dir):
 # Model loading (Qwen3 only; A100; BF16; optional LoRA)
 # ---------------------------------------------------------------------------
 
-def load_models(draft_id: str, teacher_id: str):
-    """Load draft + teacher on cuda:0 in bfloat16.  Teacher is frozen."""
+def _best_free_cuda_device() -> str:
+    """Return the cuda:N device with the most free memory."""
+    n = torch.cuda.device_count()
+    if n <= 1:
+        return "cuda:0"
+    best, best_free = 0, -1
+    for i in range(n):
+        free, _ = torch.cuda.mem_get_info(i)
+        if free > best_free:
+            best, best_free = i, free
+    return f"cuda:{best}"
+
+
+def load_models(draft_id: str, teacher_id: str, device: str = "cuda"):
+    """Load draft + teacher in bfloat16.  Teacher is frozen.
+    device="cuda" auto-selects the GPU with the most free memory."""
+    if device == "cuda" and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        device = _best_free_cuda_device()
     print(f"[load] tokenizer={draft_id}")
     tok = AutoTokenizer.from_pretrained(draft_id, trust_remote_code=True)
     if tok.pad_token is None:
@@ -389,12 +405,12 @@ def load_models(draft_id: str, teacher_id: str):
     print(f"[load] draft={draft_id}  (BF16, will be trained)")
     draft = AutoModelForCausalLM.from_pretrained(
         draft_id, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda")
+    ).to(device)
 
     print(f"[load] teacher={teacher_id}  (BF16, frozen)")
     teacher = AutoModelForCausalLM.from_pretrained(
         teacher_id, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda").eval()
+    ).to(device).eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
 
@@ -438,6 +454,8 @@ def parse_args():
                     help="Start a new W&B run even when resuming (default: reuse run id).")
     ap.add_argument("--teacher_temp", type=float, default=TEACHER_TEMP)
     ap.add_argument("--draft_temp",   type=float, default=DRAFT_TEMP)
+    ap.add_argument("--device",       default="cuda",
+                    help="CUDA device, e.g. cuda:1 (default: auto-select freest GPU)")
     return ap.parse_args()
 
 
@@ -451,7 +469,7 @@ def main():
     print(f"[output] {output_dir}")
 
     # Models
-    tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL)
+    tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL, device=args.device)
 
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
