@@ -138,9 +138,20 @@ def load_models(
 
     # Validate custom attention mask compatibility BEFORE compile so we can still
     # inspect the underlying model's layer attributes (compile wraps the module).
-    assert p_model.model.layers[0].attention_type == "full_attention", \
+    # transformers >= 4.52 moved attention_type off the layer; fall back to layer_type,
+    # then config.layer_types, and finally assume full_attention for standard Qwen3.
+    def _attn_type(model) -> str:
+        layer = model.model.layers[0]
+        if hasattr(layer, "attention_type"):
+            return layer.attention_type
+        if hasattr(layer, "layer_type"):
+            return layer.layer_type
+        cfg_types = getattr(model.config, "layer_types", None)
+        return cfg_types[0] if cfg_types else "full_attention"
+
+    assert _attn_type(p_model) == "full_attention", \
         "Custom attention mask not compatible with this HF Model"
-    assert q_model.model.layers[0].attention_type == "full_attention", \
+    assert _attn_type(q_model) == "full_attention", \
         "Custom attention mask not compatible with this HF Model"
 
     # Optionally compile the draft model to reduce Python→CUDA dispatch overhead.
