@@ -1,8 +1,4 @@
 from node import *
-import heapq, math
-import torch
-import torch.nn.functional as F
-
 
 """
 Creates a tree verifier over a draft tree by taking in:
@@ -16,41 +12,22 @@ Any verification method probabilistically outputs a Node in the tree, plus an ad
 
 This class implements a wrapper to call a verification method from a string descriptor.
 The currently available verification methods are shown below.
-    - {descriptor}  {appearing in}                                  {setting}       {OT-based}
-    - naive:        Chen et al. (2023); Leviathan et al. (2023)     single-path     YES
-    - bv:           Block Verification, Sun et al. (2024c)          single-path     NO
-    - nss:          Naive Speculative Sampling, Miao et al. (2024)  multi-path      YES
-    - spectr:       SpecTr, Sun et al. (2023)                       multi-path      YES
-    - specinfer:    SpecInfer, Miao et al. (2024)                   multi-path      YES
-    - khisti:       Canonical Decomposition, Khisti et al. (2025)   multi-path      YES
-    - traversal:    Traversal Verification, Weng et al. (2025)      multi-path      NO
-    - gbv:          Greedy Block Verification (this work)            multi-path      NO
-
-Empirical block efficiency ordering (Thomas et al., 2026, Table 2 — averaged across
-Qwen/Gemma/Llama model pairs, 5 datasets, 8 sampling configs, K tuned per run):
-    traversal (5.31) > specinfer (4.58) ≈ spectr (4.61) > bv (4.30) > nss (4.05)
-
-Key finding from Thomas et al. (2026): Traversal consistently outperforms all OT-based
-methods (+15% BE) because OT-based methods waste branching budget near the root
-(where target/draft distributions are similar), while Traversal's bottom-up approach
-naturally exploits deeper nodes where divergence — and acceptance gains — are larger.
-
-GBV (this work) improves on single-path BV by extending block-level acceptance
-to multi-path i.i.d. trees, achieving higher BE than SpecInfer via greedy path selection.
-
-Reference:
-    Thomas, R., Kitanovski, T., Goldblum, M., Pal, A. (2026).
-    "Dynamic Delayed Tree Expansion for Improved Multi-Path Speculative Decoding."
-    arXiv:2602.16994v1.
-
+    - {descriptor}  {appearing in}              {setting}       {OT-based}
+    - naive:        Speculative Decoding        single-path     YES
+    - bv:           Block Verification          single-path     NO
+    - nss:          Naive Speculative Sampling  multi-path      YES
+    - spectr:       SpecTr                      multi-path      YES
+    - specinfer:    SpecInfer                   multi-path      YES
+    - khisti:       Canonical Decomposition     multi-path      YES
+    - max:          N/A, combines the above     multi-path      YES
+    - traversal:    Traversal Verification      multi-path      NO
+    - gbv:          Greedy Block Verification   multi-path      NO
 NOTE: the bulk of OT-based methods such as spectr are implemented at a token level in the Node class
 NOTE: single-path methods, while intended for K=1, can be used for higher K by only taking the first path
 NOTE: spectr, specinfer, khisti, and max are equivalent to naive if K=1
 NOTE: traversal and gbv are equivalent to bv if K=1
 """
 class TreeVerifier:
-    traversal_cache = {}
-
     def __init__(
         self,
         q_paths: List[List[int]],
@@ -152,7 +129,7 @@ class TreeVerifier:
                 return node, next_token
 
         # If we progressed all the way to a leaf node, sample another token directly from p.
-        p = self.p_probs_dict[node.rep] 
+        p = self.p_probs_dict[node.rep]
         return node, torch.multinomial(p, num_samples=1).item()
 
     def naive_verify(self) -> Tuple[Node, int]:
@@ -175,7 +152,74 @@ class TreeVerifier:
 
 
     """
-    Block verification (https://arxiv.org/pdf/2403.10444) is not an OT-based verification method. 
+    Expected returned node.depth for otlp_verify methods.
+    Uses cutoffs D = L-trunc, ..., L, where verification terminates once it reaches depth >= D.
+    Returns a list with ith entry being E[returned_depth with cutoff D = (L-trunc) + i]
+    Uses nss_otlp_branch once per node to cache on-tree transition probabilities to disticnt child tokens.
+    """
+    def expected_otlp_depths(self, otlp_branch: Callable[[Node, torch.Tensor, torch.Tensor], Dict[int, float]], trunc: int) -> List[float]:
+        n = len(self.nodes)
+        trunc = min(trunc, self.L)
+
+        # Iterate through nodes in decreasing depth, i.e. ancestors appear later in the order.
+        order_desc = sorted(self.nodes, key=lambda u: u.depth, reverse=True)
+
+        # For each node, cache tuples (child_idx, P(append that child's token)) over distinct children, and P(append a token that lands off-tree).
+        edges = [[] for _ in range(n)]
+        stop = [0.0 for _ in range(n)]
+
+        # Iterate through nodes to update edges and stop lists.
+        for node in self.nodes:
+            if node.depth >= self.L or node.children == []:
+                stop[node.idx] = 1.0
+                continue
+
+            # Create mapping of distinct child tokens to indices, overwriting duplicates.
+            token_to_child_idx = {}
+            for child in node.children:
+                token_to_child_idx[child.token] = child.idx
+
+            # Compute branching probability dictionary and update edge and stop lists.
+            branch_dict = otlp_branch(node, self.p_probs_dict[node.rep], self.q_probs_dict[node.rep])
+            continue_prob = 0.0
+            for next_token, next_token_prob in branch_dict.items():
+                edges[node.idx].append((token_to_child_idx[next_token], next_token_prob))
+                continue_prob += next_token_prob
+            stop[node.idx] = max(0.0, 1.0 - continue_prob)
+
+        # For each truncating depth, compute expected OTLP depth on truncated tree from root using DP on edge and stop lists.
+        root_idx = self.nodes[0].idx
+        out = []
+        for end_depth in range(self.L - trunc, self.L + 1):
+            expected_depth = [0.0 for i in range(n)]
+            for node in order_desc:
+                if node.depth >= end_depth:
+                    expected_depth[node.idx] = float(end_depth)
+                else:
+                    expected_depth[node.idx] += stop[node.idx] * node.depth
+                    for child_idx, next_token_prob in edges[node.idx]:
+                        expected_depth[node.idx] += next_token_prob * expected_depth[child_idx]
+            out.append(expected_depth[root_idx])
+        return out
+
+    def expected_naive_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.naive_otlp_branch(p, q), trunc)
+
+    def expected_nss_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.nss_otlp_branch(p, q), trunc)
+
+    def expected_specinfer_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.specinfer_otlp_branch(p, q), trunc)
+
+    def expected_spectr_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.spectr_otlp_branch(p, q), trunc)
+
+    def expected_khisti_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.khisti_otlp_branch(p, q), trunc)
+
+
+    """
+    Block verification (https://arxiv.org/pdf/2403.10444) is not an OT-based verification method.
     This is a single-path method, so when the draft tree contains multiple paths, only the FIRST is used.
     First, it recursively computes node weights p_i and block acceptances h_i as in Algorithm 2 of the paper.
     Then, it randomly accepts (prob h_i) or rejects each block, and selects the last accepted block of length tau.
@@ -201,7 +245,7 @@ class TreeVerifier:
             node = node.children[0]
             denom = torch.clamp(q[node.token], min=1e-8)
             node.weight = min(1.0, weight * (p[node.token] / denom).item())
-            
+
             # Compute block acceptance for the child node.
             h_block = node.weight
             if i < self.L:
@@ -209,13 +253,13 @@ class TreeVerifier:
                 q = self.q_probs_dict[node.rep]
                 h_block = F.relu(node.weight * p - q).sum()
                 h_block = h_block / (h_block + 1.0 - node.weight + 1e-10)
-            
+
             # Set tau to block length if accepted, and verify the block's last node.
             if random.random() <= h_block:
                 tau = i
                 last_ver_node = node
 
-        # If the whole path was accepted, sample an extra token from the target. 
+        # If the whole path was accepted, sample an extra token from the target.
         p = self.p_probs_dict[last_ver_node.rep]
         if tau == self.L:
             return last_ver_node, torch.multinomial(p, num_samples=1).item()
@@ -243,7 +287,7 @@ class TreeVerifier:
         (z / x) * [(A + y + z)^(K-1) + (A + y + z)^(K-2) * (A + y) + ... + (A + y)^(K-1)] / [(A + x)^(K-1) + (A + x)^(K-2) * A + ... + A^(K-1)]
     Simplifying z / x and adjusting scalar constants gives a stable form for reasonably large A:
         q * [((A + y + z) / A)^(K-1) + ((A + y + z) / A)^(K-2) * ((A + y) / A) + ... + ((A + y) / A)^(K-1)]
-    This is the formula we use, and we normalize to make it a valid distribution. 
+    This is the formula we use, and we normalize to make it a valid distribution.
     When A is especially small, we replace division by A with division by max(A, 1e-8) for stability.
     NOTE: It is not recommended to use this function (and GBV) with K > 4 due to numerical instability.
     """
@@ -280,7 +324,7 @@ class TreeVerifier:
 
 
     """
-    Greedy block verification (our method) is not an OT-based verification method. 
+    Greedy block verification (our method) is not an OT-based verification method.
     This is a multi-path method, which reduces to block verification when K=1 (single-path).
     First, it selects the path with highest rank according to lexicographic ordering by p()/q().
     Along the way, computes the skewed draft distribution q_skew at all draft tree nodes.
@@ -288,17 +332,17 @@ class TreeVerifier:
     """
     def gbv_verify(self) -> Tuple[Node, int]:
         q_skew_probs_dict = {}
-        
+
         # Travel from root to a leaf, by stepping to the child node with highest next-token p / q.
         node = self.nodes[0]
         q0 = self.q_probs_dict[node.rep]
         node.q_cdf = None                       # Full CDF distribution of the next token under p / q ordering.
-        node.q_joint = q0.new_tensor(1.0)       # Joint probability value of sampling the current node context. 
+        node.q_joint = q0.new_tensor(1.0)       # Joint probability value of sampling the current node context.
         node.q_joint_cdf = q0.new_tensor(1.0)   # Joint CDF value of sampling <= to the current node context, under lexicographic p / q ordering.
         for _ in range(self.L):
             p_probs = self.p_probs_dict[node.rep]
             q_probs = self.q_probs_dict[node.rep]
-            ratio = torch.minimum(torch.ones_like(p_probs), p_probs / (q_probs + torch.finfo(p_probs.dtype).eps))
+            ratio = p_probs / (q_probs + torch.finfo(p_probs.dtype).eps)
 
             # Compute the current node's q CDF under the vocab ordering of p / q increasing.
             order = torch.argsort(ratio, stable=True)
@@ -312,8 +356,8 @@ class TreeVerifier:
 
                 # Compute CDF as total mass across paths which match the parent and deviate at the last token, or are ranked lower than the parent.
                 node.q_joint_cdf = node.parent.q_joint_cdf - node.parent.q_joint            # Paths whose start ranks lower than the parent.
-                node.q_joint_cdf += node.parent.q_joint * node.parent.q_cdf[node.token]     # Paths that start with the parent and rank lower at next token.      
-            
+                node.q_joint_cdf += node.parent.q_joint * node.parent.q_cdf[node.token]     # Paths that start with the parent and rank lower at next token.
+
             # Compute skewed draft at this node and update the dictionary.
             q_skew_probs_dict[node.rep] = self.compute_skew(node)
 
@@ -332,10 +376,10 @@ class TreeVerifier:
         bv_tree = TreeVerifier([chosen_path], self.q_prefixes, q_skew_probs_dict, self.p_probs_dict)
         return bv_tree.bv_verify()
 
-    
-    
+
+
     """
-    Traversal verification (https://arxiv.org/pdf/2505.12398) is not an OT-based verification method. 
+    Traversal verification (https://arxiv.org/pdf/2505.12398) is not an OT-based verification method.
     This is a multi-path method, which reduces to block verification when K=1 (single-path).
     First, it recursively computes node weights p_alpha, similar to block verification.
     Then, it iteratively selects the first leaf by DFS ordering, and follows one of two paths:
@@ -380,7 +424,7 @@ class TreeVerifier:
             p_prime = F.relu(leaf_parent.weight * p - q)
             p_prime_sum = p_prime.sum().item()
             if p_prime_sum > 0:
-                leaf_parent.weight = p_prime_sum / max(p_prime_sum + 1.0 - leaf_parent.weight, 1e-9)
+                leaf_parent.weight = p_prime_sum / (p_prime_sum + 1.0 - leaf_parent.weight)
                 self.p_probs_dict[leaf_parent.rep] = p_prime / p_prime_sum
             else:
                 leaf_parent.weight = 0.0
