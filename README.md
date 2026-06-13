@@ -28,7 +28,8 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
 # 3. download all 5 evaluation datasets + GSM8K train split
-python -m data_io.download --train
+#    --n 1000 gives 1000 held-out eval prompts (default is 100)
+python -m data_io.download --train --n 1000
 
 # 4. (optional) log in to Weights & Biases for training curves
 wandb login
@@ -110,8 +111,9 @@ What happens during training (per step):
    `--resume` works.
 
 `gsm8k_val.jsonl` and `gsm8k_eval.jsonl` use **non-overlapping** index ranges
-of the GSM8K test split (`items[0:100]` for val, `items[200:200+n]` for eval),
-so the val-best checkpoint selection does not bias the reported eval numbers.
+of the GSM8K test split (`items[0:100]` for val, `items[200:200+n]` for eval).
+With `--n 1000` the eval pool is `items[200:1200]` (within the 1319-prompt test
+set), so the val-best checkpoint selection does not bias the reported eval numbers.
 
 ### LoRA toggle
 
