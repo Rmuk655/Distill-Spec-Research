@@ -425,7 +425,11 @@ class TreeVerifier:
             p_prime = F.relu(leaf_parent.weight * p - q)
             p_prime_sum = p_prime.sum().item()
             if p_prime_sum > 0:
-                leaf_parent.weight = p_prime_sum / (p_prime_sum + 1.0 - leaf_parent.weight)
+                # Parenthesise to avoid p_prime_sum being absorbed into 1.0
+                # when it is subnormal: (p + 1.0) - w can round to 0 even
+                # when p > 0, but p + (1.0 - w) cannot (w <= 1 after clamp).
+                denom = p_prime_sum + (1.0 - leaf_parent.weight)
+                leaf_parent.weight = p_prime_sum / denom
                 self.p_probs_dict[leaf_parent.rep] = p_prime / p_prime_sum
             else:
                 leaf_parent.weight = 0.0
