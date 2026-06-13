@@ -212,12 +212,18 @@ def parse_args():
     ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     ap.add_argument("--temp",      type=float, default=DEFAULT_TEMP)
     ap.add_argument("--seed",      type=int, default=123)
+    ap.add_argument("--output",    default=None,
+                    help="Override output CSV path (default: results.csv next to eval.py). "
+                         "Set to a unique path when running multiple parallel processes.")
     return ap.parse_args()
 
 
 def main():
     args = parse_args()
     set_seed(args.seed)
+    if args.output:
+        global RESULTS_CSV
+        RESULTS_CSV = args.output
 
     # Load models — teacher always Qwen3-8B; draft is the checkpoint.
     print(f"[load] draft={args.checkpoint}")
@@ -253,6 +259,7 @@ def main():
     print("=" * 78)
 
     for mode in modes:
+        set_seed(args.seed)   # reset before every mode so RNG state is identical
         stats = evaluate_one_mode(p_model, q_model, tokenizer, prompts, mode,
                                   K=args.K, L=args.L,
                                   max_new_tokens=args.max_new_tokens, temp=args.temp)

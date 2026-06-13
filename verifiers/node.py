@@ -280,7 +280,9 @@ class Node:
         k = len(self.children)
         if k == 0:
             return self.nss_otlp_solver(p, q)
-        
+        elif k == 1:
+            return self.naive_otlp_solver(p, q)
+
         # Iteratively perform uniform child selection, either accepting it or removing it from child nodes.
         child_tokens = [child.token for child in self.children]
         while child_tokens != []:
