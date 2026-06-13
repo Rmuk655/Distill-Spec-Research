@@ -50,7 +50,7 @@ from data_io import get_path as dataset_path
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
 from inference_util import iid_draft, target_tree_pass
-from eval import speculative_decode_one   # val block-efficiency (same code path as offline eval)
+from main import speculative_decoding_loop
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -240,7 +240,7 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
     # 3. Target tree forward (no grad — teacher is frozen).
     with torch.no_grad():
-        _, _, _, p_probs_dict = target_tree_pass(
+        q_prefixes, _, _, p_probs_dict = target_tree_pass(
             teacher, p_cache, q_paths, K=K, L=L, p_temp=teacher_temp,
         )
 
@@ -249,8 +249,8 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
         draft, prompt_ids, q_paths, L=L, q_temp=draft_temp,
     )
 
-    # 5. Call the loss.
-    return loss_fn(q_probs_dict_grad, p_probs_dict, q_paths, L, K)
+    # 5. Call the loss (q_prefixes passed for tree-DP losses; ignored by others via **_kw).
+    return loss_fn(q_probs_dict_grad, p_probs_dict, q_paths, L, K, q_prefixes=q_prefixes)
 
 
 # ---------------------------------------------------------------------------
@@ -260,9 +260,12 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 # ---------------------------------------------------------------------------
 
 _LOSS_TO_VERIFIER = {
-    "naive_tree": "naive",      "nss_tree": "nss",
-    "specinfer_tree": "specinfer", "spectr_tree": "spectr", "khisti_tree": "khisti",
-    "bv_tree": "bv",            "gbv_tree": "gbv",         "traversal_tree": "traversal",
+    "naive_tree": "naive",          "naive_tree_dp": "naive",
+    "nss_tree": "nss",
+    "specinfer_tree": "specinfer",  "specinfer_tree_dp": "specinfer",
+    "spectr_tree": "spectr",        "spectr_tree_dp": "spectr",
+    "khisti_tree": "khisti",        "khisti_tree_dp": "khisti",
+    "bv_tree": "bv",                "gbv_tree": "gbv",      "traversal_tree": "traversal",
 }  # kl_tree / rev_kl_tree / jsd_tree / flat losses fall through to "traversal"
 
 
@@ -273,9 +276,13 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
     draft.eval()
     total_gen, total_calls = 0, 0
     for prompt in val_prompts[:VAL_PROMPTS]:
-        s = speculative_decode_one(teacher, draft, tokenizer, prompt, mode,
-                                   K=VAL_K, L=VAL_L, max_new_tokens=MAX_NEW_TOKENS,
-                                   temp=args.teacher_temp)
+        speculative_decoding_loop(
+            p_model=teacher, q_model=draft, tok=tokenizer,
+            prompt=prompt, verification_algo=mode,
+            max_new_tokens=MAX_NEW_TOKENS, K=VAL_K, L=VAL_L,
+            p_temp=args.teacher_temp, q_temp=args.teacher_temp,
+        )
+        s = teacher._spec_run_stats
         total_gen   += s["gen_tokens"]
         total_calls += s["target_calls"]
     draft.train()
