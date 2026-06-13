@@ -43,6 +43,8 @@ def parse_args():
     ap.add_argument("--max_new_tokens", type=int, default=128)
     ap.add_argument("--temp",       type=float, default=1.0)
     ap.add_argument("--seed",       type=int,   default=123)
+    ap.add_argument("--device",     default="cuda",
+                    help="CUDA device to use, e.g. cuda:1 (default: auto-select freest GPU)")
     return ap.parse_args()
 
 
@@ -53,7 +55,7 @@ def main():
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
     tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                        device="cuda", dtype="bf16")
+                                        device=args.device, dtype="bf16")
 
     print(f"\n[inference] prompt = {args.prompt!r}")
     print(f"[inference] mode={args.mode}  K={args.K}  L={args.L}  "

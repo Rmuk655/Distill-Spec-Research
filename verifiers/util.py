@@ -44,6 +44,19 @@ breaks or wrong results.  The draft model uses standard causal attention and is 
 compile.  Benefit: reduces Python-side kernel-launch overhead (~100-200 ms/iter on CPU) that
 accounts for ~90% of wall time on small GPUs with fast forward passes.
 """
+def _best_free_cuda_device() -> str:
+    """Return the cuda:N device with the most free memory."""
+    n = torch.cuda.device_count()
+    if n <= 1:
+        return "cuda:0"
+    best, best_free = 0, -1
+    for i in range(n):
+        free, _ = torch.cuda.mem_get_info(i)
+        if free > best_free:
+            best, best_free = i, free
+    return f"cuda:{best}"
+
+
 def load_models(
     p_name: str,
     q_name: str,
@@ -59,6 +72,8 @@ def load_models(
     GPUs (15 GB) where the 8B target in bfloat16 (~16 GB) does not fit.
     The draft model is always loaded in the requested dtype.
     """
+    if device == "cuda" and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        device = _best_free_cuda_device()
     dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
     tok = AutoTokenizer.from_pretrained(p_name, use_fast=False)
     if tok.pad_token_id is None:
