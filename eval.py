@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 from datetime import datetime
 
@@ -57,35 +58,82 @@ VERIFIER_MODES = ["naive", "nss", "specinfer", "spectr", "khisti",
 
 
 # ---------------------------------------------------------------------------
+# Resume state helpers — one JSONL per (mode, K, L), one line per prompt
+# ---------------------------------------------------------------------------
+
+def _state_path(csv_path: str, mode: str, K: int, L: int) -> str:
+    base = csv_path[:-4] if csv_path.endswith(".csv") else csv_path
+    return f"{base}.{mode}_K{K}_L{L}.state.jsonl"
+
+
+def _load_state(path: str) -> dict[int, dict]:
+    """Return {prompt_idx: run_dict} from an existing state file, or {}."""
+    done: dict[int, dict] = {}
+    if not os.path.isfile(path):
+        return done
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                r = json.loads(line)
+                done[r["prompt_idx"]] = r
+    return done
+
+
+# ---------------------------------------------------------------------------
 # Per-mode aggregate — calls speculative_decoding_loop (source of truth)
 # ---------------------------------------------------------------------------
 
-def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L, max_new_tokens, temp):
+def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
+                      max_new_tokens, temp, state_path: str | None = None):
     """Run the prompt set under one verifier mode and aggregate stats.
 
-    Per-run stats (target_calls, gen_tokens, total_time, total_tree_nodes) are
-    written by speculative_decoding_loop() into p_model._spec_profile["runs"].
+    Resumes from a prior partial run if state_path exists — already-completed
+    prompts are skipped and their stats are loaded from disk so block_eff is
+    computed correctly over the full n_prompts denominator.
     """
-    p_model._spec_profile = {"runs": []}
-    for prompt in tqdm(prompts, desc=f"mode={mode} K={K} L={L}", ncols=80):
-        speculative_decoding_loop(
-            p_model=p_model, q_model=q_model, tok=tok,
-            prompt=prompt, verification_algo=mode,
-            max_new_tokens=max_new_tokens, K=K, L=L,
-            p_temp=temp, q_temp=temp,
-        )
+    done = _load_state(state_path) if state_path else {}
+    if done:
+        print(f"  [resume] {len(done)}/{len(prompts)} prompts already done "
+              f"— skipping, loading from {state_path}")
 
-    runs        = p_model._spec_profile["runs"]
-    total_calls = sum(r["target_calls"]     for r in runs)
-    total_gen   = sum(r["gen_tokens"]       for r in runs)
-    total_time  = sum(r["total_time"]       for r in runs)
-    total_nodes = sum(r["total_tree_nodes"] for r in runs)
+    state_f = open(state_path, "a", encoding="utf-8") if state_path else None
+    all_runs: list[dict] = []
+
+    try:
+        for i, prompt in enumerate(tqdm(prompts, desc=f"mode={mode} K={K} L={L}", ncols=80)):
+            if i in done:
+                all_runs.append(done[i])
+                continue
+
+            p_model._spec_profile = {"runs": []}
+            speculative_decoding_loop(
+                p_model=p_model, q_model=q_model, tok=tok,
+                prompt=prompt, verification_algo=mode,
+                max_new_tokens=max_new_tokens, K=K, L=L,
+                p_temp=temp, q_temp=temp,
+            )
+            run = p_model._spec_profile["runs"][0]
+            run["prompt_idx"] = i
+            all_runs.append(run)
+
+            if state_f:
+                state_f.write(json.dumps(run) + "\n")
+                state_f.flush()
+    finally:
+        if state_f:
+            state_f.close()
+
+    total_calls = sum(r["target_calls"]     for r in all_runs)
+    total_gen   = sum(r["gen_tokens"]       for r in all_runs)
+    total_time  = sum(r["total_time"]       for r in all_runs)
+    total_nodes = sum(r["total_tree_nodes"] for r in all_runs)
 
     return {
         "block_eff":      total_gen / total_calls   if total_calls > 0 else float("nan"),
         "throughput":     total_gen / total_time    if total_time  > 0 else float("nan"),
         "avg_tree_nodes": total_nodes / total_calls if total_calls > 0 else float("nan"),
-        "n_prompts":      len(prompts),
+        "n_prompts":      len(all_runs),
         "total_gen":      total_gen,
         "total_time":     total_time,
     }
@@ -165,9 +213,11 @@ def main():
 
     for mode in modes:
         set_seed(args.seed)   # reset before every mode so RNG state is identical
+        sp = _state_path(RESULTS_CSV, mode, args.K, args.L)
         stats = evaluate_one_mode(p_model, q_model, tok, prompts, mode,
                                   K=args.K, L=args.L,
-                                  max_new_tokens=args.max_new_tokens, temp=args.temp)
+                                  max_new_tokens=args.max_new_tokens, temp=args.temp,
+                                  state_path=sp)
         print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
               f"throughput={stats['throughput']:.1f} tok/s  "
               f"avg_tree_nodes={stats['avg_tree_nodes']:.1f}")
