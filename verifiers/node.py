@@ -122,7 +122,7 @@ class Node:
         p_res = Node.naive_cache.get(cache_key)
         if p_res is None:
             p_res = F.relu(p - q)
-            if float(p_res.sum()) <= 0.0:
+            if p_res.sum().detach().item() <= 0.0:
                 p_res = p_res + 1e-4
             p_res = p_res / p_res.sum(dim=-1)
             Node.naive_cache[cache_key] = p_res
@@ -231,7 +231,7 @@ class Node:
             # Compute residual distribution.
             p_acc_beta_ratio = p_acc / beta.clamp(min=1e-6)
             p_res = F.relu(p - torch.minimum(p / rho, q) * p_acc_beta_ratio)
-            if float(p_res.sum()) <= 0.0:
+            if p_res.sum().detach().item() <= 0.0:
                 p_res = p_res + 1e-4
             p_res = p_res / p_res.sum()
 
