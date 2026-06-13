@@ -1,12 +1,16 @@
 """
 eval.py — block-efficiency + alpha evaluation for a trained draft model.
 
-Loads the draft checkpoint + the Qwen3-8B teacher, runs speculative decoding
-on a held-out prompt set, and reports:
+Thin wrapper around speculative_decoding_loop() from main.py (GBV source of truth).
+This file owns: dataset selection, multi-mode sweep, per-mode seed reset, CSV logging.
+All speculative decoding logic lives in main.py — do not duplicate it here.
 
     block_efficiency  = total_generated_tokens / total_target_calls
     throughput        = total_generated_tokens / wall_time   (tok/s)
     avg_tree_nodes    = average tree size per target call
+
+Dataset setup (run once before eval; default gsm8k_eval has 100 prompts):
+    python -m data_io.download --datasets gsm8k --n 1000 --force
 
 Usage:
     python eval.py --checkpoint checkpoints/kl_tree/ckpt_best  --mode gbv
@@ -14,26 +18,24 @@ Usage:
     python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --dataset alpaca   # baseline
     python eval.py --checkpoint ckpts/best --mode gbv --modes naive,gbv,traversal  # sweep
 
+    # parallel eval across modes (parallel-safe --output flag):
+    python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes naive     --output out_naive.csv &
+    python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes specinfer --output out_specinfer.csv &
+
 Results print to stdout AND append one row to results.csv for later analysis.
 """
 from __future__ import annotations
 
 import argparse
 import csv
-import json
 import os
-import sys
-import time
 from datetime import datetime
 
-import torch
 from tqdm import tqdm
 
 import verifiers  # noqa: F401 — sys.path injection
-from util             import load_prompts_jsonl, set_seed
-from inference_util   import iid_draft, target_tree_pass
-from verifier         import TreeVerifier
-from transformers     import AutoTokenizer, AutoModelForCausalLM
+from util    import load_prompts_jsonl, set_seed, load_models
+from main    import speculative_decoding_loop
 
 from data_io import get_path as dataset_path
 
@@ -41,12 +43,12 @@ from data_io import get_path as dataset_path
 # ═══════════════════════════════════════════════════════════════════════════
 #  HARDCODED CONSTANTS — edit these to change defaults
 # ═══════════════════════════════════════════════════════════════════════════
-TEACHER_MODEL  = "Qwen/Qwen3-8B"
-DEFAULT_K      = 3
-DEFAULT_L      = 8
+TEACHER_MODEL        = "Qwen/Qwen3-8B"
+DEFAULT_K            = 3
+DEFAULT_L            = 8
 DEFAULT_MAX_NEW_TOKENS = 128
-DEFAULT_TEMP   = 1.0
-RESULTS_CSV    = os.path.join(os.path.dirname(__file__), "results.csv")
+DEFAULT_TEMP         = 1.0
+RESULTS_CSV          = os.path.join(os.path.dirname(__file__), "results.csv")
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -55,119 +57,34 @@ VERIFIER_MODES = ["naive", "nss", "specinfer", "spectr", "khisti",
 
 
 # ---------------------------------------------------------------------------
-# Speculative decoding loop — same as /GBV/main.py, inlined here so eval.py
-# is self-contained and a new-grad reader can follow the whole pipeline.
+# Per-mode aggregate — calls speculative_decoding_loop (source of truth)
 # ---------------------------------------------------------------------------
 
-@torch.no_grad()
-def speculative_decode_one(p_model, q_model, tokenizer, prompt: str, mode: str,
-                            K: int, L: int, max_new_tokens: int, temp: float):
+def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L, max_new_tokens, temp):
+    """Run the prompt set under one verifier mode and aggregate stats.
+
+    Per-run stats (target_calls, gen_tokens, total_time, total_tree_nodes) are
+    written by speculative_decoding_loop() into p_model._spec_profile["runs"].
     """
-    Run one prompt through speculative decoding under verifier `mode`.
-    Returns a dict of per-prompt stats (target_calls, gen_tokens, total_time,
-    tree_nodes).
-
-    @torch.no_grad(): eval never backpropagates.  Without this, draft model
-    softmax outputs carry requires_grad=True into TreeVerifier / node.py, which
-    triggers a UserWarning when node.py converts q[token] to a Python float
-    (float() on a grad-tracked tensor).  no_grad() also removes unnecessary
-    autograd overhead during inference.
-    """
-    import torch.nn.functional as F
-
-    device = p_model.device
-    # Prefill both models' KV caches on the prompt.
-    ctx = torch.tensor(tokenizer.encode(prompt), device=device, dtype=torch.long).unsqueeze(0)
-    init_len = ctx.shape[-1]
-    p_out = p_model(ctx, use_cache=True, return_dict=True)
-    q_out = q_model(ctx, use_cache=True, return_dict=True)
-    p_cache, q_cache = p_out.past_key_values, q_out.past_key_values
-
-    # First pending token from teacher's last position.
-    pending = torch.multinomial(F.softmax(p_out.logits[:, -1, :] / temp, dim=-1),
-                                num_samples=1)
-
-    target_calls   = 0
-    total_tree_nodes = 0
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    while ctx.shape[-1] + 1 < init_len + max_new_tokens:
-        # 1. Build student's K×L draft tree (no grad — eval is frozen).
-        q_paths, q_cache, q_probs_dict = iid_draft(
-            q_model, q_cache, pending, K=K, L=L, q_temp=temp,
-        )
-        # 2. Score every tree node under the teacher.
-        q_prefixes, q_tokens, p_cache, p_probs_dict = target_tree_pass(
-            p_model, p_cache, q_paths, K=K, L=L, p_temp=temp,
-        )
-        total_tree_nodes += len(q_prefixes)
-
-        # 3. Verifier decides how many tokens to accept (τ) and which residual to emit.
-        tv = TreeVerifier(q_paths, q_prefixes, q_probs_dict, p_probs_dict)
-        ver_node, res_token = tv.verify(mode)
-        tau        = ver_node.depth
-        ver_prefix = ver_node.rep
-        path_idx   = min(i for i, path in enumerate(q_paths)
-                         if ver_prefix == ",".join(str(x) for x in path[:tau + 1]))
-
-        # 4. Splice both KV caches to keep only accepted-prefix rows.
-        from util import slice_cache
-        cached_len = ctx.shape[-1]
-        prefix_slice = [i for i, pfx in enumerate(q_prefixes)
-                        if ver_prefix.startswith(pfx + ",") or ver_prefix == pfx]
-        p_cache = slice_cache(p_cache, [0],
-                              list(range(cached_len)) + [cached_len + x for x in prefix_slice])
-        q_cache = slice_cache(q_cache, [path_idx], list(range(cached_len + tau + 1)))
-        ctx     = torch.cat([ctx, q_tokens[:, prefix_slice]], dim=-1)
-        pending[0, 0] = res_token
-
-        full = torch.cat([ctx, pending], dim=-1)
-        target_calls += 1
-        if (full == p_model.config.eos_token_id).any():
-            break
-
-    torch.cuda.synchronize()
-    total_time = time.perf_counter() - t0
-    gen_tokens = max(full.shape[-1] - init_len, 0)
-    # Decode the generated portion (everything after the prompt) so callers
-    # like inference.py can print it.  eval.py just ignores this field.
-    gen_text = tokenizer.decode(full[0, init_len:].tolist(), skip_special_tokens=True)
-    return {
-        "target_calls":     target_calls,
-        "gen_tokens":       gen_tokens,
-        "total_time":       total_time,
-        "total_tree_nodes": total_tree_nodes,
-        "generated_text":   gen_text,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Per-mode aggregate over a prompt set
-# ---------------------------------------------------------------------------
-
-def evaluate_one_mode(p_model, q_model, tokenizer, prompts, mode,
-                     K, L, max_new_tokens, temp):
-    """Run the prompt set under one verifier mode and aggregate stats."""
-    runs = []
+    p_model._spec_profile = {"runs": []}
     for prompt in tqdm(prompts, desc=f"mode={mode} K={K} L={L}", ncols=80):
-        runs.append(speculative_decode_one(
-            p_model, q_model, tokenizer, prompt, mode,
-            K=K, L=L, max_new_tokens=max_new_tokens, temp=temp,
-        ))
+        speculative_decoding_loop(
+            p_model=p_model, q_model=q_model, tok=tok,
+            prompt=prompt, verification_algo=mode,
+            max_new_tokens=max_new_tokens, K=K, L=L,
+            p_temp=temp, q_temp=temp,
+        )
 
-    total_calls = sum(r["target_calls"]    for r in runs)
+    runs        = p_model._spec_profile["runs"]
+    total_calls = sum(r["target_calls"]     for r in runs)
     total_gen   = sum(r["gen_tokens"]       for r in runs)
     total_time  = sum(r["total_time"]       for r in runs)
     total_nodes = sum(r["total_tree_nodes"] for r in runs)
 
-    block_eff      = total_gen / total_calls   if total_calls   > 0 else float("nan")
-    throughput     = total_gen / total_time    if total_time    > 0 else float("nan")
-    avg_tree_nodes = total_nodes / total_calls if total_calls   > 0 else float("nan")
-
     return {
-        "block_eff":      block_eff,
-        "throughput":     throughput,
-        "avg_tree_nodes": avg_tree_nodes,
+        "block_eff":      total_gen / total_calls   if total_calls > 0 else float("nan"),
+        "throughput":     total_gen / total_time    if total_time  > 0 else float("nan"),
+        "avg_tree_nodes": total_nodes / total_calls if total_calls > 0 else float("nan"),
         "n_prompts":      len(prompts),
         "total_gen":      total_gen,
         "total_time":     total_time,
@@ -227,31 +144,15 @@ def main():
         global RESULTS_CSV
         RESULTS_CSV = args.output
 
-    # Load models — teacher always Qwen3-8B; draft is the checkpoint.
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
-    # Tokenizer: always load from TEACHER_MODEL, not the checkpoint dir.
-    # save_checkpoint() only saves model weights (model.save_pretrained), NOT tokenizer
-    # files (tokenizer.json etc.).  Loading AutoTokenizer from a path without tokenizer
-    # files can silently fall back to a broken tokenizer whose .encode() returns floats,
-    # causing a RuntimeError in the embedding layer.  Draft + teacher share a vocab
-    # (required for speculative decoding), so TEACHER_MODEL is always the right source.
-    tokenizer = AutoTokenizer.from_pretrained(TEACHER_MODEL, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    q_model = AutoModelForCausalLM.from_pretrained(
-        args.checkpoint, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda").eval()
-    p_model = AutoModelForCausalLM.from_pretrained(
-        TEACHER_MODEL, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda").eval()
+    tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
+                                        device="cuda", dtype="bf16")
 
-    # Prompts
     data_path = dataset_path(args.dataset)
-    prompts = load_prompts_jsonl(data_path)[:args.n]
+    prompts   = load_prompts_jsonl(data_path)[:args.n]
     print(f"[data] {data_path} — {len(prompts)} prompts")
 
-    # Modes to sweep
     modes = [m.strip() for m in args.modes.split(",")] if args.modes else [args.mode]
 
     print()
@@ -262,7 +163,7 @@ def main():
 
     for mode in modes:
         set_seed(args.seed)   # reset before every mode so RNG state is identical
-        stats = evaluate_one_mode(p_model, q_model, tokenizer, prompts, mode,
+        stats = evaluate_one_mode(p_model, q_model, tok, prompts, mode,
                                   K=args.K, L=args.L,
                                   max_new_tokens=args.max_new_tokens, temp=args.temp)
         print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
