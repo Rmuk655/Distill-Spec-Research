@@ -89,6 +89,7 @@ def speculative_decode_one(p_model, q_model, tokenizer, prompt: str, mode: str,
 
     target_calls   = 0
     total_tree_nodes = 0
+    torch.cuda.synchronize()
     t0 = time.perf_counter()
     while ctx.shape[-1] + 1 < init_len + max_new_tokens:
         # 1. Build student's K×L draft tree (no grad — eval is frozen).
@@ -125,6 +126,7 @@ def speculative_decode_one(p_model, q_model, tokenizer, prompt: str, mode: str,
         if (full == p_model.config.eos_token_id).any():
             break
 
+    torch.cuda.synchronize()
     total_time = time.perf_counter() - t0
     gen_tokens = max(full.shape[-1] - init_len, 0)
     # Decode the generated portion (everything after the prompt) so callers
