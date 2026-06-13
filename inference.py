@@ -22,12 +22,9 @@ from __future__ import annotations
 import argparse
 import time
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 import verifiers  # noqa: F401 — sys.path injection
-from util             import set_seed
-from eval             import speculative_decode_one    # we reuse the loop from eval.py
+from util  import set_seed, load_models
+from main  import speculative_decoding_loop
 
 
 TEACHER_MODEL = "Qwen/Qwen3-8B"
@@ -55,38 +52,33 @@ def main():
 
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
-    tokenizer = AutoTokenizer.from_pretrained(TEACHER_MODEL, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    q_model = AutoModelForCausalLM.from_pretrained(
-        args.checkpoint, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda").eval()
-    p_model = AutoModelForCausalLM.from_pretrained(
-        TEACHER_MODEL, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda").eval()
+    tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
+                                        device="cuda", dtype="bf16")
 
     print(f"\n[inference] prompt = {args.prompt!r}")
     print(f"[inference] mode={args.mode}  K={args.K}  L={args.L}  "
           f"max_new_tokens={args.max_new_tokens}\n")
 
-    # speculative_decode_one (imported from eval.py) does the full speculative loop
-    # but only returns aggregate stats — we re-tokenise the prompt here so we can
-    # also print the generated text.  In a future cleanup, refactor to return both.
+    p_model._spec_profile = {"runs": []}
     t0 = time.time()
-    stats = speculative_decode_one(
-        p_model, q_model, tokenizer, args.prompt, args.mode,
-        K=args.K, L=args.L,
-        max_new_tokens=args.max_new_tokens, temp=args.temp,
+    full_seq = speculative_decoding_loop(
+        p_model=p_model, q_model=q_model, tok=tok,
+        prompt=args.prompt, verification_algo=args.mode,
+        max_new_tokens=args.max_new_tokens, K=args.K, L=args.L,
+        p_temp=args.temp, q_temp=args.temp,
     )
     elapsed = time.time() - t0
 
+    stats     = p_model._spec_run_stats
+    init_len  = len(tok.encode(args.prompt))
+    gen_text  = tok.decode(full_seq[0, init_len:].tolist(), skip_special_tokens=True)
     block_eff = stats["gen_tokens"] / stats["target_calls"] \
                 if stats["target_calls"] > 0 else float("nan")
 
     print()
     print("─" * 70)
     print("GENERATED TEXT:")
-    print(stats.get("generated_text", "<no text>"))
+    print(gen_text)
     print("─" * 70)
     print()
     print("=" * 70)
