@@ -421,6 +421,7 @@ class TreeVerifier:
             # Update parent weight and target distributions.
             p = self.p_probs_dict[leaf_parent.rep]
             q = self.q_probs_dict[leaf_parent.rep]
+            leaf_parent.weight = min(leaf_parent.weight, 1.0)  # guard fp drift above 1
             p_prime = F.relu(leaf_parent.weight * p - q)
             p_prime_sum = p_prime.sum().item()
             if p_prime_sum > 0:
