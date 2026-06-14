@@ -131,18 +131,29 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
         if state_f:
             state_f.close()
 
-    total_calls = sum(r["target_calls"]     for r in all_runs)
-    total_gen   = sum(r["gen_tokens"]       for r in all_runs)
-    total_time  = sum(r["total_time"]       for r in all_runs)
-    total_nodes = sum(r["total_tree_nodes"] for r in all_runs)
+    total_calls  = sum(r["target_calls"]     for r in all_runs)
+    total_gen    = sum(r["gen_tokens"]       for r in all_runs)
+    total_time   = sum(r["total_time"]       for r in all_runs)
+    total_nodes  = sum(r["total_tree_nodes"] for r in all_runs)
+    time_draft   = sum(r.get("time_draft",   0.0) for r in all_runs)
+    time_target  = sum(r.get("time_target",  0.0) for r in all_runs)
+    time_verify  = sum(r.get("time_verify",  0.0) for r in all_runs)
+    time_cache   = sum(r.get("time_cache",   0.0) for r in all_runs)
 
     return {
-        "block_eff":      total_gen / total_calls   if total_calls > 0 else float("nan"),
-        "throughput":     total_gen / total_time    if total_time  > 0 else float("nan"),
-        "avg_tree_nodes": total_nodes / total_calls if total_calls > 0 else float("nan"),
-        "n_prompts":      len(all_runs),
-        "total_gen":      total_gen,
-        "total_time":     total_time,
+        "block_eff":        total_gen / total_calls   if total_calls > 0 else float("nan"),
+        "throughput":       total_gen / total_time    if total_time  > 0 else float("nan"),
+        "avg_tree_nodes":   total_nodes / total_calls if total_calls > 0 else float("nan"),
+        "n_prompts":        len(all_runs),
+        "total_calls":      total_calls,
+        "total_gen":        total_gen,
+        "total_time":       total_time,
+        "time_per_call_ms": 1000.0 * total_time / total_calls  if total_calls > 0 else float("nan"),
+        "time_per_token_ms":1000.0 * total_time / total_gen    if total_gen   > 0 else float("nan"),
+        "time_draft_s":     time_draft,
+        "time_target_s":    time_target,
+        "time_verify_s":    time_verify,
+        "time_cache_s":     time_cache,
     }
 
 
@@ -151,8 +162,10 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
 # ---------------------------------------------------------------------------
 
 CSV_COLUMNS = ["timestamp", "checkpoint", "dataset", "mode", "K", "L",
-               "n_prompts", "block_eff", "throughput_tok_s", "avg_tree_nodes",
-               "total_gen_tokens", "total_time_s"]
+               "n_prompts", "target_calls", "block_eff", "throughput_tok_s",
+               "time_per_call_ms", "time_per_token_ms",
+               "avg_tree_nodes", "total_gen_tokens", "total_time_s",
+               "time_draft_s", "time_target_s", "time_verify_s", "time_cache_s"]
 
 
 def append_csv_row(row: dict):
@@ -230,18 +243,25 @@ def main():
               f"avg_tree_nodes={stats['avg_tree_nodes']:.1f}")
 
         append_csv_row({
-            "timestamp":        datetime.utcnow().isoformat(timespec="seconds"),
-            "checkpoint":       args.checkpoint,
-            "dataset":          args.dataset,
-            "mode":             mode,
-            "K":                args.K,
-            "L":                args.L,
-            "n_prompts":        stats["n_prompts"],
-            "block_eff":        f"{stats['block_eff']:.6f}",
-            "throughput_tok_s": f"{stats['throughput']:.4f}",
-            "avg_tree_nodes":   f"{stats['avg_tree_nodes']:.4f}",
-            "total_gen_tokens": stats["total_gen"],
-            "total_time_s":     f"{stats['total_time']:.2f}",
+            "timestamp":         datetime.utcnow().isoformat(timespec="seconds"),
+            "checkpoint":        args.checkpoint,
+            "dataset":           args.dataset,
+            "mode":              mode,
+            "K":                 args.K,
+            "L":                 args.L,
+            "n_prompts":         stats["n_prompts"],
+            "target_calls":      stats["total_calls"],
+            "block_eff":         f"{stats['block_eff']:.6f}",
+            "throughput_tok_s":  f"{stats['throughput']:.4f}",
+            "time_per_call_ms":  f"{stats['time_per_call_ms']:.3f}",
+            "time_per_token_ms": f"{stats['time_per_token_ms']:.3f}",
+            "avg_tree_nodes":    f"{stats['avg_tree_nodes']:.4f}",
+            "total_gen_tokens":  stats["total_gen"],
+            "total_time_s":      f"{stats['total_time']:.2f}",
+            "time_draft_s":      f"{stats['time_draft_s']:.3f}",
+            "time_target_s":     f"{stats['time_target_s']:.3f}",
+            "time_verify_s":     f"{stats['time_verify_s']:.3f}",
+            "time_cache_s":      f"{stats['time_cache_s']:.3f}",
         })
 
     print(f"\n[done] results appended to {RESULTS_CSV}")

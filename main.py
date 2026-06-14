@@ -60,6 +60,8 @@ def speculative_decoding_loop(
     _run_stats = {
         "time_draft": 0.0,
         "time_target": 0.0,
+        "time_verify": 0.0,
+        "time_cache": 0.0,
         "total_tree_nodes": 0,
         "kv_target_peak_bytes": 0,
         "kv_draft_peak_bytes": 0,
@@ -174,18 +176,30 @@ def speculative_decoding_iter(
 
     # (3) Verification to select one node on one draft path, plus a residual token, and then update caches and contexts
     tree_verifier = TreeVerifier(q_paths, q_prefixes, q_probs_dict, p_probs_dict)
+    if _run_stats is not None:
+        torch.cuda.synchronize()
+        _t_verify = time.perf_counter()
     ver_node, res_token = tree_verifier.verify(verification_algo)
+    if _run_stats is not None:
+        torch.cuda.synchronize()
+        _run_stats["time_verify"] += time.perf_counter() - _t_verify
     tau = ver_node.depth
     ver_prefix = ver_node.rep
     path_idx = min(i for i, path in enumerate(q_paths) if ver_prefix == ",".join(str(x) for x in path[:tau + 1]))
 
     # (4) Update caches and contexts accordingly for the next iteration of decoding.
+    if _run_stats is not None:
+        torch.cuda.synchronize()
+        _t_cache = time.perf_counter()
     cached_len = context_cached.shape[-1]
     prefix_slice = [i for i, q_prefix in enumerate(q_prefixes) if ver_prefix.startswith(q_prefix + ",") or ver_prefix == q_prefix]
     p_cache = slice_cache(p_cache, [0], list(range(cached_len)) + [(cached_len + x) for x in prefix_slice])
     q_cache = slice_cache(q_cache, [path_idx], list(range(cached_len + tau + 1)))
     context_cached = torch.cat([context_cached, q_tokens[:, prefix_slice]], dim=-1)
     context_pending[0, 0] = res_token
+    if _run_stats is not None:
+        torch.cuda.synchronize()
+        _run_stats["time_cache"] += time.perf_counter() - _t_cache
 
     # Profile KV cache sizes
     if _run_stats is not None:
