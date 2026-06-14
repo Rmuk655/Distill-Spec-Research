@@ -61,9 +61,16 @@ VERIFIER_MODES = ["naive", "nss", "specinfer", "spectr", "khisti",
 # Resume state helpers — one JSONL per (mode, K, L), one line per prompt
 # ---------------------------------------------------------------------------
 
-def _state_path(csv_path: str, mode: str, K: int, L: int) -> str:
-    base = csv_path[:-4] if csv_path.endswith(".csv") else csv_path
-    return f"{base}.{mode}_K{K}_L{L}.state.jsonl"
+def _state_path(csv_path: str, mode: str, K: int, L: int, checkpoint: str = "") -> str:
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(csv_path)), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    if checkpoint:
+        parts = checkpoint.replace("\\", "/").rstrip("/").split("/")
+        ckpt_tag = "_".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+        filename = f"{ckpt_tag}.{mode}_K{K}_L{L}.state.jsonl"
+    else:
+        filename = f"{mode}_K{K}_L{L}.state.jsonl"
+    return os.path.join(logs_dir, filename)
 
 
 def _load_state(path: str) -> dict[int, dict]:
@@ -213,7 +220,7 @@ def main():
 
     for mode in modes:
         set_seed(args.seed)   # reset before every mode so RNG state is identical
-        sp = _state_path(RESULTS_CSV, mode, args.K, args.L)
+        sp = _state_path(RESULTS_CSV, mode, args.K, args.L, args.checkpoint)
         stats = evaluate_one_mode(p_model, q_model, tok, prompts, mode,
                                   K=args.K, L=args.L,
                                   max_new_tokens=args.max_new_tokens, temp=args.temp,
