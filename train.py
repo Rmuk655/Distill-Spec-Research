@@ -261,11 +261,11 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 # ---------------------------------------------------------------------------
 
 _LOSS_TO_VERIFIER = {
-    "naive_tree": "naive",          "naive_tree_dp": "naive",
-    "nss_tree": "nss",
-    "specinfer_tree": "specinfer",  "specinfer_tree_dp": "specinfer",
-    "spectr_tree": "spectr",        "spectr_tree_dp": "spectr",
-    "khisti_tree": "khisti",        "khisti_tree_dp": "khisti",
+    "naive_tree": "naive",          "naive_tree_dp": "naive",         "naive_tree_pg": "naive",
+    "nss_tree": "nss",                                                "nss_tree_pg": "nss",
+    "specinfer_tree": "specinfer",  "specinfer_tree_dp": "specinfer", "specinfer_tree_pg": "specinfer",
+    "spectr_tree": "spectr",        "spectr_tree_dp": "spectr",       "spectr_tree_pg": "spectr",
+    "khisti_tree": "khisti",        "khisti_tree_dp": "khisti",       "khisti_tree_pg": "khisti",
     "bv_tree": "bv",                "gbv_tree": "gbv",      "traversal_tree": "traversal",
 }  # kl_tree / rev_kl_tree / jsd_tree / flat losses fall through to "traversal"
 
