@@ -532,93 +532,6 @@ def khisti_tree_dp(q_probs_dict, p_probs_dict, q_paths, L, K, q_prefixes=None, *
 
 
 # ---------------------------------------------------------------------------
-# 5.  Online policy-gradient (REINFORCE) over the researcher's exact OTLP depth.
-#
-#     The researcher's TreeVerifier.expected_*_depths return PLAIN PYTHON FLOATS
-#     (every *_otlp_branch in node.py casts via float(); see GBV/node.py) — they
-#     are non-differentiable BY DESIGN, used as offline regression labels in
-#     build_training_data.py under torch.inference_mode().  Back-propagating
-#     through them (the *_tree_dp losses above) only carries gradient because the
-#     pipeline's node.py fork dropped those float() casts, and that gradient is
-#     the degenerate clamp(p/q, max=1) form that collapses q.
-#
-#     This family instead uses the EXACT depth metric UNMODIFIED, as a detached
-#     scalar reward R = E[τ_V], and gets the training signal from the
-#     score-function (REINFORCE) estimator:
-#
-#         ∇θ E_{tree~qθ}[R(tree)] = E[ (R − b) · ∇θ log qθ(tree) ]
-#
-#     The gradient flows only through log qθ(tree) — the student's log-prob of
-#     the freshly-sampled draft tree — never through the verifier.  b is an EMA
-#     baseline for variance reduction.  This optimises the true multi-step tree
-#     depth on-policy without touching researcher source or duplicating it.
-# ---------------------------------------------------------------------------
-
-_PG_BASELINE: Dict[str, float] = {}          # EMA reward baseline, per depth_fn
-_PG_BASELINE_BETA = 0.9
-
-
-def _tree_depth_reward(depth_fn_name, q_probs_dict, p_probs_dict, q_paths, L, q_prefixes):
-    """Detached scalar reward R = E[τ_V] via the researcher's exact OTLP DP.
-
-    Inputs are detached first so the verifier sees constants — the DP output is
-    used purely as a reward and never enters the autograd graph.
-    """
-    from verifier import TreeVerifier     # verifiers/ already on sys.path
-    q_det = {k: v.detach() for k, v in q_probs_dict.items()}
-    p_det = {k: v.detach() for k, v in p_probs_dict.items()}
-    tree   = TreeVerifier(q_paths, q_prefixes, q_det, p_det)
-    depths = getattr(tree, depth_fn_name)(L)
-    return float(depths[-1]) if depths else 0.0
-
-
-def _tree_logprob(q_probs_dict, q_paths, L):
-    """log qθ(tree) = Σ_paths Σ_{i=1..L} log q(path[i] | path[:i]).
-
-    Each of the K i.i.d. paths contributes the log-prob of every token it
-    sampled, scored under the CURRENT student (q_probs_dict carries grad).
-    """
-    device = next(iter(q_probs_dict.values())).device
-    logp   = torch.zeros(1, device=device)
-    used   = False
-    for path in q_paths:
-        for i in range(1, L + 1):
-            prefix = ",".join(str(x) for x in path[:i])
-            if prefix not in q_probs_dict:
-                break
-            q   = q_probs_dict[prefix]
-            tok = int(path[i])
-            if tok < q.shape[-1]:
-                logp = logp + torch.log(q[tok].clamp(min=1e-12))
-                used = True
-    return logp, used
-
-
-def _reinforce_depth_loss(depth_fn_name, q_probs_dict, p_probs_dict, q_paths, L, q_prefixes):
-    """-(R - b) · log qθ(tree).  Minimising this ascends E[R] = E[τ_V]."""
-    device = next(iter(q_probs_dict.values())).device
-    if q_prefixes is None:
-        return torch.zeros(1, device=device, requires_grad=True)
-
-    R = _tree_depth_reward(depth_fn_name, q_probs_dict, p_probs_dict, q_paths, L, q_prefixes)
-    logp, used = _tree_logprob(q_probs_dict, q_paths, L)
-    if not used:
-        return torch.zeros(1, device=device, requires_grad=True)
-
-    b = _PG_BASELINE.get(depth_fn_name, R)                       # pre-update baseline
-    _PG_BASELINE[depth_fn_name] = _PG_BASELINE_BETA * b + (1.0 - _PG_BASELINE_BETA) * R
-    advantage = R - b                                           # detached scalar
-    return -(advantage * logp)
-
-
-def naive_tree_pg    (q, p, paths, L, K, q_prefixes=None, **_kw): return _reinforce_depth_loss("expected_naive_depths",     q, p, paths, L, q_prefixes)
-def nss_tree_pg      (q, p, paths, L, K, q_prefixes=None, **_kw): return _reinforce_depth_loss("expected_nss_depths",       q, p, paths, L, q_prefixes)
-def specinfer_tree_pg(q, p, paths, L, K, q_prefixes=None, **_kw): return _reinforce_depth_loss("expected_specinfer_depths", q, p, paths, L, q_prefixes)
-def spectr_tree_pg   (q, p, paths, L, K, q_prefixes=None, **_kw): return _reinforce_depth_loss("expected_spectr_depths",    q, p, paths, L, q_prefixes)
-def khisti_tree_pg   (q, p, paths, L, K, q_prefixes=None, **_kw): return _reinforce_depth_loss("expected_khisti_depths",    q, p, paths, L, q_prefixes)
-
-
-# ---------------------------------------------------------------------------
 # Registry — train.py looks up the loss here by --loss flag.
 # Every value has the signature (q_probs_dict, p_probs_dict, q_paths, L, K, **_kw).
 # ---------------------------------------------------------------------------
@@ -638,9 +551,4 @@ TREE_LOSSES = {
     "spectr_tree_dp":     spectr_tree_dp,
     "specinfer_tree_dp":  specinfer_tree_dp,
     "khisti_tree_dp":     khisti_tree_dp,
-    "naive_tree_pg":      naive_tree_pg,
-    "nss_tree_pg":        nss_tree_pg,
-    "specinfer_tree_pg":  specinfer_tree_pg,
-    "spectr_tree_pg":     spectr_tree_pg,
-    "khisti_tree_pg":     khisti_tree_pg,
 }
