@@ -51,6 +51,7 @@ from data_io import get_path as dataset_path
 import verifiers  # noqa: F401  — side effect: sys.path injection
 from inference_util import iid_draft, target_tree_pass
 from main import speculative_decoding_loop
+from node import Node  # class-level caches cleared each step to avoid id() reuse bugs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -531,6 +532,9 @@ def main():
         ids    = _prompt_to_ids(prompt, tokenizer, draft.device)
 
         if tree:
+            Node.naive_cache.clear()
+            Node.spectr_cache.clear()
+            Node.specinfer_cache.clear()
             loss = compute_tree_loss(loss_fn, draft, teacher, ids,
                                      K=K, L=L,
                                      draft_temp=args.draft_temp,
