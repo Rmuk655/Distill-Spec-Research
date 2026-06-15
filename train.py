@@ -380,38 +380,15 @@ def try_resume(model, optimizer, scheduler, output_dir):
 # Model loading (Qwen3 only; A100; BF16; optional LoRA)
 # ---------------------------------------------------------------------------
 
-def _best_free_cuda_device() -> str:
-    """Return the cuda:N device with the most free memory."""
-    n = torch.cuda.device_count()
-    if n <= 1:
-        return "cuda:0"
-    best, best_free = 0, -1
-    for i in range(n):
-        free, _ = torch.cuda.mem_get_info(i)
-        if free > best_free:
-            best, best_free = i, free
-    return f"cuda:{best}"
-
-
 def load_models(draft_id: str, teacher_id: str, device: str = "cuda"):
-    """Load draft + teacher in bfloat16.  Teacher is frozen.
-    device="cuda" auto-selects the GPU with the most free memory."""
-    if device == "cuda" and torch.cuda.is_available() and torch.cuda.device_count() > 1:
-        device = _best_free_cuda_device()
-    print(f"[load] tokenizer={draft_id}")
-    tok = AutoTokenizer.from_pretrained(draft_id, trust_remote_code=True)
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-
-    print(f"[load] draft={draft_id}  (BF16, will be trained)")
-    draft = AutoModelForCausalLM.from_pretrained(
-        draft_id, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to(device)
-
-    print(f"[load] teacher={teacher_id}  (BF16, frozen)")
-    teacher = AutoModelForCausalLM.from_pretrained(
-        teacher_id, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to(device).eval()
+    """Load draft + teacher via verifiers/util.load_models, then configure for training.
+    util.load_models handles device selection and BF16 loading; we add the training-specific
+    setup: re-enable grad, freeze teacher, optionally wrap draft in LoRA."""
+    from util import load_models as _sot_load
+    tok, teacher, draft = _sot_load(teacher_id, draft_id, device=device)
+    # util.load_models disables grad globally (inference default); restore for training.
+    torch.set_grad_enabled(True)
+    teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
 
@@ -430,6 +407,7 @@ def load_models(draft_id: str, teacher_id: str, device: str = "cuda"):
         for p in draft.parameters():
             p.requires_grad_(True)
 
+    draft.train()
     return tok, draft, teacher
 
 
