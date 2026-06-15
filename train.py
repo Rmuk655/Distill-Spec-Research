@@ -457,6 +457,12 @@ def parse_args():
     ap.add_argument("--draft_temp",   type=float, default=DRAFT_TEMP)
     ap.add_argument("--device",       default="cuda",
                     help="CUDA device, e.g. cuda:1 (default: auto-select freest GPU)")
+    ap.add_argument("--aux_loss",   type=str, default=None,
+                    choices=sorted(ALL_LOSSES.keys()),
+                    help="Optional auxiliary loss: total = primary + aux_weight * aux. "
+                         "Typical use: --loss forward_kl --aux_loss naive_tree --aux_weight 0.1")
+    ap.add_argument("--aux_weight", type=float, default=0.1,
+                    help="Scalar weight applied to the auxiliary loss (default 0.1).")
     return ap.parse_args()
 
 
@@ -521,6 +527,12 @@ def main():
     tree     = is_tree_loss(args.loss)
     print(f"[loss] {args.loss}  ({'tree' if tree else 'flat'})")
 
+    aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
+    aux_is_tree = is_tree_loss(args.aux_loss) if args.aux_loss else False
+    if aux_loss_fn is not None:
+        print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
+              f"weight={args.aux_weight}")
+
     # ── Training loop ─────────────────────────────────────────────────────────
     draft.train()
     optimizer.zero_grad(set_to_none=True)
@@ -543,6 +555,21 @@ def main():
             loss = compute_flat_loss(loss_fn, draft, teacher, ids,
                                      max_new_tokens=MAX_NEW_TOKENS,
                                      teacher_temp=args.teacher_temp)
+
+        if aux_loss_fn is not None:
+            if aux_is_tree:
+                Node.naive_cache.clear()
+                Node.spectr_cache.clear()
+                Node.specinfer_cache.clear()
+                aux = compute_tree_loss(aux_loss_fn, draft, teacher, ids,
+                                        K=K, L=L,
+                                        draft_temp=args.draft_temp,
+                                        teacher_temp=args.teacher_temp)
+            else:
+                aux = compute_flat_loss(aux_loss_fn, draft, teacher, ids,
+                                        max_new_tokens=MAX_NEW_TOKENS,
+                                        teacher_temp=args.teacher_temp)
+            loss = loss + args.aux_weight * aux
 
         # Gradient accumulation: scale by 1/GRAD_ACCUM, only step every GRAD_ACCUM micro-steps.
         (loss / GRAD_ACCUM).backward()
