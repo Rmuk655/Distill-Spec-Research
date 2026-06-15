@@ -166,57 +166,31 @@ def bv_tree(q_probs_dict, p_probs_dict, q_paths, L, K=None, **_kw):
 
 def traversal_tree(q_probs_dict, p_probs_dict, q_paths, L, K, **_kw):
     """
-    Differentiable surrogate for E[τ_traversal].
+    Differentiable surrogate for E[τ_traversal] via _bv_path_loss per path.
 
-    The traversal verifier (verifier.py::traversal_verify) initialises each node
-    with a running-clamped weight
+    The traversal verifier applies BV-style leaf-rejection on a K-path tree
+    (identical to BV at K=1).  The previous running-weight surrogate used
+    p[token]/q[token] (single sampled token) for its gradient, which is sparse:
+    it can only push q DOWN at sampled tokens and has no signal to push q UP
+    toward p.  Over training the model finds a degenerate minimum where q
+    concentrates on a teacher-rejected token (p[token]≈0 → alpha→0 → e_tau→0
+    → loss→0 → gradient vanishes → training freezes).
 
-        w_d = min(1, w_{d-1} · p_d/q_d),   w_0 = 1
-
-    and then runs a sequential leaf-rejection process (block-acceptance updates,
-    identical to BV at K=1) to find the accepted depth.  The exact E[τ] is not
-    differentiable.
-
-    This surrogate sums the INITIALISATION weights as a telescoping approximation:
-
-        E[τ_surrogate] = Σ_{d=1..L} w_d
-
-    Two improvements over the previous product surrogate (−Π min(1, p_i/q_i)):
-      1. Telescoping sum instead of terminal product — gradient at every depth,
-         not just the last (at L=8 the product is O(0.05), near-zero gradient).
-      2. Running clamp instead of per-factor clamp — matches the verifier's own
-         weight initialisation (verifier.py:356) and recovers after shortfalls.
-
-    Gradient enters only through the current depth's q (w_{d-1} is detached),
-    consistent with the telescoping pattern in _bv_path_loss and _telescoping_loss.
+    Fix: delegate to _bv_path_loss, which carries the full-vocabulary gradient
+    through F.relu(w*p − q) and correctly pushes up every token where q < w*p.
+    Traversal and BV share the same acceptance semantics at K=1; for K>1 this
+    is the closest differentiable surrogate in the existing codebase.
     """
     device  = next(iter(q_probs_dict.values())).device
     total   = torch.zeros(1, device=device)
     n_paths = 0
     for path in q_paths:
-        e_tau = torch.zeros(1, device=device)
-        w     = torch.ones(1, device=device)          # w_0 = 1 per verifier init
-        used  = False
-        for i in range(1, L + 1):
-            prefix = ",".join(str(x) for x in path[:i])
-            token  = path[i]
-            if prefix not in q_probs_dict or prefix not in p_probs_dict:
-                break
-            p = p_probs_dict[prefix].detach().to(w.dtype)
-            q = q_probs_dict[prefix].to(w.dtype)
-            # Running-clamped weight: w_d = min(1, w_{d-1} · p_d/q_d).
-            # Detach w_{d-1} so gradient is single-pass through current q.
-            alpha = torch.clamp(w.detach() * p[token] / q[token].clamp(min=1e-9),
-                                max=1.0)
-            e_tau = e_tau + alpha                      # E[τ] += w_d
-            w     = alpha.detach()                     # carry forward, no grad
-            used  = True
-        if used:
-            total   += e_tau
-            n_paths += 1
+        loss_path = _bv_path_loss(q_probs_dict, p_probs_dict, path, L)
+        total  += loss_path
+        n_paths += 1
     if n_paths == 0:
         return torch.zeros(1, device=device, requires_grad=True)
-    return -(total / n_paths)
+    return total / n_paths
 
 
 # --- GBV (greedy path + BV on skewed distribution) ----------------------------
