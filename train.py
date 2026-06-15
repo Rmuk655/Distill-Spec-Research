@@ -286,6 +286,16 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
 # the same dashboard URL instead of splitting across two runs).
 # ---------------------------------------------------------------------------
 
+def run_slug(args) -> str:
+    """Loss component of the run identifier, shared by the checkpoint dir and the W&B
+    run name. Includes the aux loss + weight so a combined run (e.g. forward_kl+l1x0.5)
+    never overwrites the single-loss run's checkpoints."""
+    slug = args.loss
+    if args.aux_loss:
+        slug += f"+{args.aux_loss}x{args.aux_weight}"
+    return slug
+
+
 def setup_wandb(args, output_dir, resumed: bool):
     """Initialise W&B, resuming the saved run id if <output>/wandb_run.json exists."""
     if args.no_wandb:
@@ -305,12 +315,10 @@ def setup_wandb(args, output_dir, resumed: bool):
         except Exception:
             saved = None
 
-    loss_tag = args.loss
     tags = [args.loss, f"K{K}", f"L{L}"]
     if args.aux_loss:
-        loss_tag += f"+{args.aux_loss}x{args.aux_weight}"
         tags.append(f"aux:{args.aux_loss}")
-    run_name = f"{loss_tag}_K{K}_L{L}_seed{args.seed}"
+    run_name = f"{run_slug(args)}_K{K}_L{L}_seed{args.seed}"
     init_kw = dict(project=WANDB_PROJECT, name=run_name,
                    tags=tags, config=vars(args))
     if saved:
@@ -424,7 +432,7 @@ def parse_args():
                     help=f"Validation dataset name passed to data_io.get_path (default {VAL_DATASET}).")
     ap.add_argument("--seed",   type=int, default=SEED)
     ap.add_argument("--output", type=str, default=None,
-                    help=f"Output dir for checkpoints (default {OUTPUT_ROOT}/<loss>).")
+                    help=f"Output dir for checkpoints (default {OUTPUT_ROOT}/<loss>[+<aux>x<weight>]).")
     ap.add_argument("--resume", action="store_true",
                     help="Resume from <output>/ckpt_latest if it exists.")
     ap.add_argument("--no_wandb",     action="store_true", help="Disable W&B logging.")
@@ -447,7 +455,7 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
-    output_dir = args.output or os.path.join(OUTPUT_ROOT, args.loss)
+    output_dir = args.output or os.path.join(OUTPUT_ROOT, run_slug(args))
     os.makedirs(output_dir, exist_ok=True)
     print(f"[output] {output_dir}")
 
