@@ -166,6 +166,34 @@ def append_csv_row(row: dict):
         w.writerow(row)
 
 
+def log_result(stats: dict, args, mode: str):
+    """Print a one-line summary and append a CSV row — called once per mode."""
+    print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
+          f"throughput={stats['throughput']:.1f} tok/s  "
+          f"avg_tree_nodes={stats['avg_tree_nodes']:.1f}")
+    append_csv_row({
+        "timestamp":         datetime.utcnow().isoformat(timespec="seconds"),
+        "checkpoint":        args.checkpoint,
+        "dataset":           args.dataset,
+        "mode":              mode,
+        "K":                 args.K,
+        "L":                 args.L,
+        "n_prompts":         stats["n_prompts"],
+        "target_calls":      stats["total_calls"],
+        "block_eff":         f"{stats['block_eff']:.6f}",
+        "throughput_tok_s":  f"{stats['throughput']:.4f}",
+        "time_per_call_ms":  f"{stats['time_per_call_ms']:.3f}",
+        "time_per_token_ms": f"{stats['time_per_token_ms']:.3f}",
+        "avg_tree_nodes":    f"{stats['avg_tree_nodes']:.4f}",
+        "total_gen_tokens":  stats["total_gen"],
+        "total_time_s":      f"{stats['total_time']:.2f}",
+        "time_draft_s":      f"{stats['time_draft_s']:.3f}",
+        "time_target_s":     f"{stats['time_target_s']:.3f}",
+        "time_verify_s":     f"{stats['time_verify_s']:.3f}",
+        "time_cache_s":      f"{stats['time_cache_s']:.3f}",
+    })
+
+
 # ---------------------------------------------------------------------------
 # Argparse + main
 # ---------------------------------------------------------------------------
@@ -226,31 +254,7 @@ def main():
                                   K=args.K, L=args.L,
                                   max_new_tokens=args.max_new_tokens, temp=args.temp,
                                   state_path=sp)
-        print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
-              f"throughput={stats['throughput']:.1f} tok/s  "
-              f"avg_tree_nodes={stats['avg_tree_nodes']:.1f}")
-
-        append_csv_row({
-            "timestamp":         datetime.utcnow().isoformat(timespec="seconds"),
-            "checkpoint":        args.checkpoint,
-            "dataset":           args.dataset,
-            "mode":              mode,
-            "K":                 args.K,
-            "L":                 args.L,
-            "n_prompts":         stats["n_prompts"],
-            "target_calls":      stats["total_calls"],
-            "block_eff":         f"{stats['block_eff']:.6f}",
-            "throughput_tok_s":  f"{stats['throughput']:.4f}",
-            "time_per_call_ms":  f"{stats['time_per_call_ms']:.3f}",
-            "time_per_token_ms": f"{stats['time_per_token_ms']:.3f}",
-            "avg_tree_nodes":    f"{stats['avg_tree_nodes']:.4f}",
-            "total_gen_tokens":  stats["total_gen"],
-            "total_time_s":      f"{stats['total_time']:.2f}",
-            "time_draft_s":      f"{stats['time_draft_s']:.3f}",
-            "time_target_s":     f"{stats['time_target_s']:.3f}",
-            "time_verify_s":     f"{stats['time_verify_s']:.3f}",
-            "time_cache_s":      f"{stats['time_cache_s']:.3f}",
-        })
+        log_result(stats, args, mode)
 
     print(f"\n[done] results appended to {RESULTS_CSV}")
 
