@@ -40,7 +40,7 @@ from main    import speculative_decoding_loop
 
 from data_io import get_path as dataset_path
 from config  import (TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS,
-                     DEFAULT_TEMP, VERIFIER_MODES)
+                     DEFAULT_TEMP, DEFAULT_DTYPE, VERIFIER_MODES)
 
 RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
@@ -205,7 +205,7 @@ def main():
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
     tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                        device=args.device, dtype="bf16")
+                                        device=args.device, dtype=DEFAULT_DTYPE)
 
     data_path = dataset_path(args.dataset)
     prompts   = load_prompts_jsonl(data_path)[:args.n]
