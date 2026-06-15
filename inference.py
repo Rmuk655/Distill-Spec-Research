@@ -25,7 +25,7 @@ import time
 import verifiers  # noqa: F401 — sys.path injection
 from util   import set_seed, load_models
 from main   import speculative_decoding_loop
-from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE
+from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED
 
 
 def parse_args():
@@ -38,7 +38,7 @@ def parse_args():
     ap.add_argument("--L",          type=int,   default=DEFAULT_L)
     ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     ap.add_argument("--temp",       type=float, default=DEFAULT_TEMP)
-    ap.add_argument("--seed",       type=int,   default=123)
+    ap.add_argument("--seed",       type=int,   default=DEFAULT_SEED)
     ap.add_argument("--device",     default="cuda",
                     help="CUDA device to use, e.g. cuda:1 (default: auto-select freest GPU)")
     return ap.parse_args()

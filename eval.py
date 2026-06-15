@@ -40,7 +40,7 @@ from main    import speculative_decoding_loop
 
 from data_io import get_path as dataset_path
 from config  import (TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS,
-                     DEFAULT_TEMP, DEFAULT_DTYPE, VERIFIER_MODES)
+                     DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, VERIFIER_MODES)
 
 RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
@@ -214,7 +214,7 @@ def parse_args():
     ap.add_argument("--temp",      type=float, default=DEFAULT_TEMP)
     ap.add_argument("--device",    default="cuda",
                     help="CUDA device to use, e.g. cuda:1 (default: auto-select freest GPU)")
-    ap.add_argument("--seed",      type=int, default=123)
+    ap.add_argument("--seed",      type=int, default=DEFAULT_SEED)
     ap.add_argument("--output",    default=None,
                     help="Override output CSV path (default: results.csv next to eval.py). "
                          "Set to a unique path when running multiple parallel processes.")
