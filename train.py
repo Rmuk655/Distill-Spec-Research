@@ -45,7 +45,7 @@ from transformers import AutoModelForCausalLM
 # Local modules
 from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss
 from data_io import get_path as dataset_path
-from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, block_eff
+from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff
 
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
