@@ -176,21 +176,16 @@ def traversal_tree(q_probs_dict, p_probs_dict, q_paths, L, K, **_kw):
     concentrates on a teacher-rejected token (p[token]≈0 → alpha→0 → e_tau→0
     → loss→0 → gradient vanishes → training freezes).
 
-    Fix: delegate to _bv_path_loss, which carries the full-vocabulary gradient
-    through F.relu(w*p − q) and correctly pushes up every token where q < w*p.
-    Traversal and BV share the same acceptance semantics at K=1; for K>1 this
-    is the closest differentiable surrogate in the existing codebase.
+    Fix: use _telescoping_loss(_alpha_naive).  _alpha_naive = Σ_v min(p[v], q[v])
+    is strictly positive for any full-softmax distribution — the zero minimum is
+    structurally unreachable.  _bv_path_loss (previous attempt) still collapses
+    because every gradient term is multiplied by w, and w gates on p[token]/q[token]
+    which can reach zero.  At K=1 traversal and naive are identical verifiers.
+    For K>1 this loses verifier-specificity but retains a stable training signal.
+    Val is still measured with traversal verifier (train.py _LOSS_TO_VERIFIER),
+    so checkpoint selection remains traversal-aligned.
     """
-    device  = next(iter(q_probs_dict.values())).device
-    total   = torch.zeros(1, device=device)
-    n_paths = 0
-    for path in q_paths:
-        loss_path = _bv_path_loss(q_probs_dict, p_probs_dict, path, L)
-        total  += loss_path
-        n_paths += 1
-    if n_paths == 0:
-        return torch.zeros(1, device=device, requires_grad=True)
-    return total / n_paths
+    return _telescoping_loss(_alpha_naive, q_probs_dict, p_probs_dict, q_paths, L, K)
 
 
 # --- GBV (greedy path + BV on skewed distribution) ----------------------------
