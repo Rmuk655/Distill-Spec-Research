@@ -128,20 +128,21 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
     time_verify  = sum(r.get("time_verify",  0.0) for r in all_runs)
     time_cache   = sum(r.get("time_cache",   0.0) for r in all_runs)
 
+    # Keys match CSV_COLUMNS (minus the metadata fields added by log_result).
     return {
-        "block_eff":        total_gen / total_calls   if total_calls > 0 else float("nan"),
-        "throughput":       total_gen / total_time    if total_time  > 0 else float("nan"),
-        "avg_tree_nodes":   total_nodes / total_calls if total_calls > 0 else float("nan"),
-        "n_prompts":        len(all_runs),
-        "total_calls":      total_calls,
-        "total_gen":        total_gen,
-        "total_time":       total_time,
-        "time_per_call_ms": 1000.0 * total_time / total_calls  if total_calls > 0 else float("nan"),
-        "time_per_token_ms":1000.0 * total_time / total_gen    if total_gen   > 0 else float("nan"),
-        "time_draft_s":     time_draft,
-        "time_target_s":    time_target,
-        "time_verify_s":    time_verify,
-        "time_cache_s":     time_cache,
+        "n_prompts":         len(all_runs),
+        "target_calls":      total_calls,
+        "block_eff":         total_gen / total_calls   if total_calls > 0 else float("nan"),
+        "throughput_tok_s":  total_gen / total_time    if total_time  > 0 else float("nan"),
+        "time_per_call_ms":  1000.0 * total_time / total_calls  if total_calls > 0 else float("nan"),
+        "time_per_token_ms": 1000.0 * total_time / total_gen    if total_gen   > 0 else float("nan"),
+        "avg_tree_nodes":    total_nodes / total_calls if total_calls > 0 else float("nan"),
+        "total_gen_tokens":  total_gen,
+        "total_time_s":      total_time,
+        "time_draft_s":      time_draft,
+        "time_target_s":     time_target,
+        "time_verify_s":     time_verify,
+        "time_cache_s":      time_cache,
     }
 
 
@@ -166,32 +167,29 @@ def append_csv_row(row: dict):
         w.writerow(row)
 
 
+# Format specs for float stats columns; integer columns pass through as-is.
+_FLOAT_FMT = {
+    "block_eff": ".6f", "throughput_tok_s": ".4f",
+    "time_per_call_ms": ".3f", "time_per_token_ms": ".3f",
+    "avg_tree_nodes": ".4f", "total_time_s": ".2f",
+    "time_draft_s": ".3f", "time_target_s": ".3f",
+    "time_verify_s": ".3f", "time_cache_s": ".3f",
+}
+
+
 def log_result(stats: dict, args, mode: str):
     """Print a one-line summary and append a CSV row — called once per mode."""
     print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
-          f"throughput={stats['throughput']:.1f} tok/s  "
+          f"throughput={stats['throughput_tok_s']:.1f} tok/s  "
           f"avg_tree_nodes={stats['avg_tree_nodes']:.1f}")
-    append_csv_row({
-        "timestamp":         datetime.utcnow().isoformat(timespec="seconds"),
-        "checkpoint":        args.checkpoint,
-        "dataset":           args.dataset,
-        "mode":              mode,
-        "K":                 args.K,
-        "L":                 args.L,
-        "n_prompts":         stats["n_prompts"],
-        "target_calls":      stats["total_calls"],
-        "block_eff":         f"{stats['block_eff']:.6f}",
-        "throughput_tok_s":  f"{stats['throughput']:.4f}",
-        "time_per_call_ms":  f"{stats['time_per_call_ms']:.3f}",
-        "time_per_token_ms": f"{stats['time_per_token_ms']:.3f}",
-        "avg_tree_nodes":    f"{stats['avg_tree_nodes']:.4f}",
-        "total_gen_tokens":  stats["total_gen"],
-        "total_time_s":      f"{stats['total_time']:.2f}",
-        "time_draft_s":      f"{stats['time_draft_s']:.3f}",
-        "time_target_s":     f"{stats['time_target_s']:.3f}",
-        "time_verify_s":     f"{stats['time_verify_s']:.3f}",
-        "time_cache_s":      f"{stats['time_cache_s']:.3f}",
-    })
+    row = {
+        "timestamp":  datetime.utcnow().isoformat(timespec="seconds"),
+        "checkpoint": args.checkpoint, "dataset": args.dataset,
+        "mode": mode, "K": args.K, "L": args.L,
+    }
+    for k, v in stats.items():
+        row[k] = format(v, _FLOAT_FMT[k]) if k in _FLOAT_FMT else v
+    append_csv_row(row)
 
 
 # ---------------------------------------------------------------------------
