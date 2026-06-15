@@ -94,6 +94,19 @@ LOG_EVERY       = 10                         # console + W&B step-log cadence
 # Storage layout — change OUTPUT_ROOT to your preferred checkpoint dir
 OUTPUT_ROOT     = os.path.join(os.path.dirname(__file__), "checkpoints")
 WANDB_PROJECT   = "distillspec-pipeline"
+
+# Maps each tree loss to the verifier mode used for val block_eff measurement.
+# Losses not listed (kl_tree, rev_kl_tree, jsd_tree, flat losses) fall through to "traversal".
+LOSS_TO_VERIFIER = {
+    "naive_tree":    "naive",
+    "nss_tree":      "nss",
+    "specinfer_tree":"specinfer",
+    "spectr_tree":   "spectr",
+    "khisti_tree":   "khisti",
+    "bv_tree":       "bv",
+    "gbv_tree":      "gbv",
+    "traversal_tree":"traversal",
+}
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -244,20 +257,10 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 # losses with no direct pairing (best general BE, Thomas et al. 2026 Table 2).
 # ---------------------------------------------------------------------------
 
-_LOSS_TO_VERIFIER = {
-    "naive_tree": "naive",
-    "nss_tree": "nss",
-    "specinfer_tree": "specinfer",
-    "spectr_tree": "spectr",
-    "khisti_tree": "khisti",
-    "bv_tree": "bv",                "gbv_tree": "gbv",      "traversal_tree": "traversal",
-}  # kl_tree / rev_kl_tree / jsd_tree / flat losses fall through to "traversal"
-
-
 @torch.no_grad()
 def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
     """Returns val block efficiency averaged over VAL_PROMPTS prompts."""
-    mode = _LOSS_TO_VERIFIER.get(args.loss, "traversal")
+    mode = LOSS_TO_VERIFIER.get(args.loss, "traversal")
     draft.eval()
     total_gen, total_calls = 0, 0
     for prompt in val_prompts[:VAL_PROMPTS]:
