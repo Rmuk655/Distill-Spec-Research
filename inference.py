@@ -25,7 +25,7 @@ import time
 import verifiers  # noqa: F401 — sys.path injection
 from util   import set_seed, load_models
 from main   import speculative_decoding_loop
-from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED
+from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, block_eff
 
 
 def parse_args():
@@ -70,8 +70,7 @@ def main():
     stats     = p_model._spec_run_stats
     init_len  = len(tok.encode(args.prompt))
     gen_text  = tok.decode(full_seq[0, init_len:].tolist(), skip_special_tokens=True)
-    block_eff = stats["gen_tokens"] / stats["target_calls"] \
-                if stats["target_calls"] > 0 else float("nan")
+    be = block_eff(stats["gen_tokens"], stats["target_calls"])
 
     print()
     print("─" * 70)
@@ -83,7 +82,7 @@ def main():
     print(f"  generated tokens   : {stats['gen_tokens']}")
     print(f"  target model calls : {stats['target_calls']}")
     print(f"  total tree nodes   : {stats['total_tree_nodes']}")
-    print(f"  block efficiency   : {block_eff:.3f}")
+    print(f"  block efficiency   : {be:.3f}")
     print(f"  wall time          : {elapsed:.2f} s  "
           f"({stats['gen_tokens']/elapsed:.1f} tok/s)")
     print("=" * 70)

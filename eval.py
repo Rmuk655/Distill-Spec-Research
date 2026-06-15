@@ -40,7 +40,7 @@ from main    import speculative_decoding_loop
 
 from data_io import get_path as dataset_path
 from config  import (TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS,
-                     DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, VERIFIER_MODES)
+                     DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, VERIFIER_MODES, block_eff)
 
 RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
@@ -132,7 +132,7 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
     return {
         "n_prompts":         len(all_runs),
         "target_calls":      total_calls,
-        "block_eff":         total_gen / total_calls   if total_calls > 0 else float("nan"),
+        "block_eff":         block_eff(total_gen, total_calls),
         "throughput_tok_s":  total_gen / total_time    if total_time  > 0 else float("nan"),
         "time_per_call_ms":  1000.0 * total_time / total_calls  if total_calls > 0 else float("nan"),
         "time_per_token_ms": 1000.0 * total_time / total_gen    if total_gen   > 0 else float("nan"),
