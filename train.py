@@ -305,9 +305,14 @@ def setup_wandb(args, output_dir, resumed: bool):
         except Exception:
             saved = None
 
-    run_name = f"{args.loss}_K{K}_L{L}_seed{args.seed}"
+    loss_tag = args.loss
+    tags = [args.loss, f"K{K}", f"L{L}"]
+    if args.aux_loss:
+        loss_tag += f"+{args.aux_loss}x{args.aux_weight}"
+        tags.append(f"aux:{args.aux_loss}")
+    run_name = f"{loss_tag}_K{K}_L{L}_seed{args.seed}"
     init_kw = dict(project=WANDB_PROJECT, name=run_name,
-                   tags=[args.loss, f"K{K}", f"L{L}"], config=vars(args))
+                   tags=tags, config=vars(args))
     if saved:
         init_kw["id"]     = saved["run_id"]
         init_kw["resume"] = "must"
