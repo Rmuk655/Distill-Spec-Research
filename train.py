@@ -32,50 +32,50 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
-import sys
 import time
 from typing import Dict, List
 
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 # Local modules
 from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss
 from data_io import get_path as dataset_path
+from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP
 
-# Import the inference-time draft tree builder from /GBV verifier code.
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
+from util           import set_seed, load_prompts_jsonl, load_models as _sot_load
 from inference_util import iid_draft, target_tree_pass
-from main import speculative_decoding_loop
-from node import Node  # class-level caches cleared each step to avoid id() reuse bugs
+from main           import speculative_decoding_loop
+from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  HARDCODED CONSTANTS — edit these before running, or override with CLI flags.
+#  HARDCODED CONSTANTS — edit config.py for shared defaults; override here for
+#  training-specific values, or pass CLI flags.
 # ═══════════════════════════════════════════════════════════════════════════
-DRAFT_MODEL     = "Qwen/Qwen3-0.6B"
-TEACHER_MODEL   = "Qwen/Qwen3-8B"
-
 # Training hyper-parameters
 STEPS           = 4000                       # number of gradient-accum steps
 GRAD_ACCUM      = 8                          # opt-steps = STEPS / GRAD_ACCUM = 500
 LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
 WARMUP_STEPS    = 50                         # 10 % of opt-steps (STEPS/GRAD_ACCUM=500)
 GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.08461) — 1.0 is the LLM fine-tuning standard (LLaMA, GPT-3, Qwen3)
+LR_MIN_RATIO    = 0.1                        # cosine decays to 10 % of peak LR
 SEED            = 42
 
-# Speculative-decoding shape (used by all *_tree losses)
-K               = 3                          # number of draft paths — K=3 matches offline eval default (eval.py, results CSV)
-L               = 8                          # draft block length
-DRAFT_TEMP      = 1.0                        # q_temp for the draft model
+# Speculative-decoding shape (used by all *_tree losses) — defaults from config.py
+K               = DEFAULT_K                  # number of draft paths — K=3 matches offline eval default (eval.py, results CSV)
+L               = DEFAULT_L                  # draft block length
+DRAFT_TEMP      = DEFAULT_TEMP               # q_temp for the draft model
 VAL_K           = K                          # val tree paths — tied to K so training and validation always use the same tree shape
 VAL_L           = L                          # val tree depth  — change to test different L without touching training
-TEACHER_TEMP    = 1.0                        # for flat-loss teacher rollout — DistillSpec (arXiv:2310.08461) uses T=1.0
-MAX_NEW_TOKENS  = 128                        # generated sequence length for flat losses
+TEACHER_TEMP    = DEFAULT_TEMP               # for flat-loss teacher rollout — DistillSpec (arXiv:2310.08461) uses T=1.0
+MAX_NEW_TOKENS  = DEFAULT_MAX_NEW_TOKENS     # generated sequence length for flat losses
 
 # LoRA toggle (full fine-tune is default).  Set USE_LORA = True for adapter
 # training — saves disk and lets you keep many checkpoints.  Full FT of
@@ -95,22 +95,6 @@ LOG_EVERY       = 10                         # console + W&B step-log cadence
 OUTPUT_ROOT     = os.path.join(os.path.dirname(__file__), "checkpoints")
 WANDB_PROJECT   = "distillspec-pipeline"
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-# ---------------------------------------------------------------------------
-# Utility: build a tokenised prompt with grad-free KV cache (used by tree losses)
-# ---------------------------------------------------------------------------
-
-def _prompt_to_ids(prompt: str, tokenizer, device) -> torch.Tensor:
-    """Tokenise a string prompt to [1, plen] LongTensor on the model's device."""
-    return torch.tensor(tokenizer.encode(prompt), device=device, dtype=torch.long).unsqueeze(0)
-
-
-def _prepare_prompt_cache(model, prompt_ids):
-    """Prefill the KV cache for the prompt under no_grad — same as iid_draft does."""
-    with torch.no_grad():
-        out = model(prompt_ids, use_cache=True, return_dict=True)
-    return out.past_key_values
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +368,6 @@ def load_models(draft_id: str, teacher_id: str, device: str = "cuda"):
     """Load draft + teacher via verifiers/util.load_models, then configure for training.
     util.load_models handles device selection and BF16 loading; we add the training-specific
     setup: re-enable grad, freeze teacher, optionally wrap draft in LoRA."""
-    from util import load_models as _sot_load
     tok, teacher, draft = _sot_load(teacher_id, draft_id, device=device)
     # util.load_models disables grad globally (inference default); restore for training.
     torch.set_grad_enabled(True)
@@ -446,8 +429,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    set_seed(args.seed)
 
     output_dir = args.output or os.path.join(OUTPUT_ROOT, args.loss)
     os.makedirs(output_dir, exist_ok=True)
@@ -468,7 +450,6 @@ def main():
     # WARMUP_STEPS=50 → 50 × GRAD_ACCUM = 400 training steps = 10 % of 4000.
     # Previously WARMUP_STEPS was set to 400 (training-step count, not opt-step
     # count), causing 80 % of the run to be in warmup with LR never reaching peak.
-    LR_MIN_RATIO = 0.1                       # cosine decays to 10 % of peak LR
     total_opt_steps = args.steps // GRAD_ACCUM
     def lr_lambda(step):
         if step < WARMUP_STEPS:
@@ -476,7 +457,6 @@ def main():
         # Cosine decay from 1.0 → LR_MIN_RATIO over remaining opt-steps
         progress = (step - WARMUP_STEPS) / max(1, total_opt_steps - WARMUP_STEPS)
         progress = min(progress, 1.0)
-        import math
         cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
         return LR_MIN_RATIO + (1.0 - LR_MIN_RATIO) * cosine
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -493,10 +473,8 @@ def main():
     # Data
     print(f"[data] train = {dataset_path('gsm8k_train')}")
     print(f"[data] val   = {dataset_path('gsm8k_val')}")
-    train_prompts = [json.loads(l)["prompt"]
-                     for l in open(dataset_path("gsm8k_train"), encoding="utf-8")]
-    val_prompts   = [json.loads(l)["prompt"]
-                     for l in open(dataset_path("gsm8k_val"),   encoding="utf-8")]
+    train_prompts = load_prompts_jsonl(dataset_path("gsm8k_train"))
+    val_prompts   = load_prompts_jsonl(dataset_path("gsm8k_val"))
     random.Random(args.seed).shuffle(train_prompts)
     print(f"[data] {len(train_prompts)} train / {len(val_prompts)} val prompts")
 
@@ -519,7 +497,7 @@ def main():
 
     for step in range(start_step, args.steps):
         prompt = train_prompts[step % len(train_prompts)]
-        ids    = _prompt_to_ids(prompt, tokenizer, draft.device)
+        ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
         if tree:
             Node.naive_cache.clear()

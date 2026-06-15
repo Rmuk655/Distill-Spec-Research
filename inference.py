@@ -23,25 +23,21 @@ import argparse
 import time
 
 import verifiers  # noqa: F401 — sys.path injection
-from util  import set_seed, load_models
-from main  import speculative_decoding_loop
-
-
-TEACHER_MODEL = "Qwen/Qwen3-8B"
+from util   import set_seed, load_models
+from main   import speculative_decoding_loop
+from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP
 
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Single-prompt speculative decoding.")
     ap.add_argument("--checkpoint", required=True,
                     help="Draft model checkpoint dir (or HF id for baseline).")
-    ap.add_argument("--mode",       default="gbv",
-                    choices=["naive", "nss", "specinfer", "spectr", "khisti",
-                             "bv", "gbv", "traversal"])
+    ap.add_argument("--mode",       default="gbv", choices=VERIFIER_MODES)
     ap.add_argument("--prompt",     required=True, help="The user prompt as a string.")
-    ap.add_argument("--K",          type=int,   default=3)
-    ap.add_argument("--L",          type=int,   default=8)
-    ap.add_argument("--max_new_tokens", type=int, default=128)
-    ap.add_argument("--temp",       type=float, default=1.0)
+    ap.add_argument("--K",          type=int,   default=DEFAULT_K)
+    ap.add_argument("--L",          type=int,   default=DEFAULT_L)
+    ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
+    ap.add_argument("--temp",       type=float, default=DEFAULT_TEMP)
     ap.add_argument("--seed",       type=int,   default=123)
     ap.add_argument("--device",     default="cuda",
                     help="CUDA device to use, e.g. cuda:1 (default: auto-select freest GPU)")

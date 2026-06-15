@@ -39,22 +39,10 @@ from util    import load_prompts_jsonl, set_seed, load_models
 from main    import speculative_decoding_loop
 
 from data_io import get_path as dataset_path
+from config  import (TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS,
+                     DEFAULT_TEMP, VERIFIER_MODES)
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  HARDCODED CONSTANTS — edit these to change defaults
-# ═══════════════════════════════════════════════════════════════════════════
-TEACHER_MODEL        = "Qwen/Qwen3-8B"
-DEFAULT_K            = 3
-DEFAULT_L            = 8
-DEFAULT_MAX_NEW_TOKENS = 128
-DEFAULT_TEMP         = 1.0
-RESULTS_CSV          = os.path.join(os.path.dirname(__file__), "results.csv")
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-VERIFIER_MODES = ["naive", "nss", "specinfer", "spectr", "khisti",
-                  "bv", "gbv", "traversal"]
+RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
 
 # ---------------------------------------------------------------------------
