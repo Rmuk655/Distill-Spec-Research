@@ -25,7 +25,7 @@ import time
 import verifiers  # noqa: F401 — sys.path injection
 from util   import set_seed, load_models
 from main   import speculative_decoding_loop
-from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP
+from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE
 
 
 def parse_args():
@@ -51,7 +51,7 @@ def main():
     print(f"[load] draft={args.checkpoint}")
     print(f"[load] teacher={TEACHER_MODEL}")
     tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                        device=args.device, dtype="bf16")
+                                        device=args.device, dtype=DEFAULT_DTYPE)
 
     print(f"\n[inference] prompt = {args.prompt!r}")
     print(f"[inference] mode={args.mode}  K={args.K}  L={args.L}  "
