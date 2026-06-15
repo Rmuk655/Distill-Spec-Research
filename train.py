@@ -66,7 +66,7 @@ LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
 WARMUP_STEPS    = 50                         # 10 % of opt-steps (STEPS/GRAD_ACCUM=500)
 GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.08461) — 1.0 is the LLM fine-tuning standard (LLaMA, GPT-3, Qwen3)
 LR_MIN_RATIO    = 0.1                        # cosine decays to 10 % of peak LR
-SEED            = 42
+SEED            = DEFAULT_SEED
 
 # Speculative-decoding shape (used by all *_tree losses) — defaults from config.py
 K               = DEFAULT_K                  # number of draft paths — K=3 matches offline eval default (eval.py, results CSV)

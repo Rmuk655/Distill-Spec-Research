@@ -15,7 +15,7 @@ DEFAULT_L              = 8
 DEFAULT_MAX_NEW_TOKENS = 128
 DEFAULT_TEMP           = 1.0
 DEFAULT_DTYPE          = "bf16"
-DEFAULT_SEED           = 123   # eval / inference default; train.py uses SEED=42
+DEFAULT_SEED           = 123   # matches main.py default; used by train, eval, and inference
 
 # Verifier modes understood by speculative_decoding_loop (main.py)
 VERIFIER_MODES = [
