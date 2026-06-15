@@ -113,9 +113,12 @@ class Node:
 
         # Get conditional acceptance for first token.
         token = self.children[0].token if child_token is None else child_token
-        qt = q[token] if token < len(q) else q.new_tensor(0.0)
-        pt = p[token].detach() if token < len(p) else p.new_tensor(0.0)
-        cond_accept = torch.clamp(pt / qt.clamp(min=1e-9), max=1.0)
+        qt = float(q[token]) if token < len(q) else 0.0
+        pt = float(p[token]) if token < len(p) else 0.0
+        if qt <= 0.0:
+            cond_accept = 1.0
+        else:
+            cond_accept = min(1.0, pt / qt)
 
         # Use a node-shared cache for residual computation.
         cache_key = (id(p), id(q))
@@ -130,10 +133,10 @@ class Node:
         # Mix conditional acceptance and residual sampling probabilities.
         out = (1.0 - cond_accept) * p_res
         if token < len(out):
-            out[token] = out[token] + cond_accept
+            out[token] += cond_accept
         for child in self.children:
             t = int(child.token)
-            probs[t] = out[t] if t < len(out) else out.new_tensor(0.0)
+            probs[t] = float(out[t]) if t < len(out) else 0.0
         return probs
 
 
@@ -225,18 +228,18 @@ class Node:
         if hit is None:
             # Compute divison factor rho needed for K-SEQ (round up), by using binary search up to a certain tolerance.
             rho = self.spectr_binary_search_approx(p, q, k)
-            beta = torch.minimum(p / rho, q).sum()
+            beta = float(torch.minimum(p / rho, q).sum())
             p_acc = 1 - (1 - beta) ** k
 
             # Compute residual distribution.
-            p_acc_beta_ratio = p_acc / beta.clamp(min=1e-6)
+            p_acc_beta_ratio = (p_acc / max(beta, 1e-6)) if beta > 0.0 else float(rho)
             p_res = F.relu(p - torch.minimum(p / rho, q) * p_acc_beta_ratio)
             if p_res.sum().detach().item() <= 0.0:
                 p_res = p_res + 1e-4
             p_res = p_res / p_res.sum()
 
-            # Store entry in cache (rho stays float; beta/p_acc are tensors for grad).
-            hit = (float(rho), beta, p_acc, p_res)
+            # Store entry in cache.
+            hit = (float(rho), beta, float(p_acc), p_res)
             Node.spectr_cache[cache_key] = hit
         rho, beta_f, p_acc, p_res = hit
 
@@ -246,22 +249,23 @@ class Node:
         pN, qN = int(p.numel()), int(q.numel())
         for t in child_tokens:
             if t < 0 or t >= pN or t >= qN:
-                a.append(q.new_tensor(0.0))
+                a.append(0.0)
                 continue
-            a.append(torch.clamp(p[t] / (rho * q[t]).clamp(min=1e-9), max=1.0))
+            qt = float(q[t])
+            a.append(1.0 if qt <= 0.0 else min(1.0, float(p[t]) / (rho * qt)))
 
         # Residual distribution used only if all k accept tests fail.
-        probs, pref_reject = {}, q.new_tensor(1.0)
+        probs, pref_reject = {}, 1.0
         for t, ai in zip(child_tokens, a):
-            probs[t] = probs.get(t, q.new_tensor(0.0)) + pref_reject * ai
-            pref_reject = pref_reject * (1.0 - ai)
+            probs[t] = probs.get(t, 0.0) + pref_reject * ai
+            pref_reject *= (1.0 - ai)
 
         # If all tests reject, add residual mass on each distinct child token.
         for t in set(child_tokens):
             if 0 <= t < pN and t < qN:
-                probs[t] = probs.get(t, q.new_tensor(0.0)) + pref_reject * p_res[t]
+                probs[t] = probs.get(t, 0.0) + pref_reject * float(p_res[t])
             else:
-                probs[t] = probs.get(t, q.new_tensor(0.0))
+                probs[t] = probs.get(t, 0.0)
         return probs
 
 
@@ -335,14 +339,15 @@ class Node:
         p_child = []
         accept_child = []
         for reject_step in range(k):
-            p_vals = [res[t] if 0 <= t < vocab_sz else res.new_tensor(0.0) for t in unique_tokens]
+            p_vals = [float(res[t]) if 0 <= t < vocab_sz else 0.0 for t in unique_tokens]
             p_child.append(p_vals)
             a_vals = []
             for t, pt in zip(unique_tokens, p_vals):
                 if not (0 <= t < vocab_sz):
-                    a_vals.append(q.new_tensor(0.0))
+                    a_vals.append(0.0)
                     continue
-                a_vals.append(torch.clamp(pt / q[t].clamp(min=1e-9), max=1.0))
+                qt = float(q[t])
+                a_vals.append(1.0 if qt <= 0.0 else min(1.0, pt / qt))
             accept_child.append(a_vals)
             res = F.relu(res - q)
             if float(res.sum()) <= 0.0:
@@ -350,7 +355,7 @@ class Node:
             res = res / res.sum()
 
         # After all children rejected, sampling is from residual, and branch only needs mass on child tokens.
-        p_child.append([res[t] if 0 <= t < vocab_sz else res.new_tensor(0.0) for t in unique_tokens])
+        p_child.append([float(res[t]) if 0 <= t < vocab_sz else 0.0 for t in unique_tokens])
 
         # DP over remaining occurrences with a bitmask, since SpecInfer picks uniformly among remaining occurrences.
         occ_u = [token_to_u[t] for t in child_tokens]
@@ -361,7 +366,7 @@ class Node:
             remaining = mask.bit_count()
             reject_step = k - remaining
             inv_remaining = 1.0 / remaining
-            out = [q.new_tensor(0.0) for _ in range(U)]
+            out = [0.0] * U
             mm = mask
             while mm:
                 lsb = mm & -mm
@@ -369,14 +374,15 @@ class Node:
                 mm ^= lsb
                 ui = occ_u[i]
                 a = accept_child[reject_step][ui]
-                out[ui] = out[ui] + inv_remaining * a
-                child = dp[mask ^ (1 << i)]
-                w = inv_remaining * (1.0 - a)
-                for u in range(U):
-                    out[u] = out[u] + w * child[u]
+                out[ui] += inv_remaining * a
+                if a < 1.0:
+                    child = dp[mask ^ (1 << i)]
+                    w = inv_remaining * (1.0 - a)
+                    for u in range(U):
+                        out[u] += w * child[u]
             dp[mask] = out
         root = dp[(1 << k) - 1]
-        probs = {t: root[token_to_u[t]] for t in unique_tokens}
+        probs = {t: float(root[token_to_u[t]]) for t in unique_tokens}
         Node.specinfer_cache[cache_key] = probs
         return probs
 
@@ -472,7 +478,7 @@ class Node:
         for winner, pw in winner_dist.items():
             tmp = self.naive_otlp_branch(p, q_imp, child_token=winner)
             for t, val in tmp.items():
-                probs[t] = probs.get(t, q.new_tensor(0.0)) + pw * val
+                probs[t] = probs.get(t, 0.0) + pw * float(val)
         Node.khisti_cache[cache_key] = probs
         return probs
 
