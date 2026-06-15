@@ -45,7 +45,7 @@ from transformers import AutoModelForCausalLM
 # Local modules
 from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss
 from data_io import get_path as dataset_path
-from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP
+from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, block_eff
 
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
@@ -271,7 +271,7 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
         total_gen   += s["gen_tokens"]
         total_calls += s["target_calls"]
     draft.train()
-    return total_gen / max(1, total_calls)
+    return block_eff(total_gen, total_calls)
 
 
 # ---------------------------------------------------------------------------
