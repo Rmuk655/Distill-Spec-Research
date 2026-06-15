@@ -91,6 +91,10 @@ VAL_PROMPTS     = 25                         # val loss averaged over this many 
 SAVE_EVERY      = 200                        # ckpt_latest write cadence
 LOG_EVERY       = 10                         # console + W&B step-log cadence
 
+# Dataset names (resolved via data_io.get_path)
+TRAIN_DATASET   = "gsm8k_train"
+VAL_DATASET     = "gsm8k_val"
+
 # Storage layout — change OUTPUT_ROOT to your preferred checkpoint dir
 OUTPUT_ROOT     = os.path.join(os.path.dirname(__file__), "checkpoints")
 WANDB_PROJECT   = "distillspec-pipeline"
@@ -409,6 +413,10 @@ def parse_args():
                     help=f"Total gradient-accumulation steps (default {STEPS}).")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
+    ap.add_argument("--train_dataset", default=TRAIN_DATASET,
+                    help=f"Training dataset name passed to data_io.get_path (default {TRAIN_DATASET}).")
+    ap.add_argument("--val_dataset",   default=VAL_DATASET,
+                    help=f"Validation dataset name passed to data_io.get_path (default {VAL_DATASET}).")
     ap.add_argument("--seed",   type=int, default=SEED)
     ap.add_argument("--output", type=str, default=None,
                     help=f"Output dir for checkpoints (default {OUTPUT_ROOT}/<loss>).")
@@ -474,10 +482,10 @@ def main():
     wandb_run = setup_wandb(args, output_dir, resumed=(start_step > 0))
 
     # Data
-    print(f"[data] train = {dataset_path('gsm8k_train')}")
-    print(f"[data] val   = {dataset_path('gsm8k_val')}")
-    train_prompts = load_prompts_jsonl(dataset_path("gsm8k_train"))
-    val_prompts   = load_prompts_jsonl(dataset_path("gsm8k_val"))
+    print(f"[data] train = {dataset_path(args.train_dataset)}")
+    print(f"[data] val   = {dataset_path(args.val_dataset)}")
+    train_prompts = load_prompts_jsonl(dataset_path(args.train_dataset))
+    val_prompts   = load_prompts_jsonl(dataset_path(args.val_dataset))
     random.Random(args.seed).shuffle(train_prompts)
     print(f"[data] {len(train_prompts)} train / {len(val_prompts)} val prompts")
 
