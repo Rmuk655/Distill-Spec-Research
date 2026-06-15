@@ -442,65 +442,6 @@ def khisti_tree   (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_kh
 
 
 # ---------------------------------------------------------------------------
-# 4.  Researcher tree-DP loss (uses actual drafted tree topology via TreeVerifier)
-# ---------------------------------------------------------------------------
-
-def _tree_dp_loss(depth_fn_name, q_probs_dict, p_probs_dict, q_paths, L, q_prefixes):
-    """Shared body for all researcher tree-DP losses."""
-    from verifier import TreeVerifier  # lazy: verifiers/ sys.path set before any call
-    device = next(iter(q_probs_dict.values())).device
-    tree = TreeVerifier(q_paths, q_prefixes, q_probs_dict, p_probs_dict)
-    depths = getattr(tree, depth_fn_name)(L)
-    if not depths:
-        return torch.zeros(1, device=device, requires_grad=True)
-    return -depths[-1]
-
-
-def naive_tree_dp(q_probs_dict, p_probs_dict, q_paths, L, K, q_prefixes=None, **_kw):
-    """
-    -E[τ_naive] via exact tree DP.  Falls back to naive_tree if q_prefixes absent.
-    Grad flows through q[child_token] at every node via naive_otlp_branch.
-    """
-    if q_prefixes is None:
-        return naive_tree(q_probs_dict, p_probs_dict, q_paths, L, K)
-    return _tree_dp_loss("expected_naive_depths", q_probs_dict, p_probs_dict, q_paths, L, q_prefixes)
-
-
-def spectr_tree_dp(q_probs_dict, p_probs_dict, q_paths, L, K, q_prefixes=None, **_kw):
-    """
-    -E[τ_spectr] via exact tree DP.  Falls back to spectr_tree if q_prefixes absent.
-    rho (binary-search scalar) is treated as a constant; grad flows through
-    per-child clamp(p[t]/(rho*q[t]), max=1) and the residual p_res.
-    """
-    if q_prefixes is None:
-        return spectr_tree(q_probs_dict, p_probs_dict, q_paths, L, K)
-    return _tree_dp_loss("expected_spectr_depths", q_probs_dict, p_probs_dict, q_paths, L, q_prefixes)
-
-
-def specinfer_tree_dp(q_probs_dict, p_probs_dict, q_paths, L, K, q_prefixes=None, **_kw):
-    """
-    -E[τ_specinfer] via exact tree DP.  Falls back to specinfer_tree if q_prefixes absent.
-    Bitmask DP (2^K states, K≤4) is now tensor-valued; grad flows through
-    per-step acceptance clamp(p_res[t]/q[t], max=1) at each rejection step.
-    """
-    if q_prefixes is None:
-        return specinfer_tree(q_probs_dict, p_probs_dict, q_paths, L, K)
-    return _tree_dp_loss("expected_specinfer_depths", q_probs_dict, p_probs_dict, q_paths, L, q_prefixes)
-
-
-def khisti_tree_dp(q_probs_dict, p_probs_dict, q_paths, L, K, q_prefixes=None, **_kw):
-    """
-    -E[τ_khisti] via exact tree DP.  Falls back to khisti_tree if q_prefixes absent.
-    Tournament probabilities (LP solver → numpy floats) are treated as constants;
-    grad flows only through the final naive_otlp_branch call per tournament winner.
-    Weaker gradient than naive/spectr/specinfer but still tree-topology-aware.
-    """
-    if q_prefixes is None:
-        return khisti_tree(q_probs_dict, p_probs_dict, q_paths, L, K)
-    return _tree_dp_loss("expected_khisti_depths", q_probs_dict, p_probs_dict, q_paths, L, q_prefixes)
-
-
-# ---------------------------------------------------------------------------
 # Registry — train.py looks up the loss here by --loss flag.
 # Every value has the signature (q_probs_dict, p_probs_dict, q_paths, L, K, **_kw).
 # ---------------------------------------------------------------------------
@@ -516,8 +457,4 @@ TREE_LOSSES = {
     "specinfer_tree":  specinfer_tree,
     "spectr_tree":     spectr_tree,
     "khisti_tree":     khisti_tree,
-    "naive_tree_dp":      naive_tree_dp,
-    "spectr_tree_dp":     spectr_tree_dp,
-    "specinfer_tree_dp":  specinfer_tree_dp,
-    "khisti_tree_dp":     khisti_tree_dp,
 }

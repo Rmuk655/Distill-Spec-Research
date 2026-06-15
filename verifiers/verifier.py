@@ -214,9 +214,6 @@ class TreeVerifier:
     def expected_spectr_depths(self, trunc: int) -> List[float]:
         return self.expected_otlp_depths(lambda node, p, q : node.spectr_otlp_branch(p, q), trunc)
 
-    def expected_khisti_depths(self, trunc: int) -> List[float]:
-        return self.expected_otlp_depths(lambda node, p, q : node.khisti_otlp_branch(p, q), trunc)
-
 
     """
     Block verification (https://arxiv.org/pdf/2403.10444) is not an OT-based verification method.
