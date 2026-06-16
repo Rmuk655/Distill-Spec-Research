@@ -23,9 +23,10 @@ import argparse
 import time
 
 import verifiers  # noqa: F401 — sys.path injection
-from util   import set_seed, load_models
-from main   import speculative_decoding_loop
-from config import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, block_eff
+from util          import set_seed, load_models
+from main          import speculative_decoding_loop
+from verifier_safe import VerifierError
+from config        import TEACHER_MODEL, VERIFIER_MODES, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, block_eff
 
 
 def parse_args():
@@ -57,14 +58,21 @@ def main():
     print(f"[inference] mode={args.mode}  K={args.K}  L={args.L}  "
           f"max_new_tokens={args.max_new_tokens}\n")
 
-    p_model._spec_profile = {"runs": []}
+    p_model._spec_profile  = {"runs": []}
+    p_model._spec_prompt_idx = 0
     t0 = time.time()
-    full_seq = speculative_decoding_loop(
-        p_model=p_model, q_model=q_model, tok=tok,
-        prompt=args.prompt, verification_algo=args.mode,
-        max_new_tokens=args.max_new_tokens, K=args.K, L=args.L,
-        p_temp=args.temp, q_temp=args.temp,
-    )
+    try:
+        full_seq = speculative_decoding_loop(
+            p_model=p_model, q_model=q_model, tok=tok,
+            prompt=args.prompt, verification_algo=args.mode,
+            max_new_tokens=args.max_new_tokens, K=args.K, L=args.L,
+            p_temp=args.temp, q_temp=args.temp,
+        )
+    except VerifierError as ve:
+        print(f"\n[error] Verifier raised an exception for this prompt:")
+        print(f"        {ve}")
+        print(f"        Full context logged to verifier_errors.log for researcher debugging.")
+        return
     elapsed = time.time() - t0
 
     stats     = p_model._spec_run_stats
