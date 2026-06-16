@@ -158,13 +158,11 @@ Open it in pandas / Excel — one row per (checkpoint × mode × K × L × datas
 Our server has **4 GPUs and 96 CPU cores**.  To get comparable numbers across runs:
 
 ```bash
-# Run each eval pinned to its own GPU.  CUDA_VISIBLE_DEVICES=N is the only
-# control needed — it restricts the process to physical GPU N at the OS level.
-# No --device flag required; eval.py always uses the one visible GPU (cuda:0).
-CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes gbv &
-CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv &
-CUDA_VISIBLE_DEVICES=2 python eval.py --checkpoint ckpt_c --modes gbv &
-CUDA_VISIBLE_DEVICES=3 python eval.py --checkpoint ckpt_d --modes gbv &
+# Run each eval pinned to its own GPU — --device cuda:N is the only flag needed.
+python eval.py --checkpoint ckpt_a --modes gbv --device cuda:0 &
+python eval.py --checkpoint ckpt_b --modes gbv --device cuda:1 &
+python eval.py --checkpoint ckpt_c --modes gbv --device cuda:2 &
+python eval.py --checkpoint ckpt_d --modes gbv --device cuda:3 &
 wait
 ```
 
@@ -172,7 +170,7 @@ wait
 
 | Rule | Why |
 |---|---|
-| `CUDA_VISIBLE_DEVICES=N` | Restricts the process to physical GPU N at the **OS/driver level** — no other job can land on the same HBM bus. CUDA remaps it to `cuda:0` inside the process. `eval.py` always uses the one visible GPU; no `--device` flag is needed or accepted. |
+| `--device cuda:N` | Pins PyTorch and pynvml telemetry to GPU N. `torch.cuda.set_device(N)` is called at startup so all ops go to that GPU. Run one process per GPU with different `--device` values to keep runs isolated. |
 | `--seed 123` (default) | Fixes the RNG state before every mode sweep — same token sampling path |
 | Prompts in file order, no shuffle | `load_prompts_jsonl()[:n]` is deterministic; never shuffle before eval |
 | `--dtype bf16` (default) | Mixed precision changes numerics and throughput |
