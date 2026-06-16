@@ -19,18 +19,18 @@ Usage:
     python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --dataset alpaca   # baseline
     python eval.py --checkpoint ckpts/best --mode gbv --modes naive,gbv,traversal  # sweep
 
-    # one eval per GPU — CUDA_VISIBLE_DEVICES=N is the only control needed:
-    CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes naive &
-    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv   &
+    # one eval per GPU — --device cuda:N is the only control needed:
+    python eval.py --checkpoint ckpt_a --modes naive --device cuda:0 &
+    python eval.py --checkpoint ckpt_b --modes gbv   --device cuda:1 &
 
     # parallel eval across modes on separate GPUs (parallel-safe --output flag):
-    CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes naive     --output out_naive.csv &
-    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes specinfer --output out_specinfer.csv &
+    python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes naive     --device cuda:0 --output out_naive.csv &
+    python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes specinfer --device cuda:1 --output out_specinfer.csv &
 
 Results print to stdout AND append one row to results.csv for later analysis.
 
 GPU reproducibility protocol (1 eval per GPU):
-    • Fix the GPU via CUDA_VISIBLE_DEVICES=N — no --device flag needed or accepted
+    • Fix the GPU via --device cuda:N — this is the only flag needed
     • Fix seed via --seed (default 123) — reset before EVERY mode sweep
     • Prompts are always read in file order and sliced [:n]; do not shuffle
     • dtype is fixed to DEFAULT_DTYPE (bf16); do not mix precision across runs
@@ -78,17 +78,11 @@ RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 #  GPU / CPU telemetry (pynvml + psutil — gracefully degrades if missing)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _physical_gpu_index() -> int:
-    """Return the physical GPU index for pynvml, derived from CUDA_VISIBLE_DEVICES.
-
-    CUDA_VISIBLE_DEVICES=N remaps physical GPU N to cuda:0 inside the process.
-    PyTorch always uses cuda:0; pynvml needs the physical index to monitor the
-    right GPU.  If CUDA_VISIBLE_DEVICES is unset or 'NoDevFiles', falls back to 0.
-    """
-    val = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    if val and val not in ("NoDevFiles", "-1"):
+def _gpu_index_from_device(device_str: str) -> int:
+    """Parse 'cuda:2' → 2.  Falls back to 0 for plain 'cuda' or 'cpu'."""
+    if ":" in device_str:
         try:
-            return int(val.split(",")[0].strip())
+            return int(device_str.split(":")[-1])
         except ValueError:
             pass
     return 0
@@ -613,10 +607,10 @@ def parse_args():
                     help="How many prompts from the dataset to evaluate.")
     ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     ap.add_argument("--temp",      type=float, default=DEFAULT_TEMP)
-    # --device removed: GPU selection is done entirely via CUDA_VISIBLE_DEVICES=N.
-    # That env-var remaps physical GPU N to cuda:0 inside the process, so PyTorch
-    # always uses cuda:0 (the only visible device).  Accepting a --device argument
-    # was redundant and caused "invalid device ordinal" when users passed cuda:N.
+    ap.add_argument("--device", default="cuda:0",
+                    help="CUDA device to run on, e.g. --device cuda:0 or --device cuda:2. "
+                         "This is the only flag needed to select a GPU — no environment "
+                         "variables required.  Default: cuda:0.")
     ap.add_argument("--seed",      type=int, default=DEFAULT_SEED,
                     help="RNG seed (default 123).  Reset before EVERY mode to keep "
                          "prompt order and sampling identical across runs.")
@@ -641,24 +635,20 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # ── GPU selection — via CUDA_VISIBLE_DEVICES only ────────────────────────
-    # CUDA_VISIBLE_DEVICES=N restricts the process to physical GPU N and remaps
-    # it to cuda:0.  PyTorch always uses "cuda" (= cuda:0, the only visible GPU).
-    # _physical_gpu_index() reads CUDA_VISIBLE_DEVICES to give pynvml the correct
-    # physical index so telemetry monitors the right GPU.
-    torch_device = "cuda"
-    phys_gpu_idx = _physical_gpu_index()
+    # ── GPU selection — --device cuda:N is the single source of truth ────────
+    # torch.cuda.set_device() pins all subsequent CUDA ops to GPU N.
+    # The same index N is passed to pynvml so telemetry monitors the right GPU.
+    torch_device = args.device
+    phys_gpu_idx = _gpu_index_from_device(args.device)
     if torch.cuda.is_available():
-        torch.cuda.set_device(0)
+        torch.cuda.set_device(phys_gpu_idx)
 
     # CPU thread budget: auto-detect unless user overrides.
     cpu_threads = args.cpu_threads if args.cpu_threads is not None else _auto_cpu_threads()
     torch.set_num_threads(cpu_threads)
     torch.set_num_interop_threads(cpu_threads)
-    print(f"[init] CPU threads = {cpu_threads} "
+    print(f"[init] device={args.device}  CPU threads={cpu_threads} "
           f"({'user override' if args.cpu_threads is not None else 'auto: cores/gpus'})")
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "not set")
-    print(f"[init] CUDA_VISIBLE_DEVICES={cvd}  physical GPU index for telemetry={phys_gpu_idx}")
 
     set_seed(args.seed)
 
@@ -695,7 +685,7 @@ def main():
     print("=" * 78)
     print(f"  Eval  draft={args.checkpoint}  dataset={args.dataset}  "
           f"K={args.K} L={args.L} n={len(prompts)}")
-    print(f"  CUDA_VISIBLE_DEVICES={cvd}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
+    print(f"  device={args.device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
     print("=" * 78)
 
     for mode in modes:
