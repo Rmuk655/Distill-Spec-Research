@@ -9,3 +9,5 @@ datasets>=2.20          # data_io/download.py uses load_dataset for alpaca/math5
 wandb>=0.17             # set --no_wandb to disable; otherwise wandb login once
 tqdm>=4.66
 scipy                   # used by verifiers/khisti.py (LP solver)
+pynvml>=11.0            # GPU telemetry in eval.py (SM util, HBM-bus %, PCIe, NVLink)
+psutil>=5.9             # CPU thread count + CPU utilization in eval.py
