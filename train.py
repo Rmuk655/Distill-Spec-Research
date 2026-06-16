@@ -336,7 +336,8 @@ def run_slug(args) -> str:
     never overwrites the single-loss run's checkpoints."""
     slug = args.loss
     if args.aux_mode == "depth_weight":
-        slug += f"+dw_{args.aux_loss or 'naive_tree'}_lam{args.depth_lambda}"
+        tag = "lin" if args.depth_linear else f"lam{args.depth_lambda}"
+        slug += f"+dw_{args.aux_loss or 'naive_tree'}_{tag}"
     elif args.aux_loss:
         slug += f"+{args.aux_loss}x{args.aux_weight}"
     return slug
@@ -364,7 +365,7 @@ def setup_wandb(args, output_dir, resumed: bool):
     tags = [args.loss, f"K{K}", f"L{L}"]
     if args.aux_mode == "depth_weight":
         tags.append(f"depthw:{args.aux_loss or 'naive_tree'}")
-        tags.append(f"lam{args.depth_lambda}")
+        tags.append("lin" if args.depth_linear else f"lam{args.depth_lambda}")
     elif args.aux_loss:
         tags.append(f"aux:{args.aux_loss}")
     run_name = f"{run_slug(args)}_K{K}_L{L}_seed{args.seed}"
@@ -507,6 +508,11 @@ def parse_args():
                     help="Signed exponent for --aux_mode depth_weight.  >0 amplify "
                          "loss on deep-tree prompts, <0 amplify shallow, 0 = plain "
                          "flat (control).  EMA-centred so E[w]~=1 (no LR confound).")
+    ap.add_argument("--depth_linear", action="store_true",
+                    help="--aux_mode depth_weight: weight = d / EMA(d) — the "
+                         "researcher's 'tree_depth * loss', mean-normalised so E[w]~=1 "
+                         "(linear in depth, but no LR confound; self-adapts as d drifts). "
+                         "Ignores --depth_lambda.")
     ap.add_argument("--val_temp", type=float, default=0.2,
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
@@ -611,7 +617,12 @@ def main():
             d = expected_depth_scalar(draft, teacher, ids, K, L, verifier,
                                       args.draft_temp, args.teacher_temp)
             depth_ema = d if depth_ema is None else 0.9 * depth_ema + 0.1 * d
-            depth_w = math.exp(args.depth_lambda * (d - depth_ema))   # E[w]~=1
+            if args.depth_linear:
+                # Researcher's literal "tree_depth * loss", mean-normalised so
+                # E[w]~=1 (w proportional to depth, but no LR confound).
+                depth_w = d / max(depth_ema, 1e-6)
+            else:
+                depth_w = math.exp(args.depth_lambda * (d - depth_ema))   # E[w]~=1
             depth_d = d
             loss = depth_w * loss
         elif aux_loss_fn is not None:
