@@ -158,14 +158,13 @@ Open it in pandas / Excel — one row per (checkpoint × mode × K × L × datas
 Our server has **4 GPUs and 96 CPU cores**.  To get comparable numbers across runs:
 
 ```bash
-# Run each eval pinned to its own GPU.  Use CUDA_VISIBLE_DEVICES to isolate
-# the process at the OS level so no other job can land on the same GPU.
-# IMPORTANT: CUDA_VISIBLE_DEVICES=N remaps that GPU to cuda:0 inside the
-# process — always pass --device cuda:0, not cuda:N.
-CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes gbv --device cuda:0 &
-CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv --device cuda:0 &
-CUDA_VISIBLE_DEVICES=2 python eval.py --checkpoint ckpt_c --modes gbv --device cuda:0 &
-CUDA_VISIBLE_DEVICES=3 python eval.py --checkpoint ckpt_d --modes gbv --device cuda:0 &
+# Run each eval pinned to its own GPU.  CUDA_VISIBLE_DEVICES=N is the only
+# control needed — it restricts the process to physical GPU N at the OS level.
+# No --device flag required; eval.py always uses the one visible GPU (cuda:0).
+CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes gbv &
+CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv &
+CUDA_VISIBLE_DEVICES=2 python eval.py --checkpoint ckpt_c --modes gbv &
+CUDA_VISIBLE_DEVICES=3 python eval.py --checkpoint ckpt_d --modes gbv &
 wait
 ```
 
@@ -173,7 +172,7 @@ wait
 
 | Rule | Why |
 |---|---|
-| `CUDA_VISIBLE_DEVICES=N --device cuda:0` | `CUDA_VISIBLE_DEVICES=N` enforces isolation at the **OS/driver level**: the process can only see GPU N, so no other job can accidentally land on the same HBM bus. Inside that environment, CUDA remaps GPU N to index 0, so `--device cuda:0` is always correct — passing `--device cuda:N` would fail with "invalid device ordinal". Without the env-var wrapper, `--device cuda:N` alone is a soft hint the runtime may ignore. |
+| `CUDA_VISIBLE_DEVICES=N` | Restricts the process to physical GPU N at the **OS/driver level** — no other job can land on the same HBM bus. CUDA remaps it to `cuda:0` inside the process. `eval.py` always uses the one visible GPU; no `--device` flag is needed or accepted. |
 | `--seed 123` (default) | Fixes the RNG state before every mode sweep — same token sampling path |
 | Prompts in file order, no shuffle | `load_prompts_jsonl()[:n]` is deterministic; never shuffle before eval |
 | `--dtype bf16` (default) | Mixed precision changes numerics and throughput |

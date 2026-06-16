@@ -19,18 +19,18 @@ Usage:
     python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --dataset alpaca   # baseline
     python eval.py --checkpoint ckpts/best --mode gbv --modes naive,gbv,traversal  # sweep
 
-    # one eval per GPU — CUDA_VISIBLE_DEVICES=N remaps GPU N to cuda:0 inside the process:
-    CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes naive --device cuda:0 &
-    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv   --device cuda:0 &
+    # one eval per GPU — CUDA_VISIBLE_DEVICES=N is the only control needed:
+    CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes naive &
+    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv   &
 
-    # parallel eval across modes (parallel-safe --output flag):
-    python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes naive     --output out_naive.csv &
-    python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes specinfer --output out_specinfer.csv &
+    # parallel eval across modes on separate GPUs (parallel-safe --output flag):
+    CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes naive     --output out_naive.csv &
+    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes specinfer --output out_specinfer.csv &
 
 Results print to stdout AND append one row to results.csv for later analysis.
 
 GPU reproducibility protocol (1 eval per GPU):
-    • Fix the GPU via --device cuda:N (or CUDA_VISIBLE_DEVICES=N --device cuda:0)
+    • Fix the GPU via CUDA_VISIBLE_DEVICES=N — no --device flag needed or accepted
     • Fix seed via --seed (default 123) — reset before EVERY mode sweep
     • Prompts are always read in file order and sliced [:n]; do not shuffle
     • dtype is fixed to DEFAULT_DTYPE (bf16); do not mix precision across runs
@@ -78,11 +78,17 @@ RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 #  GPU / CPU telemetry (pynvml + psutil — gracefully degrades if missing)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _gpu_index_from_device(device_str: str) -> int:
-    """Parse 'cuda:2' → 2.  Falls back to 0 for plain 'cuda' or 'cpu'."""
-    if ":" in device_str:
+def _physical_gpu_index() -> int:
+    """Return the physical GPU index for pynvml, derived from CUDA_VISIBLE_DEVICES.
+
+    CUDA_VISIBLE_DEVICES=N remaps physical GPU N to cuda:0 inside the process.
+    PyTorch always uses cuda:0; pynvml needs the physical index to monitor the
+    right GPU.  If CUDA_VISIBLE_DEVICES is unset or 'NoDevFiles', falls back to 0.
+    """
+    val = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if val and val not in ("NoDevFiles", "-1"):
         try:
-            return int(device_str.split(":")[-1])
+            return int(val.split(",")[0].strip())
         except ValueError:
             pass
     return 0
@@ -556,7 +562,7 @@ _FLOAT_FMT: dict[str, str] = {
 
 def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
                csv_path: str, specs: dict | None = None,
-               cpu_threads_used: int | None = None):
+               cpu_threads_used: int | None = None, phys_gpu_idx: int = 0):
     """Print a one-line summary, GPU telemetry, and append a CSV row."""
     skip_note = f"  ({stats['skipped_prompts']} skipped)" if stats.get("skipped_prompts") else ""
     print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
@@ -574,7 +580,7 @@ def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
         "timestamp":       datetime.utcnow().isoformat(timespec="seconds"),
         "checkpoint":      args.checkpoint, "dataset": args.dataset,
         "mode":            mode, "K": args.K, "L": args.L,
-        "device":          args.device, "seed": args.seed, "dtype": DEFAULT_DTYPE,
+        "device":          f"cuda:{phys_gpu_idx}", "seed": args.seed, "dtype": DEFAULT_DTYPE,
         "cpu_threads_used": cpu_threads_used,
     }
     for k, v in stats.items():
@@ -607,13 +613,10 @@ def parse_args():
                     help="How many prompts from the dataset to evaluate.")
     ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     ap.add_argument("--temp",      type=float, default=DEFAULT_TEMP)
-    ap.add_argument("--device",    default="cuda",
-                    help="CUDA device to use.  When pinning to a specific GPU use "
-                         "CUDA_VISIBLE_DEVICES=N --device cuda:0 — the env-var remaps "
-                         "GPU N to index 0 inside the process, so cuda:0 is always correct. "
-                         "Never pass --device cuda:N alongside CUDA_VISIBLE_DEVICES=N; "
-                         "that will raise 'invalid device ordinal'.  "
-                         "Default 'cuda' auto-selects the first visible GPU.")
+    # --device removed: GPU selection is done entirely via CUDA_VISIBLE_DEVICES=N.
+    # That env-var remaps physical GPU N to cuda:0 inside the process, so PyTorch
+    # always uses cuda:0 (the only visible device).  Accepting a --device argument
+    # was redundant and caused "invalid device ordinal" when users passed cuda:N.
     ap.add_argument("--seed",      type=int, default=DEFAULT_SEED,
                     help="RNG seed (default 123).  Reset before EVERY mode to keep "
                          "prompt order and sampling identical across runs.")
@@ -638,31 +641,31 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # ── Reproducibility: pin device, fix threads, fix seed ──────────────────
-    gpu_idx = 0
-    if args.device.startswith("cuda"):
-        gpu_idx = _gpu_index_from_device(args.device)
-        if torch.cuda.is_available():
-            torch.cuda.set_device(gpu_idx)
+    # ── GPU selection — via CUDA_VISIBLE_DEVICES only ────────────────────────
+    # CUDA_VISIBLE_DEVICES=N restricts the process to physical GPU N and remaps
+    # it to cuda:0.  PyTorch always uses "cuda" (= cuda:0, the only visible GPU).
+    # _physical_gpu_index() reads CUDA_VISIBLE_DEVICES to give pynvml the correct
+    # physical index so telemetry monitors the right GPU.
+    torch_device = "cuda"
+    phys_gpu_idx = _physical_gpu_index()
+    if torch.cuda.is_available():
+        torch.cuda.set_device(0)
 
     # CPU thread budget: auto-detect unless user overrides.
-    # With 4 simultaneous evals (1 per GPU) on a 4-GPU / 96-core server:
-    #   auto = 96 physical cores / 4 GPUs = 24 threads per process
-    # This prevents the 4 processes from each spawning 96 threads and trashing
-    # each other's CPU L3 cache.  Within a single eval, prompts are sequential;
-    # these threads are for PyTorch intra-op (BLAS) parallelism, not data loading.
     cpu_threads = args.cpu_threads if args.cpu_threads is not None else _auto_cpu_threads()
     torch.set_num_threads(cpu_threads)
     torch.set_num_interop_threads(cpu_threads)
     print(f"[init] CPU threads = {cpu_threads} "
           f"({'user override' if args.cpu_threads is not None else 'auto: cores/gpus'})")
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "not set")
+    print(f"[init] CUDA_VISIBLE_DEVICES={cvd}  physical GPU index for telemetry={phys_gpu_idx}")
 
     set_seed(args.seed)
 
     csv_path = args.output or RESULTS_CSV
 
     # Collect machine specs once — stored in every CSV row for reproducibility.
-    specs = _machine_specs(gpu_idx)
+    specs = _machine_specs(phys_gpu_idx)
     print(f"[hw]   GPU: {specs.get('machine_gpu', 'unknown')}  "
           f"({specs.get('machine_gpu_count', '?')} GPUs, "
           f"{specs.get('machine_gpu_vram_gb', '?')} GB VRAM each)  "
@@ -672,9 +675,9 @@ def main():
     # ── Load models (teacher first, then draft — always this order) ──────────
     print(f"[load] teacher={TEACHER_MODEL}")
     print(f"[load] draft={args.checkpoint}")
-    print(f"[load] device={args.device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
+    print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
     tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                        device=args.device, dtype=DEFAULT_DTYPE)
+                                        device=torch_device, dtype=DEFAULT_DTYPE)
 
     # Log GPU memory after model load — both models share the same device.
     if torch.cuda.is_available():
@@ -692,14 +695,13 @@ def main():
     print("=" * 78)
     print(f"  Eval  draft={args.checkpoint}  dataset={args.dataset}  "
           f"K={args.K} L={args.L} n={len(prompts)}")
-    print(f"  device={args.device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
+    print(f"  CUDA_VISIBLE_DEVICES={cvd}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
     print("=" * 78)
 
-    gpu_idx = _gpu_index_from_device(args.device) if args.device.startswith("cuda") else 0
     for mode in modes:
         set_seed(args.seed)   # identical RNG state for every mode
 
-        mon = GpuMonitor(device_idx=gpu_idx) if not args.no_gpu_monitor else None
+        mon = GpuMonitor(device_idx=phys_gpu_idx) if not args.no_gpu_monitor else None
 
         sp = _state_path(csv_path, mode, args.K, args.L, args.checkpoint)
         stats = evaluate_one_mode(
@@ -709,7 +711,7 @@ def main():
             state_path=sp, gpu_monitor=mon,
         )
         log_result(stats, args, mode, mon, csv_path,
-                   specs=specs, cpu_threads_used=cpu_threads)
+                   specs=specs, cpu_threads_used=cpu_threads, phys_gpu_idx=phys_gpu_idx)
 
     print(f"\n[done] results appended to {csv_path}")
 
