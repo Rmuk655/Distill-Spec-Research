@@ -40,8 +40,7 @@ pip install pynvml psutil
 wandb login
 ```
 
-That's it.  No multi-tier config, no provider-specific bootstrap.
-This pipeline targets A100 (40 GB) but runs on any CUDA GPU with bfloat16 support.
+Runs on any CUDA GPU with bfloat16 support.
 
 ---
 
@@ -177,7 +176,7 @@ wait
 
 | Rule | Why |
 |---|---|
-| `CUDA_VISIBLE_DEVICES=N --device cuda:N` | Prevents a second process from landing on the same GPU and sharing HBM bandwidth |
+| `CUDA_VISIBLE_DEVICES=N --device cuda:N` | `CUDA_VISIBLE_DEVICES=N` enforces isolation at the **OS/driver level**: the process can only see GPU N, so no other job can accidentally land on the same HBM bus. `--device cuda:0` inside that environment then maps to the one exposed GPU. Without the env-var wrapper, `--device cuda:N` alone is a soft hint — the CUDA runtime ignores it if another process has already claimed the device. |
 | `--seed 123` (default) | Fixes the RNG state before every mode sweep — same token sampling path |
 | Prompts in file order, no shuffle | `load_prompts_jsonl()[:n]` is deterministic; never shuffle before eval |
 | `--dtype bf16` (default) | Mixed precision changes numerics and throughput |
