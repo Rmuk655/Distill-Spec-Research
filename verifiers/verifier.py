@@ -1,4 +1,8 @@
 from node import *
+import heapq, math
+import torch
+import torch.nn.functional as F
+
 
 """
 Creates a tree verifier over a draft tree by taking in:
@@ -28,6 +32,8 @@ NOTE: spectr, specinfer, khisti, and max are equivalent to naive if K=1
 NOTE: traversal and gbv are equivalent to bv if K=1
 """
 class TreeVerifier:
+    traversal_cache = {}
+
     def __init__(
         self,
         q_paths: List[List[int]],
@@ -129,7 +135,7 @@ class TreeVerifier:
                 return node, next_token
 
         # If we progressed all the way to a leaf node, sample another token directly from p.
-        p = self.p_probs_dict[node.rep]
+        p = self.p_probs_dict[node.rep] 
         return node, torch.multinomial(p, num_samples=1).item()
 
     def naive_verify(self) -> Tuple[Node, int]:
@@ -214,9 +220,12 @@ class TreeVerifier:
     def expected_spectr_depths(self, trunc: int) -> List[float]:
         return self.expected_otlp_depths(lambda node, p, q : node.spectr_otlp_branch(p, q), trunc)
 
+    def expected_khisti_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.khisti_otlp_branch(p, q), trunc)
+
 
     """
-    Block verification (https://arxiv.org/pdf/2403.10444) is not an OT-based verification method.
+    Block verification (https://arxiv.org/pdf/2403.10444) is not an OT-based verification method. 
     This is a single-path method, so when the draft tree contains multiple paths, only the FIRST is used.
     First, it recursively computes node weights p_i and block acceptances h_i as in Algorithm 2 of the paper.
     Then, it randomly accepts (prob h_i) or rejects each block, and selects the last accepted block of length tau.
@@ -242,7 +251,7 @@ class TreeVerifier:
             node = node.children[0]
             denom = torch.clamp(q[node.token], min=1e-8)
             node.weight = min(1.0, weight * (p[node.token] / denom).item())
-
+            
             # Compute block acceptance for the child node.
             h_block = node.weight
             if i < self.L:
@@ -250,13 +259,13 @@ class TreeVerifier:
                 q = self.q_probs_dict[node.rep]
                 h_block = F.relu(node.weight * p - q).sum()
                 h_block = h_block / (h_block + 1.0 - node.weight + 1e-10)
-
+            
             # Set tau to block length if accepted, and verify the block's last node.
             if random.random() <= h_block:
                 tau = i
                 last_ver_node = node
 
-        # If the whole path was accepted, sample an extra token from the target.
+        # If the whole path was accepted, sample an extra token from the target. 
         p = self.p_probs_dict[last_ver_node.rep]
         if tau == self.L:
             return last_ver_node, torch.multinomial(p, num_samples=1).item()
@@ -284,7 +293,7 @@ class TreeVerifier:
         (z / x) * [(A + y + z)^(K-1) + (A + y + z)^(K-2) * (A + y) + ... + (A + y)^(K-1)] / [(A + x)^(K-1) + (A + x)^(K-2) * A + ... + A^(K-1)]
     Simplifying z / x and adjusting scalar constants gives a stable form for reasonably large A:
         q * [((A + y + z) / A)^(K-1) + ((A + y + z) / A)^(K-2) * ((A + y) / A) + ... + ((A + y) / A)^(K-1)]
-    This is the formula we use, and we normalize to make it a valid distribution.
+    This is the formula we use, and we normalize to make it a valid distribution. 
     When A is especially small, we replace division by A with division by max(A, 1e-8) for stability.
     NOTE: It is not recommended to use this function (and GBV) with K > 4 due to numerical instability.
     """
@@ -321,7 +330,7 @@ class TreeVerifier:
 
 
     """
-    Greedy block verification (our method) is not an OT-based verification method.
+    Greedy block verification (our method) is not an OT-based verification method. 
     This is a multi-path method, which reduces to block verification when K=1 (single-path).
     First, it selects the path with highest rank according to lexicographic ordering by p()/q().
     Along the way, computes the skewed draft distribution q_skew at all draft tree nodes.
@@ -329,17 +338,17 @@ class TreeVerifier:
     """
     def gbv_verify(self) -> Tuple[Node, int]:
         q_skew_probs_dict = {}
-
+        
         # Travel from root to a leaf, by stepping to the child node with highest next-token p / q.
         node = self.nodes[0]
         q0 = self.q_probs_dict[node.rep]
         node.q_cdf = None                       # Full CDF distribution of the next token under p / q ordering.
-        node.q_joint = q0.new_tensor(1.0)       # Joint probability value of sampling the current node context.
+        node.q_joint = q0.new_tensor(1.0)       # Joint probability value of sampling the current node context. 
         node.q_joint_cdf = q0.new_tensor(1.0)   # Joint CDF value of sampling <= to the current node context, under lexicographic p / q ordering.
         for _ in range(self.L):
             p_probs = self.p_probs_dict[node.rep]
             q_probs = self.q_probs_dict[node.rep]
-            ratio = p_probs / (q_probs + torch.finfo(p_probs.dtype).eps)
+            ratio = torch.minimum(torch.ones_like(p_probs), p_probs / (q_probs + torch.finfo(p_probs.dtype).eps))
 
             # Compute the current node's q CDF under the vocab ordering of p / q increasing.
             order = torch.argsort(ratio, stable=True)
@@ -353,8 +362,8 @@ class TreeVerifier:
 
                 # Compute CDF as total mass across paths which match the parent and deviate at the last token, or are ranked lower than the parent.
                 node.q_joint_cdf = node.parent.q_joint_cdf - node.parent.q_joint            # Paths whose start ranks lower than the parent.
-                node.q_joint_cdf += node.parent.q_joint * node.parent.q_cdf[node.token]     # Paths that start with the parent and rank lower at next token.
-
+                node.q_joint_cdf += node.parent.q_joint * node.parent.q_cdf[node.token]     # Paths that start with the parent and rank lower at next token.      
+            
             # Compute skewed draft at this node and update the dictionary.
             q_skew_probs_dict[node.rep] = self.compute_skew(node)
 
@@ -373,10 +382,10 @@ class TreeVerifier:
         bv_tree = TreeVerifier([chosen_path], self.q_prefixes, q_skew_probs_dict, self.p_probs_dict)
         return bv_tree.bv_verify()
 
-
-
+    
+    
     """
-    Traversal verification (https://arxiv.org/pdf/2505.12398) is not an OT-based verification method.
+    Traversal verification (https://arxiv.org/pdf/2505.12398) is not an OT-based verification method. 
     This is a multi-path method, which reduces to block verification when K=1 (single-path).
     First, it recursively computes node weights p_alpha, similar to block verification.
     Then, it iteratively selects the first leaf by DFS ordering, and follows one of two paths:
@@ -418,15 +427,10 @@ class TreeVerifier:
             # Update parent weight and target distributions.
             p = self.p_probs_dict[leaf_parent.rep]
             q = self.q_probs_dict[leaf_parent.rep]
-            leaf_parent.weight = min(leaf_parent.weight, 1.0)  # guard fp drift above 1
             p_prime = F.relu(leaf_parent.weight * p - q)
             p_prime_sum = p_prime.sum().item()
             if p_prime_sum > 0:
-                # Parenthesise to avoid p_prime_sum being absorbed into 1.0
-                # when it is subnormal: (p + 1.0) - w can round to 0 even
-                # when p > 0, but p + (1.0 - w) cannot (w <= 1 after clamp).
-                denom = p_prime_sum + (1.0 - leaf_parent.weight)
-                leaf_parent.weight = p_prime_sum / denom
+                leaf_parent.weight = p_prime_sum / (p_prime_sum + 1.0 - leaf_parent.weight)
                 self.p_probs_dict[leaf_parent.rep] = p_prime / p_prime_sum
             else:
                 leaf_parent.weight = 0.0
@@ -452,3 +456,124 @@ class TreeVerifier:
                     desc.weight = min(1.0, desc.parent.weight * p_parent[desc.token].item() / qtok) if qtok > 0.0 else 0.0
 
         return first_leaf, torch.multinomial(self.p_probs_dict[first_leaf.rep], num_samples=1).item()
+
+    def expected_traversal_depths(self, trunc: int, vocab_size: int) -> List[float]:
+        trunc = min(int(trunc), int(self.L))
+        D0, n = self.L - trunc, len(self.nodes)
+        rep = [u.rep for u in self.nodes]
+        depth = [int(u.depth) for u in self.nodes]
+        tok = [int(u.token) for u in self.nodes]
+        par = [u.parent.idx if u.parent is not None else -1 for u in self.nodes]
+
+        mult = [dict() for _ in range(n)]
+        for u in self.nodes:
+            d = mult[u.idx]
+            for ch in u.children:
+                d[ch.idx] = d.get(ch.idx, 0) + 1  # duplicates collapse on reject, matches traversal_verify
+
+        by_depth = sorted(range(n), key=lambda i: (depth[i], i))
+        out = []
+
+        with torch.no_grad():
+            for D in range(D0, self.L + 1):
+                act = [depth[i] <= D for i in range(n)]
+
+                deg = [0] * n
+                for u in range(n):
+                    if act[u]:
+                        deg[u] = sum(cnt for c, cnt in mult[u].items() if act[c])
+
+                heap = [i for i in range(n) if act[i] and deg[i] == 0]
+                heapq.heapify(heap)
+                popped = [False] * n
+                order = []
+                while heap:
+                    v = heapq.heappop(heap)
+                    if (not act[v]) or popped[v]:
+                        continue
+                    popped[v] = True
+                    order.append(v)
+                    p = par[v]
+                    if p != -1 and act[p]:
+                        deg[p] -= mult[p].get(v, 0)
+                        if deg[p] == 0:
+                            heapq.heappush(heap, p)
+
+                child_order = [[] for _ in range(n)]
+                for v in order:
+                    p = par[v]
+                    if p != -1 and act[p]:
+                        child_order[p].append(v)
+
+                w_start = [0.0] * n
+                w_post  = [0.0] * n
+                w_start[0] = 1.0
+
+                for u in by_depth:
+                    if not act[u]:
+                        continue
+                    w = float(w_start[u])
+                    p = self.p_probs_dict[rep[u]][:vocab_size].clone()
+                    q = self.q_probs_dict[rep[u]][:vocab_size].clone()
+
+                    seq = child_order[u]
+                    if seq:
+                        seq_tokens = tuple(tok[c] for c in seq)
+                        wkey = int(round(w_start[u] * (2**24)))
+                        ckey = (rep[u], vocab_size, wkey, seq_tokens)
+                        hit = TreeVerifier.traversal_cache.get(ckey)
+                        if hit is not None:
+                            w_post[u], child_ws = hit
+                            for c, wc in zip(seq, child_ws):
+                                w_start[c] = wc
+                            continue
+
+                    for c in child_order[u]:
+                        t = tok[c]
+                        qt = float(q[t].item()) if 0 <= t < vocab_size else 0.0
+                        pt = float(p[t].item()) if 0 <= t < vocab_size else 0.0
+                        w_start[c] = min(1.0, w * pt / max(qt, 1e-8)) if qt > 0.0 else 0.0
+
+                        r = (p.mul(w) - q).clamp(min=0.0)
+                        S = float(r.sum(dtype=torch.float64).item())
+                        if S > 0.0 and math.isfinite(S):
+                            den = S + 1.0 - w
+                            w = S / max(den, 1e-12)
+                            p = r / S
+                        else:
+                            w = 0.0
+
+                        if 0 <= t < vocab_size:
+                            q_rem = float((q.sum(dtype=torch.float64) - q[t]).item())
+                            if q_rem > 0.0 and math.isfinite(q_rem):
+                                q = q / q_rem
+                                q[t] = 0.0
+                            else:
+                                q[t] = 0.0
+
+                    if seq:
+                        TreeVerifier.traversal_cache[ckey] = (w, tuple(w_start[c] for c in seq))
+                    w_post[u] = w
+
+                survive, E = 1.0, 0.0
+                for v in order:
+                    if v == 0:
+                        a = 1.0
+                    elif depth[v] == D:
+                        a = float(w_start[v])
+                    else:
+                        a = float(w_post[v])
+
+                    if a <= 0.0:
+                        continue
+                    if a >= 1.0:
+                        E += survive * float(depth[v])
+                        break
+                    E += survive * a * float(depth[v])
+                    survive *= (1.0 - a)
+                    if survive <= 0.0:
+                        break
+
+                out.append(float(E))
+
+        return out
