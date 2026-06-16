@@ -31,12 +31,7 @@ pip install -r requirements.txt
 #    --n 1000 gives 1000 held-out eval prompts (default is 100)
 python -m data_io.download --train --n 1000
 
-# 4. (optional) GPU telemetry — pynvml + psutil (pip, one time)
-#    eval.py uses these to record SM utilization, HBM-bus %, PCIe throughput,
-#    and CPU utilization in every results.csv row.  Degrades gracefully if absent.
-pip install pynvml psutil
-
-# 5. (optional) log in to Weights & Biases for training curves
+# 4. (optional) log in to Weights & Biases for training curves
 wandb login
 ```
 
