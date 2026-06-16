@@ -189,7 +189,7 @@ def draft_tree_forward_with_grad(
 # ---------------------------------------------------------------------------
 
 def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
-                       max_new_tokens=128, teacher_temp=0.8):
+                       max_new_tokens=128):
     """
     Teacher greedily generates max_new_tokens.  Student is then forwarded on
     [prompt + generated_tokens] WITH grad.  Loss = divergence(student_logits,
@@ -605,8 +605,7 @@ def main():
                                      teacher_temp=args.teacher_temp)
         else:
             loss = compute_flat_loss(loss_fn, draft, teacher, ids,
-                                     max_new_tokens=MAX_NEW_TOKENS,
-                                     teacher_temp=args.teacher_temp)
+                                     max_new_tokens=MAX_NEW_TOKENS)
 
         if args.aux_mode == "depth_weight":
             # (3) Multiply the (flat) primary loss by a detached depth weight.
@@ -636,8 +635,7 @@ def main():
                                         teacher_temp=args.teacher_temp)
             else:
                 aux = compute_flat_loss(aux_loss_fn, draft, teacher, ids,
-                                        max_new_tokens=MAX_NEW_TOKENS,
-                                        teacher_temp=args.teacher_temp)
+                                        max_new_tokens=MAX_NEW_TOKENS)
             loss = loss + args.aux_weight * aux
 
         # Gradient accumulation: scale by 1/GRAD_ACCUM, only step every GRAD_ACCUM micro-steps.
