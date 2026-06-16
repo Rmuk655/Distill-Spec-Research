@@ -655,13 +655,23 @@ def main():
 
         losses_log.append(loss.item())
 
-        # Console log
+        # Console log + W&B train metrics
         if (step + 1) % LOG_EVERY == 0:
             avg = sum(losses_log[-LOG_EVERY:]) / LOG_EVERY
             elapsed = time.time() - t0
             print(f"step={step+1:5d}/{args.steps}  loss={avg:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}  "
                   f"grad={grad_norm.item():.2f}  elapsed={elapsed/60:.1f}m")
+
+            # Compute val metrics at val steps BEFORE logging so train + val go
+            # into a single wandb.log() call — two separate calls at the same
+            # step cause the second to be silently dropped in wandb ≥0.15.
+            val_be = None
+            if (step + 1) % VAL_EVERY == 0:
+                val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                      f"best={best_val_block_eff:.3f}")
+
             if wandb_run:
                 wandb_run.log({
                     "train/loss":      avg,
@@ -669,15 +679,18 @@ def main():
                     "train/grad_norm": grad_norm.item(),
                     **({"train/depth_w": depth_w, "train/depth_d": depth_d}
                        if args.aux_mode == "depth_weight" else {}),
+                    **({"val/block_eff": val_be} if val_be is not None else {}),
                 }, step=step + 1)
 
-        # Validation + checkpoint best
+        # Validation + checkpoint best (val_be already computed above if LOG step)
         if (step + 1) % VAL_EVERY == 0:
-            val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
-            print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
-                  f"best={best_val_block_eff:.3f}")
-            if wandb_run:
-                wandb_run.log({"val/block_eff": val_be}, step=step + 1)
+            if (step + 1) % LOG_EVERY != 0:
+                # VAL_EVERY not a multiple of LOG_EVERY — compute val now
+                val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                      f"best={best_val_block_eff:.3f}")
+                if wandb_run:
+                    wandb_run.log({"val/block_eff": val_be}, step=step + 1)
             if val_be > best_val_block_eff:
                 best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
