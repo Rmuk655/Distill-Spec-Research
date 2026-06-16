@@ -688,8 +688,10 @@ def main():
                             state={"step": step + 1,
                                    "best_val_block_eff": best_val_block_eff})
 
-    # Final save
-    save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_final",
+    # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
+    # so a multi-combo sweep keeps only ckpt_best + ckpt_latest per run and does
+    # not blow the disk quota).  ckpt_best holds the val-best model.
+    save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                     state={"step": args.steps, "best_val_block_eff": best_val_block_eff})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")
