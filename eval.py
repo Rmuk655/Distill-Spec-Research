@@ -46,7 +46,7 @@ GPU telemetry notes:
     • PCIe TX/RX throughput (KB/s) is read from NVML.
     • NVLink counters are read if NVLink is present; skipped otherwise.
     • CPU utilization is polled via psutil in the same background thread.
-    Install optional deps once: pip install pynvml psutil
+    Install optional deps once: pip install nvidia-ml-py psutil
 """
 from __future__ import annotations
 
