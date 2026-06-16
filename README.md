@@ -103,22 +103,34 @@ Two ways to mix a dense flat loss with a verifier-aligned tree loss.  Both reuse
 #     through q, with the natural (depth-decaying) survival weight.
 python train.py --loss jsd --aux_loss naive_tree --aux_weight 0.1
 
-# (3) Depth-weight — multiply the flat primary loss by exp(depth_lambda*(d-EMA(d))),
-#     d = E[tau_V] of the draft tree.  Curriculum reweighting only (no acceptance
-#     gradient).  EMA-centred so E[w]~=1 (no hidden LR change).
+# (3) Depth-weight — multiply the flat primary loss by a detached depth weight
+#     w(d), d = E[tau_V] of the draft tree.  Curriculum reweighting only (no
+#     acceptance gradient).  All forms below are normalised to E[w]~=1.
+
+# (3a) Linear — w = d / EMA(d).  The researcher's literal "tree_depth * loss",
+#      mean-normalised so there is no hidden LR change.
+python train.py --loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_linear
+
+# (3b) Exponential — w = exp(depth_lambda*(d - EMA(d))).  Signed knob (below).
 python train.py --loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_lambda 0.5
 ```
 
 `--depth_lambda` is a single signed knob: `>0` amplifies the loss on deep-tree
 prompts, `<0` amplifies shallow, and **`--depth_lambda 0` is the control** — it
 must reproduce a plain `--loss jsd` run (use it as a correctness check).
+`--depth_linear` ignores `--depth_lambda` and uses `w = d / EMA(d)` instead.
 
-Each combo gets its own checkpoint dir + W&B run name + tags, so `λ=0.5` and
-`λ=-0.5` never overwrite each other:
+> Both forms divide out the running mean of `d`, so `E[w]~=1` and the effective
+> learning rate is unchanged — no need to drop `--lr` to compensate, and the
+> normalisation self-adapts as the tree deepens during training.
+
+Each combo gets its own checkpoint dir + W&B run name + tags, so `λ=0.5`,
+`λ=-0.5`, and `lin` never overwrite each other:
 
 | Flags | Checkpoint dir / W&B run |
 |---|---|
 | `--loss jsd --aux_loss naive_tree --aux_weight 0.1` | `jsd+naive_treex0.1` |
+| `--loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_linear` | `jsd+dw_khisti_tree_lin` |
 | `--loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_lambda 0.5` | `jsd+dw_khisti_tree_lam0.5` |
 
 In `depth_weight` mode, `train/depth_w` (applied weight) and `train/depth_d`
