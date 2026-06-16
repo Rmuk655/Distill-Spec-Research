@@ -579,8 +579,13 @@ def main():
     aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
     aux_is_tree = is_tree_loss(args.aux_loss) if args.aux_loss else False
     if aux_loss_fn is not None:
-        print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
-              f"weight={args.aux_weight}")
+        if args.aux_mode == "depth_weight":
+            _dw_tag = "lin" if args.depth_linear else f"lam={args.depth_lambda}"
+            print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
+                  f"depth_weight={_dw_tag}")
+        else:
+            print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
+                  f"weight={args.aux_weight}")
 
     # ── Training loop ─────────────────────────────────────────────────────────
     draft.train()
