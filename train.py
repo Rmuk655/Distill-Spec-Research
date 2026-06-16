@@ -17,8 +17,8 @@ Pipeline:
                      run teacher tree forward (no grad)            → p_probs_dict,
                      run student tree forward (WITH grad)          → q_probs_dict,
                      loss = -E[tau_V](q_probs_dict, p_probs_dict, K, L).
-    3. every VAL_EVERY steps → val_loss on held-out gsm8k_val.jsonl,
-       update best_val_loss, save ckpt_best, log to W&B.
+    3. every VAL_EVERY steps → val/block_eff on gsm8k_val.jsonl,
+       update best_val_block_eff, save ckpt_best, log to W&B.
     4. every SAVE_EVERY  steps → write ckpt_latest + training_state.json.
     5. resume picks up from ckpt_latest if --resume is passed.
 
@@ -32,46 +32,51 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
-import sys
 import time
 from typing import Dict, List
 
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 # Local modules
 from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss
 from data_io import get_path as dataset_path
+from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff
 
-# Import the inference-time draft tree builder from /GBV verifier code.
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
+from util           import set_seed, load_prompts_jsonl, load_models as _sot_load
 from inference_util import iid_draft, target_tree_pass
+from main           import speculative_decoding_loop
+from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
+from verifier_safe  import VerifierError
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  HARDCODED CONSTANTS — edit these before running, or override with CLI flags.
+#  HARDCODED CONSTANTS — edit config.py for shared defaults; override here for
+#  training-specific values, or pass CLI flags.
 # ═══════════════════════════════════════════════════════════════════════════
-DRAFT_MODEL     = "Qwen/Qwen3-0.6B"
-TEACHER_MODEL   = "Qwen/Qwen3-8B"
-
 # Training hyper-parameters
 STEPS           = 4000                       # number of gradient-accum steps
 GRAD_ACCUM      = 8                          # opt-steps = STEPS / GRAD_ACCUM = 500
 LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
-WARMUP_STEPS    = 400                        # 10 % of STEPS = 50 opt-steps
-GRAD_CLIP       = 5.0
-SEED            = 42
+WARMUP_STEPS    = 50                         # 10 % of opt-steps (STEPS/GRAD_ACCUM=500)
+GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.08461) — 1.0 is the LLM fine-tuning standard (LLaMA, GPT-3, Qwen3)
+LR_MIN_RATIO    = 0.1                        # cosine decays to 10 % of peak LR
+SEED            = DEFAULT_SEED
 
-# Speculative-decoding shape (used by all *_tree losses)
-K               = 4                          # number of draft paths
-L               = 8                          # draft block length
-DRAFT_TEMP      = 1.0                        # q_temp for the draft model
-TEACHER_TEMP    = 0.8                        # for flat-loss teacher rollout
-MAX_NEW_TOKENS  = 128                        # generated sequence length for flat losses
+# Speculative-decoding shape (used by all *_tree losses) — defaults from config.py
+K               = DEFAULT_K                  # number of draft paths — K=3 matches offline eval default (eval.py, results CSV)
+L               = DEFAULT_L                  # draft block length
+DRAFT_TEMP      = DEFAULT_TEMP               # q_temp for the draft model
+VAL_K           = K                          # val tree paths — tied to K so training and validation always use the same tree shape
+VAL_L           = L                          # val tree depth  — change to test different L without touching training
+TEACHER_TEMP    = DEFAULT_TEMP               # for flat-loss teacher rollout — DistillSpec (arXiv:2310.08461) uses T=1.0
+MAX_NEW_TOKENS  = DEFAULT_MAX_NEW_TOKENS     # generated sequence length for flat losses
 
 # LoRA toggle (full fine-tune is default).  Set USE_LORA = True for adapter
 # training — saves disk and lets you keep many checkpoints.  Full FT of
@@ -83,30 +88,31 @@ LORA_DROPOUT    = 0.05
 
 # Validation & checkpointing cadence
 VAL_EVERY       = 100                        # gradient-accum steps between val checks
-VAL_PROMPTS     = 100                        # val loss averaged over this many prompts
+VAL_PROMPTS     = 25                         # val loss averaged over this many prompts
 SAVE_EVERY      = 200                        # ckpt_latest write cadence
 LOG_EVERY       = 10                         # console + W&B step-log cadence
+
+# Dataset names (resolved via data_io.get_path)
+TRAIN_DATASET   = "gsm8k_train"
+VAL_DATASET     = "gsm8k_val"
 
 # Storage layout — change OUTPUT_ROOT to your preferred checkpoint dir
 OUTPUT_ROOT     = os.path.join(os.path.dirname(__file__), "checkpoints")
 WANDB_PROJECT   = "distillspec-pipeline"
+
+# Maps each tree loss to the verifier mode used for val block_eff measurement.
+# Losses not listed (kl_tree, rev_kl_tree, jsd_tree, flat losses) fall through to "traversal".
+LOSS_TO_VERIFIER = {
+    "naive_tree":    "naive",
+    "nss_tree":      "nss",
+    "specinfer_tree":"specinfer",
+    "spectr_tree":   "spectr",
+    "khisti_tree":   "khisti",
+    "bv_tree":       "bv",
+    "gbv_tree":      "gbv",
+    "traversal_tree":"traversal",
+}
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-# ---------------------------------------------------------------------------
-# Utility: build a tokenised prompt with grad-free KV cache (used by tree losses)
-# ---------------------------------------------------------------------------
-
-def _prompt_to_ids(prompt: str, tokenizer, device) -> torch.Tensor:
-    """Tokenise a string prompt to [1, plen] LongTensor on the model's device."""
-    return torch.tensor(tokenizer.encode(prompt), device=device).unsqueeze(0)
-
-
-def _prepare_prompt_cache(model, prompt_ids):
-    """Prefill the KV cache for the prompt under no_grad — same as iid_draft does."""
-    with torch.no_grad():
-        out = model(prompt_ids, use_cache=True, return_dict=True)
-    return out.past_key_values
 
 
 # ---------------------------------------------------------------------------
@@ -251,31 +257,58 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
 
 # ---------------------------------------------------------------------------
-# Validation: average per-prompt loss over up to VAL_PROMPTS prompts.
-# Uses forward_kl as the comparable val metric for tree losses (the tree
-# objectives themselves are not directly comparable across loss families).
+# Validation: block efficiency via eval.speculative_decode_one (same code path
+# as offline eval.py).  Verifier mode matched to training loss; traversal for
+# losses with no direct pairing (best general BE, Thomas et al. 2026 Table 2).
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def compute_val_loss(draft, teacher, tokenizer, val_prompts, args):
+def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
+    """Returns val block efficiency averaged over VAL_PROMPTS prompts.
+
+    VerifierError (from verifier_safe.py) is caught per-prompt so a bug in
+    verifier.py does not abort training.  Skipped prompts are excluded from the
+    block_eff denominator; if all prompts fail, returns nan.
+    """
+    mode = LOSS_TO_VERIFIER.get(args.loss, "traversal")
     draft.eval()
-    losses = []
-    for prompt in val_prompts[:VAL_PROMPTS]:
-        ids = _prompt_to_ids(prompt, tokenizer, draft.device)
-        # Use forward_kl on a short teacher rollout as a stable cross-loss proxy.
-        loss = compute_flat_loss(
-            FLAT_LOSSES["forward_kl"], draft, teacher, ids,
-            max_new_tokens=64, teacher_temp=args.teacher_temp,
-        )
-        losses.append(loss.item())
+    total_gen, total_calls, skipped = 0, 0, 0
+    for i, prompt in enumerate(val_prompts[:VAL_PROMPTS]):
+        teacher._spec_prompt_idx = i
+        try:
+            speculative_decoding_loop(
+                p_model=teacher, q_model=draft, tok=tokenizer,
+                prompt=prompt, verification_algo=mode,
+                max_new_tokens=MAX_NEW_TOKENS, K=VAL_K, L=VAL_L,
+                p_temp=args.teacher_temp, q_temp=args.teacher_temp,
+            )
+        except VerifierError as ve:
+            skipped += 1
+            print(f"  [val-skip] prompt {i}: {ve}")
+            continue
+        s = teacher._spec_run_stats
+        total_gen   += s["gen_tokens"]
+        total_calls += s["target_calls"]
+    if skipped:
+        print(f"  [val] {skipped}/{VAL_PROMPTS} prompts skipped (verifier errors)")
     draft.train()
-    return sum(losses) / max(1, len(losses))
+    return block_eff(total_gen, total_calls)
 
 
 # ---------------------------------------------------------------------------
 # W&B setup with run-id resume (so a killed-and-resumed training continues
 # the same dashboard URL instead of splitting across two runs).
 # ---------------------------------------------------------------------------
+
+def run_slug(args) -> str:
+    """Loss component of the run identifier, shared by the checkpoint dir and the W&B
+    run name. Includes the aux loss + weight so a combined run (e.g. forward_kl+l1x0.5)
+    never overwrites the single-loss run's checkpoints."""
+    slug = args.loss
+    if args.aux_loss:
+        slug += f"+{args.aux_loss}x{args.aux_weight}"
+    return slug
+
 
 def setup_wandb(args, output_dir, resumed: bool):
     """Initialise W&B, resuming the saved run id if <output>/wandb_run.json exists."""
@@ -296,9 +329,12 @@ def setup_wandb(args, output_dir, resumed: bool):
         except Exception:
             saved = None
 
-    run_name = f"{args.loss}_K{K}_L{L}_seed{args.seed}"
+    tags = [args.loss, f"K{K}", f"L{L}"]
+    if args.aux_loss:
+        tags.append(f"aux:{args.aux_loss}")
+    run_name = f"{run_slug(args)}_K{K}_L{L}_seed{args.seed}"
     init_kw = dict(project=WANDB_PROJECT, name=run_name,
-                   tags=[args.loss, f"K{K}", f"L{L}"], config=vars(args))
+                   tags=tags, config=vars(args))
     if saved:
         init_kw["id"]     = saved["run_id"]
         init_kw["resume"] = "must"
@@ -362,22 +398,14 @@ def try_resume(model, optimizer, scheduler, output_dir):
 # Model loading (Qwen3 only; A100; BF16; optional LoRA)
 # ---------------------------------------------------------------------------
 
-def load_models(draft_id: str, teacher_id: str):
-    """Load draft + teacher on cuda:0 in bfloat16.  Teacher is frozen."""
-    print(f"[load] tokenizer={draft_id}")
-    tok = AutoTokenizer.from_pretrained(draft_id, trust_remote_code=True)
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
-
-    print(f"[load] draft={draft_id}  (BF16, will be trained)")
-    draft = AutoModelForCausalLM.from_pretrained(
-        draft_id, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda")
-
-    print(f"[load] teacher={teacher_id}  (BF16, frozen)")
-    teacher = AutoModelForCausalLM.from_pretrained(
-        teacher_id, torch_dtype=torch.bfloat16, trust_remote_code=True,
-    ).to("cuda").eval()
+def load_models(draft_id: str, teacher_id: str, device: str = "cuda"):
+    """Load draft + teacher via verifiers/util.load_models, then configure for training.
+    util.load_models handles device selection and BF16 loading; we add the training-specific
+    setup: re-enable grad, freeze teacher, optionally wrap draft in LoRA."""
+    tok, teacher, draft = _sot_load(teacher_id, draft_id, device=device)
+    # util.load_models disables grad globally (inference default); restore for training.
+    torch.set_grad_enabled(True)
+    teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
 
@@ -396,6 +424,7 @@ def load_models(draft_id: str, teacher_id: str):
         for p in draft.parameters():
             p.requires_grad_(True)
 
+    draft.train()
     return tok, draft, teacher
 
 
@@ -411,9 +440,13 @@ def parse_args():
                     help=f"Total gradient-accumulation steps (default {STEPS}).")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
+    ap.add_argument("--train_dataset", default=TRAIN_DATASET,
+                    help=f"Training dataset name passed to data_io.get_path (default {TRAIN_DATASET}).")
+    ap.add_argument("--val_dataset",   default=VAL_DATASET,
+                    help=f"Validation dataset name passed to data_io.get_path (default {VAL_DATASET}).")
     ap.add_argument("--seed",   type=int, default=SEED)
     ap.add_argument("--output", type=str, default=None,
-                    help=f"Output dir for checkpoints (default {OUTPUT_ROOT}/<loss>).")
+                    help=f"Output dir for checkpoints (default {OUTPUT_ROOT}/<loss>[+<aux>x<weight>]).")
     ap.add_argument("--resume", action="store_true",
                     help="Resume from <output>/ckpt_latest if it exists.")
     ap.add_argument("--no_wandb",     action="store_true", help="Disable W&B logging.")
@@ -421,47 +454,65 @@ def parse_args():
                     help="Start a new W&B run even when resuming (default: reuse run id).")
     ap.add_argument("--teacher_temp", type=float, default=TEACHER_TEMP)
     ap.add_argument("--draft_temp",   type=float, default=DRAFT_TEMP)
+    ap.add_argument("--device",       default="cuda",
+                    help="CUDA device, e.g. cuda:1 (default: auto-select freest GPU)")
+    ap.add_argument("--aux_loss",   type=str, default=None,
+                    choices=sorted(ALL_LOSSES.keys()),
+                    help="Optional auxiliary loss: total = primary + aux_weight * aux. "
+                         "Typical use: --loss forward_kl --aux_loss naive_tree --aux_weight 0.1")
+    ap.add_argument("--aux_weight", type=float, default=0.1,
+                    help="Scalar weight applied to the auxiliary loss (default 0.1).")
     return ap.parse_args()
 
 
 def main():
     args = parse_args()
-    random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    set_seed(args.seed)
 
-    output_dir = args.output or os.path.join(OUTPUT_ROOT, args.loss)
+    output_dir = args.output or os.path.join(OUTPUT_ROOT, run_slug(args))
     os.makedirs(output_dir, exist_ok=True)
     print(f"[output] {output_dir}")
 
     # Models
-    tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL)
+    tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL, device=args.device)
 
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95))
+    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
+                                  weight_decay=0.0)   # DistillSpec uses no regularisation
 
+    # LR schedule: linear warmup for WARMUP_STEPS optimizer steps, then cosine
+    # decay to LR_MIN_RATIO × peak.  Matches DistillSpec (arXiv:2310.08461) which
+    # uses linear warmup + cosine cooldown.  WARMUP_STEPS counts optimizer steps
+    # (scheduler.step() fires once per GRAD_ACCUM training steps), so
+    # WARMUP_STEPS=50 → 50 × GRAD_ACCUM = 400 training steps = 10 % of 4000.
+    # Previously WARMUP_STEPS was set to 400 (training-step count, not opt-step
+    # count), causing 80 % of the run to be in warmup with LR never reaching peak.
+    total_opt_steps = args.steps // GRAD_ACCUM
     def lr_lambda(step):
         if step < WARMUP_STEPS:
             return step / max(1, WARMUP_STEPS)
-        return 1.0
+        # Cosine decay from 1.0 → LR_MIN_RATIO over remaining opt-steps
+        progress = (step - WARMUP_STEPS) / max(1, total_opt_steps - WARMUP_STEPS)
+        progress = min(progress, 1.0)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return LR_MIN_RATIO + (1.0 - LR_MIN_RATIO) * cosine
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     # Resume?
     start_step, train_state = (0, {})
     if args.resume:
         start_step, train_state = try_resume(draft, optimizer, scheduler, output_dir)
-    best_val_loss = train_state.get("best_val_loss", float("inf"))
+    best_val_block_eff = train_state.get("best_val_block_eff", 0.0)
 
     # W&B
     wandb_run = setup_wandb(args, output_dir, resumed=(start_step > 0))
 
     # Data
-    print(f"[data] train = {dataset_path('gsm8k_train')}")
-    print(f"[data] val   = {dataset_path('gsm8k_val')}")
-    train_prompts = [json.loads(l)["prompt"]
-                     for l in open(dataset_path("gsm8k_train"), encoding="utf-8")]
-    val_prompts   = [json.loads(l)["prompt"]
-                     for l in open(dataset_path("gsm8k_val"),   encoding="utf-8")]
+    print(f"[data] train = {dataset_path(args.train_dataset)}")
+    print(f"[data] val   = {dataset_path(args.val_dataset)}")
+    train_prompts = load_prompts_jsonl(dataset_path(args.train_dataset))
+    val_prompts   = load_prompts_jsonl(dataset_path(args.val_dataset))
     random.Random(args.seed).shuffle(train_prompts)
     print(f"[data] {len(train_prompts)} train / {len(val_prompts)} val prompts")
 
@@ -469,6 +520,12 @@ def main():
     loss_fn  = get_loss(args.loss)
     tree     = is_tree_loss(args.loss)
     print(f"[loss] {args.loss}  ({'tree' if tree else 'flat'})")
+
+    aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
+    aux_is_tree = is_tree_loss(args.aux_loss) if args.aux_loss else False
+    if aux_loss_fn is not None:
+        print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
+              f"weight={args.aux_weight}")
 
     # ── Training loop ─────────────────────────────────────────────────────────
     draft.train()
@@ -478,9 +535,12 @@ def main():
 
     for step in range(start_step, args.steps):
         prompt = train_prompts[step % len(train_prompts)]
-        ids    = _prompt_to_ids(prompt, tokenizer, draft.device)
+        ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
         if tree:
+            Node.naive_cache.clear()
+            Node.spectr_cache.clear()
+            Node.specinfer_cache.clear()
             loss = compute_tree_loss(loss_fn, draft, teacher, ids,
                                      K=K, L=L,
                                      draft_temp=args.draft_temp,
@@ -489,6 +549,21 @@ def main():
             loss = compute_flat_loss(loss_fn, draft, teacher, ids,
                                      max_new_tokens=MAX_NEW_TOKENS,
                                      teacher_temp=args.teacher_temp)
+
+        if aux_loss_fn is not None:
+            if aux_is_tree:
+                Node.naive_cache.clear()
+                Node.spectr_cache.clear()
+                Node.specinfer_cache.clear()
+                aux = compute_tree_loss(aux_loss_fn, draft, teacher, ids,
+                                        K=K, L=L,
+                                        draft_temp=args.draft_temp,
+                                        teacher_temp=args.teacher_temp)
+            else:
+                aux = compute_flat_loss(aux_loss_fn, draft, teacher, ids,
+                                        max_new_tokens=MAX_NEW_TOKENS,
+                                        teacher_temp=args.teacher_temp)
+            loss = loss + args.aux_weight * aux
 
         # Gradient accumulation: scale by 1/GRAD_ACCUM, only step every GRAD_ACCUM micro-steps.
         (loss / GRAD_ACCUM).backward()
@@ -518,29 +593,29 @@ def main():
 
         # Validation + checkpoint best
         if (step + 1) % VAL_EVERY == 0:
-            val_loss = compute_val_loss(draft, teacher, tokenizer, val_prompts, args)
-            print(f"  [val] step={step+1}  val_loss={val_loss:.4f}  "
-                  f"best={best_val_loss:.4f}")
+            val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+            print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                  f"best={best_val_block_eff:.3f}")
             if wandb_run:
-                wandb_run.log({"val/loss": val_loss}, step=step + 1)
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+                wandb_run.log({"val/block_eff": val_be}, step=step + 1)
+            if val_be > best_val_block_eff:
+                best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
-                                state={"step": step + 1, "val_loss": val_loss,
-                                       "best_val_loss": best_val_loss})
-                print(f"  [val] saved ckpt_best (val_loss={val_loss:.4f})")
+                                state={"step": step + 1, "val_block_eff": val_be,
+                                       "best_val_block_eff": best_val_block_eff})
+                print(f"  [val] saved ckpt_best (block_eff={val_be:.3f})")
 
         # Rolling latest checkpoint
         if (step + 1) % SAVE_EVERY == 0:
             save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                             state={"step": step + 1,
-                                   "best_val_loss": best_val_loss})
+                                   "best_val_block_eff": best_val_block_eff})
 
     # Final save
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_final",
-                    state={"step": args.steps, "best_val_loss": best_val_loss})
+                    state={"step": args.steps, "best_val_block_eff": best_val_block_eff})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
-          f"best_val_loss = {best_val_loss:.4f}")
+          f"best_val_block_eff = {best_val_block_eff:.3f}")
     if wandb_run:
         wandb_run.finish()
 

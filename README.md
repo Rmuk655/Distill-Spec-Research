@@ -28,14 +28,14 @@ python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
 # 3. download all 5 evaluation datasets + GSM8K train split
-python -m data_io.download --train
+#    --n 1000 gives 1000 held-out eval prompts (default is 100)
+python -m data_io.download --train --n 1000
 
 # 4. (optional) log in to Weights & Biases for training curves
 wandb login
 ```
 
-That's it.  No multi-tier config, no auto-detection of GPU type, no
-provider-specific bootstrap.  This pipeline assumes one A100 (40 GB).
+Runs on any CUDA GPU with bfloat16 support.
 
 ---
 
@@ -110,8 +110,9 @@ What happens during training (per step):
    `--resume` works.
 
 `gsm8k_val.jsonl` and `gsm8k_eval.jsonl` use **non-overlapping** index ranges
-of the GSM8K test split (`items[0:100]` for val, `items[200:200+n]` for eval),
-so the val-best checkpoint selection does not bias the reported eval numbers.
+of the GSM8K test split (`items[0:100]` for val, `items[200:200+n]` for eval).
+With `--n 1000` the eval pool is `items[200:1200]` (within the 1319-prompt test
+set), so the val-best checkpoint selection does not bias the reported eval numbers.
 
 ### LoRA toggle
 
@@ -139,13 +140,53 @@ python eval.py --checkpoint checkpoints/gbv_tree/ckpt_best \
 python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv
 ```
 
-Every eval cell appends one row to `results.csv`:
+Every eval cell appends one row to `results.csv`.  Key columns:
 
-```
-timestamp,checkpoint,dataset,mode,K,L,n_prompts,block_eff,throughput_tok_s,avg_tree_nodes,total_gen_tokens,total_time_s
-```
+| Column group | Columns |
+|---|---|
+| Identity | `timestamp`, `checkpoint`, `dataset`, `mode`, `K`, `L` |
+| Core metrics | `block_eff`, `throughput_tok_s`, `avg_tree_nodes` |
+| Time breakdown | `time_draft_s`, `time_target_s`, `time_verify_s`, `time_cache_s`, `time_tokenizer_s` |
+| GPU telemetry | `gpu_sm_util_avg_pct`, `gpu_mem_util_avg_pct` (HBM-bus %), `gpu_vram_peak_mb`, `gpu_pcie_tx/rx_avg_kbs`, `gpu_nvlink_tx/rx_avg_kbs`, `cpu_util_avg_pct` |
+| Reproducibility | `device`, `seed`, `dtype`, `cpu_threads_used` |
+| Machine spec | `machine_gpu`, `machine_gpu_count`, `machine_gpu_vram_gb`, `machine_driver`, `machine_cpu_physical_cores`, `machine_ram_gb`, `machine_os` |
 
 Open it in pandas / Excel — one row per (checkpoint × mode × K × L × dataset).
+
+### Reproducibility protocol — 1 eval per GPU
+
+Our server has **4 GPUs and 96 CPU cores**.  To get comparable numbers across runs:
+
+```bash
+# Run each eval pinned to its own GPU — --device cuda:N is the only flag needed.
+python eval.py --checkpoint ckpt_a --modes gbv --device cuda:0 &
+python eval.py --checkpoint ckpt_b --modes gbv --device cuda:1 &
+python eval.py --checkpoint ckpt_c --modes gbv --device cuda:2 &
+python eval.py --checkpoint ckpt_d --modes gbv --device cuda:3 &
+wait
+```
+
+**Rules — if you break any of these, your throughput numbers are not comparable:**
+
+| Rule | Why |
+|---|---|
+| `--device cuda:N` | Pins PyTorch and pynvml telemetry to GPU N. `torch.cuda.set_device(N)` is called at startup so all ops go to that GPU. Run one process per GPU with different `--device` values to keep runs isolated. |
+| `--seed 123` (default) | Fixes the RNG state before every mode sweep — same token sampling path |
+| Prompts in file order, no shuffle | `load_prompts_jsonl()[:n]` is deterministic; never shuffle before eval |
+| `--dtype bf16` (default) | Mixed precision changes numerics and throughput |
+| Teacher loaded first, draft second | Already enforced in `load_models()` |
+| `--cpu_threads` auto-detected | Default is `physical_cores // num_gpus` (96 / 4 = 24 on our server) — prevents CPU cache thrashing across 4 parallel evals |
+
+**Interpreting GPU telemetry:**
+
+- `gpu_sm_util_avg_pct` near 100 % → compute-bound (expected for large target model)
+- `gpu_mem_util_avg_pct` near 100 % but SM low → HBM bandwidth-bound
+- Both low → CPU / Python overhead dominates (check `time_draft_s` vs `time_target_s`)
+- If throughput drops between runs while `gpu_vram_peak_mb` stays the same → HBM bandwidth contention, not VRAM pressure
+
+**Note on L2 hit rate and exact HBM GB/s:** these require DCGM
+(`sudo apt install datacenter-gpu-manager`).  The `gpu_mem_util_avg_pct` field
+(from standard NVML) is the closest available proxy without DCGM.
 
 ---
 

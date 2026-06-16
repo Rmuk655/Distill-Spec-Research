@@ -152,7 +152,7 @@ EVAL_DATASETS = {
     # name        → (hf_id,                       split,  prompt_field,   config, answer_field)
     "alpaca":     ("tatsu-lab/alpaca",            "train",   "instruction", None,  "output"),
     "math500":    ("HuggingFaceH4/MATH-500",      "test",    "problem",     None,  "answer"),
-    "humaneval":  ("openai_humaneval",            "test",    "prompt",      None,  "canonical_solution"),
+    "humaneval":  ("openai/openai_humaneval",       "test",    "prompt",      None,  "canonical_solution"),
     "mtbench":    ("philschmid/mt-bench",         "train",   "turns",       None,  None),
 }
 
@@ -193,8 +193,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", type=str, default=None,
                     help="Comma-separated subset (e.g. 'gsm8k,math500').  Default: all.")
-    ap.add_argument("--n",        type=int, default=100,
-                    help="Prompts per eval set (default 100; paper used 1319 for gsm8k).")
+    ap.add_argument("--n",        type=int, default=1000,
+                    help="Prompts per eval set (default 1000; GSM8K test has 1319 total).")
     ap.add_argument("--train",    action="store_true",
                     help="Also fetch gsm8k_train.jsonl (the 7473-prompt training split).")
     ap.add_argument("--force",    action="store_true",

@@ -44,6 +44,19 @@ breaks or wrong results.  The draft model uses standard causal attention and is 
 compile.  Benefit: reduces Python-side kernel-launch overhead (~100-200 ms/iter on CPU) that
 accounts for ~90% of wall time on small GPUs with fast forward passes.
 """
+def _best_free_cuda_device() -> str:
+    """Return the cuda:N device with the most free memory."""
+    n = torch.cuda.device_count()
+    if n <= 1:
+        return "cuda:0"
+    best, best_free = 0, -1
+    for i in range(n):
+        free, _ = torch.cuda.mem_get_info(i)
+        if free > best_free:
+            best, best_free = i, free
+    return f"cuda:{best}"
+
+
 def load_models(
     p_name: str,
     q_name: str,
@@ -59,6 +72,8 @@ def load_models(
     GPUs (15 GB) where the 8B target in bfloat16 (~16 GB) does not fit.
     The draft model is always loaded in the requested dtype.
     """
+    if device == "cuda" and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        device = _best_free_cuda_device()
     dev = torch.device(device if (device == "cpu" or torch.cuda.is_available()) else "cpu")
     tok = AutoTokenizer.from_pretrained(p_name, use_fast=False)
     if tok.pad_token_id is None:
@@ -123,9 +138,20 @@ def load_models(
 
     # Validate custom attention mask compatibility BEFORE compile so we can still
     # inspect the underlying model's layer attributes (compile wraps the module).
-    assert p_model.model.layers[0].attention_type == "full_attention", \
+    # transformers >= 4.52 moved attention_type off the layer; fall back to layer_type,
+    # then config.layer_types, and finally assume full_attention for standard Qwen3.
+    def _attn_type(model) -> str:
+        layer = model.model.layers[0]
+        if hasattr(layer, "attention_type"):
+            return layer.attention_type
+        if hasattr(layer, "layer_type"):
+            return layer.layer_type
+        cfg_types = getattr(model.config, "layer_types", None)
+        return cfg_types[0] if cfg_types else "full_attention"
+
+    assert _attn_type(p_model) == "full_attention", \
         "Custom attention mask not compatible with this HF Model"
-    assert q_model.model.layers[0].attention_type == "full_attention", \
+    assert _attn_type(q_model) == "full_attention", \
         "Custom attention mask not compatible with this HF Model"
 
     # Optionally compile the draft model to reduce Python→CUDA dispatch overhead.
