@@ -125,7 +125,7 @@ class Node:
         p_res = Node.naive_cache.get(cache_key)
         if p_res is None:
             p_res = F.relu(p - q)
-            if p_res.sum().detach().item() <= 0.0:
+            if float(p_res.sum()) <= 0.0:
                 p_res = p_res + 1e-4
             p_res = p_res / p_res.sum(dim=-1)
             Node.naive_cache[cache_key] = p_res
@@ -234,7 +234,7 @@ class Node:
             # Compute residual distribution.
             p_acc_beta_ratio = (p_acc / max(beta, 1e-6)) if beta > 0.0 else float(rho)
             p_res = F.relu(p - torch.minimum(p / rho, q) * p_acc_beta_ratio)
-            if p_res.sum().detach().item() <= 0.0:
+            if float(p_res.sum()) <= 0.0:
                 p_res = p_res + 1e-4
             p_res = p_res / p_res.sum()
 
@@ -280,9 +280,7 @@ class Node:
         k = len(self.children)
         if k == 0:
             return self.nss_otlp_solver(p, q)
-        elif k == 1:
-            return self.naive_otlp_solver(p, q)
-
+        
         # Iteratively perform uniform child selection, either accepting it or removing it from child nodes.
         child_tokens = [child.token for child in self.children]
         while child_tokens != []:
@@ -382,7 +380,7 @@ class Node:
                         out[u] += w * child[u]
             dp[mask] = out
         root = dp[(1 << k) - 1]
-        probs = {t: float(root[token_to_u[t]]) for t in unique_tokens}
+        probs = {t: root[token_to_u[t]] for t in unique_tokens}
         Node.specinfer_cache[cache_key] = probs
         return probs
 

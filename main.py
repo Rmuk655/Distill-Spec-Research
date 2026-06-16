@@ -28,6 +28,8 @@ from inference_util import *
 from node import *
 from verifier import *
 
+from verifier_safe import safe_verify, VerifierError
+
 
 """
 Runs the full speculative decoding algorithm on a prompt.
@@ -54,6 +56,14 @@ def speculative_decoding_loop(
     verification_algo: str,
     eos_token_id : int = None, max_new_tokens: int = 128, K: int = 4, L: int = 8, p_temp: float = 1.0, q_temp: float = 1.0,
 ):
+    # Store debug context so speculative_decoding_iter can include it in
+    # verifier_safe logs without changing the iter signature.
+    p_model._spec_debug_ctx = {
+        "prompt": prompt,
+        "K": K, "L": L, "p_temp": p_temp, "q_temp": q_temp,
+        "prompt_idx": getattr(p_model, "_spec_prompt_idx", None),
+    }
+
     # Profiling init of per-run stats and timer
     if not hasattr(p_model, "_spec_profile"):
         p_model._spec_profile = {"runs": []}
@@ -174,12 +184,19 @@ def speculative_decoding_iter(
         _tree_size = len(q_prefixes)
         _run_stats["total_tree_nodes"] += _tree_size
 
-    # (3) Verification to select one node on one draft path, plus a residual token, and then update caches and contexts
-    tree_verifier = TreeVerifier(q_paths, q_prefixes, q_probs_dict, p_probs_dict)
+    # (3) Verification — routed through safe_verify so researcher bugs in
+    # verifier.py / node.py are caught, logged, and re-raised as VerifierError
+    # (caller skips the prompt; see verifier_safe.py).
+    _dbg = getattr(p_model, "_spec_debug_ctx", {})
     if _run_stats is not None:
         torch.cuda.synchronize()
         _t_verify = time.perf_counter()
-    ver_node, res_token = tree_verifier.verify(verification_algo)
+    ver_node, res_token = safe_verify(
+        q_paths, q_prefixes, q_probs_dict, p_probs_dict, verification_algo,
+        prompt=_dbg.get("prompt", "<unknown>"),
+        K=_dbg.get("K"), L=_dbg.get("L"), p_temp=_dbg.get("p_temp"),
+        prompt_idx=_dbg.get("prompt_idx"),
+    )
     if _run_stats is not None:
         torch.cuda.synchronize()
         _run_stats["time_verify"] += time.perf_counter() - _t_verify

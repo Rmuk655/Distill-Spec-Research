@@ -53,6 +53,7 @@ from util           import set_seed, load_prompts_jsonl, load_models as _sot_loa
 from inference_util import iid_draft, target_tree_pass
 from main           import speculative_decoding_loop
 from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
+from verifier_safe  import VerifierError
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -263,20 +264,33 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
 @torch.no_grad()
 def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
-    """Returns val block efficiency averaged over VAL_PROMPTS prompts."""
+    """Returns val block efficiency averaged over VAL_PROMPTS prompts.
+
+    VerifierError (from verifier_safe.py) is caught per-prompt so a bug in
+    verifier.py does not abort training.  Skipped prompts are excluded from the
+    block_eff denominator; if all prompts fail, returns nan.
+    """
     mode = LOSS_TO_VERIFIER.get(args.loss, "traversal")
     draft.eval()
-    total_gen, total_calls = 0, 0
-    for prompt in val_prompts[:VAL_PROMPTS]:
-        speculative_decoding_loop(
-            p_model=teacher, q_model=draft, tok=tokenizer,
-            prompt=prompt, verification_algo=mode,
-            max_new_tokens=MAX_NEW_TOKENS, K=VAL_K, L=VAL_L,
-            p_temp=args.teacher_temp, q_temp=args.teacher_temp,
-        )
+    total_gen, total_calls, skipped = 0, 0, 0
+    for i, prompt in enumerate(val_prompts[:VAL_PROMPTS]):
+        teacher._spec_prompt_idx = i
+        try:
+            speculative_decoding_loop(
+                p_model=teacher, q_model=draft, tok=tokenizer,
+                prompt=prompt, verification_algo=mode,
+                max_new_tokens=MAX_NEW_TOKENS, K=VAL_K, L=VAL_L,
+                p_temp=args.teacher_temp, q_temp=args.teacher_temp,
+            )
+        except VerifierError as ve:
+            skipped += 1
+            print(f"  [val-skip] prompt {i}: {ve}")
+            continue
         s = teacher._spec_run_stats
         total_gen   += s["gen_tokens"]
         total_calls += s["target_calls"]
+    if skipped:
+        print(f"  [val] {skipped}/{VAL_PROMPTS} prompts skipped (verifier errors)")
     draft.train()
     return block_eff(total_gen, total_calls)
 
