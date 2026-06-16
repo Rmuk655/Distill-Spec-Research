@@ -19,9 +19,9 @@ Usage:
     python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --dataset alpaca   # baseline
     python eval.py --checkpoint ckpts/best --mode gbv --modes naive,gbv,traversal  # sweep
 
-    # one eval per GPU — pin to specific GPU so parallel runs don't fight:
+    # one eval per GPU — CUDA_VISIBLE_DEVICES=N remaps GPU N to cuda:0 inside the process:
     CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes naive --device cuda:0 &
-    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv   --device cuda:1 &
+    CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv   --device cuda:0 &
 
     # parallel eval across modes (parallel-safe --output flag):
     python eval.py --checkpoint Qwen/Qwen3-0.6B --K 1 --n 1000 --modes naive     --output out_naive.csv &
@@ -608,9 +608,12 @@ def parse_args():
     ap.add_argument("--max_new_tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS)
     ap.add_argument("--temp",      type=float, default=DEFAULT_TEMP)
     ap.add_argument("--device",    default="cuda",
-                    help="CUDA device to use, e.g. cuda:0 or cuda:1.  "
-                         "For 1-eval-per-GPU runs use CUDA_VISIBLE_DEVICES=N --device cuda:0.  "
-                         "Default 'cuda' auto-selects the GPU with most free memory.")
+                    help="CUDA device to use.  When pinning to a specific GPU use "
+                         "CUDA_VISIBLE_DEVICES=N --device cuda:0 — the env-var remaps "
+                         "GPU N to index 0 inside the process, so cuda:0 is always correct. "
+                         "Never pass --device cuda:N alongside CUDA_VISIBLE_DEVICES=N; "
+                         "that will raise 'invalid device ordinal'.  "
+                         "Default 'cuda' auto-selects the first visible GPU.")
     ap.add_argument("--seed",      type=int, default=DEFAULT_SEED,
                     help="RNG seed (default 123).  Reset before EVERY mode to keep "
                          "prompt order and sampling identical across runs.")
