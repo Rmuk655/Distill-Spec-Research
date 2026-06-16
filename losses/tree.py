@@ -54,7 +54,7 @@ import torch.nn.functional as F
 # 1.  Generic divergences on tree nodes (no verifier in the formula)
 # ---------------------------------------------------------------------------
 
-def kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None):
+def kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, **_kw):
     """Forward KL(p_teacher ∥ q_student), averaged over non-leaf tree nodes."""
     device = next(iter(q_probs_dict.values())).device
     total  = torch.zeros(1, device=device)
@@ -70,7 +70,7 @@ def kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None):
     return total / n
 
 
-def rev_kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None):
+def rev_kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, **_kw):
     """Reverse KL(q_student ∥ p_teacher), averaged over non-leaf tree nodes."""
     device = next(iter(q_probs_dict.values())).device
     total  = torch.zeros(1, device=device)
@@ -88,7 +88,7 @@ def rev_kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None):
     return total / n
 
 
-def jsd_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, alpha=0.5):
+def jsd_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, alpha=0.5, **_kw):
     """Symmetric JSD at every non-leaf node (mixture weight α=0.5 by default)."""
     device = next(iter(q_probs_dict.values())).device
     total  = torch.zeros(1, device=device)
@@ -156,7 +156,7 @@ def _bv_path_loss(q_probs_dict, p_probs_dict, path, L):
     return -e_tau
 
 
-def bv_tree(q_probs_dict, p_probs_dict, q_paths, L, K=None):
+def bv_tree(q_probs_dict, p_probs_dict, q_paths, L, K=None, **_kw):
     """BV-aligned loss averaged over the K draft paths."""
     total = torch.zeros(1, device=next(iter(q_probs_dict.values())).device)
     for path in q_paths:
@@ -164,26 +164,28 @@ def bv_tree(q_probs_dict, p_probs_dict, q_paths, L, K=None):
     return total / len(q_paths)
 
 
-def traversal_tree(q_probs_dict, p_probs_dict, q_paths, L, K):
+def traversal_tree(q_probs_dict, p_probs_dict, q_paths, L, K, **_kw):
     """
-    Maximise the mean leaf weight  w_leaf = Π_{i=1..L} min(1, p[t_i]/q[t_i])
-    across the K paths.  This is a smooth lower-bound surrogate for the
-    sequential-rejection traversal_verify routine (which is not differentiable).
+    Differentiable surrogate for E[τ_traversal] via _bv_path_loss per path.
+
+    The traversal verifier applies BV-style leaf-rejection on a K-path tree
+    (identical to BV at K=1).  The previous running-weight surrogate used
+    p[token]/q[token] (single sampled token) for its gradient, which is sparse:
+    it can only push q DOWN at sampled tokens and has no signal to push q UP
+    toward p.  Over training the model finds a degenerate minimum where q
+    concentrates on a teacher-rejected token (p[token]≈0 → alpha→0 → e_tau→0
+    → loss→0 → gradient vanishes → training freezes).
+
+    Fix: use _telescoping_loss(_alpha_naive).  _alpha_naive = Σ_v min(p[v], q[v])
+    is strictly positive for any full-softmax distribution — the zero minimum is
+    structurally unreachable.  _bv_path_loss (previous attempt) still collapses
+    because every gradient term is multiplied by w, and w gates on p[token]/q[token]
+    which can reach zero.  At K=1 traversal and naive are identical verifiers.
+    For K>1 this loses verifier-specificity but retains a stable training signal.
+    Val is still measured with traversal verifier (train.py _LOSS_TO_VERIFIER),
+    so checkpoint selection remains traversal-aligned.
     """
-    device = next(iter(q_probs_dict.values())).device
-    total  = torch.zeros(1, device=device)
-    for path in q_paths:
-        w = torch.ones(1, device=device)
-        for i in range(1, L + 1):
-            prefix = ",".join(str(x) for x in path[:i])
-            token  = path[i]
-            if prefix not in q_probs_dict or prefix not in p_probs_dict:
-                break
-            p = p_probs_dict[prefix].detach().to(w.dtype)
-            q = q_probs_dict[prefix].to(w.dtype)
-            w = w * torch.clamp(p[token] / q[token].clamp(min=1e-9), max=1.0)
-        total = total + w
-    return -(total / K)
+    return _telescoping_loss(_alpha_naive, q_probs_dict, p_probs_dict, q_paths, L, K)
 
 
 # --- GBV (greedy path + BV on skewed distribution) ----------------------------
@@ -214,7 +216,7 @@ def _gbv_select_path(q_probs_dict, p_probs_dict, q_paths, L):
         for cpfx, tok in children[cur_pfx]:
             qt = q[tok].item()
             pt = p[tok].item()
-            r  = min(1.0, pt / qt) if qt > 1e-9 else 0.0
+            r  = pt / (qt + torch.finfo(p.dtype).eps)
             if r > best[2]:
                 best = (cpfx, tok, r)
         if best[1] is None:
@@ -271,7 +273,7 @@ def _gbv_skew_dict(q_probs_dict, p_probs_dict, path, L, K):
         # Argsort on p/q ratio (discrete — no grad), then cumsum q under that order.
         with torch.no_grad():
             eps   = torch.finfo(q.dtype).eps
-            ratio = torch.minimum(torch.ones_like(p), p / q.detach().clamp(min=eps))
+            ratio = p / q.detach().clamp(min=eps)
             order = torch.argsort(ratio, stable=True)
             inv   = torch.empty_like(order)
             inv[order] = torch.arange(len(order), device=device)
@@ -294,7 +296,7 @@ def _gbv_skew_dict(q_probs_dict, p_probs_dict, path, L, K):
     return skew
 
 
-def gbv_tree(q_probs_dict, p_probs_dict, q_paths, L, K):
+def gbv_tree(q_probs_dict, p_probs_dict, q_paths, L, K, **_kw):
     """
     GBV-aligned loss: pick the best path (no grad), substitute q_skew for q,
     then run the BV path loss.  Matches gbv_verify in verifiers/node.py.
@@ -432,16 +434,16 @@ def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K):
     return -(total / n_paths)
 
 
-def naive_tree    (q, p, paths, L, K): return _telescoping_loss(_alpha_naive,     q, p, paths, L, K)
-def nss_tree      (q, p, paths, L, K): return _telescoping_loss(_alpha_nss,       q, p, paths, L, K)
-def specinfer_tree(q, p, paths, L, K): return _telescoping_loss(_alpha_specinfer, q, p, paths, L, K)
-def spectr_tree   (q, p, paths, L, K): return _telescoping_loss(_alpha_spectr,    q, p, paths, L, K)
-def khisti_tree   (q, p, paths, L, K): return _telescoping_loss(_alpha_khisti,    q, p, paths, L, K)
+def naive_tree    (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive,     q, p, paths, L, K)
+def nss_tree      (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_nss,       q, p, paths, L, K)
+def specinfer_tree(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_specinfer, q, p, paths, L, K)
+def spectr_tree   (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_spectr,    q, p, paths, L, K)
+def khisti_tree   (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_khisti,    q, p, paths, L, K)
 
 
 # ---------------------------------------------------------------------------
 # Registry — train.py looks up the loss here by --loss flag.
-# Every value has the signature (q_probs_dict, p_probs_dict, q_paths, L, K).
+# Every value has the signature (q_probs_dict, p_probs_dict, q_paths, L, K, **_kw).
 # ---------------------------------------------------------------------------
 TREE_LOSSES = {
     "kl_tree":         kl_tree,

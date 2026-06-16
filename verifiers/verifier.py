@@ -16,33 +16,16 @@ Any verification method probabilistically outputs a Node in the tree, plus an ad
 
 This class implements a wrapper to call a verification method from a string descriptor.
 The currently available verification methods are shown below.
-    - {descriptor}  {appearing in}                                  {setting}       {OT-based}
-    - naive:        Chen et al. (2023); Leviathan et al. (2023)     single-path     YES
-    - bv:           Block Verification, Sun et al. (2024c)          single-path     NO
-    - nss:          Naive Speculative Sampling, Miao et al. (2024)  multi-path      YES
-    - spectr:       SpecTr, Sun et al. (2023)                       multi-path      YES
-    - specinfer:    SpecInfer, Miao et al. (2024)                   multi-path      YES
-    - khisti:       Canonical Decomposition, Khisti et al. (2025)   multi-path      YES
-    - traversal:    Traversal Verification, Weng et al. (2025)      multi-path      NO
-    - gbv:          Greedy Block Verification (this work)            multi-path      NO
-
-Empirical block efficiency ordering (Thomas et al., 2026, Table 2 — averaged across
-Qwen/Gemma/Llama model pairs, 5 datasets, 8 sampling configs, K tuned per run):
-    traversal (5.31) > specinfer (4.58) ≈ spectr (4.61) > bv (4.30) > nss (4.05)
-
-Key finding from Thomas et al. (2026): Traversal consistently outperforms all OT-based
-methods (+15% BE) because OT-based methods waste branching budget near the root
-(where target/draft distributions are similar), while Traversal's bottom-up approach
-naturally exploits deeper nodes where divergence — and acceptance gains — are larger.
-
-GBV (this work) improves on single-path BV by extending block-level acceptance
-to multi-path i.i.d. trees, achieving higher BE than SpecInfer via greedy path selection.
-
-Reference:
-    Thomas, R., Kitanovski, T., Goldblum, M., Pal, A. (2026).
-    "Dynamic Delayed Tree Expansion for Improved Multi-Path Speculative Decoding."
-    arXiv:2602.16994v1.
-
+    - {descriptor}  {appearing in}              {setting}       {OT-based}
+    - naive:        Speculative Decoding        single-path     YES
+    - bv:           Block Verification          single-path     NO
+    - nss:          Naive Speculative Sampling  multi-path      YES
+    - spectr:       SpecTr                      multi-path      YES
+    - specinfer:    SpecInfer                   multi-path      YES
+    - khisti:       Canonical Decomposition     multi-path      YES
+    - max:          N/A, combines the above     multi-path      YES
+    - traversal:    Traversal Verification      multi-path      NO
+    - gbv:          Greedy Block Verification   multi-path      NO
 NOTE: the bulk of OT-based methods such as spectr are implemented at a token level in the Node class
 NOTE: single-path methods, while intended for K=1, can be used for higher K by only taking the first path
 NOTE: spectr, specinfer, khisti, and max are equivalent to naive if K=1
@@ -172,6 +155,73 @@ class TreeVerifier:
 
     def max_verify(self) -> Tuple[Node, int]:
         return self.otlp_verify(lambda node, p, q : node.max_otlp_solver(p, q))
+
+
+    """
+    Expected returned node.depth for otlp_verify methods.
+    Uses cutoffs D = L-trunc, ..., L, where verification terminates once it reaches depth >= D.
+    Returns a list with ith entry being E[returned_depth with cutoff D = (L-trunc) + i]
+    Uses nss_otlp_branch once per node to cache on-tree transition probabilities to disticnt child tokens.
+    """
+    def expected_otlp_depths(self, otlp_branch: Callable[[Node, torch.Tensor, torch.Tensor], Dict[int, float]], trunc: int) -> List[float]:
+        n = len(self.nodes)
+        trunc = min(trunc, self.L)
+
+        # Iterate through nodes in decreasing depth, i.e. ancestors appear later in the order.
+        order_desc = sorted(self.nodes, key=lambda u: u.depth, reverse=True)
+
+        # For each node, cache tuples (child_idx, P(append that child's token)) over distinct children, and P(append a token that lands off-tree).
+        edges = [[] for _ in range(n)]
+        stop = [0.0 for _ in range(n)]
+
+        # Iterate through nodes to update edges and stop lists.
+        for node in self.nodes:
+            if node.depth >= self.L or node.children == []:
+                stop[node.idx] = 1.0
+                continue
+
+            # Create mapping of distinct child tokens to indices, overwriting duplicates.
+            token_to_child_idx = {}
+            for child in node.children:
+                token_to_child_idx[child.token] = child.idx
+
+            # Compute branching probability dictionary and update edge and stop lists.
+            branch_dict = otlp_branch(node, self.p_probs_dict[node.rep], self.q_probs_dict[node.rep])
+            continue_prob = 0.0
+            for next_token, next_token_prob in branch_dict.items():
+                edges[node.idx].append((token_to_child_idx[next_token], next_token_prob))
+                continue_prob += next_token_prob
+            stop[node.idx] = max(0.0, 1.0 - continue_prob)
+
+        # For each truncating depth, compute expected OTLP depth on truncated tree from root using DP on edge and stop lists.
+        root_idx = self.nodes[0].idx
+        out = []
+        for end_depth in range(self.L - trunc, self.L + 1):
+            expected_depth = [0.0 for i in range(n)]
+            for node in order_desc:
+                if node.depth >= end_depth:
+                    expected_depth[node.idx] = float(end_depth)
+                else:
+                    expected_depth[node.idx] += stop[node.idx] * node.depth
+                    for child_idx, next_token_prob in edges[node.idx]:
+                        expected_depth[node.idx] += next_token_prob * expected_depth[child_idx]
+            out.append(expected_depth[root_idx])
+        return out
+
+    def expected_naive_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.naive_otlp_branch(p, q), trunc)
+
+    def expected_nss_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.nss_otlp_branch(p, q), trunc)
+
+    def expected_specinfer_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.specinfer_otlp_branch(p, q), trunc)
+
+    def expected_spectr_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.spectr_otlp_branch(p, q), trunc)
+
+    def expected_khisti_depths(self, trunc: int) -> List[float]:
+        return self.expected_otlp_depths(lambda node, p, q : node.khisti_otlp_branch(p, q), trunc)
 
 
     """
@@ -406,3 +456,124 @@ class TreeVerifier:
                     desc.weight = min(1.0, desc.parent.weight * p_parent[desc.token].item() / qtok) if qtok > 0.0 else 0.0
 
         return first_leaf, torch.multinomial(self.p_probs_dict[first_leaf.rep], num_samples=1).item()
+
+    def expected_traversal_depths(self, trunc: int, vocab_size: int) -> List[float]:
+        trunc = min(int(trunc), int(self.L))
+        D0, n = self.L - trunc, len(self.nodes)
+        rep = [u.rep for u in self.nodes]
+        depth = [int(u.depth) for u in self.nodes]
+        tok = [int(u.token) for u in self.nodes]
+        par = [u.parent.idx if u.parent is not None else -1 for u in self.nodes]
+
+        mult = [dict() for _ in range(n)]
+        for u in self.nodes:
+            d = mult[u.idx]
+            for ch in u.children:
+                d[ch.idx] = d.get(ch.idx, 0) + 1  # duplicates collapse on reject, matches traversal_verify
+
+        by_depth = sorted(range(n), key=lambda i: (depth[i], i))
+        out = []
+
+        with torch.no_grad():
+            for D in range(D0, self.L + 1):
+                act = [depth[i] <= D for i in range(n)]
+
+                deg = [0] * n
+                for u in range(n):
+                    if act[u]:
+                        deg[u] = sum(cnt for c, cnt in mult[u].items() if act[c])
+
+                heap = [i for i in range(n) if act[i] and deg[i] == 0]
+                heapq.heapify(heap)
+                popped = [False] * n
+                order = []
+                while heap:
+                    v = heapq.heappop(heap)
+                    if (not act[v]) or popped[v]:
+                        continue
+                    popped[v] = True
+                    order.append(v)
+                    p = par[v]
+                    if p != -1 and act[p]:
+                        deg[p] -= mult[p].get(v, 0)
+                        if deg[p] == 0:
+                            heapq.heappush(heap, p)
+
+                child_order = [[] for _ in range(n)]
+                for v in order:
+                    p = par[v]
+                    if p != -1 and act[p]:
+                        child_order[p].append(v)
+
+                w_start = [0.0] * n
+                w_post  = [0.0] * n
+                w_start[0] = 1.0
+
+                for u in by_depth:
+                    if not act[u]:
+                        continue
+                    w = float(w_start[u])
+                    p = self.p_probs_dict[rep[u]][:vocab_size].clone()
+                    q = self.q_probs_dict[rep[u]][:vocab_size].clone()
+
+                    seq = child_order[u]
+                    if seq:
+                        seq_tokens = tuple(tok[c] for c in seq)
+                        wkey = int(round(w_start[u] * (2**24)))
+                        ckey = (rep[u], vocab_size, wkey, seq_tokens)
+                        hit = TreeVerifier.traversal_cache.get(ckey)
+                        if hit is not None:
+                            w_post[u], child_ws = hit
+                            for c, wc in zip(seq, child_ws):
+                                w_start[c] = wc
+                            continue
+
+                    for c in child_order[u]:
+                        t = tok[c]
+                        qt = float(q[t].item()) if 0 <= t < vocab_size else 0.0
+                        pt = float(p[t].item()) if 0 <= t < vocab_size else 0.0
+                        w_start[c] = min(1.0, w * pt / max(qt, 1e-8)) if qt > 0.0 else 0.0
+
+                        r = (p.mul(w) - q).clamp(min=0.0)
+                        S = float(r.sum(dtype=torch.float64).item())
+                        if S > 0.0 and math.isfinite(S):
+                            den = S + 1.0 - w
+                            w = S / max(den, 1e-12)
+                            p = r / S
+                        else:
+                            w = 0.0
+
+                        if 0 <= t < vocab_size:
+                            q_rem = float((q.sum(dtype=torch.float64) - q[t]).item())
+                            if q_rem > 0.0 and math.isfinite(q_rem):
+                                q = q / q_rem
+                                q[t] = 0.0
+                            else:
+                                q[t] = 0.0
+
+                    if seq:
+                        TreeVerifier.traversal_cache[ckey] = (w, tuple(w_start[c] for c in seq))
+                    w_post[u] = w
+
+                survive, E = 1.0, 0.0
+                for v in order:
+                    if v == 0:
+                        a = 1.0
+                    elif depth[v] == D:
+                        a = float(w_start[v])
+                    else:
+                        a = float(w_post[v])
+
+                    if a <= 0.0:
+                        continue
+                    if a >= 1.0:
+                        E += survive * float(depth[v])
+                        break
+                    E += survive * a * float(depth[v])
+                    survive *= (1.0 - a)
+                    if survive <= 0.0:
+                        break
+
+                out.append(float(E))
+
+        return out
