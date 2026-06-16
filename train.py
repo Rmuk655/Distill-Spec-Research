@@ -53,6 +53,7 @@ from util           import set_seed, load_prompts_jsonl, load_models as _sot_loa
 from inference_util import iid_draft, target_tree_pass
 from main           import speculative_decoding_loop
 from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
+from verifier        import TreeVerifier  # for --aux_mode depth_weight (expected_*_depths)
 from verifier_safe  import VerifierError
 
 
@@ -257,6 +258,35 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
 
 # ---------------------------------------------------------------------------
+# (3) Depth-as-weight: scalar E[τ_V] over the draft tree, used to MULTIPLY a
+# flat loss.  The depth has NO gradient (pure-Python DP) — this is per-prompt
+# loss reweighting, not an acceptance gradient.  Cost: one extra target tree
+# pass per step.  See --aux_mode depth_weight.
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def expected_depth_scalar(draft, teacher, prompt_ids, K, L, verifier,
+                          draft_temp, teacher_temp) -> float:
+    """E[accepted depth] for `verifier` on a fresh student draft tree (no grad)."""
+    t_out = teacher(prompt_ids, use_cache=True, return_dict=True)
+    p_cache = t_out.past_key_values
+    p_probs_last = F.softmax(t_out.logits[:, -1, :] / teacher_temp, dim=-1)
+    context_pending = torch.multinomial(p_probs_last, num_samples=1)
+
+    q_out = draft(prompt_ids, use_cache=True, return_dict=True)
+    q_paths, _, _ = iid_draft(draft, q_out.past_key_values, context_pending,
+                              K=K, L=L, q_temp=draft_temp)
+    q_prefixes, _, _, p_probs_dict = target_tree_pass(
+        teacher, p_cache, q_paths, K=K, L=L, p_temp=teacher_temp)
+    q_probs_dict = draft_tree_forward_with_grad(draft, prompt_ids, q_paths,
+                                                L=L, q_temp=draft_temp)
+
+    tv = TreeVerifier(q_paths, q_prefixes, q_probs_dict, p_probs_dict)
+    depths = getattr(tv, f"expected_{verifier}_depths")(L)   # list over cutoffs
+    return float(depths[-1])                                 # full-depth E[τ_V]
+
+
+# ---------------------------------------------------------------------------
 # Validation: block efficiency via eval.speculative_decode_one (same code path
 # as offline eval.py).  Verifier mode matched to training loss; traversal for
 # losses with no direct pairing (best general BE, Thomas et al. 2026 Table 2).
@@ -280,7 +310,7 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
                 p_model=teacher, q_model=draft, tok=tokenizer,
                 prompt=prompt, verification_algo=mode,
                 max_new_tokens=MAX_NEW_TOKENS, K=VAL_K, L=VAL_L,
-                p_temp=args.teacher_temp, q_temp=args.teacher_temp,
+                p_temp=args.val_temp, q_temp=args.val_temp,
             )
         except VerifierError as ve:
             skipped += 1
@@ -305,7 +335,9 @@ def run_slug(args) -> str:
     run name. Includes the aux loss + weight so a combined run (e.g. forward_kl+l1x0.5)
     never overwrites the single-loss run's checkpoints."""
     slug = args.loss
-    if args.aux_loss:
+    if args.aux_mode == "depth_weight":
+        slug += f"+dw_{args.aux_loss or 'naive_tree'}_lam{args.depth_lambda}"
+    elif args.aux_loss:
         slug += f"+{args.aux_loss}x{args.aux_weight}"
     return slug
 
@@ -330,7 +362,10 @@ def setup_wandb(args, output_dir, resumed: bool):
             saved = None
 
     tags = [args.loss, f"K{K}", f"L{L}"]
-    if args.aux_loss:
+    if args.aux_mode == "depth_weight":
+        tags.append(f"depthw:{args.aux_loss or 'naive_tree'}")
+        tags.append(f"lam{args.depth_lambda}")
+    elif args.aux_loss:
         tags.append(f"aux:{args.aux_loss}")
     run_name = f"{run_slug(args)}_K{K}_L{L}_seed{args.seed}"
     init_kw = dict(project=WANDB_PROJECT, name=run_name,
@@ -462,6 +497,20 @@ def parse_args():
                          "Typical use: --loss forward_kl --aux_loss naive_tree --aux_weight 0.1")
     ap.add_argument("--aux_weight", type=float, default=0.1,
                     help="Scalar weight applied to the auxiliary loss (default 0.1).")
+    ap.add_argument("--aux_mode", choices=["add", "depth_weight"], default="add",
+                    help="'add' (default): total = primary + aux_weight*aux.  "
+                         "'depth_weight': multiply the (flat) primary loss by "
+                         "exp(depth_lambda*(d - EMA(d))), where d = E[tau_V] of the "
+                         "verifier named by --aux_loss.  Depth has NO gradient — this "
+                         "is per-prompt loss reweighting (researcher's scalar scheme).")
+    ap.add_argument("--depth_lambda", type=float, default=0.0,
+                    help="Signed exponent for --aux_mode depth_weight.  >0 amplify "
+                         "loss on deep-tree prompts, <0 amplify shallow, 0 = plain "
+                         "flat (control).  EMA-centred so E[w]~=1 (no LR confound).")
+    ap.add_argument("--val_temp", type=float, default=0.2,
+                    help="Sampling temperature for val block_eff decoding.  Low (0.2) "
+                         "is near-deterministic → far lower run-to-run variance than "
+                         "the 0.8 training temp.  Cannot be 0 (softmax/temp divide).")
     return ap.parse_args()
 
 
@@ -531,6 +580,9 @@ def main():
     draft.train()
     optimizer.zero_grad(set_to_none=True)
     losses_log: List[float] = []
+    depth_ema: float | None = None   # running mean of E[tau_V] for --aux_mode depth_weight
+    depth_w = 1.0
+    depth_d = 0.0                     # last raw E[tau_V] (logged so the sweep is observable)
     t0 = time.time()
 
     for step in range(start_step, args.steps):
@@ -550,7 +602,19 @@ def main():
                                      max_new_tokens=MAX_NEW_TOKENS,
                                      teacher_temp=args.teacher_temp)
 
-        if aux_loss_fn is not None:
+        if args.aux_mode == "depth_weight":
+            # (3) Multiply the (flat) primary loss by a detached depth weight.
+            verifier = LOSS_TO_VERIFIER.get(args.aux_loss, "naive")
+            Node.naive_cache.clear()
+            Node.spectr_cache.clear()
+            Node.specinfer_cache.clear()
+            d = expected_depth_scalar(draft, teacher, ids, K, L, verifier,
+                                      args.draft_temp, args.teacher_temp)
+            depth_ema = d if depth_ema is None else 0.9 * depth_ema + 0.1 * d
+            depth_w = math.exp(args.depth_lambda * (d - depth_ema))   # E[w]~=1
+            depth_d = d
+            loss = depth_w * loss
+        elif aux_loss_fn is not None:
             if aux_is_tree:
                 Node.naive_cache.clear()
                 Node.spectr_cache.clear()
@@ -589,6 +653,8 @@ def main():
                     "train/loss":      avg,
                     "train/lr":        scheduler.get_last_lr()[0],
                     "train/grad_norm": grad_norm.item(),
+                    **({"train/depth_w": depth_w, "train/depth_d": depth_d}
+                       if args.aux_mode == "depth_weight" else {}),
                 }, step=step + 1)
 
         # Validation + checkpoint best
