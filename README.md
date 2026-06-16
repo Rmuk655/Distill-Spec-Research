@@ -93,6 +93,43 @@ python train.py --loss khisti_tree
 python train.py --loss kl_tree --resume
 ```
 
+### Combining a flat backbone with an acceptance-aligned tree loss
+
+Two ways to mix a dense flat loss with a verifier-aligned tree loss.  Both reuse
+`--aux_loss` (named by verifier, e.g. `naive_tree`, `khisti_tree`).
+
+```bash
+# (1) Additive — total = primary + aux_weight * aux.  Real per-level gradient
+#     through q, with the natural (depth-decaying) survival weight.
+python train.py --loss jsd --aux_loss naive_tree --aux_weight 0.1
+
+# (3) Depth-weight — multiply the flat primary loss by exp(depth_lambda*(d-EMA(d))),
+#     d = E[tau_V] of the draft tree.  Curriculum reweighting only (no acceptance
+#     gradient).  EMA-centred so E[w]~=1 (no hidden LR change).
+python train.py --loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_lambda 0.5
+```
+
+`--depth_lambda` is a single signed knob: `>0` amplifies the loss on deep-tree
+prompts, `<0` amplifies shallow, and **`--depth_lambda 0` is the control** — it
+must reproduce a plain `--loss jsd` run (use it as a correctness check).
+
+Each combo gets its own checkpoint dir + W&B run name + tags, so `λ=0.5` and
+`λ=-0.5` never overwrite each other:
+
+| Flags | Checkpoint dir / W&B run |
+|---|---|
+| `--loss jsd --aux_loss naive_tree --aux_weight 0.1` | `jsd+naive_treex0.1` |
+| `--loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_lambda 0.5` | `jsd+dw_khisti_tree_lam0.5` |
+
+In `depth_weight` mode, `train/depth_w` (applied weight) and `train/depth_d`
+(raw `E[tau_V]`) are logged to W&B — watch `depth_d` to see whether the draft
+tree is actually getting deeper during training.
+
+**Note — `--val_temp` (default 0.2):** val block-efficiency is decoded at a low,
+near-deterministic temperature so the curve is readable.  The 0.8 training temp
+made `val/block_eff` swing ±0.4 (pure sampling noise) and masked real effects.
+`--val_temp` cannot be 0 (temperature divide).
+
 What happens during training (per step):
 
 1. Pick a prompt from `gsm8k_train.jsonl`.
@@ -104,8 +141,9 @@ What happens during training (per step):
    with grad → `q_probs_dict`.  Loss = `−E[τ_V](q, p, K, L)`.
 4. Gradient accumulation over `GRAD_ACCUM` micro-steps, AdamW step, linear
    warmup → constant LR.
-5. Every `VAL_EVERY` steps: forward-KL on `gsm8k_val.jsonl`.  If improved,
-   save `ckpt_best/`.  W&B logs `val/loss`.
+5. Every `VAL_EVERY` steps: decode block-efficiency on `gsm8k_val.jsonl`
+   (verifier matched to the loss, at `--val_temp`).  If improved, save
+   `ckpt_best/`.  W&B logs `val/block_eff`.
 6. Every `SAVE_EVERY` steps: write `ckpt_latest/` + `state.json` so
    `--resume` works.
 
