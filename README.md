@@ -31,12 +31,17 @@ pip install -r requirements.txt
 #    --n 1000 gives 1000 held-out eval prompts (default is 100)
 python -m data_io.download --train --n 1000
 
-# 4. (optional) log in to Weights & Biases for training curves
+# 4. (optional) GPU telemetry — pynvml + psutil (pip, one time)
+#    eval.py uses these to record SM utilization, HBM-bus %, PCIe throughput,
+#    and CPU utilization in every results.csv row.  Degrades gracefully if absent.
+pip install pynvml psutil
+
+# 5. (optional) log in to Weights & Biases for training curves
 wandb login
 ```
 
-That's it.  No multi-tier config, no auto-detection of GPU type, no
-provider-specific bootstrap.  This pipeline assumes one A100 (40 GB).
+That's it.  No multi-tier config, no provider-specific bootstrap.
+This pipeline targets A100 (40 GB) but runs on any CUDA GPU with bfloat16 support.
 
 ---
 
@@ -141,13 +146,54 @@ python eval.py --checkpoint checkpoints/gbv_tree/ckpt_best \
 python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv
 ```
 
-Every eval cell appends one row to `results.csv`:
+Every eval cell appends one row to `results.csv`.  Key columns:
 
-```
-timestamp,checkpoint,dataset,mode,K,L,n_prompts,block_eff,throughput_tok_s,avg_tree_nodes,total_gen_tokens,total_time_s
-```
+| Column group | Columns |
+|---|---|
+| Identity | `timestamp`, `checkpoint`, `dataset`, `mode`, `K`, `L` |
+| Core metrics | `block_eff`, `throughput_tok_s`, `avg_tree_nodes` |
+| Time breakdown | `time_draft_s`, `time_target_s`, `time_verify_s`, `time_cache_s`, `time_tokenizer_s` |
+| GPU telemetry | `gpu_sm_util_avg_pct`, `gpu_mem_util_avg_pct` (HBM-bus %), `gpu_vram_peak_mb`, `gpu_pcie_tx/rx_avg_kbs`, `gpu_nvlink_tx/rx_avg_kbs`, `cpu_util_avg_pct` |
+| Reproducibility | `device`, `seed`, `dtype`, `cpu_threads_used` |
+| Machine spec | `machine_gpu`, `machine_gpu_count`, `machine_gpu_vram_gb`, `machine_driver`, `machine_cpu_physical_cores`, `machine_ram_gb`, `machine_os` |
 
 Open it in pandas / Excel — one row per (checkpoint × mode × K × L × dataset).
+
+### Reproducibility protocol — 1 eval per GPU
+
+Our server has **4 GPUs and 96 CPU cores**.  To get comparable numbers across runs:
+
+```bash
+# Run each eval pinned to its own GPU.  Use CUDA_VISIBLE_DEVICES to isolate
+# the process at the OS level so no other job can land on the same GPU.
+CUDA_VISIBLE_DEVICES=0 python eval.py --checkpoint ckpt_a --modes gbv --device cuda:0 &
+CUDA_VISIBLE_DEVICES=1 python eval.py --checkpoint ckpt_b --modes gbv --device cuda:1 &
+CUDA_VISIBLE_DEVICES=2 python eval.py --checkpoint ckpt_c --modes gbv --device cuda:2 &
+CUDA_VISIBLE_DEVICES=3 python eval.py --checkpoint ckpt_d --modes gbv --device cuda:3 &
+wait
+```
+
+**Rules — if you break any of these, your throughput numbers are not comparable:**
+
+| Rule | Why |
+|---|---|
+| `CUDA_VISIBLE_DEVICES=N --device cuda:N` | Prevents a second process from landing on the same GPU and sharing HBM bandwidth |
+| `--seed 123` (default) | Fixes the RNG state before every mode sweep — same token sampling path |
+| Prompts in file order, no shuffle | `load_prompts_jsonl()[:n]` is deterministic; never shuffle before eval |
+| `--dtype bf16` (default) | Mixed precision changes numerics and throughput |
+| Teacher loaded first, draft second | Already enforced in `load_models()` |
+| `--cpu_threads` auto-detected | Default is `physical_cores // num_gpus` (96 / 4 = 24 on our server) — prevents CPU cache thrashing across 4 parallel evals |
+
+**Interpreting GPU telemetry:**
+
+- `gpu_sm_util_avg_pct` near 100 % → compute-bound (expected for large target model)
+- `gpu_mem_util_avg_pct` near 100 % but SM low → HBM bandwidth-bound
+- Both low → CPU / Python overhead dominates (check `time_draft_s` vs `time_target_s`)
+- If throughput drops between runs while `gpu_vram_peak_mb` stays the same → HBM bandwidth contention, not VRAM pressure
+
+**Note on L2 hit rate and exact HBM GB/s:** these require DCGM
+(`sudo apt install datacenter-gpu-manager`).  The `gpu_mem_util_avg_pct` field
+(from standard NVML) is the closest available proxy without DCGM.
 
 ---
 
