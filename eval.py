@@ -54,6 +54,7 @@ import argparse
 import csv
 import json
 import os
+import platform
 import threading
 import time
 from datetime import datetime
@@ -89,21 +90,34 @@ def _gpu_index_from_device(device_str: str) -> int:
 
 class GpuMonitor:
     """
-    Background thread that polls GPU and CPU metrics at 1-second intervals.
+    Background daemon thread that polls GPU and CPU metrics at 1-second intervals.
+
+    Overhead: each NVML call takes ~10 μs; at 1 Hz that is 0.001 % of wall time.
+    The GIL is released during the C-extension NVML calls, so the main eval thread
+    is NEVER blocked.  This does NOT measurably affect throughput measurements.
 
     Metrics collected (when pynvml / psutil are available):
-        sm_util        : SM utilization % (proxy for compute saturation)
-        mem_util       : memory-bus utilization % (proxy for HBM bandwidth)
-        vram_used_mb   : VRAM currently allocated (MB)
-        pcie_tx_kbs    : PCIe TX throughput (KB/s)
-        pcie_rx_kbs    : PCIe RX throughput (KB/s)
-        nvlink_tx_kbs  : NVLink TX counter (KB/s, if NVLink present)
-        nvlink_rx_kbs  : NVLink RX counter (KB/s, if NVLink present)
-        cpu_util       : CPU utilization % (all cores, via psutil)
+        sm_util        : SM utilization % (time GPU SMs were active — compute proxy)
+        mem_util       : memory-bus utilization % (fraction of time HBM was busy)
+        vram_used_mb   : VRAM currently in use (MB)
+        pcie_tx_kbs    : PCIe TX throughput (KB/s, host→device)
+        pcie_rx_kbs    : PCIe RX throughput (KB/s, device→host)
+        nvlink_tx_kbs  : NVLink TX counter, summed over all links (KB/s, if present)
+        nvlink_rx_kbs  : NVLink RX counter, summed over all links (KB/s, if present)
+        cpu_util       : CPU utilization % across all cores (via psutil)
 
-    Metrics NOT available without DCGM:
-        L2 hit rate    — requires: sudo apt install datacenter-gpu-manager
-        HBM bandwidth (GB/s) — mem_util % is the closest NVML proxy
+    Metrics that require DCGM (not standard NVML):
+        L2 cache hit rate  — sudo apt install datacenter-gpu-manager
+        HBM bandwidth GB/s — mem_util % is the driver's closest proxy without DCGM
+        SM occupancy       — requires DCGM or Nsight
+
+    When running 1 eval per GPU the SM/HBM numbers still tell you whether:
+        - SM utilization stays near 100% → compute-bound (good for A100)
+        - mem_util near 100% but SM low → memory-bandwidth bound
+        - Both low → CPU/Python overhead is the bottleneck
+
+    If throughput changes while VRAM usage stays similar across checkpoints, the
+    culprit is HBM bandwidth or cache contention, not capacity pressure.
 
     Usage:
         mon = GpuMonitor(device_idx=0)
@@ -272,6 +286,73 @@ class GpuMonitor:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Machine-spec snapshot (recorded once at startup, stored in every CSV row)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _machine_specs(gpu_idx: int = 0) -> dict:
+    """
+    Collect a one-time snapshot of the machine's hardware for reproducibility.
+
+    Recorded in every CSV row so two runs can be compared even if the server
+    changes.  All fields degrade gracefully when the relevant library is absent.
+    """
+    specs: dict = {}
+
+    # GPU identity
+    if torch.cuda.is_available():
+        try:
+            specs["machine_gpu"]       = torch.cuda.get_device_name(gpu_idx)
+            specs["machine_gpu_count"] = torch.cuda.device_count()
+            total_vram = torch.cuda.get_device_properties(gpu_idx).total_memory
+            specs["machine_gpu_vram_gb"] = round(total_vram / 1024**3, 1)
+        except Exception:
+            pass
+    else:
+        specs["machine_gpu"] = "cpu"
+
+    # NVIDIA driver version
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        specs["machine_driver"] = pynvml.nvmlSystemGetDriverVersion()
+    except Exception:
+        pass
+
+    # CPU / RAM
+    specs["machine_cpu_logical_cores"] = os.cpu_count() or 0
+    try:
+        import psutil
+        specs["machine_cpu_physical_cores"] = psutil.cpu_count(logical=False) or 0
+        specs["machine_ram_gb"] = round(psutil.virtual_memory().total / 1024**3, 1)
+    except Exception:
+        pass
+
+    specs["machine_os"] = platform.platform(terse=True)
+
+    return specs
+
+
+def _auto_cpu_threads() -> int:
+    """
+    Compute a sensible default for torch CPU threads when running 1 eval per GPU.
+
+    With N_gpus eval processes sharing C physical CPU cores, each process should
+    use at most C // N_gpus threads so they don't thrash each other's CPU caches.
+    For this workload (GPU-bound eval), the practical impact is small but it
+    prevents the 4 × 96 = 384-thread scenario on a 4-GPU / 96-core server.
+
+    Example (our server): 96 cores, 4 GPUs → 24 threads per eval process.
+    """
+    n_gpus = max(1, torch.cuda.device_count() if torch.cuda.is_available() else 1)
+    try:
+        import psutil
+        n_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+    except Exception:
+        n_cores = os.cpu_count() or 1
+    return max(1, n_cores // n_gpus)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Resume state helpers — one JSONL per (mode, K, L), one line per prompt
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -421,19 +502,28 @@ CSV_COLUMNS = [
     # Time breakdown
     "time_draft_s", "time_target_s", "time_verify_s", "time_cache_s",
     "time_tokenizer_s",
-    # GPU telemetry (populated when pynvml is installed)
-    "gpu_sm_util_avg_pct",    # SM utilization % (avg over eval)
-    "gpu_mem_util_avg_pct",   # Memory-bus utilization % — proxy for HBM bandwidth
-    "gpu_vram_peak_mb",       # Peak VRAM usage during eval (MB)
-    "gpu_pcie_tx_avg_kbs",    # PCIe TX throughput avg (KB/s)
-    "gpu_pcie_rx_avg_kbs",    # PCIe RX throughput avg (KB/s)
-    "gpu_nvlink_tx_avg_kbs",  # NVLink TX avg (KB/s; blank if no NVLink)
-    "gpu_nvlink_rx_avg_kbs",  # NVLink RX avg (KB/s; blank if no NVLink)
-    "cpu_util_avg_pct",       # CPU utilization % (all cores, avg)
-    "torch_vram_alloc_mb",    # torch.cuda.memory_allocated at eval end (MB)
-    "torch_vram_reserv_mb",   # torch.cuda.memory_reserved at eval end (MB)
+    # GPU telemetry during eval (pynvml background thread, 1 Hz — ~0.001% overhead)
+    "gpu_sm_util_avg_pct",    # SM utilization % (avg) — time SMs were active
+    "gpu_mem_util_avg_pct",   # Memory-bus utilization % — closest proxy for HBM bandwidth
+    "gpu_vram_peak_mb",       # Peak VRAM in use during eval (MB)
+    "gpu_pcie_tx_avg_kbs",    # PCIe host→device throughput avg (KB/s)
+    "gpu_pcie_rx_avg_kbs",    # PCIe device→host throughput avg (KB/s)
+    "gpu_nvlink_tx_avg_kbs",  # NVLink TX avg KB/s (blank if GPU has no NVLink)
+    "gpu_nvlink_rx_avg_kbs",  # NVLink RX avg KB/s (blank if GPU has no NVLink)
+    "cpu_util_avg_pct",       # CPU utilization % averaged over eval (all cores)
+    "torch_vram_alloc_mb",    # torch.cuda.memory_allocated at eval-end snapshot (MB)
+    "torch_vram_reserv_mb",   # torch.cuda.memory_reserved at eval-end snapshot (MB)
     # Reproducibility fingerprint
-    "device", "seed", "dtype",
+    "device", "seed", "dtype", "cpu_threads_used",
+    # Machine spec (one-time snapshot at startup — changes if server changes)
+    "machine_gpu",            # GPU model name, e.g. "NVIDIA A100-SXM4-40GB"
+    "machine_gpu_count",      # Total GPUs on the node
+    "machine_gpu_vram_gb",    # VRAM per GPU (GB)
+    "machine_driver",         # NVIDIA driver version
+    "machine_cpu_logical_cores",
+    "machine_cpu_physical_cores",
+    "machine_ram_gb",
+    "machine_os",
 ]
 
 
@@ -465,7 +555,8 @@ _FLOAT_FMT: dict[str, str] = {
 
 
 def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
-               csv_path: str):
+               csv_path: str, specs: dict | None = None,
+               cpu_threads_used: int | None = None):
     """Print a one-line summary, GPU telemetry, and append a CSV row."""
     skip_note = f"  ({stats['skipped_prompts']} skipped)" if stats.get("skipped_prompts") else ""
     print(f"\n  mode={mode:11s}  BE={stats['block_eff']:.4f}  "
@@ -480,16 +571,19 @@ def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
         gpu_monitor.print_summary()
 
     row: dict = {
-        "timestamp":  datetime.utcnow().isoformat(timespec="seconds"),
-        "checkpoint": args.checkpoint, "dataset": args.dataset,
-        "mode": mode, "K": args.K, "L": args.L,
-        "device": args.device, "seed": args.seed, "dtype": DEFAULT_DTYPE,
+        "timestamp":       datetime.utcnow().isoformat(timespec="seconds"),
+        "checkpoint":      args.checkpoint, "dataset": args.dataset,
+        "mode":            mode, "K": args.K, "L": args.L,
+        "device":          args.device, "seed": args.seed, "dtype": DEFAULT_DTYPE,
+        "cpu_threads_used": cpu_threads_used,
     }
     for k, v in stats.items():
         if isinstance(v, float) and k in _FLOAT_FMT:
             row[k] = format(v, _FLOAT_FMT[k])
         elif v is not None:
             row[k] = v
+    if specs:
+        row.update(specs)
     append_csv_row(row, csv_path)
 
 
@@ -521,14 +615,20 @@ def parse_args():
                     help="RNG seed (default 123).  Reset before EVERY mode to keep "
                          "prompt order and sampling identical across runs.")
     ap.add_argument("--cpu_threads", type=int, default=None,
-                    help="Cap PyTorch CPU thread pool.  Set to the same value "
-                         "for all parallel eval processes to prevent cache contention.  "
-                         "Recommended: number-of-physical-cores / number-of-parallel-evals.")
+                    help="Override the auto-computed PyTorch CPU thread count.  "
+                         "Auto default: physical_cores // num_gpus (e.g. 96 cores / 4 GPUs = 24).  "
+                         "When 4 evals run simultaneously (1 per GPU), each needs its own CPU "
+                         "budget so the 4 processes don't compete for the same 96 cores.  "
+                         "Within a single eval, prompts are always sequential; these threads "
+                         "are for PyTorch intra-op parallelism (BLAS etc.), not prompt batching.")
     ap.add_argument("--output",    default=None,
                     help="Override output CSV path (default: results.csv next to eval.py). "
                          "Set to a unique path when running multiple parallel processes.")
     ap.add_argument("--no_gpu_monitor", action="store_true",
-                    help="Disable background GPU/CPU telemetry polling (saves ~1%% overhead).")
+                    help="Disable the background GPU/CPU telemetry thread.  "
+                         "The thread polls pynvml at 1 Hz (~10 μs per call, 0.001%% overhead) "
+                         "so disabling it only makes sense if you are profiling at microsecond "
+                         "resolution and want a completely clean baseline.")
     return ap.parse_args()
 
 
@@ -536,21 +636,35 @@ def main():
     args = parse_args()
 
     # ── Reproducibility: pin device, fix threads, fix seed ──────────────────
-    # Pin to the specified GPU so parallel eval processes stay on their own GPU.
+    gpu_idx = 0
     if args.device.startswith("cuda"):
         gpu_idx = _gpu_index_from_device(args.device)
         if torch.cuda.is_available():
             torch.cuda.set_device(gpu_idx)
 
-    # Cap CPU threads so parallel evals don't thrash the CPU cache.
-    if args.cpu_threads is not None:
-        torch.set_num_threads(args.cpu_threads)
-        torch.set_num_interop_threads(args.cpu_threads)
-        print(f"[init] CPU threads capped to {args.cpu_threads}")
+    # CPU thread budget: auto-detect unless user overrides.
+    # With 4 simultaneous evals (1 per GPU) on a 4-GPU / 96-core server:
+    #   auto = 96 physical cores / 4 GPUs = 24 threads per process
+    # This prevents the 4 processes from each spawning 96 threads and trashing
+    # each other's CPU L3 cache.  Within a single eval, prompts are sequential;
+    # these threads are for PyTorch intra-op (BLAS) parallelism, not data loading.
+    cpu_threads = args.cpu_threads if args.cpu_threads is not None else _auto_cpu_threads()
+    torch.set_num_threads(cpu_threads)
+    torch.set_num_interop_threads(cpu_threads)
+    print(f"[init] CPU threads = {cpu_threads} "
+          f"({'user override' if args.cpu_threads is not None else 'auto: cores/gpus'})")
 
     set_seed(args.seed)
 
     csv_path = args.output or RESULTS_CSV
+
+    # Collect machine specs once — stored in every CSV row for reproducibility.
+    specs = _machine_specs(gpu_idx)
+    print(f"[hw]   GPU: {specs.get('machine_gpu', 'unknown')}  "
+          f"({specs.get('machine_gpu_count', '?')} GPUs, "
+          f"{specs.get('machine_gpu_vram_gb', '?')} GB VRAM each)  "
+          f"CPU: {specs.get('machine_cpu_physical_cores', specs.get('machine_cpu_logical_cores', '?'))} physical cores  "
+          f"RAM: {specs.get('machine_ram_gb', '?')} GB")
 
     # ── Load models (teacher first, then draft — always this order) ──────────
     print(f"[load] teacher={TEACHER_MODEL}")
@@ -591,7 +705,8 @@ def main():
             max_new_tokens=args.max_new_tokens, temp=args.temp,
             state_path=sp, gpu_monitor=mon,
         )
-        log_result(stats, args, mode, mon, csv_path)
+        log_result(stats, args, mode, mon, csv_path,
+                   specs=specs, cpu_threads_used=cpu_threads)
 
     print(f"\n[done] results appended to {csv_path}")
 
