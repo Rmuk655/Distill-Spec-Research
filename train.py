@@ -359,8 +359,11 @@ def setup_wandb(args, output_dir, resumed: bool):
     if resumed and os.path.isfile(meta_path) and not args.fresh_wandb:
         try:
             saved = json.load(open(meta_path, encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            print(f"[wandb] WARNING: could not read {meta_path} ({e}) — starting fresh W&B run")
             saved = None
+    elif resumed and not os.path.isfile(meta_path):
+        print(f"[wandb] no saved run ID at {meta_path} — starting fresh W&B run")
 
     tags = [args.loss, f"K{K}", f"L{L}"]
     if args.aux_mode == "depth_weight":
@@ -413,9 +416,17 @@ def try_resume(model, optimizer, scheduler, output_dir):
     """Load ckpt_latest if it exists.  Returns (start_step, training_state)."""
     latest = os.path.join(output_dir, "ckpt_latest")
     state_path = os.path.join(latest, "state.json")
+    print(f"[resume] looking for checkpoint at {latest}")
     if not os.path.isfile(state_path):
+        if os.path.isdir(latest):
+            print(f"[resume] WARNING: {latest} exists but state.json is missing — starting from scratch")
+        else:
+            print(f"[resume] no checkpoint found — starting from scratch")
         return 0, {}
     state = json.load(open(state_path, encoding="utf-8"))
+    step = state.get("step", 0)
+    best_be = state.get("best_val_block_eff", 0.0)
+    print(f"[resume] found state: step={step}  best_be={best_be:.3f} — loading weights...")
     # Load model weights
     model_state = AutoModelForCausalLM.from_pretrained(
         latest, torch_dtype=torch.bfloat16,
@@ -426,8 +437,8 @@ def try_resume(model, optimizer, scheduler, output_dir):
     optimizer.load_state_dict(optim_blob["optimizer"])
     if scheduler and optim_blob.get("scheduler"):
         scheduler.load_state_dict(optim_blob["scheduler"])
-    print(f"[resume] restored step={state.get('step', 0)} from {latest}")
-    return state.get("step", 0), state
+    print(f"[resume] restored step={step} from {latest}")
+    return step, state
 
 
 # ---------------------------------------------------------------------------
