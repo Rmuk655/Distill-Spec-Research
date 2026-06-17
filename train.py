@@ -570,7 +570,21 @@ def main():
     # WARMUP_STEPS=50 → 50 × GRAD_ACCUM = 400 training steps = 10 % of 4000.
     # Previously WARMUP_STEPS was set to 400 (training-step count, not opt-step
     # count), causing 80 % of the run to be in warmup with LR never reaching peak.
-    total_opt_steps = args.steps // GRAD_ACCUM
+    # The cosine horizon is anchored to the step budget the run STARTED with, not
+    # to the current --steps.  This keeps the LR continuous on resume: if you later
+    # raise --steps to train longer, the already-trained cosine is NOT reshaped
+    # (which would make the LR jump back up on restart); the extra steps simply run
+    # at the LR_MIN_RATIO floor.  Saved in state.json as "sched_steps".
+    sched_steps = args.steps
+    if args.resume:
+        _sp = os.path.join(output_dir, "ckpt_latest", "state.json")
+        if os.path.isfile(_sp):
+            sched_steps = json.load(open(_sp)).get("sched_steps", args.steps)
+            if sched_steps != args.steps:
+                print(f"[lr] schedule horizon anchored to original {sched_steps} steps "
+                      f"(--steps={args.steps}); steps beyond {sched_steps} run at "
+                      f"LR_MIN_RATIO={LR_MIN_RATIO}*peak (no LR jump on resume)")
+    total_opt_steps = sched_steps // GRAD_ACCUM
     def lr_lambda(step):
         if step < WARMUP_STEPS:
             return step / max(1, WARMUP_STEPS)
@@ -730,6 +744,7 @@ def main():
             save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                             state={"step": step + 1,
                                    "best_val_block_eff": best_val_block_eff,
+                                   "sched_steps": sched_steps,
                                    "cmd": sys.argv})
 
     # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
@@ -737,7 +752,7 @@ def main():
     # not blow the disk quota).  ckpt_best holds the val-best model.
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                     state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
-                           "cmd": sys.argv})
+                           "sched_steps": sched_steps, "cmd": sys.argv})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")
     if wandb_run:
