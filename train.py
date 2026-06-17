@@ -35,6 +35,7 @@ import json
 import math
 import os
 import random
+import sys
 import time
 from typing import Dict, List
 
@@ -427,6 +428,9 @@ def try_resume(model, optimizer, scheduler, output_dir):
     step = state.get("step", 0)
     best_be = state.get("best_val_block_eff", 0.0)
     print(f"[resume] found state: step={step}  best_be={best_be:.3f} — loading weights...")
+    if "cmd" in state:
+        resume_cmd = " ".join(state["cmd"]) + " --resume"
+        print(f"[resume] to resume again after next kill:\n  {resume_cmd}")
     # Load model weights
     model_state = AutoModelForCausalLM.from_pretrained(
         latest, torch_dtype=torch.bfloat16,
@@ -538,6 +542,18 @@ def main():
     output_dir = args.output or os.path.join(OUTPUT_ROOT, run_slug(args))
     os.makedirs(output_dir, exist_ok=True)
     print(f"[output] {output_dir}")
+
+    # Warn if starting fresh over an existing checkpoint
+    if not args.resume:
+        _state_path = os.path.join(output_dir, "ckpt_latest", "state.json")
+        if os.path.isfile(_state_path):
+            _s = json.load(open(_state_path))
+            _step = _s.get("step", 0)
+            _be   = _s.get("best_val_block_eff", 0.0)
+            _cmd  = " ".join(_s["cmd"]) + " --resume" if "cmd" in _s else "(add --resume to this command)"
+            print(f"\n*** WARNING: existing checkpoint at step={_step} "
+                  f"best_be={_be:.3f} will be OVERWRITTEN ***")
+            print(f"*** To continue from it run: {_cmd} ***\n")
 
     # Models
     tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL, device=args.device)
@@ -713,13 +729,15 @@ def main():
         if (step + 1) % SAVE_EVERY == 0:
             save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                             state={"step": step + 1,
-                                   "best_val_block_eff": best_val_block_eff})
+                                   "best_val_block_eff": best_val_block_eff,
+                                   "cmd": sys.argv})
 
     # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
     # so a multi-combo sweep keeps only ckpt_best + ckpt_latest per run and does
     # not blow the disk quota).  ckpt_best holds the val-best model.
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
-                    state={"step": args.steps, "best_val_block_eff": best_val_block_eff})
+                    state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
+                           "cmd": sys.argv})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")
     if wandb_run:
