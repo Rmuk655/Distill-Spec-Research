@@ -162,8 +162,21 @@ class GpuMonitor:
             pass
 
     # ------------------------------------------------------------------
-    def start(self):
+    def start(self, sidecar_path: str | None = None):
+        self._sidecar_path = sidecar_path
         self._samples = []
+        if sidecar_path and os.path.exists(sidecar_path):
+            try:
+                with open(sidecar_path, encoding="utf-8") as _sf:
+                    for _line in _sf:
+                        _line = _line.strip()
+                        if _line:
+                            self._samples.append(json.loads(_line))
+                print(f"  [gpu-resume] loaded {len(self._samples)} prior GPU samples"
+                      f" from {os.path.basename(sidecar_path)}")
+            except Exception as _e:
+                print(f"  [gpu-resume] could not load GPU sidecar ({_e}) — starting fresh")
+                self._samples = []
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
@@ -172,6 +185,14 @@ class GpuMonitor:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5.0)
+        sidecar = getattr(self, "_sidecar_path", None)
+        if sidecar and self._samples:
+            try:
+                with open(sidecar, "w", encoding="utf-8") as _sf:
+                    for _s in self._samples:
+                        _sf.write(json.dumps(_s) + "\n")
+            except Exception as _e:
+                print(f"  [gpu-resume] could not save GPU sidecar ({_e})")
 
     def _poll_loop(self):
         while self._running:
@@ -410,7 +431,10 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
     skipped = 0
 
     if gpu_monitor is not None:
-        gpu_monitor.start()
+        _gpu_sidecar = (state_path.replace(".state.jsonl", ".gpu.jsonl")
+                        if state_path and state_path.endswith(".state.jsonl")
+                        else None)
+        gpu_monitor.start(sidecar_path=_gpu_sidecar)
 
     t_tokenizer_total = 0.0
 

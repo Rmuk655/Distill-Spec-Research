@@ -35,6 +35,7 @@ import json
 import math
 import os
 import random
+import sys
 import time
 from typing import Dict, List
 
@@ -53,6 +54,7 @@ from util           import set_seed, load_prompts_jsonl, load_models as _sot_loa
 from inference_util import iid_draft, target_tree_pass
 from main           import speculative_decoding_loop
 from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
+from verifier        import TreeVerifier  # for --aux_mode depth_weight (expected_*_depths)
 from verifier_safe  import VerifierError
 
 
@@ -188,7 +190,7 @@ def draft_tree_forward_with_grad(
 # ---------------------------------------------------------------------------
 
 def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
-                       max_new_tokens=128, teacher_temp=0.8):
+                       max_new_tokens=128):
     """
     Teacher greedily generates max_new_tokens.  Student is then forwarded on
     [prompt + generated_tokens] WITH grad.  Loss = divergence(student_logits,
@@ -257,6 +259,35 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
 
 # ---------------------------------------------------------------------------
+# (3) Depth-as-weight: scalar E[τ_V] over the draft tree, used to MULTIPLY a
+# flat loss.  The depth has NO gradient (pure-Python DP) — this is per-prompt
+# loss reweighting, not an acceptance gradient.  Cost: one extra target tree
+# pass per step.  See --aux_mode depth_weight.
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def expected_depth_scalar(draft, teacher, prompt_ids, K, L, verifier,
+                          draft_temp, teacher_temp) -> float:
+    """E[accepted depth] for `verifier` on a fresh student draft tree (no grad)."""
+    t_out = teacher(prompt_ids, use_cache=True, return_dict=True)
+    p_cache = t_out.past_key_values
+    p_probs_last = F.softmax(t_out.logits[:, -1, :] / teacher_temp, dim=-1)
+    context_pending = torch.multinomial(p_probs_last, num_samples=1)
+
+    q_out = draft(prompt_ids, use_cache=True, return_dict=True)
+    q_paths, _, _ = iid_draft(draft, q_out.past_key_values, context_pending,
+                              K=K, L=L, q_temp=draft_temp)
+    q_prefixes, _, _, p_probs_dict = target_tree_pass(
+        teacher, p_cache, q_paths, K=K, L=L, p_temp=teacher_temp)
+    q_probs_dict = draft_tree_forward_with_grad(draft, prompt_ids, q_paths,
+                                                L=L, q_temp=draft_temp)
+
+    tv = TreeVerifier(q_paths, q_prefixes, q_probs_dict, p_probs_dict)
+    depths = getattr(tv, f"expected_{verifier}_depths")(L)   # list over cutoffs
+    return float(depths[-1])                                 # full-depth E[τ_V]
+
+
+# ---------------------------------------------------------------------------
 # Validation: block efficiency via eval.speculative_decode_one (same code path
 # as offline eval.py).  Verifier mode matched to training loss; traversal for
 # losses with no direct pairing (best general BE, Thomas et al. 2026 Table 2).
@@ -280,7 +311,7 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
                 p_model=teacher, q_model=draft, tok=tokenizer,
                 prompt=prompt, verification_algo=mode,
                 max_new_tokens=MAX_NEW_TOKENS, K=VAL_K, L=VAL_L,
-                p_temp=args.teacher_temp, q_temp=args.teacher_temp,
+                p_temp=args.val_temp, q_temp=args.val_temp,
             )
         except VerifierError as ve:
             skipped += 1
@@ -305,7 +336,10 @@ def run_slug(args) -> str:
     run name. Includes the aux loss + weight so a combined run (e.g. forward_kl+l1x0.5)
     never overwrites the single-loss run's checkpoints."""
     slug = args.loss
-    if args.aux_loss:
+    if args.aux_mode == "depth_weight":
+        tag = "lin" if args.depth_linear else f"lam{args.depth_lambda}"
+        slug += f"+dw_{args.aux_loss or 'naive_tree'}_{tag}"
+    elif args.aux_loss:
         slug += f"+{args.aux_loss}x{args.aux_weight}"
     return slug
 
@@ -326,11 +360,17 @@ def setup_wandb(args, output_dir, resumed: bool):
     if resumed and os.path.isfile(meta_path) and not args.fresh_wandb:
         try:
             saved = json.load(open(meta_path, encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            print(f"[wandb] WARNING: could not read {meta_path} ({e}) — starting fresh W&B run")
             saved = None
+    elif resumed and not os.path.isfile(meta_path):
+        print(f"[wandb] no saved run ID at {meta_path} — starting fresh W&B run")
 
     tags = [args.loss, f"K{K}", f"L{L}"]
-    if args.aux_loss:
+    if args.aux_mode == "depth_weight":
+        tags.append(f"depthw:{args.aux_loss or 'naive_tree'}")
+        tags.append("lin" if args.depth_linear else f"lam{args.depth_lambda}")
+    elif args.aux_loss:
         tags.append(f"aux:{args.aux_loss}")
     run_name = f"{run_slug(args)}_K{K}_L{L}_seed{args.seed}"
     init_kw = dict(project=WANDB_PROJECT, name=run_name,
@@ -377,9 +417,20 @@ def try_resume(model, optimizer, scheduler, output_dir):
     """Load ckpt_latest if it exists.  Returns (start_step, training_state)."""
     latest = os.path.join(output_dir, "ckpt_latest")
     state_path = os.path.join(latest, "state.json")
+    print(f"[resume] looking for checkpoint at {latest}")
     if not os.path.isfile(state_path):
+        if os.path.isdir(latest):
+            print(f"[resume] WARNING: {latest} exists but state.json is missing — starting from scratch")
+        else:
+            print(f"[resume] no checkpoint found — starting from scratch")
         return 0, {}
     state = json.load(open(state_path, encoding="utf-8"))
+    step = state.get("step", 0)
+    best_be = state.get("best_val_block_eff", 0.0)
+    print(f"[resume] found state: step={step}  best_be={best_be:.3f} — loading weights...")
+    if "cmd" in state:
+        resume_cmd = " ".join(state["cmd"]) + " --resume"
+        print(f"[resume] to resume again after next kill:\n  {resume_cmd}")
     # Load model weights
     model_state = AutoModelForCausalLM.from_pretrained(
         latest, torch_dtype=torch.bfloat16,
@@ -390,8 +441,8 @@ def try_resume(model, optimizer, scheduler, output_dir):
     optimizer.load_state_dict(optim_blob["optimizer"])
     if scheduler and optim_blob.get("scheduler"):
         scheduler.load_state_dict(optim_blob["scheduler"])
-    print(f"[resume] restored step={state.get('step', 0)} from {latest}")
-    return state.get("step", 0), state
+    print(f"[resume] restored step={step} from {latest}")
+    return step, state
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +513,25 @@ def parse_args():
                          "Typical use: --loss forward_kl --aux_loss naive_tree --aux_weight 0.1")
     ap.add_argument("--aux_weight", type=float, default=0.1,
                     help="Scalar weight applied to the auxiliary loss (default 0.1).")
+    ap.add_argument("--aux_mode", choices=["add", "depth_weight"], default="add",
+                    help="'add' (default): total = primary + aux_weight*aux.  "
+                         "'depth_weight': multiply the (flat) primary loss by "
+                         "exp(depth_lambda*(d - EMA(d))), where d = E[tau_V] of the "
+                         "verifier named by --aux_loss.  Depth has NO gradient — this "
+                         "is per-prompt loss reweighting (researcher's scalar scheme).")
+    ap.add_argument("--depth_lambda", type=float, default=0.0,
+                    help="Signed exponent for --aux_mode depth_weight.  >0 amplify "
+                         "loss on deep-tree prompts, <0 amplify shallow, 0 = plain "
+                         "flat (control).  EMA-centred so E[w]~=1 (no LR confound).")
+    ap.add_argument("--depth_linear", action="store_true",
+                    help="--aux_mode depth_weight: weight = d / EMA(d) — the "
+                         "researcher's 'tree_depth * loss', mean-normalised so E[w]~=1 "
+                         "(linear in depth, but no LR confound; self-adapts as d drifts). "
+                         "Ignores --depth_lambda.")
+    ap.add_argument("--val_temp", type=float, default=0.2,
+                    help="Sampling temperature for val block_eff decoding.  Low (0.2) "
+                         "is near-deterministic → far lower run-to-run variance than "
+                         "the 0.8 training temp.  Cannot be 0 (softmax/temp divide).")
     return ap.parse_args()
 
 
@@ -472,6 +542,18 @@ def main():
     output_dir = args.output or os.path.join(OUTPUT_ROOT, run_slug(args))
     os.makedirs(output_dir, exist_ok=True)
     print(f"[output] {output_dir}")
+
+    # Warn if starting fresh over an existing checkpoint
+    if not args.resume:
+        _state_path = os.path.join(output_dir, "ckpt_latest", "state.json")
+        if os.path.isfile(_state_path):
+            _s = json.load(open(_state_path))
+            _step = _s.get("step", 0)
+            _be   = _s.get("best_val_block_eff", 0.0)
+            _cmd  = " ".join(_s["cmd"]) + " --resume" if "cmd" in _s else "(add --resume to this command)"
+            print(f"\n*** WARNING: existing checkpoint at step={_step} "
+                  f"best_be={_be:.3f} will be OVERWRITTEN ***")
+            print(f"*** To continue from it run: {_cmd} ***\n")
 
     # Models
     tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL, device=args.device)
@@ -488,7 +570,21 @@ def main():
     # WARMUP_STEPS=50 → 50 × GRAD_ACCUM = 400 training steps = 10 % of 4000.
     # Previously WARMUP_STEPS was set to 400 (training-step count, not opt-step
     # count), causing 80 % of the run to be in warmup with LR never reaching peak.
-    total_opt_steps = args.steps // GRAD_ACCUM
+    # The cosine horizon is anchored to the step budget the run STARTED with, not
+    # to the current --steps.  This keeps the LR continuous on resume: if you later
+    # raise --steps to train longer, the already-trained cosine is NOT reshaped
+    # (which would make the LR jump back up on restart); the extra steps simply run
+    # at the LR_MIN_RATIO floor.  Saved in state.json as "sched_steps".
+    sched_steps = args.steps
+    if args.resume:
+        _sp = os.path.join(output_dir, "ckpt_latest", "state.json")
+        if os.path.isfile(_sp):
+            sched_steps = json.load(open(_sp)).get("sched_steps", args.steps)
+            if sched_steps != args.steps:
+                print(f"[lr] schedule horizon anchored to original {sched_steps} steps "
+                      f"(--steps={args.steps}); steps beyond {sched_steps} run at "
+                      f"LR_MIN_RATIO={LR_MIN_RATIO}*peak (no LR jump on resume)")
+    total_opt_steps = sched_steps // GRAD_ACCUM
     def lr_lambda(step):
         if step < WARMUP_STEPS:
             return step / max(1, WARMUP_STEPS)
@@ -524,13 +620,21 @@ def main():
     aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
     aux_is_tree = is_tree_loss(args.aux_loss) if args.aux_loss else False
     if aux_loss_fn is not None:
-        print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
-              f"weight={args.aux_weight}")
+        if args.aux_mode == "depth_weight":
+            _dw_tag = "lin" if args.depth_linear else f"lam={args.depth_lambda}"
+            print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
+                  f"depth_weight={_dw_tag}")
+        else:
+            print(f"[aux]  {args.aux_loss}  ({'tree' if aux_is_tree else 'flat'})  "
+                  f"weight={args.aux_weight}")
 
     # ── Training loop ─────────────────────────────────────────────────────────
     draft.train()
     optimizer.zero_grad(set_to_none=True)
     losses_log: List[float] = []
+    depth_ema: float | None = None   # running mean of E[tau_V] for --aux_mode depth_weight
+    depth_w = 1.0
+    depth_d = 0.0                     # last raw E[tau_V] (logged so the sweep is observable)
     t0 = time.time()
 
     for step in range(start_step, args.steps):
@@ -547,10 +651,26 @@ def main():
                                      teacher_temp=args.teacher_temp)
         else:
             loss = compute_flat_loss(loss_fn, draft, teacher, ids,
-                                     max_new_tokens=MAX_NEW_TOKENS,
-                                     teacher_temp=args.teacher_temp)
+                                     max_new_tokens=MAX_NEW_TOKENS)
 
-        if aux_loss_fn is not None:
+        if args.aux_mode == "depth_weight":
+            # (3) Multiply the (flat) primary loss by a detached depth weight.
+            verifier = LOSS_TO_VERIFIER.get(args.aux_loss, "naive")
+            Node.naive_cache.clear()
+            Node.spectr_cache.clear()
+            Node.specinfer_cache.clear()
+            d = expected_depth_scalar(draft, teacher, ids, K, L, verifier,
+                                      args.draft_temp, args.teacher_temp)
+            depth_ema = d if depth_ema is None else 0.9 * depth_ema + 0.1 * d
+            if args.depth_linear:
+                # Researcher's literal "tree_depth * loss", mean-normalised so
+                # E[w]~=1 (w proportional to depth, but no LR confound).
+                depth_w = d / max(depth_ema, 1e-6)
+            else:
+                depth_w = math.exp(args.depth_lambda * (d - depth_ema))   # E[w]~=1
+            depth_d = d
+            loss = depth_w * loss
+        elif aux_loss_fn is not None:
             if aux_is_tree:
                 Node.naive_cache.clear()
                 Node.spectr_cache.clear()
@@ -561,8 +681,7 @@ def main():
                                         teacher_temp=args.teacher_temp)
             else:
                 aux = compute_flat_loss(aux_loss_fn, draft, teacher, ids,
-                                        max_new_tokens=MAX_NEW_TOKENS,
-                                        teacher_temp=args.teacher_temp)
+                                        max_new_tokens=MAX_NEW_TOKENS)
             loss = loss + args.aux_weight * aux
 
         # Gradient accumulation: scale by 1/GRAD_ACCUM, only step every GRAD_ACCUM micro-steps.
@@ -577,27 +696,42 @@ def main():
 
         losses_log.append(loss.item())
 
-        # Console log
+        # Console log + W&B train metrics
         if (step + 1) % LOG_EVERY == 0:
             avg = sum(losses_log[-LOG_EVERY:]) / LOG_EVERY
             elapsed = time.time() - t0
             print(f"step={step+1:5d}/{args.steps}  loss={avg:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}  "
                   f"grad={grad_norm.item():.2f}  elapsed={elapsed/60:.1f}m")
+
+            # Compute val metrics at val steps BEFORE logging so train + val go
+            # into a single wandb.log() call — two separate calls at the same
+            # step cause the second to be silently dropped in wandb ≥0.15.
+            val_be = None
+            if (step + 1) % VAL_EVERY == 0:
+                val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                      f"best={best_val_block_eff:.3f}")
+
             if wandb_run:
                 wandb_run.log({
                     "train/loss":      avg,
                     "train/lr":        scheduler.get_last_lr()[0],
                     "train/grad_norm": grad_norm.item(),
+                    **({"train/depth_w": depth_w, "train/depth_d": depth_d}
+                       if args.aux_mode == "depth_weight" else {}),
+                    **({"val/block_eff": val_be} if val_be is not None else {}),
                 }, step=step + 1)
 
-        # Validation + checkpoint best
+        # Validation + checkpoint best (val_be already computed above if LOG step)
         if (step + 1) % VAL_EVERY == 0:
-            val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
-            print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
-                  f"best={best_val_block_eff:.3f}")
-            if wandb_run:
-                wandb_run.log({"val/block_eff": val_be}, step=step + 1)
+            if (step + 1) % LOG_EVERY != 0:
+                # VAL_EVERY not a multiple of LOG_EVERY — compute val now
+                val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                      f"best={best_val_block_eff:.3f}")
+                if wandb_run:
+                    wandb_run.log({"val/block_eff": val_be}, step=step + 1)
             if val_be > best_val_block_eff:
                 best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
@@ -609,11 +743,16 @@ def main():
         if (step + 1) % SAVE_EVERY == 0:
             save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                             state={"step": step + 1,
-                                   "best_val_block_eff": best_val_block_eff})
+                                   "best_val_block_eff": best_val_block_eff,
+                                   "sched_steps": sched_steps,
+                                   "cmd": sys.argv})
 
-    # Final save
-    save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_final",
-                    state={"step": args.steps, "best_val_block_eff": best_val_block_eff})
+    # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
+    # so a multi-combo sweep keeps only ckpt_best + ckpt_latest per run and does
+    # not blow the disk quota).  ckpt_best holds the val-best model.
+    save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
+                    state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
+                           "sched_steps": sched_steps, "cmd": sys.argv})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")
     if wandb_run:
