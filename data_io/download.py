@@ -174,10 +174,10 @@ def fetch_math(name: str, split: str, level_filter: set | None = None,
         return path
 
     label = f"levels {sorted(level_filter)}" if level_filter else "all levels"
-    print(f"  fetching {name} (competition_math {split}, {label}) ...")
+    print(f"  fetching {name} (lighteval/MATH {split}, {label}) ...")
     try:
         from datasets import load_dataset
-        ds = load_dataset("hendrycks/competition_math", split=split)
+        ds = load_dataset("lighteval/MATH", split=split)
         items = []
         for row in ds:
             if level_filter and row.get("level") not in level_filter:
