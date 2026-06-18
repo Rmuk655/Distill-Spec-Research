@@ -167,19 +167,20 @@ def _is_hard(level) -> bool:
     return str(level).strip() in _HARD_LEVELS
 
 
-def fetch_math_hard_and_val(force: bool = False):
+def fetch_math_hard_and_val(force: bool = False, val_frac: float = 0.1):
     """
-    Build math_hard (train, levels 4+5) and math_val (test, all levels).
+    Build math_hard (train, levels 4+5) and math_val (val, levels 4+5).
 
-    Strategy A — EleutherAI/hendrycks_math (7 subject configs, ~7500 train problems):
-        math_hard = train split, levels 4+5 across all subjects  (~3000 problems)
-        math_val  = test  split, levels 4+5 across all subjects  (~1200 problems)
-        Completely disjoint (different HF splits).
+    Pool all level-4+5 problems from both HF splits, shuffle with seed 42,
+    then do a 90/10 split:
+        math_hard  — 90% for training  (~5880 problems)
+        math_val   — 10% for val       (~650 problems, enough for stable block_eff)
 
-    Strategy B — fallback to HuggingFaceH4/MATH-500 (500 problems, benchmark):
-        math_hard = levels 4+5  (~262 problems)
-        math_val  = levels 1-3  (~238 problems)
-        Disjoint by level partition.
+    Strategy A — EleutherAI/hendrycks_math (7 subject configs):
+        Pools train+test across all subjects, filters levels 4+5, then 90/10 split.
+
+    Strategy B — fallback to HuggingFaceH4/MATH-500 (500 problems):
+        Pools all 500, filters levels 4+5 (~262), then 90/10 split.
     """
     hard_path = os.path.join(DATA_DIR, "math_hard.jsonl")
     val_path  = os.path.join(DATA_DIR, "math_val.jsonl")
@@ -197,46 +198,39 @@ def fetch_math_hard_and_val(force: bool = False):
                 "level":  row.get("level", ""),
                 "type":   row.get("type", row.get("subject", ""))}
 
-    # ── Strategy A: full MATH dataset via EleutherAI/hendrycks_math ──────────
+    def _split_and_save(all_items):
+        random.Random(42).shuffle(all_items)
+        cut = int(len(all_items) * (1 - val_frac))
+        save_jsonl(hard_path, all_items[:cut])
+        save_jsonl(val_path,  all_items[cut:])
+
+    # ── Strategy A: pool both HF splits, filter levels 4+5, then 90/10 ───────
     print("  fetching EleutherAI/hendrycks_math (7 subjects × train+test) ...")
     try:
         from datasets import load_dataset
-        hard, val = [], []
+        all_hard = []
         for subj in _HENDRYCKS_SUBJECTS:
-            ds_train = load_dataset("EleutherAI/hendrycks_math", subj, split="train", trust_remote_code=True)
-            ds_test  = load_dataset("EleutherAI/hendrycks_math", subj, split="test",  trust_remote_code=True)
-            for row in ds_train:
-                item = _row_to_item(row)
-                if item and _is_hard(item["level"]):
-                    hard.append(item)
-            for row in ds_test:
-                item = _row_to_item(row)
-                if item and _is_hard(item["level"]):
-                    val.append(item)
-        if hard and val:
-            save_jsonl(hard_path, hard)
-            save_jsonl(val_path,  val)
+            for split in ("train", "test"):
+                ds = load_dataset("EleutherAI/hendrycks_math", subj, split=split)
+                for row in ds:
+                    item = _row_to_item(row)
+                    if item and _is_hard(item["level"]):
+                        all_hard.append(item)
+        if all_hard:
+            _split_and_save(all_hard)
             return hard_path, val_path
         print("  EleutherAI/hendrycks_math returned empty — falling back to MATH-500 split")
     except Exception as e:
         print(f"  EleutherAI/hendrycks_math failed ({e}) — falling back to MATH-500 split")
 
-    # ── Strategy B: partition MATH-500 benchmark by level ────────────────────
+    # ── Strategy B: MATH-500, filter levels 4+5, then 90/10 ─────────────────
     print("  fetching HuggingFaceH4/MATH-500 as fallback ...")
     try:
         from datasets import load_dataset
         ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
-        hard, val = [], []
-        for row in ds:
-            item = _row_to_item(row)
-            if not item:
-                continue
-            if _is_hard(item["level"]):
-                hard.append(item)
-            else:
-                val.append(item)
-        save_jsonl(hard_path, hard)
-        save_jsonl(val_path,  val)
+        all_hard = [item for row in ds
+                    if (item := _row_to_item(row)) and _is_hard(item["level"])]
+        _split_and_save(all_hard)
     except Exception as e:
         print(f"  WARNING: all downloads failed: {e}")
         for p in (hard_path, val_path):
