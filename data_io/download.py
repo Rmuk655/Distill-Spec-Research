@@ -184,7 +184,7 @@ def fetch_math_hard_and_val(force: bool = False):
                 continue
             item = {"prompt": prompt, "answer": row.get("solution", row.get("answer", "")),
                     "level": level, "type": row.get("subject", row.get("type", ""))}
-            if level in ("Level 4", "Level 5"):
+            if str(level).strip() in ("Level 4", "Level 5", "4", "5"):
                 hard.append(item)
             else:
                 val.append(item)
