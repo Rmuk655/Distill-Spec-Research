@@ -1,28 +1,40 @@
-"""algo_sanity.py — does the tree loss actually optimise acceptance?
+"""algo_sanity.py — do the tree losses actually optimise acceptance?
 
 A cheap (~minutes, no 32B) correctness check that disambiguates the two
 hypotheses our 8B/0.6B negatives confound:
   H1  capacity ceiling   — algo fine, just no headroom on GSM8K
   H2  algorithm wrong    — the tree loss is a no-op / mis-wired
 
-Method: overfit a *handful* of prompts with the loss under test and measure
-E[tau] (full-depth expected accepted length) ON THE SAME PROMPTS every few
-steps.  Overfitting guarantees headroom, so:
+Method: overfit a *small* set of prompts with each loss and measure E[tau]
+(full-depth expected accepted length) ON THE SAME PROMPTS every few steps.
+Overfitting a handful guarantees headroom, so a working acceptance loss MUST
+push E[tau] up; if it cannot, the formulation is broken.
 
-  * naive_tree (tree loss):  E[tau] MUST climb clearly.  If it does not move
-    while the train loss drops, the loss optimises something disconnected from
-    acceptance -> H2 (broken) -> fix before scaling.
-  * jsd (flat control):      run it too; q->p should also raise E[tau].  If
-    flat reaches the SAME E[tau] as tree, that is positive evidence the 8B
-    result is genuine no-headroom (H1), not a bug.
+Sample-size note — this is a CORRECTNESS test, not a generalisation estimate,
+so a small set is the point (it guarantees fittability).  But the verdict is
+asymmetric: a clear RISE is trustworthy even at small n; a NON-rise is
+ambiguous (broken algo vs an unlucky sample with no headroom vs noise).  So we
+use ~8 prompts, average E[tau] over several sampled trees, report the noise,
+print per-prompt baselines (so you can see whether headroom existed), and judge
+by effect size vs noise — never a single number.
+
+Only the tree/telescoping family has an acceptance gradient worth testing.
+depth_weight (w*jsd) is jsd's gradient times a DETACHED scalar — nothing to
+validate.  additive (jsd + lambda*tree) reuses the tree gradient — covered
+transitively by testing the tree loss itself.
 
 Usage:
+    # sweep the whole telescoping family in one run (fresh draft per loss):
+    python algo_sanity.py --loss naive_tree,kl_tree,gbv_tree,bv_tree,traversal_tree --device cuda:0
+    # single loss + flat control:
     python algo_sanity.py --loss naive_tree --device cuda:0
-    python algo_sanity.py --loss jsd        --device cuda:0   # control
+    python algo_sanity.py --loss jsd        --device cuda:0
 """
 from __future__ import annotations
 
 import argparse
+import copy
+import random
 import statistics
 
 import torch
@@ -30,11 +42,14 @@ import torch
 import train  # module-level imports only; importing does NOT run main()
 
 
-def measure_etau(draft, teacher, ids_list, verifier, dt, tt, reps=4):
-    """Stochastic estimate of E[tau] averaged over prompts x reps (fresh trees)."""
+def measure_etau(draft, teacher, ids_list, verifier, dt, tt, reps):
+    """E[tau] over prompts x reps (fresh stochastic trees).
+
+    Returns (overall_mean, overall_std, per_prompt_means)."""
     draft.eval()
-    vals = []
+    per_prompt, allvals = [], []
     for ids in ids_list:
+        vals = []
         for _ in range(reps):
             train.Node.naive_cache.clear()
             train.Node.spectr_cache.clear()
@@ -44,61 +59,61 @@ def measure_etau(draft, teacher, ids_list, verifier, dt, tt, reps=4):
                     draft, teacher, ids, train.K, train.L, verifier, dt, tt))
             except Exception as e:                       # verifier.py:433 ZeroDiv etc.
                 print(f"    [measure-skip] {type(e).__name__}: {e}")
+        if vals:
+            per_prompt.append(statistics.mean(vals))
+            allvals.extend(vals)
     draft.train()
-    return statistics.mean(vals) if vals else float("nan")
+    mean = statistics.mean(allvals) if allvals else float("nan")
+    std = statistics.pstdev(allvals) if len(allvals) > 1 else 0.0
+    return mean, std, per_prompt
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Tree-loss correctness / overfit probe.")
-    ap.add_argument("--loss", default="naive_tree",
-                    help="Loss to probe (naive_tree to test the algo; jsd for control).")
-    ap.add_argument("--n_prompts", type=int, default=3,
-                    help="How many prompts to overfit (small = guaranteed headroom).")
-    ap.add_argument("--steps", type=int, default=200)
-    ap.add_argument("--measure_every", type=int, default=25)
-    ap.add_argument("--lr", type=float, default=3e-5)
-    ap.add_argument("--device", default="cuda:0")
-    ap.add_argument("--seed", type=int, default=123)
-    ap.add_argument("--train_dataset", default="gsm8k_train")
-    ap.add_argument("--verifier", default="naive",
-                    help="Verifier whose E[tau] we track (fixed across losses to compare).")
-    args = ap.parse_args()
+def verdict(loss, is_tree, baseline, best, noise):
+    """Effect-size-vs-noise call.  Returns a one-line string."""
+    delta = best - baseline
+    ceiling = train.L
+    if baseline > ceiling - 0.5:
+        return (f"INCONCLUSIVE: baseline E[tau]={baseline:.2f} already near ceiling "
+                f"{ceiling} — no headroom in this sample to demonstrate a rise.")
+    if not is_tree:
+        return f"(flat control) Δ={delta:+.3f}"
+    strong = max(0.5, 3 * noise)
+    weak = max(0.15, 1.5 * noise)
+    if delta > strong:
+        return (f"WORKS: tree loss raises acceptance (Δ={delta:+.3f} > {strong:.2f}) → "
+                f"H2 rejected; 8B null is consistent with no-headroom (H1).")
+    if delta > weak:
+        return (f"WEAK: Δ={delta:+.3f} just above noise ({noise:.2f}) — moves acceptance "
+                f"feebly; inspect gradient scale / survival weighting before scaling.")
+    return (f"BROKEN?: Δ={delta:+.3f} not above noise ({noise:.2f}) even when overfitting. "
+            f"Likely H2 — but re-check with more/headroom-ier prompts before concluding.")
 
-    if torch.cuda.is_available():
-        torch.cuda.set_device(train._gpu_index_from_device(args.device)
-                              if hasattr(train, "_gpu_index_from_device")
-                              else int(args.device.split(":")[-1]))
-    train.set_seed(args.seed)
 
-    dt = getattr(train, "DRAFT_TEMP", train.DEFAULT_TEMP)
-    tt = getattr(train, "TEACHER_TEMP", train.DEFAULT_TEMP)
+def run_one_loss(loss_name, tok, draft, teacher, init_state, ids_list,
+                 args, dt, tt):
+    """Reset draft to init weights, overfit ids_list with loss_name, track E[tau]."""
+    draft.load_state_dict(init_state)            # fresh draft per loss (fair start)
+    loss_fn = train.get_loss(loss_name)
+    is_tree = train.is_tree_loss(loss_name)
+    verifier = args.verifier or train.LOSS_TO_VERIFIER.get(loss_name, "traversal")
 
-    tok, draft, teacher = train.load_models(train.DRAFT_MODEL, train.TEACHER_MODEL,
-                                            device=args.device)
-
-    prompts = train.load_prompts_jsonl(train.dataset_path(args.train_dataset))
-    import random
-    random.Random(args.seed).shuffle(prompts)
-    prompts = prompts[:args.n_prompts]
-    ids_list = [torch.tensor(tok.encode(p), device=draft.device,
-                             dtype=torch.long).unsqueeze(0) for p in prompts]
-
-    loss_fn = train.get_loss(args.loss)
-    is_tree = train.is_tree_loss(args.loss)
-
-    print("=" * 70)
-    print(f"  algo_sanity  loss={args.loss} ({'tree' if is_tree else 'flat'})  "
-          f"n_prompts={args.n_prompts}  steps={args.steps}  K={train.K} L={train.L}")
-    print(f"  tracking E[tau] under verifier='{args.verifier}' (full depth, max={train.L})")
-    print("=" * 70)
+    print("\n" + "=" * 74)
+    print(f"  LOSS={loss_name} ({'tree' if is_tree else 'flat'})  "
+          f"verifier='{verifier}'  n_prompts={len(ids_list)}  steps={args.steps}  "
+          f"K={train.K} L={train.L}")
+    print("=" * 74)
 
     trainable = [p for p in draft.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(trainable, lr=args.lr)
 
-    d0 = measure_etau(draft, teacher, ids_list, args.verifier, dt, tt)
-    print(f"  step    0  E[tau]={d0:.3f}  (baseline, before any training)")
+    b_mean, b_std, b_pp = measure_etau(draft, teacher, ids_list, verifier,
+                                       dt, tt, reps=args.baseline_reps)
+    pp_str = ", ".join(f"{x:.2f}" for x in b_pp)
+    print(f"  baseline E[tau]={b_mean:.3f} ± {b_std:.3f}   per-prompt: [{pp_str}]")
+    if b_mean > train.L - 0.5:
+        print(f"  ⚠ baseline near ceiling {train.L} — little headroom; treat verdict as weak.")
 
-    best = d0
+    best = b_mean
     for step in range(1, args.steps + 1):
         ids = ids_list[step % len(ids_list)]
         train.Node.naive_cache.clear()
@@ -117,25 +132,75 @@ def main():
         opt.step()
 
         if step % args.measure_every == 0:
-            d = measure_etau(draft, teacher, ids_list, args.verifier, dt, tt)
-            best = max(best, d)
-            print(f"  step {step:4d}  E[tau]={d:.3f}  loss={loss.item():+.4f}  "
-                  f"(Δ from baseline {d - d0:+.3f})")
+            m, s, _ = measure_etau(draft, teacher, ids_list, verifier,
+                                   dt, tt, reps=args.reps)
+            best = max(best, m)
+            print(f"  step {step:4d}  E[tau]={m:.3f} ± {s:.3f}  loss={loss.item():+.4f}  "
+                  f"(Δ {m - b_mean:+.3f})")
 
-    print("-" * 70)
-    delta = best - d0
-    print(f"  baseline E[tau]={d0:.3f}   best E[tau]={best:.3f}   Δ={delta:+.3f}")
-    if is_tree:
-        if delta > 0.5:
-            print("  VERDICT: tree loss RAISES acceptance on the overfit set → algo works "
-                  "(H2 rejected). The 8B null is consistent with no-headroom (H1).")
-        elif delta > 0.15:
-            print("  VERDICT: weak rise — tree loss moves acceptance but feebly. Inspect "
-                  "gradient scale / survival weighting before trusting it at scale.")
-        else:
-            print("  VERDICT: tree loss does NOT raise acceptance even when overfitting "
-                  "→ formulation is broken (H2). Fix BEFORE any 32B run.")
-    print("=" * 70)
+    v = verdict(loss_name, is_tree, b_mean, best, b_std)
+    print(f"  → {v}")
+    return dict(loss=loss_name, verifier=verifier, baseline=b_mean,
+                noise=b_std, best=best, delta=best - b_mean, verdict=v)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Tree-loss correctness / overfit probe.")
+    ap.add_argument("--loss", default="naive_tree",
+                    help="Comma-separated loss list. Tree losses test the algo; "
+                         "jsd as flat control. e.g. naive_tree,kl_tree,gbv_tree,jsd")
+    ap.add_argument("--n_prompts", type=int, default=8,
+                    help="Prompts to overfit. Small = guaranteed headroom, but too "
+                         "small risks an unlucky no-headroom sample. 8 is a safe handful.")
+    ap.add_argument("--steps", type=int, default=250)
+    ap.add_argument("--measure_every", type=int, default=50)
+    ap.add_argument("--reps", type=int, default=4,
+                    help="Sampled trees per E[tau] measurement (periodic).")
+    ap.add_argument("--baseline_reps", type=int, default=8,
+                    help="More reps for the baseline (the verdict hinges on it).")
+    ap.add_argument("--lr", type=float, default=3e-5)
+    ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--train_dataset", default="gsm8k_train")
+    ap.add_argument("--verifier", default=None,
+                    help="Force one verifier for E[tau] across all losses. "
+                         "Default: per-loss matched (LOSS_TO_VERIFIER).")
+    args = ap.parse_args()
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(int(args.device.split(":")[-1]) if ":" in args.device else 0)
+    train.set_seed(args.seed)
+
+    dt = getattr(train, "DRAFT_TEMP", train.DEFAULT_TEMP)
+    tt = getattr(train, "TEACHER_TEMP", train.DEFAULT_TEMP)
+
+    tok, draft, teacher = train.load_models(train.DRAFT_MODEL, train.TEACHER_MODEL,
+                                            device=args.device)
+    init_state = copy.deepcopy(draft.state_dict())   # snapshot for fresh-draft resets
+
+    prompts = train.load_prompts_jsonl(train.dataset_path(args.train_dataset))
+    random.Random(args.seed).shuffle(prompts)
+    prompts = prompts[:args.n_prompts]
+    ids_list = [torch.tensor(tok.encode(p), device=draft.device,
+                             dtype=torch.long).unsqueeze(0) for p in prompts]
+
+    losses = [s.strip() for s in args.loss.split(",") if s.strip()]
+    results = [run_one_loss(name, tok, draft, teacher, init_state, ids_list,
+                            args, dt, tt) for name in losses]
+
+    print("\n" + "#" * 74)
+    print(f"  SUMMARY  (n_prompts={args.n_prompts}, steps={args.steps}, "
+          f"K={train.K} L={train.L})")
+    print("#" * 74)
+    print(f"  {'loss':16s} {'verifier':10s} {'base':>6s} {'best':>6s} "
+          f"{'Δ':>7s} {'noise':>6s}")
+    for r in results:
+        print(f"  {r['loss']:16s} {r['verifier']:10s} {r['baseline']:6.3f} "
+              f"{r['best']:6.3f} {r['delta']:+7.3f} {r['noise']:6.3f}")
+    print()
+    for r in results:
+        print(f"  {r['loss']:16s} → {r['verdict']}")
+    print("#" * 74)
 
 
 if __name__ == "__main__":
