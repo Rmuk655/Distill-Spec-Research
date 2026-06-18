@@ -64,8 +64,9 @@ def measure_etau(draft, teacher, ids_list, verifier, dt, tt, reps):
             allvals.extend(vals)
     draft.train()
     mean = statistics.mean(allvals) if allvals else float("nan")
-    std = statistics.pstdev(allvals) if len(allvals) > 1 else 0.0
-    return mean, std, per_prompt
+    disp = statistics.pstdev(allvals) if len(allvals) > 1 else 0.0   # prompt-to-prompt spread
+    se = disp / (len(allvals) ** 0.5) if allvals else 0.0            # uncertainty of the MEAN
+    return mean, disp, se, per_prompt
 
 
 def verdict(loss, is_tree, baseline, best, noise):
@@ -77,15 +78,15 @@ def verdict(loss, is_tree, baseline, best, noise):
                 f"{ceiling} — no headroom in this sample to demonstrate a rise.")
     if not is_tree:
         return f"(flat control) Δ={delta:+.3f}"
-    strong = max(0.5, 3 * noise)
+    strong = max(0.5, 3 * noise)   # noise = standard error of the mean
     weak = max(0.15, 1.5 * noise)
     if delta > strong:
         return (f"WORKS: tree loss raises acceptance (Δ={delta:+.3f} > {strong:.2f}) → "
                 f"H2 rejected; 8B null is consistent with no-headroom (H1).")
     if delta > weak:
-        return (f"WEAK: Δ={delta:+.3f} just above noise ({noise:.2f}) — moves acceptance "
+        return (f"WEAK: Δ={delta:+.3f} just above SE ({noise:.3f}) — moves acceptance "
                 f"feebly; inspect gradient scale / survival weighting before scaling.")
-    return (f"BROKEN?: Δ={delta:+.3f} not above noise ({noise:.2f}) even when overfitting. "
+    return (f"BROKEN?: Δ={delta:+.3f} not above SE ({noise:.3f}) even when overfitting. "
             f"Likely H2 — but re-check with more/headroom-ier prompts before concluding.")
 
 
@@ -95,21 +96,25 @@ def run_one_loss(loss_name, tok, draft, teacher, init_state, ids_list,
     draft.load_state_dict(init_state)            # fresh draft per loss (fair start)
     loss_fn = train.get_loss(loss_name)
     is_tree = train.is_tree_loss(loss_name)
-    verifier = args.verifier or train.LOSS_TO_VERIFIER.get(loss_name, "traversal")
+    # Measure E[tau] under 'naive' for ALL losses: a universal acceptance proxy
+    # that only needs L.  Matched verifiers (traversal, ...) need extra args
+    # (vocab_size) that expected_depth_scalar does not pass, so they crash.
+    verifier = args.verifier or "naive"
 
     print("\n" + "=" * 74)
     print(f"  LOSS={loss_name} ({'tree' if is_tree else 'flat'})  "
-          f"verifier='{verifier}'  n_prompts={len(ids_list)}  steps={args.steps}  "
+          f"E[tau]-verifier='{verifier}'  n_prompts={len(ids_list)}  steps={args.steps}  "
           f"K={train.K} L={train.L}")
     print("=" * 74)
 
     trainable = [p for p in draft.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(trainable, lr=args.lr)
 
-    b_mean, b_std, b_pp = measure_etau(draft, teacher, ids_list, verifier,
-                                       dt, tt, reps=args.baseline_reps)
+    b_mean, b_disp, b_se, b_pp = measure_etau(draft, teacher, ids_list, verifier,
+                                              dt, tt, reps=args.baseline_reps)
     pp_str = ", ".join(f"{x:.2f}" for x in b_pp)
-    print(f"  baseline E[tau]={b_mean:.3f} ± {b_std:.3f}   per-prompt: [{pp_str}]")
+    print(f"  baseline E[tau]={b_mean:.3f}  spread={b_disp:.2f}  SE={b_se:.3f}")
+    print(f"    per-prompt: [{pp_str}]")
     if b_mean > train.L - 0.5:
         print(f"  ⚠ baseline near ceiling {train.L} — little headroom; treat verdict as weak.")
 
@@ -132,16 +137,16 @@ def run_one_loss(loss_name, tok, draft, teacher, init_state, ids_list,
         opt.step()
 
         if step % args.measure_every == 0:
-            m, s, _ = measure_etau(draft, teacher, ids_list, verifier,
-                                   dt, tt, reps=args.reps)
+            m, d, _, _ = measure_etau(draft, teacher, ids_list, verifier,
+                                      dt, tt, reps=args.reps)
             best = max(best, m)
-            print(f"  step {step:4d}  E[tau]={m:.3f} ± {s:.3f}  loss={loss.item():+.4f}  "
+            print(f"  step {step:4d}  E[tau]={m:.3f}  spread={d:.2f}  loss={loss.item():+.4f}  "
                   f"(Δ {m - b_mean:+.3f})")
 
-    v = verdict(loss_name, is_tree, b_mean, best, b_std)
+    v = verdict(loss_name, is_tree, b_mean, best, b_se)
     print(f"  → {v}")
     return dict(loss=loss_name, verifier=verifier, baseline=b_mean,
-                noise=b_std, best=best, delta=best - b_mean, verdict=v)
+                noise=b_se, best=best, delta=best - b_mean, verdict=v)
 
 
 def main():
@@ -193,7 +198,7 @@ def main():
           f"K={train.K} L={train.L})")
     print("#" * 74)
     print(f"  {'loss':16s} {'verifier':10s} {'base':>6s} {'best':>6s} "
-          f"{'Δ':>7s} {'noise':>6s}")
+          f"{'Δ':>7s} {'SE':>6s}")
     for r in results:
         print(f"  {r['loss']:16s} {r['verifier']:10s} {r['baseline']:6.3f} "
               f"{r['best']:6.3f} {r['delta']:+7.3f} {r['noise']:6.3f}")
