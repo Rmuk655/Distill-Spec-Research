@@ -156,45 +156,45 @@ EVAL_DATASETS = {
     "mtbench":    ("philschmid/mt-bench",         "train",   "turns",       None,  None),
 }
 
-# Training datasets backed by hendrycks/competition_math.
-# level_filter: set of "Level N" strings to keep, or None for all levels.
-MATH_TRAIN_DATASETS = {
-    "math_train": ("train", None),
-    "math_hard":  ("train", {"Level 4", "Level 5"}),
-    "math_val":   ("test",  None),
-}
+def fetch_math_hard_and_val(force: bool = False):
+    """
+    Split HuggingFaceH4/MATH-500 (confirmed accessible) by difficulty level:
+        math_hard.jsonl  — levels 4 + 5  (~255 problems)  → training
+        math_val.jsonl   — levels 1 + 2 + 3  (~245 problems)  → validation
 
+    The two sets are disjoint by construction (partitioned on the level field).
+    math500.jsonl is left untouched for use as the offline eval benchmark.
+    """
+    hard_path = os.path.join(DATA_DIR, "math_hard.jsonl")
+    val_path  = os.path.join(DATA_DIR, "math_val.jsonl")
 
-def fetch_math(name: str, split: str, level_filter: set | None = None,
-               n: int = 10_000, force: bool = False) -> str:
-    """Fetch hendrycks/competition_math, optionally filtered by level."""
-    path = os.path.join(DATA_DIR, f"{name}.jsonl")
-    if os.path.isfile(path) and not force:
-        print(f"  {name}.jsonl already present — skipping")
-        return path
+    if os.path.isfile(hard_path) and os.path.isfile(val_path) and not force:
+        print("  math_hard.jsonl + math_val.jsonl already present — skipping")
+        return hard_path, val_path
 
-    label = f"levels {sorted(level_filter)}" if level_filter else "all levels"
-    print(f"  fetching {name} (lighteval/MATH {split}, {label}) ...")
+    print("  fetching HuggingFaceH4/MATH-500 to split into math_hard / math_val ...")
     try:
         from datasets import load_dataset
-        ds = load_dataset("lighteval/MATH", split=split)
-        items = []
+        ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
+        hard, val = [], []
         for row in ds:
-            if level_filter and row.get("level") not in level_filter:
-                continue
+            level = row.get("level", "")
             prompt = row.get("problem", "")
             if not (prompt and isinstance(prompt, str)):
                 continue
-            items.append({"prompt": prompt, "answer": row.get("solution", ""),
-                          "level": row.get("level", ""), "type": row.get("type", "")})
-            if len(items) >= n:
-                break
-        save_jsonl(path, items)
+            item = {"prompt": prompt, "answer": row.get("solution", row.get("answer", "")),
+                    "level": level, "type": row.get("subject", row.get("type", ""))}
+            if level in ("Level 4", "Level 5"):
+                hard.append(item)
+            else:
+                val.append(item)
+        save_jsonl(hard_path, hard)
+        save_jsonl(val_path,  val)
     except Exception as e:
-        print(f"  WARNING: HF download failed for {name}: {e}")
-        items = [{"prompt": f"Test prompt {i} for {name}."} for i in range(10)]
-        save_jsonl(path, items)
-    return path
+        print(f"  WARNING: HF download failed: {e}")
+        for p in (hard_path, val_path):
+            save_jsonl(p, [{"prompt": f"Test prompt {i}."} for i in range(10)])
+    return hard_path, val_path
 
 
 def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
@@ -208,9 +208,8 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
     if "gsm8k" in requested:
         fetch_gsm8k_val_and_eval(n_eval=n_eval, force=force)
 
-    for name, (split, level_filter) in MATH_TRAIN_DATASETS.items():
-        if name in requested:
-            fetch_math(name, split=split, level_filter=level_filter, force=force)
+    if "math_hard" in requested or "math_val" in requested:
+        fetch_math_hard_and_val(force=force)
 
     for name, (hf_id, split, field, config, ans) in EVAL_DATASETS.items():
         if name not in requested:
@@ -221,8 +220,8 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
 
 def get_path(name: str) -> str:
     """Resolve a dataset name to its on-disk JSONL path (must be downloaded)."""
-    known = ({"gsm8k_train", "gsm8k_val", "gsm8k_eval"}
-             | set(EVAL_DATASETS) | set(MATH_TRAIN_DATASETS))
+    known = ({"gsm8k_train", "gsm8k_val", "gsm8k_eval",
+              "math_hard", "math_val"} | set(EVAL_DATASETS))
     if name in known:
         return os.path.join(DATA_DIR, f"{name}.jsonl")
     raise KeyError(f"Unknown dataset '{name}'. Known: {sorted(known)}")
