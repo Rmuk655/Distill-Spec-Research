@@ -90,7 +90,7 @@ LORA_DROPOUT    = 0.05
 
 # Validation & checkpointing cadence
 VAL_EVERY       = 100                        # gradient-accum steps between val checks
-VAL_PROMPTS     = 200                        # val loss averaged over this many prompts; 25 gave SE≈0.3, 200 gives SE≈0.1
+VAL_PROMPTS     = 25                         # val loss averaged over this many prompts (kept small to limit val overhead)
 SAVE_EVERY      = 200                        # ckpt_latest write cadence
 LOG_EVERY       = 10                         # console + W&B step-log cadence
 
