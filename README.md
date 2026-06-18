@@ -32,10 +32,11 @@ pip install -r requirements.txt
 python -m data_io.download --train --n 1000
 
 # 3b. (optional) download MATH hard-level datasets for math probe training
-#     Fetches EleutherAI/hendrycks_math (7 subjects):
-#       math_hard.jsonl  — train split, levels 4+5 (~3994 problems)
-#       math_val.jsonl   — test split,  levels 4+5 (~2538 problems)
-python -m data_io.download --datasets math_hard,math_val
+#     Fetches EleutherAI/hendrycks_math (7 subjects, ~6532 level-4+5 problems total):
+#       math_val.jsonl   —  200 problems  (during-training checkpoint selection)
+#       math_eval.jsonl  — 1000 problems  (held-out final eval, same role as gsm8k_eval)
+#       math_hard.jsonl  — remainder ~5332 problems  (training)
+python -m data_io.download --datasets math_hard,math_val,math_eval
 
 # 4. (optional) log in to Weights & Biases for training curves
 wandb login

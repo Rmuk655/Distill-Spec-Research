@@ -167,27 +167,28 @@ def _is_hard(level) -> bool:
     return str(level).strip() in _HARD_LEVELS
 
 
-def fetch_math_hard_and_val(force: bool = False, val_frac: float = 0.1):
+def fetch_math_hard_and_val(force: bool = False,
+                            n_val: int = 200, n_eval: int = 1000):
     """
-    Build math_hard (train, levels 4+5) and math_val (val, levels 4+5).
+    Build math_hard / math_val / math_eval from level-4+5 MATH problems.
 
-    Pool all level-4+5 problems from both HF splits, shuffle with seed 42,
-    then do a 90/10 split:
-        math_hard  — 90% for training  (~5880 problems)
-        math_val   — 10% for val       (~650 problems, enough for stable block_eff)
+    Pools all level-4+5 problems from both HF splits, shuffles with seed 42,
+    then carves out fixed-size val and eval pools (same pattern as gsm8k):
+        math_val   — n_val  problems (default 200) for during-training checkpoint selection
+        math_eval  — n_eval problems (default 1000) held out for final eval
+        math_hard  — remainder for training (~5332 from 6532 total)
 
-    Strategy A — EleutherAI/hendrycks_math (7 subject configs):
-        Pools train+test across all subjects, filters levels 4+5, then 90/10 split.
-
-    Strategy B — fallback to HuggingFaceH4/MATH-500 (500 problems):
-        Pools all 500, filters levels 4+5 (~262), then 90/10 split.
+    Strategy A — EleutherAI/hendrycks_math (7 subject configs, ~6532 level-4+5 problems).
+    Strategy B — fallback to HuggingFaceH4/MATH-500 (~262 level-4+5 problems).
     """
     hard_path = os.path.join(DATA_DIR, "math_hard.jsonl")
     val_path  = os.path.join(DATA_DIR, "math_val.jsonl")
+    eval_path = os.path.join(DATA_DIR, "math_eval.jsonl")
 
-    if os.path.isfile(hard_path) and os.path.isfile(val_path) and not force:
-        print("  math_hard.jsonl + math_val.jsonl already present — skipping")
-        return hard_path, val_path
+    if (os.path.isfile(hard_path) and os.path.isfile(val_path)
+            and os.path.isfile(eval_path) and not force):
+        print("  math_hard.jsonl + math_val.jsonl + math_eval.jsonl already present — skipping")
+        return hard_path, val_path, eval_path
 
     def _row_to_item(row):
         prompt = row.get("problem", "")
@@ -200,11 +201,12 @@ def fetch_math_hard_and_val(force: bool = False, val_frac: float = 0.1):
 
     def _split_and_save(all_items):
         random.Random(42).shuffle(all_items)
-        cut = int(len(all_items) * (1 - val_frac))
-        save_jsonl(hard_path, all_items[:cut])
-        save_jsonl(val_path,  all_items[cut:])
+        # val and eval are carved from the front so they never overlap train
+        save_jsonl(val_path,  all_items[:n_val])
+        save_jsonl(eval_path, all_items[n_val:n_val + n_eval])
+        save_jsonl(hard_path, all_items[n_val + n_eval:])
 
-    # ── Strategy A: pool both HF splits, filter levels 4+5, then 90/10 ───────
+    # ── Strategy A: pool both HF splits, filter levels 4+5 ───────────────────
     print("  fetching EleutherAI/hendrycks_math (7 subjects × train+test) ...")
     try:
         from datasets import load_dataset
@@ -218,12 +220,12 @@ def fetch_math_hard_and_val(force: bool = False, val_frac: float = 0.1):
                         all_hard.append(item)
         if all_hard:
             _split_and_save(all_hard)
-            return hard_path, val_path
+            return hard_path, val_path, eval_path
         print("  EleutherAI/hendrycks_math returned empty — falling back to MATH-500 split")
     except Exception as e:
         print(f"  EleutherAI/hendrycks_math failed ({e}) — falling back to MATH-500 split")
 
-    # ── Strategy B: MATH-500, filter levels 4+5, then 90/10 ─────────────────
+    # ── Strategy B: MATH-500, filter levels 4+5 ──────────────────────────────
     print("  fetching HuggingFaceH4/MATH-500 as fallback ...")
     try:
         from datasets import load_dataset
@@ -233,9 +235,9 @@ def fetch_math_hard_and_val(force: bool = False, val_frac: float = 0.1):
         _split_and_save(all_hard)
     except Exception as e:
         print(f"  WARNING: all downloads failed: {e}")
-        for p in (hard_path, val_path):
+        for p in (hard_path, val_path, eval_path):
             save_jsonl(p, [{"prompt": f"Test prompt {i}."} for i in range(10)])
-    return hard_path, val_path
+    return hard_path, val_path, eval_path
 
 
 def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
@@ -249,7 +251,7 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
     if "gsm8k" in requested:
         fetch_gsm8k_val_and_eval(n_eval=n_eval, force=force)
 
-    if "math_hard" in requested or "math_val" in requested:
+    if "math_hard" in requested or "math_val" in requested or "math_eval" in requested:
         fetch_math_hard_and_val(force=force)
 
     for name, (hf_id, split, field, config, ans) in EVAL_DATASETS.items():
@@ -262,7 +264,7 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
 def get_path(name: str) -> str:
     """Resolve a dataset name to its on-disk JSONL path (must be downloaded)."""
     known = ({"gsm8k_train", "gsm8k_val", "gsm8k_eval",
-              "math_hard", "math_val"} | set(EVAL_DATASETS))
+              "math_hard", "math_val", "math_eval"} | set(EVAL_DATASETS))
     if name in known:
         return os.path.join(DATA_DIR, f"{name}.jsonl")
     raise KeyError(f"Unknown dataset '{name}'. Known: {sorted(known)}")
