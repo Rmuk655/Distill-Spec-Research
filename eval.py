@@ -686,24 +686,42 @@ def main():
           f"CPU: {specs.get('machine_cpu_physical_cores', specs.get('machine_cpu_logical_cores', '?'))} physical cores  "
           f"RAM: {specs.get('machine_ram_gb', '?')} GB")
 
-    # ── Load models (teacher first, then draft — always this order) ──────────
-    print(f"[load] teacher={TEACHER_MODEL}")
-    print(f"[load] draft={args.checkpoint}")
-    print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
-    tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                        device=torch_device, dtype=DEFAULT_DTYPE)
-
-    # Log GPU memory after model load — both models share the same device.
-    if torch.cuda.is_available():
-        _alloc = torch.cuda.memory_allocated() / 1024**2
-        _reserv = torch.cuda.memory_reserved() / 1024**2
-        print(f"[gpu]  after model load — allocated={_alloc:.0f}MB  reserved={_reserv:.0f}MB")
-
+    # ── Resolve data + modes BEFORE loading models, so a fully-cached run
+    #    can short-circuit without paying the ~8B teacher model-load cost ────
     data_path = dataset_path(args.dataset)
     prompts   = load_prompts_jsonl(data_path)[:args.n]
-    print(f"[data] {data_path} — {len(prompts)} prompts")
-
     modes = [m.strip() for m in args.modes.split(",")] if args.modes else [args.mode]
+
+    # A mode needs the models only if some prompt is still unfinished.
+    mode_state: dict[str, tuple[str, bool]] = {}
+    need_models = False
+    for mode in modes:
+        sp = _state_path(csv_path, mode, args.K, args.L, args.checkpoint)
+        done = _load_state(sp)
+        complete = bool(prompts) and all(i in done for i in range(len(prompts)))
+        mode_state[mode] = (sp, complete)
+        if not complete:
+            need_models = True
+
+    # ── Load models (teacher first, then draft) — skipped entirely when every
+    #    requested mode is already fully cached for this (K, L) ──────────────
+    if need_models:
+        print(f"[load] teacher={TEACHER_MODEL}")
+        print(f"[load] draft={args.checkpoint}")
+        print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
+        tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
+                                            device=torch_device, dtype=DEFAULT_DTYPE)
+        # Log GPU memory after model load — both models share the same device.
+        if torch.cuda.is_available():
+            _alloc = torch.cuda.memory_allocated() / 1024**2
+            _reserv = torch.cuda.memory_reserved() / 1024**2
+            print(f"[gpu]  after model load — allocated={_alloc:.0f}MB  reserved={_reserv:.0f}MB")
+    else:
+        tok = p_model = q_model = None
+        print(f"[load] all {len(modes)} mode(s) fully cached for "
+              f"K={args.K} L={args.L} — skipping model load")
+
+    print(f"[data] {data_path} — {len(prompts)} prompts")
 
     print()
     print("=" * 78)
@@ -715,17 +733,28 @@ def main():
     for mode in modes:
         set_seed(args.seed)   # identical RNG state for every mode
 
-        mon = GpuMonitor(device_idx=phys_gpu_idx) if not args.no_gpu_monitor else None
+        sp, complete = mode_state[mode]
+        # Only monitor the GPU for modes that will actually run work.
+        mon = (GpuMonitor(device_idx=phys_gpu_idx)
+               if not complete and not args.no_gpu_monitor else None)
 
-        sp = _state_path(csv_path, mode, args.K, args.L, args.checkpoint)
         stats = evaluate_one_mode(
             p_model, q_model, tok, prompts, mode,
             K=args.K, L=args.L,
             max_new_tokens=args.max_new_tokens, temp=args.temp,
             state_path=sp, gpu_monitor=mon,
         )
-        log_result(stats, args, mode, mon, csv_path,
-                   specs=specs, cpu_threads_used=cpu_threads, phys_gpu_idx=phys_gpu_idx)
+        # Skip the CSV append for a run that was already fully cached at start
+        # — re-appending an identical row only adds duplicates. A partial run
+        # that *completes* during this invocation had complete=False, so it
+        # still logs.
+        if complete:
+            print(f"  [cache] mode={mode} already complete — "
+                  f"not re-appending to {os.path.basename(csv_path)} "
+                  f"(BE={stats['block_eff']:.4f})")
+        else:
+            log_result(stats, args, mode, mon, csv_path,
+                       specs=specs, cpu_threads_used=cpu_threads, phys_gpu_idx=phys_gpu_idx)
 
     print(f"\n[done] results appended to {csv_path}")
 
