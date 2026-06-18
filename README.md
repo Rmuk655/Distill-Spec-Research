@@ -100,9 +100,19 @@ python train.py --loss khisti_tree
 python train.py --loss kl_tree --resume
 
 # Math domain probe — swap train/val datasets without touching anything else
-python train.py --loss jsd       --train_dataset math_hard --val_dataset math_val --steps 2000
+python train.py --loss jsd        --train_dataset math_hard --val_dataset math_val --steps 2000
 python train.py --loss naive_tree --train_dataset math_hard --val_dataset math_val --steps 2000
 ```
+
+### Math eval
+
+After training, evaluate on the 1000-problem held-out set:
+
+```bash
+python eval.py --checkpoint checkpoints/<run>/ckpt_best --dataset math_eval
+```
+
+`math_val` (200 problems) is only for during-training checkpoint selection — never report it as a final number. `math_eval` (1000 problems) is the held-out set, analogous to `gsm8k_eval`.
 
 ### Combining a flat backbone with an acceptance-aligned tree loss
 
