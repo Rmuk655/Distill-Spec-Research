@@ -156,14 +156,30 @@ EVAL_DATASETS = {
     "mtbench":    ("philschmid/mt-bench",         "train",   "turns",       None,  None),
 }
 
+_HENDRYCKS_SUBJECTS = [
+    "algebra", "counting_and_probability", "geometry",
+    "intermediate_algebra", "number_theory", "prealgebra", "precalculus",
+]
+_HARD_LEVELS = {"Level 4", "Level 5", "4", "5", 4, 5}
+
+
+def _is_hard(level) -> bool:
+    return str(level).strip() in _HARD_LEVELS
+
+
 def fetch_math_hard_and_val(force: bool = False):
     """
-    Split HuggingFaceH4/MATH-500 (confirmed accessible) by difficulty level:
-        math_hard.jsonl  — levels 4 + 5  (~255 problems)  → training
-        math_val.jsonl   — levels 1 + 2 + 3  (~245 problems)  → validation
+    Build math_hard (train, levels 4+5) and math_val (test, all levels).
 
-    The two sets are disjoint by construction (partitioned on the level field).
-    math500.jsonl is left untouched for use as the offline eval benchmark.
+    Strategy A — EleutherAI/hendrycks_math (7 subject configs, ~7500 train problems):
+        math_hard = train split, levels 4+5 across all subjects  (~3000 problems)
+        math_val  = test  split, levels 4+5 across all subjects  (~1200 problems)
+        Completely disjoint (different HF splits).
+
+    Strategy B — fallback to HuggingFaceH4/MATH-500 (500 problems, benchmark):
+        math_hard = levels 4+5  (~262 problems)
+        math_val  = levels 1-3  (~238 problems)
+        Disjoint by level partition.
     """
     hard_path = os.path.join(DATA_DIR, "math_hard.jsonl")
     val_path  = os.path.join(DATA_DIR, "math_val.jsonl")
@@ -172,26 +188,57 @@ def fetch_math_hard_and_val(force: bool = False):
         print("  math_hard.jsonl + math_val.jsonl already present — skipping")
         return hard_path, val_path
 
-    print("  fetching HuggingFaceH4/MATH-500 to split into math_hard / math_val ...")
+    def _row_to_item(row):
+        prompt = row.get("problem", "")
+        if not (prompt and isinstance(prompt, str)):
+            return None
+        return {"prompt": prompt,
+                "answer": row.get("solution", row.get("answer", "")),
+                "level":  row.get("level", ""),
+                "type":   row.get("type", row.get("subject", ""))}
+
+    # ── Strategy A: full MATH dataset via EleutherAI/hendrycks_math ──────────
+    print("  fetching EleutherAI/hendrycks_math (7 subjects × train+test) ...")
+    try:
+        from datasets import load_dataset
+        hard, val = [], []
+        for subj in _HENDRYCKS_SUBJECTS:
+            ds_train = load_dataset("EleutherAI/hendrycks_math", subj, split="train", trust_remote_code=True)
+            ds_test  = load_dataset("EleutherAI/hendrycks_math", subj, split="test",  trust_remote_code=True)
+            for row in ds_train:
+                item = _row_to_item(row)
+                if item and _is_hard(item["level"]):
+                    hard.append(item)
+            for row in ds_test:
+                item = _row_to_item(row)
+                if item and _is_hard(item["level"]):
+                    val.append(item)
+        if hard and val:
+            save_jsonl(hard_path, hard)
+            save_jsonl(val_path,  val)
+            return hard_path, val_path
+        print("  EleutherAI/hendrycks_math returned empty — falling back to MATH-500 split")
+    except Exception as e:
+        print(f"  EleutherAI/hendrycks_math failed ({e}) — falling back to MATH-500 split")
+
+    # ── Strategy B: partition MATH-500 benchmark by level ────────────────────
+    print("  fetching HuggingFaceH4/MATH-500 as fallback ...")
     try:
         from datasets import load_dataset
         ds = load_dataset("HuggingFaceH4/MATH-500", split="test")
         hard, val = [], []
         for row in ds:
-            level = row.get("level", "")
-            prompt = row.get("problem", "")
-            if not (prompt and isinstance(prompt, str)):
+            item = _row_to_item(row)
+            if not item:
                 continue
-            item = {"prompt": prompt, "answer": row.get("solution", row.get("answer", "")),
-                    "level": level, "type": row.get("subject", row.get("type", ""))}
-            if str(level).strip() in ("Level 4", "Level 5", "4", "5"):
+            if _is_hard(item["level"]):
                 hard.append(item)
             else:
                 val.append(item)
         save_jsonl(hard_path, hard)
         save_jsonl(val_path,  val)
     except Exception as e:
-        print(f"  WARNING: HF download failed: {e}")
+        print(f"  WARNING: all downloads failed: {e}")
         for p in (hard_path, val_path):
             save_jsonl(p, [{"prompt": f"Test prompt {i}."} for i in range(10)])
     return hard_path, val_path
