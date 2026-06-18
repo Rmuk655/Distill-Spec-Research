@@ -31,6 +31,12 @@ pip install -r requirements.txt
 #    --n 1000 gives 1000 held-out eval prompts (default is 100)
 python -m data_io.download --train --n 1000
 
+# 3b. (optional) download MATH hard-level datasets for math probe training
+#     Fetches EleutherAI/hendrycks_math (7 subjects):
+#       math_hard.jsonl  — train split, levels 4+5 (~3994 problems)
+#       math_val.jsonl   — test split,  levels 4+5 (~2538 problems)
+python -m data_io.download --datasets math_hard,math_val
+
 # 4. (optional) log in to Weights & Biases for training curves
 wandb login
 ```
@@ -51,7 +57,7 @@ Distill-Spec-Research/
 │   └── tree.py          # 11 tree losses (3 divergences + 8 verifier-aligned)
 ├── verifiers/           # VERBATIM copy of /GBV — do not edit unless syncing upstream
 ├── data_io/
-│   ├── download.py      # fetch gsm8k / alpaca / math500 / humaneval / mtbench
+│   ├── download.py      # fetch gsm8k / math_hard / math_val / alpaca / math500 / humaneval / mtbench
 │   └── raw/             # downloaded JSONL files (gitignored)
 ├── scripts/
 │   └── setup_a100.sh    # one-shot env setup wrapper
@@ -91,6 +97,10 @@ python train.py --loss khisti_tree
 
 # Resume after a kill / crash
 python train.py --loss kl_tree --resume
+
+# Math domain probe — swap train/val datasets without touching anything else
+python train.py --loss jsd       --train_dataset math_hard --val_dataset math_val --steps 2000
+python train.py --loss naive_tree --train_dataset math_hard --val_dataset math_val --steps 2000
 ```
 
 ### Combining a flat backbone with an acceptance-aligned tree loss
@@ -144,7 +154,7 @@ made `val/block_eff` swing ±0.4 (pure sampling noise) and masked real effects.
 
 What happens during training (per step):
 
-1. Pick a prompt from `gsm8k_train.jsonl`.
+1. Pick a prompt from the train dataset (`gsm8k_train.jsonl` by default; override with `--train_dataset`).
 2. **Flat loss** path: teacher generates `MAX_NEW_TOKENS` tokens, student
    forwards on the same sequence with grad, loss = divergence(student_logits,
    teacher_logits) on the generated portion.
