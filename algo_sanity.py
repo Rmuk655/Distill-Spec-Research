@@ -37,6 +37,13 @@ Usage:
     # naive_tree_full MUST still raise E[tau] here (necessary condition); if it
     # stalls/destabilises even on the overfit set, abort before the day-long run.
     python algo_sanity.py --loss naive_tree,naive_tree_full,jsd --device cuda:0
+
+    # off-policy gate (run BEFORE full GSM8K on op_ variants):
+    #   op_naive_tree      = off-policy detached survival (teacher greedy path)
+    #   op_naive_tree_full = off-policy exact ∇E[τ] (teacher path + un-detach)
+    # Teacher's own tokens have near-unit acceptance → survival products stay large
+    # → gradient reaches all depths without collapse.  Must WORKS here.
+    python algo_sanity.py --loss op_naive_tree,op_naive_tree_full,naive_tree,jsd --device cuda:0
 """
 from __future__ import annotations
 
@@ -102,15 +109,17 @@ def run_one_loss(loss_name, tok, draft, teacher, init_state, ids_list,
                  args, dt, tt):
     """Reset draft to init weights, overfit ids_list with loss_name, track E[tau]."""
     draft.load_state_dict(init_state)            # fresh draft per loss (fair start)
-    loss_fn = train.get_loss(loss_name)
-    is_tree = train.is_tree_loss(loss_name)
+    loss_fn    = train.get_loss(loss_name)
+    is_tree    = train.is_tree_loss(loss_name)
+    is_offpol  = train.is_offpolicy_tree_loss(loss_name)
     # Measure E[tau] under 'naive' for ALL losses: a universal acceptance proxy
     # that only needs L.  Matched verifiers (traversal, ...) need extra args
     # (vocab_size) that expected_depth_scalar does not pass, so they crash.
     verifier = args.verifier or "naive"
 
+    mode_tag = "off-policy tree" if is_offpol else ("tree" if is_tree else "flat")
     print("\n" + "=" * 74)
-    print(f"  LOSS={loss_name} ({'tree' if is_tree else 'flat'})  "
+    print(f"  LOSS={loss_name} ({mode_tag})  "
           f"E[tau]-verifier='{verifier}'  n_prompts={len(ids_list)}  steps={args.steps}  "
           f"K={train.K} L={train.L}")
     print("=" * 74)
@@ -132,7 +141,11 @@ def run_one_loss(loss_name, tok, draft, teacher, init_state, ids_list,
         train.Node.naive_cache.clear()
         train.Node.spectr_cache.clear()
         train.Node.specinfer_cache.clear()
-        if is_tree:
+        if is_offpol:
+            loss = train.compute_offpolicy_tree_loss(loss_fn, draft, teacher, ids,
+                                                     K=train.K, L=train.L,
+                                                     draft_temp=dt, teacher_temp=tt)
+        elif is_tree:
             loss = train.compute_tree_loss(loss_fn, draft, teacher, ids,
                                            K=train.K, L=train.L,
                                            draft_temp=dt, teacher_temp=tt)
@@ -151,7 +164,7 @@ def run_one_loss(loss_name, tok, draft, teacher, init_state, ids_list,
             print(f"  step {step:4d}  E[tau]={m:.3f}  spread={d:.2f}  loss={loss.item():+.4f}  "
                   f"(Δ {m - b_mean:+.3f})")
 
-    v = verdict(loss_name, is_tree, b_mean, best, b_se)
+    v = verdict(loss_name, is_tree or is_offpol, b_mean, best, b_se)
     print(f"  → {v}")
     return dict(loss=loss_name, verifier=verifier, baseline=b_mean,
                 noise=b_se, best=best, delta=best - b_mean, verdict=v)

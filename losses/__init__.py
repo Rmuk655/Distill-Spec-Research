@@ -13,10 +13,20 @@ from .tree import TREE_LOSSES
 
 ALL_LOSSES = {**FLAT_LOSSES, **TREE_LOSSES}
 
+# Off-policy tree losses use the teacher's greedy path as the training sequence
+# instead of draft samples.  They share the same loss formula as their on-policy
+# counterparts but are routed through compute_offpolicy_tree_loss() in train.py.
+OFFPOLICY_TREE_LOSSES = {"op_naive_tree", "op_naive_tree_full"}
+
 
 def is_tree_loss(name: str) -> bool:
     """Return True if the loss is computed on a draft tree rather than flat logits."""
     return name in TREE_LOSSES
+
+
+def is_offpolicy_tree_loss(name: str) -> bool:
+    """Return True if the loss uses the teacher's path rather than draft samples."""
+    return name in OFFPOLICY_TREE_LOSSES
 
 
 def get_loss(name: str):

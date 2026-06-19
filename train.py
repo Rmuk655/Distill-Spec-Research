@@ -44,7 +44,7 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 
 # Local modules
-from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss
+from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss, is_offpolicy_tree_loss
 from data_io import get_path as dataset_path
 from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff
 
@@ -105,8 +105,10 @@ WANDB_PROJECT   = "distillspec-pipeline"
 # Maps each tree loss to the verifier mode used for val block_eff measurement.
 # Losses not listed (kl_tree, rev_kl_tree, jsd_tree, flat losses) fall through to "traversal".
 LOSS_TO_VERIFIER = {
-    "naive_tree":    "naive",
-    "naive_tree_full":"naive",   # full-gradient (un-detached survival) variant — same verifier for a clean ablation
+    "naive_tree":         "naive",
+    "naive_tree_full":    "naive",   # full-gradient (un-detached survival) variant
+    "op_naive_tree":      "naive",   # off-policy: teacher greedy path, detached survival
+    "op_naive_tree_full": "naive",   # off-policy: teacher greedy path, exact ∇E[τ]
     "nss_tree":      "nss",
     "specinfer_tree":"specinfer",
     "spectr_tree":   "spectr",
@@ -256,6 +258,45 @@ def compute_tree_loss(loss_fn, draft, teacher, prompt_ids,
     )
 
     # 5. Call the loss.
+    return loss_fn(q_probs_dict_grad, p_probs_dict, q_paths, L, K)
+
+
+# ---------------------------------------------------------------------------
+# Off-policy tree loss: teacher's greedy sequence is the training path.
+# This avoids on-policy survival collapse — teacher tokens have near-unit
+# self-acceptance so survival products stay non-negligible at depth L.
+# q_probs are scored with grad; p_probs are frozen teacher logits on same path.
+# ---------------------------------------------------------------------------
+
+def compute_offpolicy_tree_loss(loss_fn, draft, teacher, prompt_ids,
+                                K, L, draft_temp, teacher_temp):
+    """
+    Use teacher's greedy rollout (L+1 tokens) as the single training path.
+    Teacher scores its own tokens → α stays high → survival products non-negligible.
+    Student is scored on the same path with grad → acceptance gradient flows cleanly.
+    """
+    with torch.no_grad():
+        attn_mask = torch.ones_like(prompt_ids)
+        gen = teacher.generate(
+            prompt_ids, attention_mask=attn_mask,
+            max_new_tokens=L + 1, do_sample=False,
+            pad_token_id=teacher.config.eos_token_id,
+            use_cache=True,
+        )
+        teacher_tokens = gen[0, prompt_ids.shape[1]:].tolist()  # L+1 tokens
+        # Build single-path list: [context_pending, tok1, …, tokL].
+        # target_tree_pass expects paths of length L+1.
+        q_paths = [teacher_tokens[: L + 1]]
+
+        t_cache = teacher(prompt_ids, use_cache=True, return_dict=True).past_key_values
+        _, _, _, p_probs_dict = target_tree_pass(
+            teacher, t_cache, q_paths, K=1, L=L, p_temp=teacher_temp,
+        )
+
+    q_probs_dict_grad = draft_tree_forward_with_grad(
+        draft, prompt_ids, q_paths, L=L, q_temp=draft_temp,
+    )
+
     return loss_fn(q_probs_dict_grad, p_probs_dict, q_paths, L, K)
 
 
@@ -614,9 +655,10 @@ def main():
     print(f"[data] {len(train_prompts)} train / {len(val_prompts)} val prompts")
 
     # Dispatch
-    loss_fn  = get_loss(args.loss)
-    tree     = is_tree_loss(args.loss)
-    print(f"[loss] {args.loss}  ({'tree' if tree else 'flat'})")
+    loss_fn       = get_loss(args.loss)
+    tree          = is_tree_loss(args.loss)
+    offpolicy     = is_offpolicy_tree_loss(args.loss)
+    print(f"[loss] {args.loss}  ({'off-policy tree' if offpolicy else 'tree' if tree else 'flat'})")
 
     aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
     aux_is_tree = is_tree_loss(args.aux_loss) if args.aux_loss else False
@@ -642,7 +684,15 @@ def main():
         prompt = train_prompts[step % len(train_prompts)]
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
-        if tree:
+        if offpolicy:
+            Node.naive_cache.clear()
+            Node.spectr_cache.clear()
+            Node.specinfer_cache.clear()
+            loss = compute_offpolicy_tree_loss(loss_fn, draft, teacher, ids,
+                                              K=K, L=L,
+                                              draft_temp=args.draft_temp,
+                                              teacher_temp=args.teacher_temp)
+        elif tree:
             Node.naive_cache.clear()
             Node.spectr_cache.clear()
             Node.specinfer_cache.clear()

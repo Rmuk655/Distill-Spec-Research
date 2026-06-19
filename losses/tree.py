@@ -446,8 +446,18 @@ def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K,
     return -(total / n_paths)
 
 
-def naive_tree    (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive,     q, p, paths, L, K)
-def naive_tree_full(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive,    q, p, paths, L, K, detach_survival=False)
+def naive_tree     (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive, q, p, paths, L, K)
+def naive_tree_full(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive, q, p, paths, L, K, detach_survival=False)
+
+# Off-policy variants — same loss formula, but train.py routes these through
+# compute_offpolicy_tree_loss() so the training path comes from the teacher's
+# greedy rollout rather than draft samples.  This prevents survival collapse on
+# hard prompts (teacher tokens have high acceptance → products stay non-negligible).
+# op_naive_tree_full additionally un-detaches survival → exact ∇E[τ] with full
+# depth credit (the "researcher's depth" wired into the gradient, not a scalar).
+def op_naive_tree     (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive, q, p, paths, L, K)
+def op_naive_tree_full(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive, q, p, paths, L, K, detach_survival=False)
+
 def nss_tree      (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_nss,       q, p, paths, L, K)
 def specinfer_tree(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_specinfer, q, p, paths, L, K)
 def spectr_tree   (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_spectr,    q, p, paths, L, K)
@@ -464,10 +474,12 @@ TREE_LOSSES = {
     "jsd_tree":        jsd_tree,
     "bv_tree":         bv_tree,
     "gbv_tree":        gbv_tree,
-    "traversal_tree":  traversal_tree,
-    "naive_tree":      naive_tree,
-    "naive_tree_full": naive_tree_full,
-    "nss_tree":        nss_tree,
+    "traversal_tree":   traversal_tree,
+    "naive_tree":       naive_tree,
+    "naive_tree_full":  naive_tree_full,
+    "op_naive_tree":    op_naive_tree,
+    "op_naive_tree_full": op_naive_tree_full,
+    "nss_tree":         nss_tree,
     "specinfer_tree":  specinfer_tree,
     "spectr_tree":     spectr_tree,
     "khisti_tree":     khisti_tree,
