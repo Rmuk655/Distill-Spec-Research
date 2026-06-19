@@ -332,10 +332,10 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
 # ---------------------------------------------------------------------------
 
 def run_slug(args) -> str:
-    """Loss component of the run identifier, shared by the checkpoint dir and the W&B
-    run name. Includes the aux loss + weight so a combined run (e.g. forward_kl+l1x0.5)
-    never overwrites the single-loss run's checkpoints."""
-    slug = args.loss
+    """Loss + dataset component of the run identifier, shared by the checkpoint dir
+    and the W&B run name. Includes the aux loss + weight so a combined run (e.g.
+    forward_kl+l1x0.5) never overwrites the single-loss run's checkpoints."""
+    slug = f"{args.loss}_{args.train_dataset}"
     if args.aux_mode == "depth_weight":
         tag = "lin" if args.depth_linear else f"lam{args.depth_lambda}"
         slug += f"+dw_{args.aux_loss or 'naive_tree'}_{tag}"
@@ -366,7 +366,7 @@ def setup_wandb(args, output_dir, resumed: bool):
     elif resumed and not os.path.isfile(meta_path):
         print(f"[wandb] no saved run ID at {meta_path} — starting fresh W&B run")
 
-    tags = [args.loss, f"K{K}", f"L{L}"]
+    tags = [args.loss, args.train_dataset, f"K{K}", f"L{L}"]
     if args.aux_mode == "depth_weight":
         tags.append(f"depthw:{args.aux_loss or 'naive_tree'}")
         tags.append("lin" if args.depth_linear else f"lam{args.depth_lambda}")
