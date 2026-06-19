@@ -224,16 +224,31 @@ Note: lam0.0 and jsd follow different trajectories despite identical loss becaus
 
 **Mechanism:** `L = JSD + λ · L_naive_tree` — real per-level acceptance gradient through q, with the natural survival weight `Π αⱼ.detach()` (telescoping). The only mechanism that actually redirects gradients.
 
-**Early read (~1000/4000 steps):**
+**Full eval (4000-step checkpoints, gsm8k_eval, n=100, seed 123):**
 
-| Condition | val BE ~step 1000 | vs. jsd control |
-|---|---|---|
-| jsd (seed 123) | leading | — |
-| jsd + naive_tree × 0.1 | below jsd | negative |
-| jsd + naive_tree × 0.3 | below jsd | negative |
-| jsd + naive_tree × 1.0 | below jsd; ZeroDivisionError 1/25 val prompts | negative |
+BV verifier:
 
-**Interpretation:** monotone decline as tree weight increases. Consistent with the capacity ceiling — at 8B/0.6B/GSM8K, flat JSD already reaches q≈p everywhere the 0.6B can reach, so tree gradient is at best redundant and at worst noisy. Full 4000-step runs still running at time of writing.
+| λ | K=1 | K=2 | K=3 | K=4 | Mean K=1–4 |
+|---|---|---|---|---|---|
+| jsd (0) | 5.409 | 5.346 | **5.477** | 5.428 | **5.415** |
+| +0.1 | 5.414 | 5.283 | **5.589** | 5.293 | 5.395 |
+| +0.3 | 5.436 | 5.247 | 5.438 | 5.288 | 5.352 |
+| +1.0 | 5.203 | 4.934 | 5.003 | 5.098 | 5.060 |
+
+Traversal verifier (K=4 pending):
+
+| λ | K=1 | K=2 | K=3 | Mean K=1–3 |
+|---|---|---|---|---|
+| jsd (0) | **5.554** | **5.436** | **5.427** | **5.472** |
+| +0.1 | 5.286 | 5.417 | 5.192 | 5.298 |
+| +0.3 | 5.355 | 5.373 | 5.253 | 5.327 |
+| +1.0 | 5.163 | 5.430 | 5.362 | 5.318 |
+
+**Result: null.** JSD wins on traversal at every K (mean 5.472 vs best additive 5.327). On BV, λ=0.1 shows +0.112 at K=3 but is behind at K=2 (−0.063) and K=4 (−0.135); BV mean monotone declines with λ (5.415 → 5.060). No λ produces consistent lift across both verifiers.
+
+The one above-jsd cell (BV K=3, λ=0.1: 5.589) is within run-to-run noise (±0.15) and is not reproduced at any other K or verifier. This is not a signal.
+
+**Interpretation:** consistent with the capacity ceiling — at 8B/0.6B/GSM8K, flat JSD already reaches q≈p everywhere the 0.6B can reach, so tree gradient is at best redundant and at worst noisy. Does not rule out that the tree gradient is also degraded at scale (the overfit probe is necessary-not-sufficient).
 
 ---
 
@@ -281,7 +296,9 @@ Verdict threshold: SE = disp/√N (standard error of the mean, not prompt-to-pro
 | jsd | flat | 5.996 | 5.32 | +0.41 | — |
 | forward_kl | flat | — | 5.36 | +0.45 | +0.04 |
 | depth_weight (all forms) | flat+scalar | ~5.996 | 5.20–5.47 (noise) | noise | noise |
-| jsd + naive_tree (early) | flat+tree | — | below jsd | — | negative |
+| jsd + naive_tree × 0.1 | flat+tree | — | 5.19 (traversal) / 5.59 (bv) | — | −0.24 traversal / +0.11 bv |
+| jsd + naive_tree × 0.3 | flat+tree | — | 5.25 (traversal) / 5.44 (bv) | — | −0.18 traversal / −0.04 bv |
+| jsd + naive_tree × 1.0 | flat+tree | — | 5.36 (traversal) / 5.00 (bv) | — | −0.07 traversal / −0.48 bv |
 
 ### gbv_tree / bv_tree: do not use
 These are excluded from the table above — they drive E[τ] to zero on the overfit set (broken gradient, not just suboptimal).
@@ -298,7 +315,7 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 | depth_weight (linear, all λ) | No detectable signal | Gradient-free scalar; 5× swing < noise; no-op tops table |
 | reverse_kl | Suboptimal | Degrades at K=4; dominated by forward_kl |
 | Pure tree losses (8B) | No signal yet | Is algo correct at scale? Beat baseline; lose to flat — capacity ceiling or gradient issue? |
-| Additive jsd + tree (8B, early read) | No signal yet | Monotone decline with λ; capacity ceiling or gradient quality? |
+| Additive jsd + tree (8B) | No signal — confirmed at 4000 steps | JSD wins traversal at every K; BV mean monotone declines with λ; one above-jsd cell within noise |
 
 ---
 
