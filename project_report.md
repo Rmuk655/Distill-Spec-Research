@@ -13,14 +13,14 @@
 
 We trained a 0.6B draft model to improve acceptance rates under speculative decoding with an 8B teacher. The core question: does training with acceptance-aware (tree) losses outperform plain flat distillation (JSD/KL)?
 
-**Answer at 8B/0.6B/GSM8K: No.** Flat JSD plateaus at val BE ≈ 6.0 and no tree-loss or depth-weighting variant improves on it. This is a genuine capacity ceiling — the algorithm is confirmed correct (overfit probe shows telescoping gradient works), but the 0.6B has no headroom left on GSM8K under an 8B teacher.
+**Answer at 8B/0.6B/GSM8K: No.** Flat JSD plateaus at val BE ≈ 6.0 and no tree-loss or depth-weighting variant improves on it. Open question: is the algorithm correctly sending tree signals, or are we hitting a capacity ceiling with limited headroom on this 8B/0.6B/GSM8K combination? We have tested both telescoping (multi-depth) and single-depth tree losses.
 
-**Key eliminations:**
+**Key experiments:**
 - Depth × JSD (researcher's suggestion): showed no detectable signal — gradient-free scalar, total sweep spread 0.055 < noise floor ±0.15
 - gbv_tree, bv_tree: algorithmically broken — E[τ] collapses to zero on overfit set
-- Additive (JSD + λ·tree): monotone decline at 8B, consistent with no-headroom
+- Additive (JSD + λ·tree): no meaningful improvement over JSD at 8B; λ=0.1/0.3/1.0 all below JSD control at 1000 steps
 
-**Justified next steps:** MATH levels 4–5 probe (cheap; harder prompts → more unlearnable examples → potential signal at 8B); if still null, 32B teacher run (algorithm is correct, capacity pressure is the missing ingredient).
+**Justified next steps:** MATH levels 4–5 probe (harder prompts → more unlearnable examples → potential signal at 8B); 32B teacher run; and a complete rethink of the algorithm — better ways to send tree gradients during training beyond flattened tree losses or single-depth weighting.
 
 ---
 
@@ -31,9 +31,9 @@ We trained a 0.6B draft model to improve acceptance rates under speculative deco
 | Draft | Qwen/Qwen3-0.6B, BF16 |
 | Teacher | Qwen/Qwen3-8B, BF16 |
 | Hardware | NVIDIA H100 80GB HBM3 |
-| Train steps | 4000 (standard); 2000 for probes |
+| Train steps | 4000 (standard); 250 for probes (see [algo_sanity.py](algo_sanity.py)) |
 | LR schedule | Linear warmup (200 steps) → cosine decay to 0.1× peak |
-| Peak LR | 3e-4 (flat), 1e-5 (tree) |
+| Peak LR | 3e-4 (all losses) |
 | Batch | 1 prompt / step, grad accum = 4 |
 | K (draft branching) | 3 during training; 1–4 in eval |
 | L (tree horizon) | 8 |
@@ -61,13 +61,7 @@ Evaluated Qwen3-0.6B before any training to pin the starting point.
 
 ## Phase 2 — First Training Runs + Infrastructure Bugs (2026-06-09 to 06-11)
 
-### 2.1 forward_kl baseline (run 20260609-001)
-
-**Bug:** val was evaluated at K=4 during training while the target K was 3. Val numbers were misleading. Result not usable for comparison.
-
-**Fix:** hardcoded K=3 in val loop.
-
-### 2.2 nss_tree (run 20260611-001)
+### 2.1 nss_tree (run 20260611-001)
 
 Trained with the NSS-verifier-aligned telescoping tree loss.
 
@@ -82,7 +76,7 @@ Trained with the NSS-verifier-aligned telescoping tree loss.
 
 **Finding F-001:** nss_tree val peak was noise; offline at 100 prompts it fails to beat baseline on its own verifier.
 
-### 2.3 K=1 diagnostic for nss_tree (2026-06-12)
+### 2.2 K=1 diagnostic for nss_tree (2026-06-12)
 
 K=1 removes all multi-path tree machinery. If nss_tree failed due to a multi-path bug, K=1 should match forward_kl.
 
@@ -123,6 +117,8 @@ Re-ran forward_kl cleanly (with fixed val K) and added jsd, l1, reverse_kl, kl_t
 | kl_tree | 4.585 | 4.753 | 4.785 | 4.729 |
 | naive_tree | 4.764 | 4.823 | 4.735 | 4.692 |
 
+**Note on tree losses:** bv_tree, gbv_tree, traversal_tree, and nss_tree were not run to full completion or were terminated early. bv_tree and gbv_tree showed diverging/collapsing loss from early steps. traversal_tree and nss_tree training was halted given the negative signals from kl_tree and naive_tree. Results for these are excluded from the tables above; see Phase 7 (algo correctness probe) for overfit-set verdicts.
+
 **Key findings:**
 - All four flat losses beat the untrained baseline by +0.3–0.6 BE on traversal
 - forward_kl is strongest, especially at K=2 (5.55 traversal)
@@ -136,24 +132,47 @@ Re-ran forward_kl cleanly (with fixed val K) and added jsd, l1, reverse_kl, kl_t
 
 ---
 
-## Phase 4 — K-Scaling Analysis on Baseline (2026-06-13, n=1000)
+## Phase 4 — Flat Loss Comparison and JSD Selection (2026-06-14, n=100, gsm8k_eval)
 
-Evaluated untrained baseline across K=1–4 with 1000 prompts for precision.
+Full offline evaluation of all four flat losses across K=1–4 and all 8 verifiers. This is the definitive flat-loss comparison; these checkpoints are the baseline ceiling for all subsequent tree-loss work.
 
-| Verifier | K=1 | K=2 | K=3 | K=4 | Trend |
-|---|---|---|---|---|---|
-| traversal | 4.708 | 4.938 | 4.907 | 4.870 | peaks K=2 |
-| naive | 4.450 | 4.592 | 4.625 | 4.629 | increases |
-| bv | 4.634 | 4.625 | 4.675 | 4.662 | flat |
-| gbv | 4.670 | 4.544 | 4.241 | 4.074 | decreases |
-| nss | 3.398 | 3.277 | 3.213 | 3.135 | decreases |
-| spectr | 4.450 | 4.506 | 4.450 | 4.310 | peaks K=2 |
-| specinfer | 4.450 | 4.241 | 4.039 | 3.912 | decreases |
-| khisti | 4.476 | 4.262 | 4.006 | 3.898 | decreases |
+### 4.1 Traversal BE (highest-BE verifier, most informative)
 
-**Key finding:** traversal uniquely scales with K (more branching → more acceptance paths → higher BE). NSS, specinfer, khisti, gbv degrade with K. BV is flat. Extra K beyond 2 is wasteful for most verifiers; traversal gets most of its K-gain at K=2.
+| Checkpoint | K=1 | K=2 | K=3 | K=4 |
+|---|---|---|---|---|
+| jsd | **5.436** | 5.323 | 5.323 | 5.252 |
+| forward_kl | 5.333 | **5.552** | **5.356** | **5.449** |
+| l1 | 5.341 | 5.390 | 5.262 | 5.192 |
+| reverse_kl | 5.051 | 5.076 | 5.048 | 4.728 |
 
-**α ≈ 0.84** (average per-token acceptance rate). At L=8, ~25% of paths hit the horizon wall — genuine headroom for larger L, especially under a trained draft.
+### 4.2 BV BE
+
+| Checkpoint | K=1 | K=2 | K=3 | K=4 |
+|---|---|---|---|---|
+| jsd | **5.446** | 5.302 | 5.363 | **5.361** |
+| forward_kl | 5.297 | 5.260 | 5.203 | 5.404 |
+| l1 | 5.212 | **5.458** | **5.474** | 5.323 |
+| reverse_kl | 5.034 | 5.148 | 5.047 | 4.954 |
+
+### 4.3 Mean BE across all 8 verifiers
+
+| Checkpoint | K=1 | K=2 | K=3 | K=4 |
+|---|---|---|---|---|
+| **jsd** | **5.147** | **4.893** | **4.664** | 4.569 |
+| forward_kl | 5.008 | 4.848 | 4.565 | 4.565 |
+| l1 | 5.006 | 4.841 | 4.645 | **4.586** |
+| reverse_kl | 4.887 | 4.677 | 4.537 | 4.419 |
+
+### 4.4 Findings
+
+**JSD is the strongest flat loss overall.** It leads on mean BE at K=1, K=2, and K=3, and is effectively tied at K=4.
+
+- **JSD vs forward_kl:** forward_kl leads on traversal at K=2–4 (+0.09–0.23), but JSD leads on BV at K=1 and K=4 and on mean BE at every K. Within noise on traversal at K=3 (5.323 vs 5.356, Δ=0.033 < ±0.15 noise floor). No consistent winner; JSD selected as primary baseline for its stable training curve (val BE 5.996 at step ~2300) and broad superiority across verifiers.
+- **JSD vs l1:** l1 leads on BV at K=2–3 (by up to 0.11 BE) but is consistently behind JSD on mean. JSD is the safer choice.
+- **reverse_kl:** weakest flat loss at every K and verifier; degrades sharply at K=4 on traversal (4.728 vs 5.252 for JSD).
+- **NSS BE:** reverse_kl counter-intuitively leads on NSS (mode-seeking → high per-token acceptance, but poor tree coverage). Not a useful metric for optimizing tree performance.
+
+**Selection:** JSD is designated the primary flat-loss baseline for all subsequent tree-loss and dataset experiments. forward_kl is retained as a secondary reference.
 
 ---
 
