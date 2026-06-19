@@ -400,12 +400,24 @@ def _alpha_khisti(p, q, K):
     return torch.minimum(p, q_imp).sum()
 
 
-def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K):
+def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K,
+                      detach_survival=True):
     """
     L = -E[τ] = - Σ_path Σ_{i=1..L} Π_{j=1..i} α(p_j, q_j, K),  averaged over paths.
 
-    Survival is detached at each step so the gradient enters only through the
-    most recent α — same single-pass trick the BV path loss uses.
+    detach_survival=True (default):
+        Survival Π_{j<i} αⱼ is detached at each step so the gradient enters only
+        through the most recent α — single-pass / first-order surrogate, same
+        trick the BV path loss uses.  Coefficient on ∇αᵢ is just Wᵢ=Π_{j<i}αⱼ.
+
+    detach_survival=False (the `naive_tree_full` variant):
+        Survival keeps grad → autograd computes the EXACT ∇E[τ] via the product
+        rule.  The coefficient on ∇αₛ becomes Wₛ·(1 + α_{s+1} + α_{s+1}α_{s+2} +
+        …) — i.e. early tokens are credited for gating all downstream depth.
+        This is the controlled test of whether the detach was costing the
+        credit-assignment signal.  Gradients through early α's are amplified by
+        the downstream product, so GRAD_CLIP (already applied in train.py /
+        algo_sanity.py) is load-bearing here.
     """
     device  = next(iter(q_probs_dict.values())).device
     total   = torch.zeros(1, device=device)
@@ -423,7 +435,7 @@ def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K):
             p     = p_probs_dict[prefix].detach().to(q.dtype)
             alpha = alpha_fn(p, q, K)
             e_tau    = e_tau + survival * alpha
-            survival = survival * alpha.detach()
+            survival = survival * (alpha.detach() if detach_survival else alpha)
             used     = True
         if used:
             total += e_tau
@@ -435,6 +447,7 @@ def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K):
 
 
 def naive_tree    (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive,     q, p, paths, L, K)
+def naive_tree_full(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive,    q, p, paths, L, K, detach_survival=False)
 def nss_tree      (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_nss,       q, p, paths, L, K)
 def specinfer_tree(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_specinfer, q, p, paths, L, K)
 def spectr_tree   (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_spectr,    q, p, paths, L, K)
@@ -453,6 +466,7 @@ TREE_LOSSES = {
     "gbv_tree":        gbv_tree,
     "traversal_tree":  traversal_tree,
     "naive_tree":      naive_tree,
+    "naive_tree_full": naive_tree_full,
     "nss_tree":        nss_tree,
     "specinfer_tree":  specinfer_tree,
     "spectr_tree":     spectr_tree,

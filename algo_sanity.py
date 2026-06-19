@@ -29,6 +29,14 @@ Usage:
     # single loss + flat control:
     python algo_sanity.py --loss naive_tree --device cuda:0
     python algo_sanity.py --loss jsd        --device cuda:0
+
+    # credit-assignment ablation (the gate before a full GSM8K run):
+    #   naive_tree      = detached survival (first-order surrogate, current default)
+    #   naive_tree_full = un-detached survival → exact ∇E[τ] with path credit
+    #   jsd             = flat control / ceiling
+    # naive_tree_full MUST still raise E[tau] here (necessary condition); if it
+    # stalls/destabilises even on the overfit set, abort before the day-long run.
+    python algo_sanity.py --loss naive_tree,naive_tree_full,jsd --device cuda:0
 """
 from __future__ import annotations
 
