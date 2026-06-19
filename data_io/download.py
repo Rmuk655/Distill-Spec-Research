@@ -247,6 +247,8 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
 
     if train:
         fetch_gsm8k_train(force=force)
+        if not datasets:
+            requested |= {"math_hard", "math_val"}
 
     if "gsm8k" in requested:
         fetch_gsm8k_val_and_eval(n_eval=n_eval, force=force)
