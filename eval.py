@@ -377,15 +377,17 @@ def _auto_cpu_threads() -> int:
 #  Resume state helpers — one JSONL per (mode, K, L), one line per prompt
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _state_path(csv_path: str, mode: str, K: int, L: int, checkpoint: str = "") -> str:
+def _state_path(csv_path: str, mode: str, K: int, L: int, checkpoint: str = "",
+                dataset: str = "") -> str:
     logs_dir = os.path.join(os.path.dirname(os.path.abspath(csv_path)), "logs")
     os.makedirs(logs_dir, exist_ok=True)
+    ds_tag = f".{dataset}" if dataset else ""
     if checkpoint:
         parts = checkpoint.replace("\\", "/").rstrip("/").split("/")
         ckpt_tag = "_".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-        filename = f"{ckpt_tag}.{mode}_K{K}_L{L}.state.jsonl"
+        filename = f"{ckpt_tag}.{mode}_K{K}_L{L}{ds_tag}.state.jsonl"
     else:
-        filename = f"{mode}_K{K}_L{L}.state.jsonl"
+        filename = f"{mode}_K{K}_L{L}{ds_tag}.state.jsonl"
     return os.path.join(logs_dir, filename)
 
 
@@ -696,7 +698,7 @@ def main():
     mode_state: dict[str, tuple[str, bool]] = {}
     need_models = False
     for mode in modes:
-        sp = _state_path(csv_path, mode, args.K, args.L, args.checkpoint)
+        sp = _state_path(csv_path, mode, args.K, args.L, args.checkpoint, args.dataset)
         done = _load_state(sp)
         complete = bool(prompts) and all(i in done for i in range(len(prompts)))
         mode_state[mode] = (sp, complete)
