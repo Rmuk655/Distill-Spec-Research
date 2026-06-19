@@ -337,20 +337,18 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 
 ---
 
-## Next Steps
+## Phase 8 — MATH Hard Probe (2026-06-19)
 
-### Step 1 — MATH Hard Probe ✓ COMPLETE
-
-**Rationale:** Harder prompts create more "unlearnable" examples where the 0.6B cannot match the 8B teacher. If the capacity ceiling is GSM8K-specific, tree losses should show signal here even at 8B.
+**Question:** Is the 8B GSM8K null result a capacity ceiling (H1) or does it hold on harder data? If tree losses have real signal, harder prompts (where the draft is further from the teacher) should widen their advantage — the acceptance product has more room to move.
 
 **Dataset:** MATH train, levels 4 and 5 only (~2.5K problems). Val: MATH test split.
 
-**Results (4000-step runs, seed 123):**
+**Runs (4000 steps, seed 123):**
 
 | Run | Checkpoint | Best val BE | Notes |
 |---|---|---|---|
-| jsd (math_hard) | checkpoints/jsd/ckpt_best | **6.312** (step 2500) | Completed; val = math_val |
-| naive_tree (math_hard) | math_naivetree_s123/ckpt_best | — | Run completed; val BE not tracked; offline eval below |
+| jsd (math_hard) | checkpoints/jsd/ckpt_best | **6.312** (step 2500) | val = math_val |
+| naive_tree (math_hard) | math_naivetree_s123/ckpt_best | — | val BE not tracked; offline eval below |
 
 Note: jsd math_hard val BE (6.312) is on math_val, not gsm8k_val — not directly comparable to the GSM8K jsd best of 5.996.
 
@@ -374,13 +372,15 @@ Traversal verifier:
 
 **Result: decisive negative — JSD wins by 0.45–0.60 BE across every K and both verifiers (noise floor ±0.15).** JSD is remarkably stable (~6.0 at every K); naive_tree is both lower and more variable.
 
-**Critical finding — harder data made the gap larger, not smaller.** On GSM8K the jsd–naive_tree gap was ~0.1 BE (within noise). On math_hard it is ~0.5 BE (3× the noise floor). This is the **opposite** of the Step 1 hypothesis.
+**Critical finding — harder data made the gap larger, not smaller.** On GSM8K the jsd–naive_tree gap was ~0.1 BE (within noise). On math_hard it is ~0.5 BE (3× the noise floor). This is the **opposite** of the probe hypothesis.
 
 **Root cause — on-policy survival collapse under capacity pressure:** The tree loss gradient at depth d is weighted by the survival product W_d = Π_{j<d} α_j. On harder prompts the draft is further from the teacher → acceptance rates α are lower (≈0.4 on MATH vs ≈0.6 on GSM8K). This makes W_d collapse exponentially faster: at depth 4, W_4 ≈ 0.06 on MATH vs 0.22 on GSM8K. The tree loss degenerates toward **noisy single-step distillation** — noisier than JSD because it uses on-policy draft samples (far from teacher), while JSD trains on the teacher's own high-quality rollout. The harder the task, the more the tree loss suffers from this sampling variance, and the cleaner JSD's advantage.
 
-**Implication:** tree losses are structurally fragile under capacity pressure — precisely the regime where they were theorized to help. This is a more definitive finding than the GSM8K null result and substantially strengthens the case that the problem is architectural (the draft's conditioning), not a loss formulation issue.
+**Implication:** on-policy tree losses showed no detectable signal under capacity pressure — precisely the regime where they were theorized to help. This is more definitive than the GSM8K result and identifies survival collapse, not capacity ceiling, as the primary barrier.
 
 ---
+
+## Next Steps
 
 ### Step 2 — 32B Teacher Run (if math probe passes or as direct next step)
 
@@ -420,6 +420,5 @@ python eval.py --checkpoint checkpoints/jsd/ckpt_best \
 
 | Issue | Where | Fix | Priority |
 |---|---|---|---|
-| traversal_tree wrong functional (A-002) | losses/tree.py | **RESOLVED** — now uses `_telescoping_loss(_alpha_naive)`; exact at K=1, approx at K>1 | — |
+| traversal_tree wrong functional (A-002) | losses/tree.py | **RESOLVED** — now uses `_telescoping_loss(_alpha_naive)`; exact at K=1, approx at K>1. **Note:** tree losses beyond depth_weight (scalar multiplier) are not yet signed off by researcher — full-gradient tree training remains under review. | — |
 | ZeroDivisionError in traversal verifier (A-003) | verifiers/verifier.py:433 | `max(denom, 1e-9)` — 1-line PR | Medium — drops ~1% of traversal prompts |
-| Additive full run result | — | Wait for 4000-step completion | Low — unlikely to change conclusion at 8B |
