@@ -287,22 +287,22 @@ Verdict threshold: SE = disp/√N (standard error of the mean, not prompt-to-pro
 
 ### Traversal BE at K=3 (primary comparison axis)
 
-| Checkpoint | Train loss type | val BE peak | Traversal K=3 | vs. baseline | vs. forward_kl |
+| Checkpoint | Train loss type | val BE peak | Traversal K=3 | vs. baseline | vs. jsd |
 |---|---|---|---|---|---|
-| Baseline (untrained) | — | — | 4.91 | — | −0.45 |
-| nss_tree | tree | ~3.6 (noise) | 5.20 | +0.29 | −0.16 |
-| kl_tree | tree | — | 5.18 | +0.27 | −0.18 |
-| naive_tree | tree | — | 5.22 | +0.31 | −0.14 |
-| reverse_kl | flat | — | 5.05 | +0.14 | −0.31 |
-| l1 | flat | — | 5.26 | +0.35 | −0.10 |
-| jsd | flat | 5.996 | 5.32 | +0.41 | −0.04 |
-| **forward_kl** | flat | — | **5.36** | **+0.45** | **—** |
+| Baseline (untrained) | — | — | 4.91 | — | −0.41 |
+| nss_tree | tree | ~3.6 (noise) | 5.20 | +0.29 | −0.12 |
+| kl_tree | tree | — | 5.18 | +0.27 | −0.14 |
+| naive_tree | tree | — | 5.22 | +0.31 | −0.10 |
+| reverse_kl | flat | — | 5.05 | +0.14 | −0.27 |
+| l1 | flat | — | 5.26 | +0.35 | −0.06 |
+| jsd | flat | 5.996 | 5.32 | +0.41 | — |
+| forward_kl | flat | — | 5.36 | +0.45 | +0.04 |
 | depth_weight (all forms) | flat+scalar | ~5.996 | 5.20–5.47 (noise) | noise | noise |
-| jsd + naive_tree × 0.1 | flat+tree | — | 5.19 (traversal) / 5.59 (bv) | — | −0.27 traversal |
-| jsd + naive_tree × 0.3 | flat+tree | — | 5.25 (traversal) / 5.44 (bv) | — | −0.21 traversal |
-| jsd + naive_tree × 1.0 | flat+tree | — | 5.36 (traversal) / 5.00 (bv) | — | 0.00 traversal |
+| jsd + naive_tree × 0.1 | flat+tree | — | 5.19 (traversal) / 5.59 (bv) | — | −0.24 traversal / +0.11 bv |
+| jsd + naive_tree × 0.3 | flat+tree | — | 5.25 (traversal) / 5.44 (bv) | — | −0.18 traversal / −0.04 bv |
+| jsd + naive_tree × 1.0 | flat+tree | — | 5.36 (traversal) / 5.00 (bv) | — | −0.07 traversal / −0.48 bv |
 
-**forward_kl is the strongest flat baseline** — leads at every K (traversal K=2: 5.55, K=3: 5.36). JSD was used as the primary comparison in earlier phases because it had the best tracked val BE during training (5.996); however, offline traversal eval consistently puts forward_kl above JSD. The true flat ceiling for any off-policy comparison is forward_kl, not JSD.
+**JSD is the primary flat baseline** — best val BE during training (5.996) and the deliberate control for all further experiments. forward_kl edges it by +0.04 at K=3 offline traversal, which is within the ±0.15 noise floor and not a meaningful difference. Val BE for forward_kl was never tracked during training.
 
 ### gbv_tree / bv_tree: do not use
 These are excluded from the table above — they drive E[τ] to zero on the overfit set (broken gradient, not just suboptimal).
@@ -335,9 +335,7 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 
 4. **How would depth weighting work** if the core problem is gradient direction? A detached scalar multiplier has identical gradient direction to plain JSD. It cannot redirect learning toward deeper acceptance regardless of the capacity situation.
 
-5. **forward_kl is the actual flat ceiling, not JSD.** At offline traversal eval, forward_kl leads at every K (K=2: 5.55, K=3: 5.36 vs JSD's 5.32). JSD was used as the primary comparison baseline in earlier phases due to its best val BE during training; future off-policy comparisons must beat forward_kl to constitute a meaningful result.
-
-6. **traversal + BV are the right primary metrics.** Both are high-BE verifiers, sensitive to training quality differences, and together give a more complete picture than traversal alone (traversal uniquely scales with K; BV captures tree-width acceptance).
+5. **traversal + BV are the right primary metrics.** Both are high-BE verifiers, sensitive to training quality differences, and together give a more complete picture than traversal alone (traversal uniquely scales with K; BV captures tree-width acceptance).
 
 ---
 
@@ -394,10 +392,10 @@ Traversal verifier:
 
 | Priority | Run | Purpose |
 |---|---|---|
-| 1 | forward_kl s123, s456 | Pin 32B flat ceiling (strongest flat loss at offline traversal) |
+| 1 | jsd s123, s456 | Pin 32B flat ceiling |
 | 2 | op_naive_tree_full s123, s456 | Test if off-policy tree lifts above flat |
-| 3 | jsd s123 | Secondary flat control (best val BE, useful cross-check) |
-| 4 | kl_tree s123 | On-policy tree for comparison if op_ shows signal |
+| 3 | naive_tree s123, s456 | On-policy tree for survival-collapse comparison |
+| 4 | kl_tree s123 | Second tree loss for comparison if op_ shows signal |
 
 **Skip:** gbv_tree, bv_tree (broken). depth_weight (gradient-free, ruled out). Anything with only 1 seed before claiming a result.
 
