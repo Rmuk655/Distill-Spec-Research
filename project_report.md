@@ -16,7 +16,7 @@ We trained a 0.6B draft model to improve acceptance rates under speculative deco
 **Answer at 8B/0.6B/GSM8K: No.** Flat JSD plateaus at val BE ≈ 6.0 and no tree-loss or depth-weighting variant improves on it. This is a genuine capacity ceiling — the algorithm is confirmed correct (overfit probe shows telescoping gradient works), but the 0.6B has no headroom left on GSM8K under an 8B teacher.
 
 **Key eliminations:**
-- Depth × JSD (researcher's suggestion): dead — gradient-free scalar, total sweep spread 0.055 < noise floor ±0.15
+- Depth × JSD (researcher's suggestion): showed no detectable signal — gradient-free scalar, total sweep spread 0.055 < noise floor ±0.15
 - gbv_tree, bv_tree: algorithmically broken — E[τ] collapses to zero on overfit set
 - Additive (JSD + λ·tree): monotone decline at 8B, consistent with no-headroom
 
@@ -195,7 +195,7 @@ A 5× loss-weight swing moved val BE by less than run-to-run noise (±0.25). W&B
 
 **Decisive tell:** lam0.0 (a mathematical no-op — identical loss to plain jsd) tops the table. The directional test lam+0.5 > lam−0.5 holds in only 5/8 cells (coin flip). No monotone λ trend.
 
-**Root cause:** `w(d)` is a detached scalar — `∂L/∂θ = w(d) · ∂JSD/∂θ`. It is a per-prompt adaptive learning rate. It cannot change the gradient direction, so it cannot teach the draft *how* to be accepted deeper. This mechanism is **dead in all forms**.
+**Root cause:** `w(d)` is a detached scalar — `∂L/∂θ = w(d) · ∂JSD/∂θ`. It is a per-prompt adaptive learning rate. It cannot change the gradient direction, so it cannot teach the draft *how* to be accepted deeper. This mechanism is **inconclusive across all forms** — no variant produced detectable improvement.
 
 Note: lam0.0 and jsd follow different trajectories despite identical loss because the depth_weight code unconditionally runs a full target tree pass at λ=0, consuming RNG every step — a code artefact, not science.
 
@@ -276,7 +276,7 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 | nss_tree | Structural negative | Mode-seeking surrogate at K=1; collapses coverage verifiers |
 | gbv_tree | Broken | Gradient vanishes; E[τ] → 0 on overfit set |
 | bv_tree | Broken | Same collapse |
-| depth_weight (linear, all λ) | Dead | Gradient-free scalar; 5× swing < noise; no-op tops table |
+| depth_weight (linear, all λ) | No detectable signal | Gradient-free scalar; 5× swing < noise; no-op tops table |
 | reverse_kl | Suboptimal | Degrades at K=4; dominated by forward_kl |
 | Pure tree losses (8B) | No signal | Algo correct; beat baseline; lose to flat at capacity ceiling |
 | Additive jsd + tree (8B, early read) | No signal yet | Consistent with capacity ceiling; full run pending |
