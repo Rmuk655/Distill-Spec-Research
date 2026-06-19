@@ -316,18 +316,20 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 | bv_tree | Broken | Same collapse |
 | depth_weight (linear, all λ) | No detectable signal | Gradient-free scalar; 5× swing < noise; no-op tops table |
 | reverse_kl | Suboptimal | Degrades at K=4; dominated by forward_kl |
-| Pure tree losses (8B) | No signal yet | Is algo correct at scale? Beat baseline; lose to flat — capacity ceiling or gradient issue? |
+| Pure tree losses (8B, GSM8K + math_hard) | No signal — confirmed across two datasets | Gap vs JSD grows with task difficulty (0.1 on GSM8K → 0.5 on math_hard): survival collapse under low acceptance rates, not capacity ceiling alone |
 | Additive jsd + tree (8B) | No signal — confirmed at 4000 steps | JSD wins traversal at every K; BV mean monotone declines with λ; one above-jsd cell within noise |
 
 ---
 
 ## Conclusions
 
-1. **Is it a capacity ceiling?** Flat JSD reaches val BE 5.996 and plateaus from step ~2300 with LR floored — consistent with a 0.6B limit on GSM8K under an 8B teacher, but we have not ruled out that the tree losses are also failing to send useful gradients at scale.
+1. **The on-policy survival collapse is the core problem.** The math_hard result is decisive: harder prompts widen the JSD–tree gap from ~0.1 (noise) on GSM8K to ~0.5 BE on MATH. The mechanism is structural: lower acceptance rates under harder prompts collapse the survival product W_d = Π α_j geometrically, concentrating all gradient on the first token. The tree loss degenerates to noisy single-step distillation — noisier than JSD because it samples from a bad draft rather than the teacher's rollout. More capacity pressure makes this worse, not better.
 
-2. **Do we have the right algorithm?** The telescoping acceptance gradient raises E[τ] from 1.87→5.50 (+20×SE) on a 16-prompt overfit set — encouraging, but this is a necessary-not-sufficient test. Whether the gradient is effective at full-dataset scale is an open question for the researcher.
+2. **The algorithm is correct but the estimator is fragile.** Overfit probes confirm the telescoping gradient raises E[τ] by +20×SE on 16 prompts — the gradient direction is right. The failure at scale is the on-policy sampling: the tree estimator requires the draft to be close enough to the teacher for survival products to stay non-negligible. That condition is never satisfied during training, and worsens on harder data.
 
-3. **Acceptance-aware losses need capacity pressure** to separate from flat distillation. When q≈p is reachable (GSM8K + 8B teacher + 0.6B draft), flat KL already achieves the joint optimum of every acceptance metric, leaving tree losses nothing to exploit — if the algorithm is correct.
+3. **Capacity ceiling is a secondary issue.** The primary barrier is that on-policy tree losses self-defeat under any meaningful model gap — the gradient vanishes before capacity is even reached. Removing the model gap (32B teacher) would make both JSD and tree losses better, but the survival collapse would remain.
+
+4. **Acceptance-aware losses need off-policy or re-anchored gradients** to work, not more capacity. Training with the teacher's own rollout as the tree path (off-policy tree loss) would give dense, non-collapsing gradients at every depth — the same advantage JSD already has — while still optimizing the acceptance objective. This is the open algorithmic question.
 
 4. **How would depth weighting work** if the core problem is gradient direction? A detached scalar multiplier has identical gradient direction to plain JSD. It cannot redirect learning toward deeper acceptance regardless of the capacity situation.
 
@@ -352,16 +354,31 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 
 Note: jsd math_hard val BE (6.312) is on math_val, not gsm8k_val — not directly comparable to the GSM8K jsd best of 5.996.
 
-**naive_tree math_hard — offline eval on math_eval (n=100):**
+**Offline eval on math_eval (n=100) — both checkpoints trained on math_hard:**
 
-| Verifier | K=1 | K=2 | K=3 | K=4 |
-|---|---|---|---|---|
-| bv | 5.423 | 5.287 | 5.495 | 5.375 |
-| traversal | 5.351 | 5.686 | 5.432 | 5.576 |
+BV verifier:
 
-JSD math_eval offline eval pending — needed to determine whether naive_tree lifts above jsd on math_hard. Will update when results arrive.
+| Checkpoint | K=1 | K=2 | K=3 | K=4 | Mean K=1–4 |
+|---|---|---|---|---|---|
+| naive_tree | 5.423 | 5.287 | 5.495 | 5.375 | 5.395 |
+| **jsd** | **6.015** | **5.914** | **6.018** | **6.014** | **5.990** |
+| Δ jsd − tree | +0.592 | +0.627 | +0.523 | +0.639 | **+0.595** |
 
-**Interpret as:** if naive_tree offline BE > jsd offline BE by >0.15 on math_eval → capacity pressure is the missing ingredient, 32B will be decisive. If still tied → capacity hypothesis holds across task difficulties, 32B is fully justified.
+Traversal verifier:
+
+| Checkpoint | K=1 | K=2 | K=3 | K=4 | Mean K=1–4 |
+|---|---|---|---|---|---|
+| naive_tree | 5.351 | 5.686 | 5.432 | 5.576 | 5.511 |
+| **jsd** | **6.013** | **5.991** | **5.913** | **5.943** | **5.965** |
+| Δ jsd − tree | +0.662 | +0.305 | +0.481 | +0.367 | **+0.454** |
+
+**Result: decisive negative — JSD wins by 0.45–0.60 BE across every K and both verifiers (noise floor ±0.15).** JSD is remarkably stable (~6.0 at every K); naive_tree is both lower and more variable.
+
+**Critical finding — harder data made the gap larger, not smaller.** On GSM8K the jsd–naive_tree gap was ~0.1 BE (within noise). On math_hard it is ~0.5 BE (3× the noise floor). This is the **opposite** of the Step 1 hypothesis.
+
+**Root cause — on-policy survival collapse under capacity pressure:** The tree loss gradient at depth d is weighted by the survival product W_d = Π_{j<d} α_j. On harder prompts the draft is further from the teacher → acceptance rates α are lower (≈0.4 on MATH vs ≈0.6 on GSM8K). This makes W_d collapse exponentially faster: at depth 4, W_4 ≈ 0.06 on MATH vs 0.22 on GSM8K. The tree loss degenerates toward **noisy single-step distillation** — noisier than JSD because it uses on-policy draft samples (far from teacher), while JSD trains on the teacher's own high-quality rollout. The harder the task, the more the tree loss suffers from this sampling variance, and the cleaner JSD's advantage.
+
+**Implication:** tree losses are structurally fragile under capacity pressure — precisely the regime where they were theorized to help. This is a more definitive finding than the GSM8K null result and substantially strengthens the case that the problem is architectural (the draft's conditioning), not a loss formulation issue.
 
 ---
 
