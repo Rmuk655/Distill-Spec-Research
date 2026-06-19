@@ -1,0 +1,391 @@
+{
+  "version": 1,
+  "config": "laptop",
+  "steps": {
+    "eval_baseline_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T12:08:16.421457+00:00",
+      "note": "elapsed=1501s"
+    },
+    "train_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.255109+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "merge_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:36:12.802623+00:00",
+      "note": "elapsed=48s"
+    },
+    "train_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.263659+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "merge_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:37:06.672218+00:00",
+      "note": "elapsed=54s"
+    },
+    "train_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.285806+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "merge_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:38:54.382912+00:00",
+      "note": "elapsed=51s"
+    },
+    "train_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.295409+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "merge_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:39:44.324844+00:00",
+      "note": "elapsed=50s"
+    },
+    "train_l1_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.303064+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "merge_l1_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:40:34.559989+00:00",
+      "note": "elapsed=50s"
+    },
+    "online_adapt_gsm8k": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.307712+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "merge_online_gsm8k": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.315664+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "eval_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T09:16:59.972586+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_ebe_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T09:42:11.958548+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T10:07:04.514193+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T10:32:42.530485+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_l1_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T10:57:08.860094+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_online_gsm8k": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.324713+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "eval_baseline_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.062792+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_kl_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.083087+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_ebe_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.096877+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_rev_kl_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.112119+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_jsd_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.123838+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_l1_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.135851+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_online_all": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.333509+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "eagle_gen": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.341418+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "eagle_train": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.349446+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "eagle_eval": {
+      "status": "skipped",
+      "ts": "2026-06-02T17:28:07.358084+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "train_ebe_single_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.273235+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_kl_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.312709+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_bv_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.322242+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_gbv_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.331816+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_trav_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.339823+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_rev_kl_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-01T16:40:45.347360+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_jsd_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T05:20:28.679066+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_naive_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T05:20:28.679066+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "train_nss_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T07:46:34.586147+00:00",
+      "note": "parallel train complete"
+    },
+    "train_si_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:03:09.199964+00:00",
+      "note": "parallel train complete"
+    },
+    "train_st_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:19:46.186913+00:00",
+      "note": "parallel train complete"
+    },
+    "train_khisti_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:35:24.653270+00:00",
+      "note": "parallel train complete"
+    },
+    "merge_ebe_single_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:38:03.138376+00:00",
+      "note": "elapsed=56s"
+    },
+    "merge_kl_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:41:25.719886+00:00",
+      "note": "elapsed=51s"
+    },
+    "merge_bv_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:42:17.525407+00:00",
+      "note": "elapsed=52s"
+    },
+    "merge_gbv_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:43:10.007547+00:00",
+      "note": "elapsed=52s"
+    },
+    "merge_trav_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:44:01.883597+00:00",
+      "note": "elapsed=52s"
+    },
+    "merge_rev_kl_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:44:53.768459+00:00",
+      "note": "elapsed=52s"
+    },
+    "merge_jsd_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:45:46.067593+00:00",
+      "note": "elapsed=52s"
+    },
+    "merge_naive_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:46:37.379022+00:00",
+      "note": "elapsed=51s"
+    },
+    "merge_nss_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:47:29.011985+00:00",
+      "note": "elapsed=52s"
+    },
+    "merge_si_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:48:19.561556+00:00",
+      "note": "elapsed=51s"
+    },
+    "merge_st_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:49:10.825840+00:00",
+      "note": "elapsed=51s"
+    },
+    "merge_khisti_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T08:50:03.353817+00:00",
+      "note": "elapsed=52s"
+    },
+    "eval_ebe_single_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T12:39:37.546566+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_kl_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T12:51:51.615965+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_bv_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T12:56:21.409199+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_gbv_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:00:36.531062+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_trav_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:05:12.232267+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_rev_kl_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:17:29.752792+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_jsd_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:29:57.978901+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_naive_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:34:29.760483+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_nss_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:38:54.768585+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_si_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:43:42.681950+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_st_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:48:07.906696+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_khisti_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-02T13:52:26.070428+00:00",
+      "note": "parallel eval complete"
+    },
+    "eval_ebe_single_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.145377+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_kl_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.155211+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_bv_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.165365+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_gbv_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.176525+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_trav_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.186493+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_rev_kl_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.192956+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_jsd_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.208618+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_naive_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.219958+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_nss_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.229532+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_si_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.237721+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_st_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.247579+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_khisti_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-03T05:59:36.256834+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    }
+  }
+}
