@@ -235,20 +235,22 @@ BV verifier:
 | +0.3 | 5.436 | 5.247 | 5.438 | 5.288 | 5.352 |
 | +1.0 | 5.203 | 4.934 | 5.003 | 5.098 | 5.060 |
 
-Traversal verifier (K=4 pending):
+Traversal verifier:
 
-| λ | K=1 | K=2 | K=3 | Mean K=1–3 |
-|---|---|---|---|---|
-| jsd (0) | **5.554** | **5.436** | **5.427** | **5.472** |
-| +0.1 | 5.286 | 5.417 | 5.192 | 5.298 |
-| +0.3 | 5.355 | 5.373 | 5.253 | 5.327 |
-| +1.0 | 5.163 | 5.430 | 5.362 | 5.318 |
+| λ | K=1 | K=2 | K=3 | K=4 | Mean K=1–4 |
+|---|---|---|---|---|---|
+| jsd (0) | **5.554** | **5.436** | **5.427** | 5.281 | **5.425** |
+| +0.1 | 5.286 | 5.417 | 5.192 | **5.341** | 5.309 |
+| +0.3 | 5.355 | 5.373 | 5.253 | 5.297 | 5.320 |
+| +1.0 | 5.163 | 5.430 | 5.362 | 5.237 | 5.298 |
 
-**Result: null.** JSD wins on traversal at every K (mean 5.472 vs best additive 5.327). On BV, λ=0.1 shows +0.112 at K=3 but is behind at K=2 (−0.063) and K=4 (−0.135); BV mean monotone declines with λ (5.415 → 5.060). No λ produces consistent lift across both verifiers.
+**Result: null.** JSD wins on both verifiers on mean across K=1–4.
 
-The one above-jsd cell (BV K=3, λ=0.1: 5.589) is within run-to-run noise (±0.15) and is not reproduced at any other K or verifier. This is not a signal.
+- **BV:** monotone mean decline with λ (5.415 → 5.060). λ=0.1 shows +0.112 at K=3 but −0.063 at K=2 and −0.135 at K=4; net BV mean jsd=5.415 > x0.1=5.395.
+- **Traversal:** jsd wins at K=1 (+0.268 vs x0.1) and K=3 (+0.235 vs x0.1). At K=4 x0.1 leads by +0.060 and x0.3 by +0.016 — both within run-to-run noise (±0.15). Net traversal mean jsd=5.425 > x0.1=5.309.
+- No λ lifts above jsd on both verifiers simultaneously at any K.
 
-**Interpretation:** consistent with the capacity ceiling — at 8B/0.6B/GSM8K, flat JSD already reaches q≈p everywhere the 0.6B can reach, so tree gradient is at best redundant and at worst noisy. Does not rule out that the tree gradient is also degraded at scale (the overfit probe is necessary-not-sufficient).
+**Interpretation:** consistent with the capacity ceiling — at 8B/0.6B/GSM8K, flat JSD already reaches q≈p everywhere the 0.6B can reach, so tree gradient is at best redundant and at worst noisy. Does not rule out that the gradient is also degraded at scale (the overfit probe is necessary-not-sufficient).
 
 ---
 
