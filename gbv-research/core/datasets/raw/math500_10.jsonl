@@ -1,0 +1,10 @@
+{"prompt": "Find the sum of all positive integers n such that n^2 - 19n + 99 is a perfect square."}
+{"prompt": "Let a, b, c be positive real numbers such that a + b + c = 1. Prove that a^2/(b+c) + b^2/(a+c) + c^2/(a+b) >= 1/2."}
+{"prompt": "How many positive integers less than 1000 are divisible by 2, 3, or 5?"}
+{"prompt": "Find the number of ways to write 10 as an ordered sum of positive integers."}
+{"prompt": "What is the probability that two randomly chosen integers from 1 to 100 have no common factor greater than 1?"}
+{"prompt": "Solve: |2x - 3| + |x + 1| = 6"}
+{"prompt": "Find all complex numbers z such that z^4 = -4."}
+{"prompt": "A regular hexagon has side length 2. What is its area?"}
+{"prompt": "If log_2(x) + log_4(x) + log_8(x) = 11, find x."}
+{"prompt": "Find the area of the region bounded by y = x^2 and y = x + 2."}
