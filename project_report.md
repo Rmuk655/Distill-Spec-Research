@@ -258,11 +258,11 @@ Verdict threshold: SE = disp/√N (standard error of the mean, not prompt-to-pro
 
 **gbv_tree and bv_tree are algorithmically broken.** E[τ] collapses to zero within 50 steps; loss saturates at −0.0000 (gradient vanishes entirely). These losses actively destroy acceptance — do not use at any scale. Root cause: likely a gradient sign error or degenerate optimum in the BV/GBV surrogate formulation. Needs investigation before any fix attempt.
 
-**naive_tree, kl_tree, and traversal_tree are algorithmically correct.** H2 is rejected for all three. The 8B null result is genuine no-headroom (H1).
+**Open question for researcher: are naive_tree, kl_tree, and traversal_tree truly sending correct tree gradients?** The overfit probe shows E[τ] rises on a 16-prompt set — a necessary but not sufficient condition. Whether this gradient survives at scale (full dataset, full model, longer training) is unconfirmed. We cannot definitively reject H2. Researcher sign-off needed before concluding this is purely a capacity issue.
 
 **traversal_tree caveat (open issue A-002):** the current implementation returns −Π min(1,p/q) (terminal survival product) instead of the telescoping sum −E[τ]. It still works in the overfit probe because maximising terminal survival correlates with maximising E[τ] — but it optimises a loose lower bound with vanishing gradient at depth. The functional fix (pending researcher sign-off) is expected to improve it further. Do not use traversal_tree at scale without the fix.
 
-**Implication for additive:** `jsd + λ·naive_tree` and `jsd + λ·kl_tree` inherit working tree gradients. The additive null result at 8B is a capacity ceiling, not a bug.
+**Implication for additive:** `jsd + λ·naive_tree` and `jsd + λ·kl_tree` inherit working tree gradients in the overfit sense. Whether the additive null result at 8B is a capacity ceiling or a gradient quality issue at scale remains open.
 
 ---
 
@@ -288,7 +288,7 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 
 ---
 
-## What Was Ruled Out
+## Should We Rule Out?
 
 | Approach | Status | Why |
 |---|---|---|
@@ -297,51 +297,43 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 | bv_tree | Broken | Same collapse |
 | depth_weight (linear, all λ) | No detectable signal | Gradient-free scalar; 5× swing < noise; no-op tops table |
 | reverse_kl | Suboptimal | Degrades at K=4; dominated by forward_kl |
-| Pure tree losses (8B) | No signal | Algo correct; beat baseline; lose to flat at capacity ceiling |
-| Additive jsd + tree (8B, early read) | No signal yet | Consistent with capacity ceiling; full run pending |
+| Pure tree losses (8B) | No signal yet | Is algo correct at scale? Beat baseline; lose to flat — capacity ceiling or gradient issue? |
+| Additive jsd + tree (8B, early read) | No signal yet | Monotone decline with λ; capacity ceiling or gradient quality? |
 
 ---
 
 ## Conclusions
 
-1. **The capacity ceiling is real.** Flat JSD reaches val BE 5.996 and plateaus from step ~2300 with LR floored. This is the 0.6B's limit on GSM8K under an 8B teacher.
+1. **Is it a capacity ceiling?** Flat JSD reaches val BE 5.996 and plateaus from step ~2300 with LR floored — consistent with a 0.6B limit on GSM8K under an 8B teacher, but we have not ruled out that the tree losses are also failing to send useful gradients at scale.
 
-2. **The algorithm is correct** for naive_tree and kl_tree. The telescoping acceptance gradient raises E[τ] from 1.87→5.50 (+20×SE) on an overfit set. The 8B null result is a genuine no-headroom problem, not a wiring bug.
+2. **Do we have the right algorithm?** The telescoping acceptance gradient raises E[τ] from 1.87→5.50 (+20×SE) on a 16-prompt overfit set — encouraging, but this is a necessary-not-sufficient test. Whether the gradient is effective at full-dataset scale is an open question for the researcher.
 
-3. **Acceptance-aware losses need capacity pressure** to separate from flat distillation. When q≈p is reachable (GSM8K + 8B teacher + 0.6B draft), flat KL already achieves the joint optimum of every acceptance metric, leaving tree losses nothing to exploit.
+3. **Acceptance-aware losses need capacity pressure** to separate from flat distillation. When q≈p is reachable (GSM8K + 8B teacher + 0.6B draft), flat KL already achieves the joint optimum of every acceptance metric, leaving tree losses nothing to exploit — if the algorithm is correct.
 
-4. **Depth weighting (researcher's suggestion)** cannot work by construction: a detached scalar multiplier has identical gradient direction to plain JSD. It cannot redirect learning toward deeper acceptance.
+4. **How would depth weighting work** if the core problem is gradient direction? A detached scalar multiplier has identical gradient direction to plain JSD. It cannot redirect learning toward deeper acceptance regardless of the capacity situation.
 
-5. **traversal is the right primary metric.** It is the highest-BE verifier, uniquely scales with K, and is the most sensitive to draft quality differences.
+5. **traversal + BV are the right primary metrics.** Both are high-BE verifiers, sensitive to training quality differences, and together give a more complete picture than traversal alone (traversal uniquely scales with K; BV captures tree-width acceptance).
 
 ---
 
 ## Next Steps
 
-### Step 1 — MATH Hard Probe (immediate, ~4–6h)
+### Step 1 — MATH Hard Probe ✓ COMPLETE
 
 **Rationale:** Harder prompts create more "unlearnable" examples where the 0.6B cannot match the 8B teacher. If the capacity ceiling is GSM8K-specific, tree losses should show signal here even at 8B.
 
-**Command (code updated this session):**
-```bash
-# Download once on server
-python -m data_io.download --datasets math_hard,math_val
-
-# Run 2000-step probe (not full 4000 — just looking for signal)
-python train.py --loss jsd \
-    --train_dataset math_hard --val_dataset math_val \
-    --steps 2000 --seed 123 --device cuda:0 \
-    --output checkpoints/math_hard_jsd_s123
-
-python train.py --loss naive_tree \
-    --train_dataset math_hard --val_dataset math_val \
-    --steps 2000 --seed 123 --device cuda:1 \
-    --output checkpoints/math_hard_naive_tree_s123
-```
-
-**Interpret as:** if naive_tree val BE > jsd val BE by >0.1 on math_hard at 8B → capacity pressure is the missing ingredient, 32B will be decisive. If still tied → capacity hypothesis holds at all math difficulties, 32B is fully justified.
-
 **Dataset:** MATH train, levels 4 and 5 only (~2.5K problems). Val: MATH test split.
+
+**Results (4000-step runs, seed 123):**
+
+| Run | Checkpoint | Best val BE | Notes |
+|---|---|---|---|
+| jsd (math_hard) | math_jsd_s123/ckpt_best | **5.836** | Completed; total time 330.8 min |
+| naive_tree (math_hard) | math_naivetree_s123/ckpt_best | TBD | Run completed; offline eval pending |
+
+**Preliminary read:** JSD on math_hard reaches val BE 5.836 — slightly above GSM8K JSD (5.996 val, but that is val BE not offline eval). Full offline eval of both checkpoints needed before drawing conclusions. Signal comparison (naive_tree vs jsd) pending offline eval.
+
+**Interpret as:** if naive_tree offline BE > jsd offline BE by >0.15 on math_hard → capacity pressure is the missing ingredient, 32B will be decisive. If still tied → capacity hypothesis holds across task difficulties, 32B is fully justified.
 
 ---
 
