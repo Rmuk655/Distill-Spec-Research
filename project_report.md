@@ -256,11 +256,11 @@ Verdict threshold: SE = disp/√N (standard error of the mean, not prompt-to-pro
 | bv_tree | tree | 2.34 | 2.34 | **−2.34** | 0.193 | — | **BROKEN** |
 | jsd | flat control | 2.29 | 6.26 | +3.97 | 0.196 | ~20×SE | (flat control) |
 
-**gbv_tree and bv_tree are algorithmically broken.** E[τ] collapses to zero within 50 steps; loss saturates at −0.0000 (gradient vanishes entirely). These losses actively destroy acceptance — do not use at any scale. Root cause: likely a gradient sign error or degenerate optimum in the BV/GBV surrogate formulation. Needs investigation before any fix attempt.
+**gbv_tree and bv_tree are algorithmically broken.** E[τ] collapses to zero within 50 steps; loss saturates at −0.0000 (gradient vanishes entirely). These losses actively destroy acceptance — do not use at any scale. Root cause: the BV/GBV acceptance weight w = Π min(1, p[token]/q[token]) is computed only over sampled tokens on each path. A single token where q ≫ p drives w → 0, zeroing the gradient for that path. As training progresses, the model learns to suppress high-p tokens (the ones that generate nonzero gradient), inverting the objective. This is a structural instability in the BV/GBV surrogate under large p/q ratios, not a coding typo.
 
 **Open question for researcher: are naive_tree, kl_tree, and traversal_tree truly sending correct tree gradients?** The overfit probe shows E[τ] rises on a 16-prompt set — a necessary but not sufficient condition. Whether this gradient survives at scale (full dataset, full model, longer training) is unconfirmed. We cannot definitively reject H2. Researcher sign-off needed before concluding this is purely a capacity issue.
 
-**traversal_tree caveat (open issue A-002):** the current implementation returns −Π min(1,p/q) (terminal survival product) instead of the telescoping sum −E[τ]. It still works in the overfit probe because maximising terminal survival correlates with maximising E[τ] — but it optimises a loose lower bound with vanishing gradient at depth. The functional fix (pending researcher sign-off) is expected to improve it further. Do not use traversal_tree at scale without the fix.
+**traversal_tree (A-002 resolved):** the implementation now uses `_telescoping_loss(_alpha_naive)` — the same telescoping backbone as naive_tree. Exact at K=1; at K>1 it uses naive-verifier α rather than the true traversal α (which has no closed form), so it is an approximation. The overfit probe result stands. traversal_tree is safe to run at scale.
 
 **Implication for additive:** `jsd + λ·naive_tree` and `jsd + λ·kl_tree` inherit working tree gradients in the overfit sense. Whether the additive null result at 8B is a capacity ceiling or a gradient quality issue at scale remains open.
 
@@ -328,12 +328,21 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 
 | Run | Checkpoint | Best val BE | Notes |
 |---|---|---|---|
-| jsd (math_hard) | math_jsd_s123/ckpt_best | **5.836** | Completed; total time 330.8 min |
-| naive_tree (math_hard) | math_naivetree_s123/ckpt_best | TBD | Run completed; offline eval pending |
+| jsd (math_hard) | checkpoints/jsd/ckpt_best | **6.312** (step 2500) | Completed; val = math_val |
+| naive_tree (math_hard) | math_naivetree_s123/ckpt_best | — | Run completed; val BE not tracked; offline eval below |
 
-**Preliminary read:** JSD on math_hard reaches val BE 5.836 — slightly above GSM8K JSD (5.996 val, but that is val BE not offline eval). Full offline eval of both checkpoints needed before drawing conclusions. Signal comparison (naive_tree vs jsd) pending offline eval.
+Note: jsd math_hard val BE (6.312) is on math_val, not gsm8k_val — not directly comparable to the GSM8K jsd best of 5.996.
 
-**Interpret as:** if naive_tree offline BE > jsd offline BE by >0.15 on math_hard → capacity pressure is the missing ingredient, 32B will be decisive. If still tied → capacity hypothesis holds across task difficulties, 32B is fully justified.
+**naive_tree math_hard — offline eval on math_eval (n=100):**
+
+| Verifier | K=1 | K=2 | K=3 | K=4 |
+|---|---|---|---|---|
+| bv | 5.423 | 5.287 | 5.495 | 5.375 |
+| traversal | 5.351 | 5.686 | 5.432 | 5.576 |
+
+JSD math_eval offline eval pending — needed to determine whether naive_tree lifts above jsd on math_hard. Will update when results arrive.
+
+**Interpret as:** if naive_tree offline BE > jsd offline BE by >0.15 on math_eval → capacity pressure is the missing ingredient, 32B will be decisive. If still tied → capacity hypothesis holds across task difficulties, 32B is fully justified.
 
 ---
 
@@ -375,6 +384,6 @@ python eval.py --checkpoint checkpoints/jsd/ckpt_best \
 
 | Issue | Where | Fix | Priority |
 |---|---|---|---|
-| traversal_tree wrong functional (A-002) | losses/tree.py | Telescope sum, pending researcher sign-off | High — affects traversal_tree experiments |
+| traversal_tree wrong functional (A-002) | losses/tree.py | **RESOLVED** — now uses `_telescoping_loss(_alpha_naive)`; exact at K=1, approx at K>1 | — |
 | ZeroDivisionError in traversal verifier (A-003) | verifiers/verifier.py:433 | `max(denom, 1e-9)` — 1-line PR | Medium — drops ~1% of traversal prompts |
 | Additive full run result | — | Wait for 4000-step completion | Low — unlikely to change conclusion at 8B |
