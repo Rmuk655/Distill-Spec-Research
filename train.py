@@ -106,6 +106,7 @@ WANDB_PROJECT   = "distillspec-pipeline"
 # Losses not listed (kl_tree, rev_kl_tree, jsd_tree, flat losses) fall through to "traversal".
 LOSS_TO_VERIFIER = {
     "naive_tree":    "naive",
+    "naive_tree_full":"naive",   # full-gradient (un-detached survival) variant — same verifier for a clean ablation
     "nss_tree":      "nss",
     "specinfer_tree":"specinfer",
     "spectr_tree":   "spectr",
