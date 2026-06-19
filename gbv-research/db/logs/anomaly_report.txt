@@ -1,6 +1,0 @@
-Anomaly report — 2026-06-02T22:58:07.513333
-Pipeline log   : C:\Users\rmuku\Personal\IITH\AI Project\Distill-Spec-Research\gbv-research\db\logs\pipeline_output.log
-
-[WARNING ] Out-of-memory hint
-    [BE batch] hw_tier=laptop -> one GPU subprocess per mode (serial isolation; VRAM-wait between modes; CPU fallback if OOM)
-

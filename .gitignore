@@ -19,3 +19,7 @@ wandb/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local-only directories — kept on disk but not tracked in git
+Claude/
+Results/
