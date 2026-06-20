@@ -18,6 +18,12 @@ ALL_LOSSES = {**FLAT_LOSSES, **TREE_LOSSES}
 # counterparts but are routed through compute_offpolicy_tree_loss() in train.py.
 OFFPOLICY_TREE_LOSSES = {"op_naive_tree", "op_naive_tree_full"}
 
+# Enrichment losses build the tree from the TEACHER's own sampled branches
+# (alternative continuations) and pull the draft toward them with JSD at every
+# node.  Routed through compute_enrichment_loss() in train.py.  K=1 is the
+# matched single-path control; K>1 is the enrichment ("teach additional paths").
+ENRICHMENT_LOSSES = {"jsd_enrich"}
+
 
 def is_tree_loss(name: str) -> bool:
     """Return True if the loss is computed on a draft tree rather than flat logits."""
@@ -27,6 +33,11 @@ def is_tree_loss(name: str) -> bool:
 def is_offpolicy_tree_loss(name: str) -> bool:
     """Return True if the loss uses the teacher's path rather than draft samples."""
     return name in OFFPOLICY_TREE_LOSSES
+
+
+def is_enrichment_loss(name: str) -> bool:
+    """Return True if the tree branches are sampled from the teacher, not the draft."""
+    return name in ENRICHMENT_LOSSES
 
 
 def get_loss(name: str):

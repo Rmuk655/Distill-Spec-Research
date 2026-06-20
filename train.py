@@ -44,7 +44,8 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 
 # Local modules
-from losses import ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss, is_offpolicy_tree_loss
+from losses import (ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss,
+                    is_offpolicy_tree_loss, is_enrichment_loss)
 from data_io import get_path as dataset_path
 from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff
 
@@ -54,6 +55,13 @@ from util           import set_seed, load_prompts_jsonl, load_models as _sot_loa
 from inference_util import iid_draft, target_tree_pass
 from main           import speculative_decoding_loop
 from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
+
+
+def _clear_node_caches():
+    Node.naive_cache.clear()
+    Node.spectr_cache.clear()
+    Node.specinfer_cache.clear()
+    Node.khisti_cache.clear()
 from verifier        import TreeVerifier  # for --aux_mode depth_weight (expected_*_depths)
 from verifier_safe  import VerifierError
 
@@ -66,7 +74,7 @@ from verifier_safe  import VerifierError
 STEPS           = 4000                       # number of gradient-accum steps
 GRAD_ACCUM      = 8                          # opt-steps = STEPS / GRAD_ACCUM = 500
 LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
-WARMUP_STEPS    = 50                         # 10 % of opt-steps (STEPS/GRAD_ACCUM=500)
+WARMUP_STEPS    = 50                         # fallback only — overridden in main() to 10% of total_opt_steps
 GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.08461) — 1.0 is the LLM fine-tuning standard (LLaMA, GPT-3, Qwen3)
 LR_MIN_RATIO    = 0.1                        # cosine decays to 10 % of peak LR
 SEED            = DEFAULT_SEED
@@ -301,6 +309,49 @@ def compute_offpolicy_tree_loss(loss_fn, draft, teacher, prompt_ids,
 
 
 # ---------------------------------------------------------------------------
+# Enrichment tree loss: the K branches are sampled from the TEACHER (its own
+# plausible continuations), not the draft.  Identical to compute_tree_loss
+# except iid_draft runs on the teacher.  The draft is pulled toward the teacher
+# by JSD at every node of that teacher-generated tree — covering the off-greedy
+# branch states the verifier visits at inference, where flat JSD never trains.
+# K=1 reduces to a single teacher path (the matched control); K>1 is enrichment.
+# No acceptance/telescoping term: the loss is whatever loss_fn is (jsd_enrich).
+# ---------------------------------------------------------------------------
+
+def compute_enrichment_loss(loss_fn, draft, teacher, prompt_ids,
+                            K, L, draft_temp, teacher_temp):
+    """Teacher-enriched tree: sample K teacher branches, score under both models,
+    then call the loss on (q_probs_dict_grad, p_probs_dict, q_paths, L, K)."""
+    with torch.no_grad():
+        # 1. Pending token from the teacher's last position.
+        t_out = teacher(prompt_ids, use_cache=True, return_dict=True)
+        p_cache_score = t_out.past_key_values
+        p_probs_last = F.softmax(t_out.logits[:, -1, :] / teacher_temp, dim=-1)
+        context_pending = torch.multinomial(p_probs_last, num_samples=1)
+
+        # 2. Sample K TEACHER paths.  iid_draft expands/consumes its cache, so
+        #    use a fresh teacher prefill here, separate from the scoring cache.
+        p_cache_sample = teacher(prompt_ids, use_cache=True,
+                                 return_dict=True).past_key_values
+        q_paths, _, _ = iid_draft(
+            teacher, p_cache_sample, context_pending, K=K, L=L, q_temp=teacher_temp,
+        )
+
+        # 3. Target tree pass — teacher distributions at every node (JSD targets).
+        _, _, _, p_probs_dict = target_tree_pass(
+            teacher, p_cache_score, q_paths, K=K, L=L, p_temp=teacher_temp,
+        )
+
+    # 4. Draft tree forward WITH grad over the teacher-generated tree.
+    q_probs_dict_grad = draft_tree_forward_with_grad(
+        draft, prompt_ids, q_paths, L=L, q_temp=draft_temp,
+    )
+
+    # 5. Per-node loss (jsd_enrich → JSD at every node).
+    return loss_fn(q_probs_dict_grad, p_probs_dict, q_paths, L, K)
+
+
+# ---------------------------------------------------------------------------
 # (3) Depth-as-weight: scalar E[τ_V] over the draft tree, used to MULTIPLY a
 # flat loss.  The depth has NO gradient (pure-Python DP) — this is per-prompt
 # loss reweighting, not an acceptance gradient.  Cost: one extra target tree
@@ -375,9 +426,9 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
 
 def run_slug(args) -> str:
     """Loss + dataset component of the run identifier, shared by the checkpoint dir
-    and the W&B run name. Includes the aux loss + weight so a combined run (e.g.
-    forward_kl+l1x0.5) never overwrites the single-loss run's checkpoints."""
-    slug = f"{args.loss}_{args.train_dataset}"
+    and the W&B run name. Includes K and L so runs with different tree shapes never
+    overwrite each other's checkpoints."""
+    slug = f"{args.loss}_K{args.K}_L{args.L}_{args.train_dataset}_s{args.seed}"
     if args.aux_mode == "depth_weight":
         tag = "lin" if args.depth_linear else f"lam{args.depth_lambda}"
         slug += f"+dw_{args.aux_loss or 'naive_tree'}_{tag}"
@@ -414,7 +465,7 @@ def setup_wandb(args, output_dir, resumed: bool):
         tags.append("lin" if args.depth_linear else f"lam{args.depth_lambda}")
     elif args.aux_loss:
         tags.append(f"aux:{args.aux_loss}")
-    run_name = f"{run_slug(args)}_K{K}_L{L}_seed{args.seed}"
+    run_name = run_slug(args)
     init_kw = dict(project=WANDB_PROJECT, name=run_name,
                    tags=tags, config=vars(args))
     if saved:
@@ -430,7 +481,7 @@ def setup_wandb(args, output_dir, resumed: bool):
 
     init_kw["resume"] = "allow"
     run = wandb.init(**init_kw)
-    json.dump({"run_id": run.id, "name": run.name, "project": WANDB_PROJECT},
+    json.dump({"run_id": run.id, "name": run.name, "project": WANDB_PROJECT, "url": run.url},
               open(meta_path, "w", encoding="utf-8"))
     print(f"[wandb] {run.url}")
     return run
@@ -531,6 +582,13 @@ def parse_args():
                     help="Loss function to train with.  See losses/__init__.py.")
     ap.add_argument("--steps",  type=int, default=STEPS,
                     help=f"Total gradient-accumulation steps (default {STEPS}).")
+    ap.add_argument("--K", type=int, default=DEFAULT_K,
+                    help=f"Tree width — number of paths per step (default {DEFAULT_K}). "
+                         f"For jsd_enrich: K=1 is the matched single-path control, "
+                         f"K>1 is the enrichment (teacher teaches additional paths). "
+                         f"Validation tree width follows --K.")
+    ap.add_argument("--L", type=int, default=DEFAULT_L,
+                    help=f"Tree depth / draft block length (default {DEFAULT_L}).")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -570,6 +628,10 @@ def parse_args():
                          "researcher's 'tree_depth * loss', mean-normalised so E[w]~=1 "
                          "(linear in depth, but no LR confound; self-adapts as d drifts). "
                          "Ignores --depth_lambda.")
+    ap.add_argument("--warmup_steps", type=int, default=None,
+                    help="LR warmup in optimizer steps (scheduler.step() calls). "
+                         "Default: auto = 10%% of total_opt_steps (steps // GRAD_ACCUM). "
+                         "Saved in state.json and restored on resume so the curve is continuous.")
     ap.add_argument("--val_temp", type=float, default=0.2,
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
@@ -580,6 +642,12 @@ def parse_args():
 def main():
     args = parse_args()
     set_seed(args.seed)
+
+    # Tree shape is module-global (used by the loss helpers, setup_wandb run name,
+    # and validation).  Override from --K/--L so train and val always share shape.
+    global K, L, VAL_K, VAL_L
+    K, L = args.K, args.L
+    VAL_K, VAL_L = K, L
 
     output_dir = args.output or os.path.join(OUTPUT_ROOT, run_slug(args))
     os.makedirs(output_dir, exist_ok=True)
@@ -605,33 +673,40 @@ def main():
     optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
                                   weight_decay=0.0)   # DistillSpec uses no regularisation
 
-    # LR schedule: linear warmup for WARMUP_STEPS optimizer steps, then cosine
-    # decay to LR_MIN_RATIO × peak.  Matches DistillSpec (arXiv:2310.08461) which
-    # uses linear warmup + cosine cooldown.  WARMUP_STEPS counts optimizer steps
-    # (scheduler.step() fires once per GRAD_ACCUM training steps), so
-    # WARMUP_STEPS=50 → 50 × GRAD_ACCUM = 400 training steps = 10 % of 4000.
-    # Previously WARMUP_STEPS was set to 400 (training-step count, not opt-step
-    # count), causing 80 % of the run to be in warmup with LR never reaching peak.
-    # The cosine horizon is anchored to the step budget the run STARTED with, not
-    # to the current --steps.  This keeps the LR continuous on resume: if you later
-    # raise --steps to train longer, the already-trained cosine is NOT reshaped
-    # (which would make the LR jump back up on restart); the extra steps simply run
-    # at the LR_MIN_RATIO floor.  Saved in state.json as "sched_steps".
+    # LR schedule: linear warmup then cosine decay to LR_MIN_RATIO × peak.
+    # Both sched_steps and warmup_opt_steps are anchored to the values from the
+    # run's first launch (saved in state.json) so the LR curve is continuous on
+    # resume — restarting with a different --steps or --warmup_steps doesn't
+    # reshape the already-completed portion of the schedule.
     sched_steps = args.steps
+    warmup_opt_steps_override = None   # restored from state.json on resume if present
     if args.resume:
         _sp = os.path.join(output_dir, "ckpt_latest", "state.json")
         if os.path.isfile(_sp):
-            sched_steps = json.load(open(_sp)).get("sched_steps", args.steps)
+            _saved = json.load(open(_sp, encoding="utf-8"))
+            sched_steps = _saved.get("sched_steps", args.steps)
+            warmup_opt_steps_override = _saved.get("warmup_opt_steps", None)
             if sched_steps != args.steps:
                 print(f"[lr] schedule horizon anchored to original {sched_steps} steps "
                       f"(--steps={args.steps}); steps beyond {sched_steps} run at "
                       f"LR_MIN_RATIO={LR_MIN_RATIO}*peak (no LR jump on resume)")
     total_opt_steps = sched_steps // GRAD_ACCUM
+    # Warmup: explicit --warmup_steps overrides auto; on resume, the saved value
+    # takes precedence over both so the curve stays continuous across restarts.
+    if warmup_opt_steps_override is not None:
+        warmup_opt_steps = warmup_opt_steps_override
+    elif args.warmup_steps is not None:
+        warmup_opt_steps = args.warmup_steps
+    else:
+        warmup_opt_steps = max(1, total_opt_steps // 10)   # 10% of opt-steps
+    print(f"[lr] total_opt_steps={total_opt_steps}  warmup_opt_steps={warmup_opt_steps} "
+          f"({100*warmup_opt_steps/max(1,total_opt_steps):.1f}%)")
+
     def lr_lambda(step):
-        if step < WARMUP_STEPS:
-            return step / max(1, WARMUP_STEPS)
+        if step < warmup_opt_steps:
+            return step / max(1, warmup_opt_steps)
         # Cosine decay from 1.0 → LR_MIN_RATIO over remaining opt-steps
-        progress = (step - WARMUP_STEPS) / max(1, total_opt_steps - WARMUP_STEPS)
+        progress = (step - warmup_opt_steps) / max(1, total_opt_steps - warmup_opt_steps)
         progress = min(progress, 1.0)
         cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
         return LR_MIN_RATIO + (1.0 - LR_MIN_RATIO) * cosine
@@ -658,7 +733,10 @@ def main():
     loss_fn       = get_loss(args.loss)
     tree          = is_tree_loss(args.loss)
     offpolicy     = is_offpolicy_tree_loss(args.loss)
-    print(f"[loss] {args.loss}  ({'off-policy tree' if offpolicy else 'tree' if tree else 'flat'})")
+    enrichment    = is_enrichment_loss(args.loss)
+    _mode = ("enrichment tree" if enrichment else "off-policy tree" if offpolicy
+             else "tree" if tree else "flat")
+    print(f"[loss] {args.loss}  ({_mode})")
 
     aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
     aux_is_tree = is_tree_loss(args.aux_loss) if args.aux_loss else False
@@ -684,18 +762,17 @@ def main():
         prompt = train_prompts[step % len(train_prompts)]
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
-        if offpolicy:
-            Node.naive_cache.clear()
-            Node.spectr_cache.clear()
-            Node.specinfer_cache.clear()
+        if enrichment:
+            loss = compute_enrichment_loss(loss_fn, draft, teacher, ids,
+                                           K=K, L=L,
+                                           draft_temp=args.draft_temp,
+                                           teacher_temp=args.teacher_temp)
+        elif offpolicy:
             loss = compute_offpolicy_tree_loss(loss_fn, draft, teacher, ids,
                                               K=K, L=L,
                                               draft_temp=args.draft_temp,
                                               teacher_temp=args.teacher_temp)
         elif tree:
-            Node.naive_cache.clear()
-            Node.spectr_cache.clear()
-            Node.specinfer_cache.clear()
             loss = compute_tree_loss(loss_fn, draft, teacher, ids,
                                      K=K, L=L,
                                      draft_temp=args.draft_temp,
@@ -707,9 +784,7 @@ def main():
         if args.aux_mode == "depth_weight":
             # (3) Multiply the (flat) primary loss by a detached depth weight.
             verifier = LOSS_TO_VERIFIER.get(args.aux_loss, "naive")
-            Node.naive_cache.clear()
-            Node.spectr_cache.clear()
-            Node.specinfer_cache.clear()
+            _clear_node_caches()
             d = expected_depth_scalar(draft, teacher, ids, K, L, verifier,
                                       args.draft_temp, args.teacher_temp)
             depth_ema = d if depth_ema is None else 0.9 * depth_ema + 0.1 * d
@@ -723,9 +798,6 @@ def main():
             loss = depth_w * loss
         elif aux_loss_fn is not None:
             if aux_is_tree:
-                Node.naive_cache.clear()
-                Node.spectr_cache.clear()
-                Node.specinfer_cache.clear()
                 aux = compute_tree_loss(aux_loss_fn, draft, teacher, ids,
                                         K=K, L=L,
                                         draft_temp=args.draft_temp,
@@ -760,6 +832,7 @@ def main():
             # step cause the second to be silently dropped in wandb ≥0.15.
             val_be = None
             if (step + 1) % VAL_EVERY == 0:
+                _clear_node_caches()
                 val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
                       f"best={best_val_block_eff:.3f}")
@@ -778,6 +851,7 @@ def main():
         if (step + 1) % VAL_EVERY == 0:
             if (step + 1) % LOG_EVERY != 0:
                 # VAL_EVERY not a multiple of LOG_EVERY — compute val now
+                _clear_node_caches()
                 val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
                       f"best={best_val_block_eff:.3f}")
@@ -796,6 +870,7 @@ def main():
                             state={"step": step + 1,
                                    "best_val_block_eff": best_val_block_eff,
                                    "sched_steps": sched_steps,
+                                   "warmup_opt_steps": warmup_opt_steps,
                                    "cmd": sys.argv})
 
     # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
@@ -803,7 +878,8 @@ def main():
     # not blow the disk quota).  ckpt_best holds the val-best model.
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                     state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
-                           "sched_steps": sched_steps, "cmd": sys.argv})
+                           "sched_steps": sched_steps, "warmup_opt_steps": warmup_opt_steps,
+                           "cmd": sys.argv})
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")
     if wandb_run:

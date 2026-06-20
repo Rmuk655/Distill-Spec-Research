@@ -550,6 +550,8 @@ CSV_COLUMNS = [
     "machine_cpu_physical_cores",
     "machine_ram_gb",
     "machine_os",
+    # Link back to the training run that produced this checkpoint
+    "training_wandb_url",
 ]
 
 
@@ -580,6 +582,18 @@ _FLOAT_FMT: dict[str, str] = {
 }
 
 
+def _resolve_training_url(checkpoint_path: str) -> str:
+    """Read the W&B training URL from wandb_run.json in the checkpoint's parent directory."""
+    parent = os.path.dirname(os.path.abspath(checkpoint_path))
+    meta = os.path.join(parent, "wandb_run.json")
+    if os.path.isfile(meta):
+        try:
+            return json.load(open(meta, encoding="utf-8")).get("url", "")
+        except Exception:
+            pass
+    return ""
+
+
 def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
                csv_path: str, specs: dict | None = None,
                cpu_threads_used: int | None = None, phys_gpu_idx: int = 0):
@@ -602,6 +616,7 @@ def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
         "mode":            mode, "K": args.K, "L": args.L,
         "device":          f"cuda:{phys_gpu_idx}", "seed": args.seed, "dtype": DEFAULT_DTYPE,
         "cpu_threads_used": cpu_threads_used,
+        "training_wandb_url": _resolve_training_url(args.checkpoint),
     }
     for k, v in stats.items():
         if isinstance(v, float) and k in _FLOAT_FMT:

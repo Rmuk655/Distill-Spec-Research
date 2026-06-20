@@ -88,6 +88,20 @@ def rev_kl_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, **_kw)
     return total / n
 
 
+def jsd_enrich(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, **_kw):
+    """Teacher-enrichment JSD — identical objective to jsd_tree.
+
+    The only difference is routing: train.py sends this loss through
+    compute_enrichment_loss(), so the K tree branches are sampled from the
+    TEACHER (its own plausible continuations / "additional paths") rather than
+    from the draft.  The draft is then pulled toward the teacher by JSD at every
+    node of that teacher-generated tree, covering the off-greedy branch states
+    the verifier visits at inference.  No acceptance/telescoping term.
+    K=1 gives the matched single-path control; K>1 is the enrichment condition.
+    """
+    return jsd_tree(q_probs_dict, p_probs_dict, q_paths, L, K)
+
+
 def jsd_tree(q_probs_dict, p_probs_dict, q_paths=None, L=None, K=None, alpha=0.5, **_kw):
     """Symmetric JSD at every non-leaf node (mixture weight α=0.5 by default)."""
     device = next(iter(q_probs_dict.values())).device
@@ -472,6 +486,7 @@ TREE_LOSSES = {
     "kl_tree":         kl_tree,
     "rev_kl_tree":     rev_kl_tree,
     "jsd_tree":        jsd_tree,
+    "jsd_enrich":      jsd_enrich,
     "bv_tree":         bv_tree,
     "gbv_tree":        gbv_tree,
     "traversal_tree":   traversal_tree,
