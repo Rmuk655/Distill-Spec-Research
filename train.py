@@ -45,7 +45,7 @@ from transformers import AutoModelForCausalLM
 
 # Local modules
 from losses import (ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss,
-                    is_offpolicy_tree_loss, is_enrichment_loss)
+                    is_offpolicy_tree_loss, is_enrichment_loss, is_flat_enrich_loss)
 from data_io import get_path as dataset_path
 from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff
 
@@ -227,6 +227,37 @@ def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
     s_out = draft(gen, return_dict=True)
     s_logits = s_out.logits[0, prompt_ids.shape[1]-1:-1].float()        # [T, V]
     return loss_fn(s_logits, t_logits)
+
+
+# ---------------------------------------------------------------------------
+# Flat enrichment loss: K stochastic teacher rollouts, student scored on each.
+# Apples-to-apples with compute_flat_loss — same max_new_tokens, same JSD at
+# every token.  Only variable vs jsd flat: do_sample=True (stochastic teacher)
+# and K paths averaged.  K=1 isolates greedy-vs-stochastic; K>1 adds diversity.
+# Cost: K × compute_flat_loss per step.
+# ---------------------------------------------------------------------------
+
+def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
+                             K, max_new_tokens=128, teacher_temp=1.0):
+    """Sample K stochastic teacher rollouts; score student on each; average loss."""
+    attn_mask = torch.ones_like(prompt_ids)
+    losses = []
+    for _ in range(K):
+        with torch.no_grad():
+            gen = teacher.generate(
+                prompt_ids, attention_mask=attn_mask,
+                max_new_tokens=max_new_tokens, do_sample=True,
+                temperature=teacher_temp,
+                pad_token_id=teacher.config.eos_token_id,
+                use_cache=True,
+            )
+            t_out    = teacher(gen, return_dict=True)
+            t_logits = t_out.logits[0, prompt_ids.shape[1]-1:-1].float()   # [T, V]
+
+        s_out    = draft(gen, return_dict=True)
+        s_logits = s_out.logits[0, prompt_ids.shape[1]-1:-1].float()        # [T, V]
+        losses.append(loss_fn(s_logits, t_logits))
+    return sum(losses) / K
 
 
 # ---------------------------------------------------------------------------
@@ -734,8 +765,11 @@ def main():
     tree          = is_tree_loss(args.loss)
     offpolicy     = is_offpolicy_tree_loss(args.loss)
     enrichment    = is_enrichment_loss(args.loss)
-    _mode = ("enrichment tree" if enrichment else "off-policy tree" if offpolicy
-             else "tree" if tree else "flat")
+    flat_enrich   = is_flat_enrich_loss(args.loss)
+    _mode = ("flat enrichment" if flat_enrich else
+             "enrichment tree" if enrichment else
+             "off-policy tree" if offpolicy else
+             "tree" if tree else "flat")
     print(f"[loss] {args.loss}  ({_mode})")
 
     aux_loss_fn = get_loss(args.aux_loss) if args.aux_loss else None
@@ -762,7 +796,11 @@ def main():
         prompt = train_prompts[step % len(train_prompts)]
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
-        if enrichment:
+        if flat_enrich:
+            loss = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
+                                            K=K, max_new_tokens=MAX_NEW_TOKENS,
+                                            teacher_temp=args.teacher_temp)
+        elif enrichment:
             loss = compute_enrichment_loss(loss_fn, draft, teacher, ids,
                                            K=K, L=L,
                                            draft_temp=args.draft_temp,

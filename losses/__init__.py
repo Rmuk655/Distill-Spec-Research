@@ -24,6 +24,13 @@ OFFPOLICY_TREE_LOSSES = {"op_naive_tree", "op_naive_tree_full"}
 # matched single-path control; K>1 is the enrichment ("teach additional paths").
 ENRICHMENT_LOSSES = {"jsd_enrich"}
 
+# Flat enrichment losses: same per-token JSD as jsd flat but the teacher
+# samples K stochastic continuations (do_sample=True) instead of one greedy
+# rollout.  K=1 isolates greedy-vs-stochastic; K>1 adds path diversity.
+# Apples-to-apples with jsd flat: same L=128, only teacher sampling changes.
+# Routed through compute_flat_enrich_loss() in train.py.
+FLAT_ENRICH_LOSSES = {"jsd_flat_enrich"}
+
 
 def is_tree_loss(name: str) -> bool:
     """Return True if the loss is computed on a draft tree rather than flat logits."""
@@ -38,6 +45,11 @@ def is_offpolicy_tree_loss(name: str) -> bool:
 def is_enrichment_loss(name: str) -> bool:
     """Return True if the tree branches are sampled from the teacher, not the draft."""
     return name in ENRICHMENT_LOSSES
+
+
+def is_flat_enrich_loss(name: str) -> bool:
+    """Return True if the loss uses K stochastic teacher flat rollouts (not a tree)."""
+    return name in FLAT_ENRICH_LOSSES
 
 
 def get_loss(name: str):

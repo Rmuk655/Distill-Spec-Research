@@ -92,8 +92,9 @@ def l1(student_logits, teacher_logits, **_kw):
 
 # Registry: name → callable.  train.py looks the loss up here by --loss flag.
 FLAT_LOSSES = {
-    "forward_kl": forward_kl,
-    "reverse_kl": reverse_kl,
-    "jsd":        jsd,
-    "l1":         l1,
+    "forward_kl":      forward_kl,
+    "reverse_kl":      reverse_kl,
+    "jsd":             jsd,
+    "jsd_flat_enrich": jsd,   # same loss fn — routing in train.py samples K stochastic teacher paths
+    "l1":              l1,
 }
