@@ -457,9 +457,13 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
 
 def run_slug(args) -> str:
     """Loss + dataset component of the run identifier, shared by the checkpoint dir
-    and the W&B run name. Includes K and L so runs with different tree shapes never
-    overwrite each other's checkpoints."""
-    slug = f"{args.loss}_K{args.K}_L{args.L}_{args.train_dataset}_s{args.seed}"
+    and the W&B run name. L is omitted for flat/flat-enrich losses where tree depth
+    is not a parameter; K is always included since it may distinguish enrich width."""
+    uses_L = is_tree_loss(args.loss) or is_enrichment_loss(args.loss)
+    if uses_L:
+        slug = f"{args.loss}_K{args.K}_L{args.L}_{args.train_dataset}_s{args.seed}"
+    else:
+        slug = f"{args.loss}_K{args.K}_{args.train_dataset}_s{args.seed}"
     if args.aux_mode == "depth_weight":
         tag = "lin" if args.depth_linear else f"lam{args.depth_lambda}"
         slug += f"+dw_{args.aux_loss or 'naive_tree'}_{tag}"
