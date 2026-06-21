@@ -90,28 +90,6 @@ def l1(student_logits, teacher_logits, **_kw):
     return (p_s - p_t).abs().sum(dim=-1).mean()
 
 
-def tvplus(student_logits, teacher_logits, **_kw):
-    """
-    One-sided TV: TV⁺(q, p) = Σₓ max(0, q(x) − p(x)).
-
-    Directly minimises the per-token rejection probability under NSS (K=1) and
-    Global Resolution (K>1).  For K i.i.d. drafts, expected acceptance =
-    1 − TV⁺(q,p)^K, so this loss is the theoretically-grounded training
-    objective for both verifiers.
-
-    Unlike JSD/forward-KL, which push q toward p everywhere, TV⁺ only
-    penalises tokens where the draft *overshoots* the teacher — the tokens a
-    rejection sampler would reject.  Tokens where q(x) < p(x) are already
-    accepted at full rate and contribute zero loss, so gradient is not wasted
-    on them.  This makes TV⁺ the tightest possible surrogate for NSS/GR
-    acceptance rate.
-    """
-    p_s = F.softmax(student_logits, dim=-1)
-    p_t = F.softmax(teacher_logits, dim=-1).detach()
-    # max(0, q - p) per token, summed over vocab, averaged over positions
-    return F.relu(p_s - p_t).sum(dim=-1).mean()
-
-
 # Registry: name → callable.  train.py looks the loss up here by --loss flag.
 FLAT_LOSSES = {
     "forward_kl":      forward_kl,
@@ -119,5 +97,4 @@ FLAT_LOSSES = {
     "jsd":             jsd,
     "jsd_flat_enrich": jsd,   # same loss fn — routing in train.py samples K stochastic teacher paths
     "l1":              l1,
-    "tvplus":          tvplus,  # one-sided TV: direct surrogate for NSS/Global Resolution acceptance
 }
