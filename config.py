@@ -24,6 +24,6 @@ def block_eff(gen_tokens: int, target_calls: int) -> float:
 
 # Verifier modes understood by speculative_decoding_loop (main.py)
 VERIFIER_MODES = [
-    "naive", "nss", "specinfer", "spectr", "khisti",
+    "naive", "nss", "specinfer", "spectr", "khisti", "max",
     "bv", "gbv", "traversal",
 ]
