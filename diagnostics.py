@@ -15,6 +15,7 @@ Public API:
 """
 from __future__ import annotations
 
+import math
 import os
 
 import torch
@@ -23,6 +24,14 @@ from tqdm import tqdm
 
 from config import DEFAULT_DTYPE
 from transformers import AutoModelForCausalLM
+
+# Fixed BE thresholds for easy/medium/hard buckets.
+# Comparable across checkpoints and runs (unlike percentile cuts).
+#   easy  : BE >= 6  — draft accepts most of the K-deep tree per call
+#   medium: BE 3–6   — partial acceptance
+#   hard  : BE < 3   — fewer than 3 tokens accepted per target call on average
+_BE_EASY = 6.0
+_BE_HARD = 3.0
 
 
 @torch.no_grad()
@@ -69,23 +78,40 @@ def _pearson(xs, ys):
     return sxy / (sxx ** 0.5 * syy ** 0.5)
 
 
+def _pval_pearson(r: float, n: int) -> float:
+    """Two-tailed p-value for Pearson r via t-distribution normal approx (good for n>=30)."""
+    if n < 3 or r != r:
+        return float("nan")
+    t = r * ((n - 2) ** 0.5) / max((1.0 - r * r) ** 0.5, 1e-12)
+    return 2.0 * (1.0 - 0.5 * (1.0 + math.erf(abs(t) / (2.0 ** 0.5))))
+
+
 def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                                 args, mode_name, device):
     """Correlate per-prompt training divergence with per-prompt block efficiency.
 
-    Flat (|r| ~ 0) correlation  → the divergence the losses minimise does not
-                                   predict BE → objective mismatch ("H0"):
-                                   no divergence-minimising loss can move BE.
+    Flat (|r| ~ 0) correlation  → objective mismatch (H0): minimising JSD/KL
+                                   will not move BE.
     Negative correlation        → lower divergence ⇒ higher BE (expected): the
                                    objective IS the right lever.
-    Logs a scatter + correlation scalars + a plain-English verdict to W&B.
+
+    W&B output (all scalars go to run.summary, NOT run.log, so they appear in
+    the Overview tab as numbers — not as single-point line charts):
+      • diag/bucket_summary  — Table: easy/medium/hard counts, mean BE, mean JSD
+      • diag/per_prompt      — Table: one row per prompt with prompt_idx,
+                               prompt_preview, jsd, fwd_kl, block_eff, bucket
+                               (filter by bucket='hard' to find struggling prompts)
+      • diag/jsd_vs_be       — Scatter plot against JSD only (the trained loss)
+      • run.summary scalars  — n, corr_jsd_be, p_jsd, r2_jsd, h0, verdict, counts
     """
     print("\n" + "=" * 78)
     print("  [diagnose] objective-vs-BE: per-prompt divergence vs block efficiency")
-    print(f"             (BE from mode='{mode_name}';  divergence = JSD / forward-KL)")
+    print(f"             mode='{mode_name}'  BE thresholds: easy≥{_BE_EASY} hard<{_BE_HARD}")
     print("=" * 78)
 
+    rows: list[tuple] = []   # (prompt_idx, preview, jsd, fkl, be, bucket)
     jsd_xs, fkl_xs, be_ys, valid_indices = [], [], [], []
+
     for i, prompt in enumerate(tqdm(prompts, desc="diagnose", ncols=80)):
         if i not in per_prompt_be:
             continue
@@ -93,50 +119,128 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                                       args.max_new_tokens, device)
         if jsd is None:
             continue
-        jsd_xs.append(jsd); fkl_xs.append(fkl); be_ys.append(per_prompt_be[i])
+        be = per_prompt_be[i]
+        jsd_xs.append(jsd); fkl_xs.append(fkl); be_ys.append(be)
         valid_indices.append(i)
+        bucket = "easy" if be >= _BE_EASY else ("hard" if be < _BE_HARD else "medium")
+        preview = prompt[:60].replace("\n", " ")
+        rows.append((i, preview, round(jsd, 5), round(fkl, 5), round(be, 4), bucket))
 
     r_jsd = _pearson(jsd_xs, be_ys)
     r_fkl = _pearson(fkl_xs, be_ys)
-    print(f"  n={len(be_ys)}  corr(JSD, BE)={r_jsd:+.3f}  corr(fwdKL, BE)={r_fkl:+.3f}")
+    n = len(be_ys)
+    p_jsd = _pval_pearson(r_jsd, n)
 
-    if not (r_jsd == r_jsd):  # nan
-        verdict = "insufficient data to judge (need >=2 prompts with finite values)."
+    # ── Bucket stats ────────────────────────────────────────────────────────
+    bucket_stats: dict[str, dict] = {}
+    for bkt in ("easy", "medium", "hard"):
+        pts = [(r[2], r[4]) for r in rows if r[5] == bkt]   # (jsd, be)
+        if pts:
+            bucket_stats[bkt] = dict(
+                count=len(pts),
+                mean_be=sum(b for _, b in pts) / len(pts),
+                mean_jsd=sum(j for j, _ in pts) / len(pts),
+                pct=100.0 * len(pts) / n,
+            )
+        else:
+            bucket_stats[bkt] = dict(count=0, mean_be=float("nan"),
+                                     mean_jsd=float("nan"), pct=0.0)
+
+    # ── Terminal output ─────────────────────────────────────────────────────
+    print(f"\n  n={n}  corr(JSD,BE)={r_jsd:+.3f}  p≈{p_jsd:.1e}  "
+          f"R²={r_jsd**2:.2f}  corr(fwdKL,BE)={r_fkl:+.3f}")
+    print(f"\n  {'Bucket':<8} {'N':>5} {'%':>5}  {'Mean-BE':>8}  {'Mean-JSD':>9}")
+    print(f"  {'-'*44}")
+    for bkt in ("easy", "medium", "hard"):
+        s = bucket_stats[bkt]
+        if s["count"] > 0:
+            print(f"  {bkt:<8} {s['count']:>5} {s['pct']:>4.0f}%  "
+                  f"{s['mean_be']:>8.3f}  {s['mean_jsd']:>9.4f}")
+        else:
+            print(f"  {bkt:<8} {0:>5} {0:>4.0f}%  {'--':>8}  {'--':>9}")
+
+    # ── Verdict ─────────────────────────────────────────────────────────────
+    if r_jsd != r_jsd:
+        h0 = "INCONCLUSIVE"
+        verdict = "insufficient data (need >=2 prompts with finite divergence values)."
     elif abs(r_jsd) < 0.15:
-        verdict = ("divergence does NOT predict block efficiency -> objective "
-                   "mismatch likely: minimising JSD/KL will not move BE.")
+        h0 = "NOT RULED OUT"
+        verdict = (f"H0 NOT RULED OUT (r={r_jsd:+.3f}, p≈{p_jsd:.1e}): "
+                   f"JSD does not predict BE — minimising JSD/KL may not move BE.")
     elif r_jsd < 0:
-        verdict = ("divergence is negatively related to BE (lower divergence ⇒ "
-                   "higher BE) -> the objective IS connected to BE; keep tuning it.")
+        h0 = "RULED OUT"
+        verdict = (
+            f"H0 RULED OUT (r={r_jsd:+.3f}, p≈{p_jsd:.1e}, R²={r_jsd**2:.2f}): "
+            f"lower JSD predicts higher BE. The objective IS connected to BE. "
+            f"JSD explains {r_jsd**2*100:.0f}% of BE variance; remaining "
+            f"{(1-r_jsd**2)*100:.0f}% = teacher-entropy noise (high JSD but both "
+            f"models uncertain, tokens still accepted) + capacity ceiling on hard prompts."
+        )
     else:
-        verdict = ("divergence is positively related to BE -> unexpected; verify "
-                   "orientation before trusting this result.")
+        h0 = "UNEXPECTED"
+        verdict = (f"positive JSD-BE correlation (r={r_jsd:+.3f}) — unexpected; "
+                   f"verify orientation before trusting this result.")
+    print(f"\n  [H0] {h0}")
     print(f"  [verdict] {verdict}")
 
+    # ── W&B logging ─────────────────────────────────────────────────────────
     try:
         import wandb
         run = wandb.init(
             project="distillspec-pipeline",
-            name=f"diag_{os.path.basename(args.checkpoint.rstrip('/'))}_{args.dataset}_{mode_name}",
+            name=(f"diag_{os.path.basename(args.checkpoint.rstrip('/'))}"
+                  f"_{args.dataset}_{mode_name}"),
             job_type="diagnose",
             config={"checkpoint": args.checkpoint, "dataset": args.dataset,
-                    "mode": mode_name, "K": args.K, "L": args.L, "n": len(be_ys)},
+                    "mode": mode_name, "K": args.K, "L": args.L, "n": n},
         )
-        table = wandb.Table(columns=["jsd", "fwd_kl", "block_eff"])
-        for a, b, c in zip(jsd_xs, fkl_xs, be_ys):
-            table.add_data(a, b, c)
-        run.log({
-            "diag/jsd_vs_be":   wandb.plot.scatter(table, "jsd", "block_eff",
-                                  title="Per-prompt JSD vs block efficiency"),
-            "diag/fwdkl_vs_be": wandb.plot.scatter(table, "fwd_kl", "block_eff",
-                                  title="Per-prompt forward-KL vs block efficiency"),
-            "diag/corr_jsd_be":   r_jsd,
-            "diag/corr_fwdkl_be": r_fkl,
-            "diag/n_prompts":     len(be_ys),
+
+        # Per-prompt table: filter by bucket='hard' in W&B UI to see struggling prompts.
+        pp_table = wandb.Table(
+            columns=["prompt_idx", "prompt_preview", "jsd", "fwd_kl", "block_eff", "bucket"])
+        for row in rows:
+            pp_table.add_data(*row)
+
+        # Bucket summary table: replaces the confusing scalar line charts for counts.
+        bkt_table = wandb.Table(
+            columns=["bucket", "n", "pct", "mean_be", "mean_jsd",
+                     "be_thresh_lo", "be_thresh_hi"])
+        for bkt, lo, hi in [("easy", _BE_EASY, None), ("medium", _BE_HARD, _BE_EASY),
+                             ("hard", None, _BE_HARD)]:
+            s = bucket_stats[bkt]
+            bkt_table.add_data(
+                bkt, s["count"], round(s["pct"], 1),
+                round(s["mean_be"], 3) if s["count"] else None,
+                round(s["mean_jsd"], 4) if s["count"] else None,
+                lo, hi,
+            )
+
+        # Scalars → run.summary (not run.log) so they show as numbers in the
+        # Overview tab, NOT as single-point line charts.
+        run.summary.update({
+            "diag/n":          n,
+            "diag/corr_jsd":   round(r_jsd, 4),
+            "diag/p_jsd":      round(p_jsd, 6),
+            "diag/r2_jsd":     round(r_jsd ** 2, 4),
+            "diag/corr_fkl":   round(r_fkl, 4),
+            "diag/h0":         h0,
+            "diag/verdict":    verdict,
+            "diag/n_easy":     bucket_stats["easy"]["count"],
+            "diag/n_medium":   bucket_stats["medium"]["count"],
+            "diag/n_hard":     bucket_stats["hard"]["count"],
         })
-        run.summary["diag/verdict"] = verdict
+
+        # JSD scatter only — fwdKL scatter omitted; fwdKL is not the trained loss
+        # and its range (0–0.7+) makes it hard to read next to JSD (0–0.12).
+        run.log({
+            "diag/jsd_vs_be":      wandb.plot.scatter(
+                pp_table, "jsd", "block_eff",
+                title=f"JSD vs BE  r={r_jsd:+.3f} p≈{p_jsd:.0e}  [H0: {h0}]"),
+            "diag/per_prompt":     pp_table,
+            "diag/bucket_summary": bkt_table,
+        })
         run.finish()
-        print("  [diagnose] scatter + correlation + verdict logged to W&B")
+        print("  [diagnose] per-prompt table + bucket summary + JSD scatter → W&B")
     except Exception as e:
         print(f"  [diagnose] W&B logging skipped ({e}); values printed above.")
 
