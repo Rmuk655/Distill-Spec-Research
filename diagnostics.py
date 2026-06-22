@@ -252,25 +252,40 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
     # ── W&B logging ─────────────────────────────────────────────────────────
     try:
         import wandb
+        # Run name: include training-run directory (parent of ckpt_best/ckpt_latest)
+        # so runs from different training jobs are distinguishable in W&B.
+        # e.g. "diag_jsd_mathhard_s123_ckpt_best_math_eval_nss"
+        _ckpt = args.checkpoint.rstrip("/")
+        _ckpt_leaf   = os.path.basename(_ckpt)                   # ckpt_best
+        _ckpt_parent = os.path.basename(os.path.dirname(_ckpt))  # jsd_mathhard_s123
+        _run_name = f"diag_{_ckpt_parent}_{_ckpt_leaf}_{args.dataset}_{mode_name}"
+
         run = wandb.init(
             project="distillspec-pipeline",
-            name=(f"diag_{os.path.basename(args.checkpoint.rstrip('/'))}"
-                  f"_{args.dataset}_{mode_name}"),
+            name=_run_name,
             job_type="diagnose",
             config={"checkpoint": args.checkpoint, "dataset": args.dataset,
                     "mode": mode_name, "K": args.K, "L": args.L, "n": n,
                     "trained_loss": trained_loss},
         )
 
-        # Per-prompt table: filter by bucket='hard' in W&B UI to see struggling prompts.
+        # Per-prompt table (full 6 columns — filter by bucket='hard' to find struggling prompts).
         pp_table = wandb.Table(
             columns=["prompt_idx", "prompt_preview", "jsd", "fwd_kl", "block_eff", "bucket"])
         for row in rows:
             pp_table.add_data(*row)
 
+        # Minimal 2-column table for the scatter plot only.
+        # Passing pp_table directly to wandb.plot.scatter causes W&B to log it a
+        # second time as diag/{key}_table, duplicating the per_prompt table.
+        scatter_col = "fwd_kl" if trained_loss == "fwdkl" else "jsd"
+        scatter_table = wandb.Table(columns=[scatter_col, "block_eff"])
+        for row in rows:
+            scatter_table.add_data(row[3] if trained_loss == "fwdkl" else row[2], row[4])
+
         # Bucket summary: mean of PRIMARY loss per bucket.
         bkt_table = wandb.Table(
-            columns=["bucket", "n", "pct", f"mean_be", f"mean_{trained_loss}",
+            columns=["bucket", "n", "pct", "mean_be", f"mean_{trained_loss}",
                      "be_thresh_lo", "be_thresh_hi"])
         for bkt, lo, hi in [("easy", _BE_EASY, None), ("medium", _BE_HARD, _BE_EASY),
                              ("hard", None, _BE_HARD)]:
@@ -287,9 +302,9 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
             "diag/n":                    n,
             "diag/trained_loss":         trained_loss,
             # ── primary: trained loss ────────────────────────────────────────
-            f"diag/spearman_{trained_loss}":  round(rho_pri, 4),
+            f"diag/spearman_{trained_loss}":   round(rho_pri, 4),
             f"diag/p_spearman_{trained_loss}": round(p_rho_pri, 6),
-            f"diag/pearson_{trained_loss}":   round(r_pri, 4),
+            f"diag/pearson_{trained_loss}":    round(r_pri, 4),
             f"diag/p_pearson_{trained_loss}":  round(p_pri, 6),
             f"diag/r2_{trained_loss}":         round(r_pri ** 2, 4),
             f"diag/mean_{trained_loss}":       round(mean_pri, 5),
@@ -304,22 +319,20 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
             # ── verdict ──────────────────────────────────────────────────────
             "diag/h0":                   h0,
             "diag/verdict":              verdict,
-            "diag/n_easy":        bucket_stats["easy"]["count"],
-            "diag/n_medium":      bucket_stats["medium"]["count"],
-            "diag/n_hard":        bucket_stats["hard"]["count"],
+            "diag/n_easy":               bucket_stats["easy"]["count"],
+            "diag/n_medium":             bucket_stats["medium"]["count"],
+            "diag/n_hard":               bucket_stats["hard"]["count"],
         })
 
-        # Scatter against trained loss only (secondary omitted — different axis scale).
-        scatter_col = "fwd_kl" if trained_loss == "fwdkl" else "jsd"
         run.log({
             f"diag/{trained_loss}_vs_be": wandb.plot.scatter(
-                pp_table, scatter_col, "block_eff",
+                scatter_table, scatter_col, "block_eff",
                 title=f"{pl} vs BE  ρ={rho_pri:+.3f} p≈{p_rho_pri:.0e}  [H0: {h0}]"),
-            "diag/per_prompt":            pp_table,
-            "diag/bucket_summary":        bkt_table,
+            "diag/per_prompt":     pp_table,
+            "diag/bucket_summary": bkt_table,
         })
         run.finish()
-        print(f"  [diagnose] per-prompt table + bucket summary + {pl} scatter → W&B")
+        print(f"  [diagnose] {_run_name} → W&B")
     except Exception as e:
         print(f"  [diagnose] W&B logging skipped ({e}); values printed above.")
 
