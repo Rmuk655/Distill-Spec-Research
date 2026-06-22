@@ -29,7 +29,6 @@ Loss families (see losses/__init__.py for full list):
              naive_tree, nss_tree, specinfer_tree, spectr_tree, khisti_tree
 """
 from __future__ import annotations
-from __future__ import annotations
 
 import argparse
 import json
