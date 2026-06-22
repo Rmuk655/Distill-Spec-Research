@@ -22,12 +22,13 @@ def block_eff(gen_tokens: int, target_calls: int) -> float:
     return gen_tokens / target_calls if target_calls > 0 else float("nan")
 
 
-# BE difficulty thresholds (shared by diagnostics.py and train.py).
-#   easy  : BE >= BE_EASY  — draft accepts most of the K-deep tree
-#   medium: BE_HARD <= BE < BE_EASY
-#   hard  : BE <  BE_HARD  — fewer than 3 tokens accepted per target call
-BE_EASY = 6.0
-BE_HARD = 3.0
+# BE difficulty threshold fractions of L (shared by diagnostics.py and train.py).
+# Multiply by the actual L used at runtime — do NOT hardcode absolute values.
+#   easy  : BE >= BE_EASY_FRAC * L  (0.75 × 8 = 6.0 at default L=8)
+#   medium: BE_HARD_FRAC * L <= BE < BE_EASY_FRAC * L
+#   hard  : BE <  BE_HARD_FRAC * L  (0.375 × 8 = 3.0 at default L=8)
+BE_EASY_FRAC = 0.75
+BE_HARD_FRAC = 0.375
 
 # Verifier modes understood by speculative_decoding_loop (main.py)
 VERIFIER_MODES = [

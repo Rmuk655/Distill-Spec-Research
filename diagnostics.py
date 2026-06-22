@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from config import DEFAULT_DTYPE, BE_EASY as _BE_EASY, BE_HARD as _BE_HARD
+from config import DEFAULT_DTYPE, BE_EASY_FRAC, BE_HARD_FRAC
 from transformers import AutoModelForCausalLM
 
 
@@ -96,9 +96,12 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
       • diag/jsd_vs_be       — Scatter plot against JSD only (the trained loss)
       • run.summary scalars  — n, corr_jsd_be, p_jsd, r2_jsd, h0, verdict, counts
     """
+    _BE_EASY = BE_EASY_FRAC * args.L   # e.g. 0.75 × 8 = 6.0
+    _BE_HARD = BE_HARD_FRAC * args.L   # e.g. 0.375 × 8 = 3.0
+
     print("\n" + "=" * 78)
     print("  [diagnose] objective-vs-BE: per-prompt divergence vs block efficiency")
-    print(f"             mode='{mode_name}'  BE thresholds: easy≥{_BE_EASY} hard<{_BE_HARD}")
+    print(f"             mode='{mode_name}'  L={args.L}  BE thresholds: easy≥{_BE_EASY} hard<{_BE_HARD}")
     print("=" * 78)
 
     rows: list[tuple] = []   # (prompt_idx, preview, jsd, fkl, be, bucket)
