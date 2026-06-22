@@ -344,6 +344,48 @@ What it does, as a **separate pass after the timed loop**:
 > mathematically unaffected either way.  When the flag is off, eval does no extra
 > work and never imports W&B.
 
+### Decomposition stacked-bar + radar  (`--baseline_checkpoint`)
+
+Add `--baseline_checkpoint` (typically `Qwen/Qwen3-0.6B`, the untrained base) to
+get two additional plots that show **how much of the teacher–draft gap was closed**:
+
+```bash
+# requires: pip install matplotlib
+python eval.py --checkpoint checkpoints/<run>/ckpt_best \
+               --dataset math_eval --modes traversal --diagnose \
+               --baseline_checkpoint Qwen/Qwen3-0.6B
+```
+
+What it computes (as a third pass, after `--diagnose`):
+
+1. Loads the untrained base draft and runs `_prompt_divergence` on every prompt
+   that had a valid diagnostic reading → produces **G₀** (baseline JSD per prompt).
+2. From the `--diagnose` pass: **G** (trained JSD per prompt).
+3. Learned = max(G₀ − G, 0);  Remaining = G.
+
+**Stacked-bar** (two-panel figure, prompts sorted by G₀ easiest → hardest):
+
+- Top panel: red = remaining JSD, green = gap closed, black step-line = G₀.  Tells you
+  whether training reduced the gap uniformly or only on easy/hard prompts.
+- Bottom panel: per-prompt BE.  Reading both panels together tells you whether
+  high-divergence prompts also have low BE (they should if H0 is not the bottleneck).
+
+**Radar** (polar chart):
+
+- Splits prompts into 4 quartiles by G₀ (Q1=easy, Q4=hard), shows mean trained-BE in
+  each quadrant, with an overall-mean reference ring.  Tells you where training helped
+  most.
+
+Both figures are logged as W&B images in a separate `job_type='decompose'` run.  Key
+scalars logged: `decompose/mean_learned`, `decompose/mean_remaining`,
+`decompose/frac_closed` (fraction of initial gap recovered), and
+`decompose/be_q{1–4}_{easy,…,hard}`.
+
+> **Interpretation:**  `frac_closed ≈ 0` → training changed the draft's distribution
+> but the starting gap was already large (teacher is the bottleneck — try 32B).
+> `frac_closed` high but BE still near baseline → the gap is closing but BE doesn't
+> follow (H0 mismatch — the divergence metric is not the right lever).
+
 ---
 
 ## Inference (single prompt)
