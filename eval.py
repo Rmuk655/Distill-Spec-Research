@@ -499,6 +499,9 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
         "time_per_token_ms": 1000.0 * total_time / total_gen    if total_gen   > 0 else float("nan"),
         "avg_tree_nodes":    total_nodes / total_calls if total_calls > 0 else float("nan"),
         "total_gen_tokens":  total_gen,
+        # per-prompt block_eff — used only by --diagnose; not a CSV column.
+        "per_prompt_be": {r["prompt_idx"]: block_eff(r["gen_tokens"], r["target_calls"])
+                          for r in all_runs if "prompt_idx" in r and r["target_calls"]},
         "total_time_s":      total_time,
         "time_draft_s":      time_draft,
         "time_target_s":     time_target,
@@ -629,6 +632,126 @@ def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Diagnostic (--diagnose only): does the training objective predict BE?  ["H0"]
+#  Runs as a SEPARATE pass AFTER the timed eval — never affects throughput.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@torch.no_grad()
+def _prompt_divergence(p_model, q_model, tok, prompt, max_new_tokens, device):
+    """Per-prompt mean JSD and forward-KL(p||q) between teacher (p) and draft (q).
+
+    Mirrors the flat training objective: teacher greedily rolls out, both models
+    are forwarded on the same sequence, divergence is averaged over the generated
+    positions.  Pure measurement, called outside any timer — cannot affect
+    throughput.  Returns (jsd, fwd_kl), or (None, None) if nothing was generated.
+    """
+    import torch.nn.functional as F
+    ids  = torch.tensor(tok.encode(prompt), device=device, dtype=torch.long).unsqueeze(0)
+    attn = torch.ones_like(ids)
+    gen = p_model.generate(ids, attention_mask=attn, max_new_tokens=max_new_tokens,
+                           do_sample=False, pad_token_id=p_model.config.eos_token_id,
+                           use_cache=True)
+    sl = ids.shape[1]
+    p_logits = p_model(gen, return_dict=True).logits[0, sl - 1:-1].float()
+    q_logits = q_model(gen, return_dict=True).logits[0, sl - 1:-1].float()
+    if p_logits.shape[0] == 0:
+        return None, None
+    logp = F.log_softmax(p_logits, dim=-1)
+    logq = F.log_softmax(q_logits, dim=-1)
+    p, q = logp.exp(), logq.exp()
+    fkl  = (p * (logp - logq)).sum(-1).mean().item()                 # forward KL(p||q)
+    m    = (0.5 * (p + q)).clamp_min(1e-12)
+    logm = m.log()
+    jsd  = 0.5 * ((p * (logp - logm)).sum(-1)
+                  + (q * (logq - logm)).sum(-1)).mean().item()       # JSD
+    return jsd, fkl
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return float("nan")
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx <= 0 or syy <= 0:
+        return float("nan")
+    return sxy / (sxx ** 0.5 * syy ** 0.5)
+
+
+def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
+                                args, mode_name, device):
+    """Correlate per-prompt training divergence with per-prompt block efficiency.
+
+    Flat (|r| ~ 0) correlation  → the divergence the losses minimise does not
+                                   predict BE → objective mismatch ("H0"):
+                                   no divergence-minimising loss can move BE.
+    Negative correlation        → lower divergence ⇒ higher BE (expected): the
+                                   objective IS the right lever.
+    Logs a scatter + correlation scalars + a plain-English verdict to W&B.
+    """
+    print("\n" + "=" * 78)
+    print("  [diagnose] objective-vs-BE: per-prompt divergence vs block efficiency")
+    print(f"             (BE from mode='{mode_name}';  divergence = JSD / forward-KL)")
+    print("=" * 78)
+
+    jsd_xs, fkl_xs, be_ys = [], [], []
+    for i, prompt in enumerate(tqdm(prompts, desc="diagnose", ncols=80)):
+        if i not in per_prompt_be:
+            continue
+        jsd, fkl = _prompt_divergence(p_model, q_model, tok, prompt,
+                                      args.max_new_tokens, device)
+        if jsd is None:
+            continue
+        jsd_xs.append(jsd); fkl_xs.append(fkl); be_ys.append(per_prompt_be[i])
+
+    r_jsd = _pearson(jsd_xs, be_ys)
+    r_fkl = _pearson(fkl_xs, be_ys)
+    print(f"  n={len(be_ys)}  corr(JSD, BE)={r_jsd:+.3f}  corr(fwdKL, BE)={r_fkl:+.3f}")
+
+    if not (r_jsd == r_jsd):  # nan
+        verdict = "insufficient data to judge (need >=2 prompts with finite values)."
+    elif abs(r_jsd) < 0.15:
+        verdict = ("divergence does NOT predict block efficiency -> objective "
+                   "mismatch likely: minimising JSD/KL will not move BE.")
+    elif r_jsd < 0:
+        verdict = ("divergence is negatively related to BE (lower divergence ⇒ "
+                   "higher BE) -> the objective IS connected to BE; keep tuning it.")
+    else:
+        verdict = ("divergence is positively related to BE -> unexpected; verify "
+                   "orientation before trusting this result.")
+    print(f"  [verdict] {verdict}")
+
+    try:
+        import wandb
+        run = wandb.init(
+            project="distillspec-pipeline",
+            name=f"diag_{os.path.basename(args.checkpoint.rstrip('/'))}_{args.dataset}_{mode_name}",
+            job_type="diagnose",
+            config={"checkpoint": args.checkpoint, "dataset": args.dataset,
+                    "mode": mode_name, "K": args.K, "L": args.L, "n": len(be_ys)},
+        )
+        table = wandb.Table(columns=["jsd", "fwd_kl", "block_eff"])
+        for a, b, c in zip(jsd_xs, fkl_xs, be_ys):
+            table.add_data(a, b, c)
+        run.log({
+            "diag/jsd_vs_be":   wandb.plot.scatter(table, "jsd", "block_eff",
+                                  title="Per-prompt JSD vs block efficiency"),
+            "diag/fwdkl_vs_be": wandb.plot.scatter(table, "fwd_kl", "block_eff",
+                                  title="Per-prompt forward-KL vs block efficiency"),
+            "diag/corr_jsd_be":   r_jsd,
+            "diag/corr_fwdkl_be": r_fkl,
+            "diag/n_prompts":     len(be_ys),
+        })
+        run.summary["diag/verdict"] = verdict
+        run.finish()
+        print("  [diagnose] scatter + correlation + verdict logged to W&B")
+    except Exception as e:
+        print(f"  [diagnose] W&B logging skipped ({e}); values printed above.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Argparse + main
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -670,6 +793,16 @@ def parse_args():
                          "The thread polls pynvml at 1 Hz (~10 μs per call, 0.001%% overhead) "
                          "so disabling it only makes sense if you are profiling at microsecond "
                          "resolution and want a completely clean baseline.")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="DIAGNOSTIC MODE (off by default — NOT for throughput runs). "
+                         "After the timed eval, run a SEPARATE pass that computes, per "
+                         "prompt, the training divergence (JSD and forward-KL between "
+                         "teacher and draft) and correlates it with that prompt's block "
+                         "efficiency.  Answers: does the objective the losses minimise "
+                         "actually predict BE?  A flat correlation = objective mismatch "
+                         "(minimising divergence won't move BE).  Opens a W&B run and logs "
+                         "a scatter + correlation + verdict.  Adds forward passes, so it is "
+                         "kept entirely outside the timed loop — throughput is unaffected.")
     return ap.parse_args()
 
 
@@ -719,6 +852,10 @@ def main():
         mode_state[mode] = (sp, complete)
         if not complete:
             need_models = True
+    # --diagnose needs the models for its extra forward passes even when every
+    # mode's block_eff is already cached.
+    if args.diagnose:
+        need_models = True
 
     # ── Load models (teacher first, then draft) — skipped entirely when every
     #    requested mode is already fully cached for this (K, L) ──────────────
@@ -747,6 +884,7 @@ def main():
     print(f"  device={args.device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
     print("=" * 78)
 
+    all_stats = {}
     for mode in modes:
         set_seed(args.seed)   # identical RNG state for every mode
 
@@ -761,6 +899,7 @@ def main():
             max_new_tokens=args.max_new_tokens, temp=args.temp,
             state_path=sp, gpu_monitor=mon,
         )
+        all_stats[mode] = stats
         # Skip the CSV append for a run that was already fully cached at start
         # — re-appending an identical row only adds duplicates. A partial run
         # that *completes* during this invocation had complete=False, so it
@@ -774,6 +913,18 @@ def main():
                        specs=specs, cpu_threads_used=cpu_threads, phys_gpu_idx=phys_gpu_idx)
 
     print(f"\n[done] results appended to {csv_path}")
+
+    # ── Diagnostic pass (--diagnose only) — strictly AFTER the timed eval, so it
+    #    never contaminates throughput.  Correlates per-prompt training divergence
+    #    with the first mode's per-prompt block efficiency. ────────────────────
+    if args.diagnose:
+        primary = modes[0]
+        per_prompt_be = all_stats.get(primary, {}).get("per_prompt_be", {})
+        if not per_prompt_be:
+            print("  [diagnose] no per-prompt BE available — skipping diagnostic.")
+        else:
+            run_objective_be_diagnostic(p_model, q_model, tok, prompts,
+                                        per_prompt_be, args, primary, torch_device)
 
 
 if __name__ == "__main__":
