@@ -152,13 +152,29 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
         preview = prompt[:60].replace("\n", " ")
         rows.append((i, preview, round(jsd, 5), round(fkl, 5), round(be, 4), bucket))
 
-    r_jsd  = _pearson(jsd_xs, be_ys)
-    r_fkl  = _pearson(fkl_xs, be_ys)
-    rho_jsd = _spearman(jsd_xs, be_ys)   # rank correlation — invariant to JSD range compression
-    rho_fkl = _spearman(fkl_xs, be_ys)
+    r_jsd     = _pearson(jsd_xs, be_ys)
+    r_fkl     = _pearson(fkl_xs, be_ys)
+    rho_jsd   = _spearman(jsd_xs, be_ys)   # rank correlation — invariant to JSD range compression
+    rho_fkl   = _spearman(fkl_xs, be_ys)
     n = len(be_ys)
-    p_jsd    = _pval_pearson(r_jsd, n)
+    p_jsd     = _pval_pearson(r_jsd, n)
     p_rho_jsd = _pval_pearson(rho_jsd, n)  # same t-statistic formula holds for Spearman rho
+
+    # σ(JSD): spread of JSD values across prompts.
+    # Compare across runs to distinguish range restriction from true signal change:
+    #   σ stable + ρ drops  → Case A: true degradation, JSD no longer predicts BE
+    #   σ collapses + ρ stable → Case B: range restriction, model is uniformly better
+    def _std(xs):
+        if len(xs) < 2:
+            return float("nan")
+        mu = sum(xs) / len(xs)
+        return (sum((x - mu) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
+
+    std_jsd = _std(jsd_xs)
+    std_fkl = _std(fkl_xs)
+    std_be  = _std(be_ys)
+    mean_jsd_all = sum(jsd_xs) / n if n else float("nan")
+    mean_be_all  = sum(be_ys)  / n if n else float("nan")
 
     # ── Bucket stats ────────────────────────────────────────────────────────
     bucket_stats: dict[str, dict] = {}
@@ -176,11 +192,14 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                                      mean_jsd=float("nan"), pct=0.0)
 
     # ── Terminal output ─────────────────────────────────────────────────────
-    print(f"\n  n={n}")
-    print(f"  Pearson  r(JSD,BE)={r_jsd:+.3f}  p≈{p_jsd:.1e}  R²={r_jsd**2:.2f}  "
-          f"r(fwdKL,BE)={r_fkl:+.3f}")
+    print(f"\n  n={n}  mean_JSD={mean_jsd_all:.4f}  σ(JSD)={std_jsd:.4f}  "
+          f"mean_BE={mean_be_all:.3f}  σ(BE)={std_be:.3f}")
     print(f"  Spearman ρ(JSD,BE)={rho_jsd:+.3f}  p≈{p_rho_jsd:.1e}  "
-          f"ρ(fwdKL,BE)={rho_fkl:+.3f}  ← use this; invariant to JSD range compression")
+          f"ρ(fwdKL,BE)={rho_fkl:+.3f}  [primary — rank-stable]")
+    print(f"  Pearson  r(JSD,BE)={r_jsd:+.3f}  p≈{p_jsd:.1e}  R²={r_jsd**2:.2f}  "
+          f"r(fwdKL,BE)={r_fkl:+.3f}  [secondary — shrinks if σ(JSD) collapses]")
+    print(f"  → if σ(JSD) shrinks + ρ stable = range restriction (model uniformly better)")
+    print(f"  → if σ(JSD) stable  + ρ drops  = true signal loss (objective decoupled from BE)")
     print(f"\n  {'Bucket':<8} {'N':>5} {'%':>5}  {'Mean-BE':>8}  {'Mean-JSD':>9}")
     print(f"  {'-'*44}")
     for bkt in ("easy", "medium", "hard"):
@@ -255,13 +274,24 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
         # Pearson r reported as secondary — expect it to shrink as model improves.
         run.summary.update({
             "diag/n":             n,
-            "diag/spearman_jsd":  round(rho_jsd, 4),   # primary
+            # ── primary signal ──────────────────────────────────────────────
+            "diag/spearman_jsd":  round(rho_jsd, 4),
             "diag/p_spearman":    round(p_rho_jsd, 6),
-            "diag/pearson_jsd":   round(r_jsd, 4),      # secondary; shrinks with model quality
+            # ── secondary: Pearson r shrinks under range restriction ────────
+            "diag/pearson_jsd":   round(r_jsd, 4),
             "diag/p_pearson":     round(p_jsd, 6),
             "diag/r2_jsd":        round(r_jsd ** 2, 4),
+            # ── spread diagnostics: distinguish Case A vs Case B ────────────
+            # Case A (true degradation): σ(JSD) stable, ρ drops
+            # Case B (range restriction): σ(JSD) collapses, ρ stable, r drops
+            "diag/mean_jsd":      round(mean_jsd_all, 5),
+            "diag/std_jsd":       round(std_jsd, 5),
+            "diag/mean_be":       round(mean_be_all, 4),
+            "diag/std_be":        round(std_be, 4),
+            # ── fwdKL secondaries ───────────────────────────────────────────
             "diag/spearman_fkl":  round(rho_fkl, 4),
             "diag/pearson_fkl":   round(r_fkl, 4),
+            # ── verdict ─────────────────────────────────────────────────────
             "diag/h0":            h0,
             "diag/verdict":       verdict,
             "diag/n_easy":        bucket_stats["easy"]["count"],
