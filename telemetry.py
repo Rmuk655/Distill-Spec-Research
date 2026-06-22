@@ -161,6 +161,20 @@ class GpuMonitor:
                     s["pcie_rx_kbs"] = rx
                 except Exception:
                     pass
+                try:
+                    # SM (shader) clock in MHz — drops under thermal throttle.
+                    s["sm_clock_mhz"] = self._nvml.nvmlDeviceGetClockInfo(
+                        self._handle, self._nvml.NVML_CLOCK_SM)
+                    # Memory (HBM) clock in MHz.
+                    s["mem_clock_mhz"] = self._nvml.nvmlDeviceGetClockInfo(
+                        self._handle, self._nvml.NVML_CLOCK_MEM)
+                except Exception:
+                    pass
+                try:
+                    s["gpu_temp_c"] = self._nvml.nvmlDeviceGetTemperature(
+                        self._handle, self._nvml.NVML_TEMPERATURE_GPU)
+                except Exception:
+                    pass
                 # NVLink — sum counters across all active links.
                 if self._nvlink_links:
                     try:
@@ -205,6 +219,10 @@ class GpuMonitor:
             ("gpu_sm_util_avg_pct",    lambda: _avg("sm_util")),
             ("gpu_mem_util_avg_pct",   lambda: _avg("mem_util")),   # HBM bus %
             ("gpu_vram_peak_mb",       lambda: _peak("vram_used_mb")),
+            ("gpu_sm_clock_avg_mhz",   lambda: _avg("sm_clock_mhz")),   # drops under throttle
+            ("gpu_mem_clock_avg_mhz",  lambda: _avg("mem_clock_mhz")),
+            ("gpu_temp_avg_c",         lambda: _avg("gpu_temp_c")),
+            ("gpu_temp_peak_c",        lambda: _peak("gpu_temp_c")),
             ("gpu_pcie_tx_avg_kbs",    lambda: _avg("pcie_tx_kbs")),
             ("gpu_pcie_rx_avg_kbs",    lambda: _avg("pcie_rx_kbs")),
             ("gpu_nvlink_tx_avg_kbs",  lambda: _avg("nvlink_tx_kbs")),
@@ -236,6 +254,10 @@ class GpuMonitor:
             parts.append(f"HBM-bus={s['gpu_mem_util_avg_pct']:.0f}%")
         if "gpu_vram_peak_mb" in s:
             parts.append(f"VRAM-peak={s['gpu_vram_peak_mb']}MB")
+        if "gpu_sm_clock_avg_mhz" in s:
+            parts.append(f"SM-clk={s['gpu_sm_clock_avg_mhz']:.0f}MHz")
+        if "gpu_temp_avg_c" in s:
+            parts.append(f"temp={s['gpu_temp_avg_c']:.0f}°C(peak={s.get('gpu_temp_peak_c','?')}°C)")
         if "gpu_pcie_tx_avg_kbs" in s:
             parts.append(f"PCIe-TX={s['gpu_pcie_tx_avg_kbs']/1024:.1f}MB/s")
         if "gpu_pcie_rx_avg_kbs" in s:

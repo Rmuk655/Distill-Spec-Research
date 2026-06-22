@@ -75,7 +75,8 @@ RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
 def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
                       max_new_tokens, temp, state_path: str | None = None,
-                      gpu_monitor: GpuMonitor | None = None):
+                      gpu_monitor: GpuMonitor | None = None,
+                      warmup_n: int = 3):
     """Run the prompt set under one verifier mode and aggregate stats.
 
     Verifier exceptions (VerifierError from verifier_safe.py) are caught
@@ -103,6 +104,23 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
         gpu_monitor.start(sidecar_path=_gpu_sidecar)
 
     t_tokenizer_total = 0.0
+
+    # Prime CUDA kernels before the timed loop.  The first few prompts are slow
+    # because flash-attention and other CUDA extensions JIT-compile on first use.
+    if warmup_n > 0:
+        print(f"  [warmup] running {warmup_n} prompt(s) to prime CUDA kernels ...")
+        for wp in prompts[:warmup_n]:
+            p_model._spec_profile = {"runs": []}
+            try:
+                speculative_decoding_loop(
+                    p_model=p_model, q_model=q_model, tok=tok,
+                    prompt=wp, verification_algo=mode,
+                    max_new_tokens=max_new_tokens, K=K, L=L,
+                    p_temp=temp, q_temp=temp,
+                )
+            except Exception:
+                pass
+        torch.cuda.synchronize()
 
     try:
         for i, prompt in enumerate(tqdm(prompts, desc=f"mode={mode} K={K} L={L}", ncols=80)):
@@ -215,6 +233,9 @@ def parse_args():
     ap.add_argument("--output",    default=None,
                     help="Override output CSV path (default: results.csv next to eval.py). "
                          "Set to a unique path when running multiple parallel processes.")
+    ap.add_argument("--warmup_n",  type=int, default=3,
+                    help="Prompts to run (untimed) before the timed loop to prime CUDA kernels. "
+                         "Default 3.  Set 0 to skip (faster iteration, less accurate throughput).")
     ap.add_argument("--no_gpu_monitor", action="store_true",
                     help="Disable the background GPU/CPU telemetry thread.  "
                          "The thread polls pynvml at 1 Hz (~10 μs per call, 0.001%% overhead) "
@@ -276,6 +297,9 @@ def main():
     data_path = dataset_path(args.dataset)
     prompts   = load_prompts_jsonl(data_path)[:args.n]
     modes = [m.strip() for m in args.modes.split(",")] if args.modes else [args.mode]
+    unknown = [m for m in modes if m not in VERIFIER_MODES]
+    if unknown:
+        raise SystemExit(f"Unknown verifier mode(s): {unknown}. Valid: {VERIFIER_MODES}")
 
     # A mode needs the models only if some prompt is still unfinished.
     mode_state: dict[str, tuple[str, bool]] = {}
@@ -333,6 +357,7 @@ def main():
             K=args.K, L=args.L,
             max_new_tokens=args.max_new_tokens, temp=args.temp,
             state_path=sp, gpu_monitor=mon,
+            warmup_n=args.warmup_n,
         )
         all_stats[mode] = stats
         # Skip the CSV append for a run that was already fully cached at start
