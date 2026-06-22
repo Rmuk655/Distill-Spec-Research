@@ -58,7 +58,7 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts,
     if skipped:
         print(f"  [val] {skipped}/{n_prompts} prompts skipped (verifier errors)")
     draft.train()
-
+    return block_eff(total_gen, total_calls), per_prompt
 
 
 def _update_forgetting(best_per_prompt: dict, val_pp: dict) -> float:
