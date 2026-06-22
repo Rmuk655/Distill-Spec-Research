@@ -251,6 +251,11 @@ def parse_args():
                          "(minimising divergence won't move BE).  Opens a W&B run and logs "
                          "a scatter + correlation + verdict.  Adds forward passes, so it is "
                          "kept entirely outside the timed loop — throughput is unaffected.")
+    ap.add_argument("--trained_loss", default=None,
+                    help="Which divergence was minimised during training: 'jsd' or 'fwdkl'. "
+                         "Used by --diagnose to select primary metrics (σ, mean, Spearman ρ). "
+                         "Defaults to auto-detect from checkpoint path (looks for 'jsd'/'kl'); "
+                         "if undetectable defaults to 'jsd'.")
     ap.add_argument("--baseline_checkpoint", default=None,
                     help="Untrained base draft checkpoint for decomposition analysis "
                          "(e.g. 'Qwen/Qwen3-0.6B').  Only used together with --diagnose. "
@@ -380,11 +385,20 @@ def main():
     if args.diagnose:
         primary = modes[0]
         per_prompt_be = all_stats.get(primary, {}).get("per_prompt_be", {})
+        # Resolve which loss was trained with — explicit arg > checkpoint path heuristic.
+        _ckpt_lower = args.checkpoint.lower()
+        if args.trained_loss:
+            trained_loss = args.trained_loss.lower()
+        elif "fwdkl" in _ckpt_lower or ("kl" in _ckpt_lower and "jsd" not in _ckpt_lower):
+            trained_loss = "fwdkl"
+        else:
+            trained_loss = "jsd"   # default: jsd covers jsd_flat, jsd_flat_enrich, etc.
         if not per_prompt_be:
             print("  [diagnose] no per-prompt BE available — skipping diagnostic.")
         else:
             diag = run_objective_be_diagnostic(p_model, q_model, tok, prompts,
-                                               per_prompt_be, args, primary, torch_device)
+                                               per_prompt_be, args, primary, torch_device,
+                                               trained_loss=trained_loss)
             if args.baseline_checkpoint and diag is not None:
                 jsd_xs, _fkl_xs, be_ys, valid_indices = diag
                 if len(jsd_xs) >= 4:

@@ -110,29 +110,37 @@ def _spearman(xs: list, ys: list) -> float:
 
 
 def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
-                                args, mode_name, device):
+                                args, mode_name, device, trained_loss: str = "jsd"):
     """Correlate per-prompt training divergence with per-prompt block efficiency.
 
-    Flat (|r| ~ 0) correlation  → objective mismatch (H0): minimising JSD/KL
-                                   will not move BE.
-    Negative correlation        → lower divergence ⇒ higher BE (expected): the
-                                   objective IS the right lever.
+    trained_loss: 'jsd' or 'fwdkl' — which divergence was minimised during training.
+    Primary metrics (σ, mean, Spearman ρ, scatter plot) are reported for the trained
+    loss.  The other divergence is computed and reported as secondary for reference.
 
-    W&B output (all scalars go to run.summary, NOT run.log, so they appear in
-    the Overview tab as numbers — not as single-point line charts):
-      • diag/bucket_summary  — Table: easy/medium/hard counts, mean BE, mean JSD
-      • diag/per_prompt      — Table: one row per prompt with prompt_idx,
-                               prompt_preview, jsd, fwd_kl, block_eff, bucket
-                               (filter by bucket='hard' to find struggling prompts)
-      • diag/jsd_vs_be       — Scatter plot against JSD only (the trained loss)
-      • run.summary scalars  — n, corr_jsd_be, p_jsd, r2_jsd, h0, verdict, counts
+    Flat (|r| ~ 0) correlation  → objective mismatch (H0): minimising this loss
+                                   will not move BE.
+    Negative correlation        → lower divergence ⇒ higher BE: the objective IS
+                                   the right lever.
+
+    W&B output (all scalars go to run.summary, NOT run.log):
+      • diag/bucket_summary       — Table: easy/medium/hard counts, mean BE, mean loss
+      • diag/per_prompt           — Table: prompt_idx, preview, jsd, fwd_kl, be, bucket
+      • diag/{trained_loss}_vs_be — Scatter of trained loss vs BE (primary)
+      • run.summary scalars       — spearman, pearson, sigma, mean for trained loss
     """
     _BE_EASY = BE_EASY_FRAC * args.L   # e.g. 0.75 × 8 = 6.0
     _BE_HARD = BE_HARD_FRAC * args.L   # e.g. 0.375 × 8 = 3.0
 
+    # Resolve primary vs secondary divergence labels
+    if trained_loss == "fwdkl":
+        primary_label, secondary_label = "fwdKL", "JSD"
+    else:
+        primary_label, secondary_label = "JSD", "fwdKL"
+
     print("\n" + "=" * 78)
     print("  [diagnose] objective-vs-BE: per-prompt divergence vs block efficiency")
-    print(f"             mode='{mode_name}'  L={args.L}  BE thresholds: easy≥{_BE_EASY} hard<{_BE_HARD}")
+    print(f"             mode='{mode_name}'  L={args.L}  trained_loss={trained_loss}  "
+          f"primary={primary_label}  BE thresholds: easy≥{_BE_EASY} hard<{_BE_HARD}")
     print("=" * 78)
 
     rows: list[tuple] = []   # (prompt_idx, preview, jsd, fkl, be, bucket)
@@ -152,61 +160,65 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
         preview = prompt[:60].replace("\n", " ")
         rows.append((i, preview, round(jsd, 5), round(fkl, 5), round(be, 4), bucket))
 
-    r_jsd     = _pearson(jsd_xs, be_ys)
-    r_fkl     = _pearson(fkl_xs, be_ys)
-    rho_jsd   = _spearman(jsd_xs, be_ys)   # rank correlation — invariant to JSD range compression
-    rho_fkl   = _spearman(fkl_xs, be_ys)
-    n = len(be_ys)
-    p_jsd     = _pval_pearson(r_jsd, n)
-    p_rho_jsd = _pval_pearson(rho_jsd, n)  # same t-statistic formula holds for Spearman rho
+    # Assign primary/secondary arrays based on trained_loss
+    pri_xs  = fkl_xs if trained_loss == "fwdkl" else jsd_xs
+    sec_xs  = jsd_xs if trained_loss == "fwdkl" else fkl_xs
 
-    # σ(JSD): spread of JSD values across prompts.
-    # Compare across runs to distinguish range restriction from true signal change:
-    #   σ stable + ρ drops  → Case A: true degradation, JSD no longer predicts BE
-    #   σ collapses + ρ stable → Case B: range restriction, model is uniformly better
+    r_pri   = _pearson(pri_xs, be_ys)
+    r_sec   = _pearson(sec_xs, be_ys)
+    rho_pri = _spearman(pri_xs, be_ys)
+    rho_sec = _spearman(sec_xs, be_ys)
+    n = len(be_ys)
+    p_pri     = _pval_pearson(r_pri, n)
+    p_rho_pri = _pval_pearson(rho_pri, n)
+
     def _std(xs):
         if len(xs) < 2:
             return float("nan")
         mu = sum(xs) / len(xs)
         return (sum((x - mu) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
 
-    std_jsd = _std(jsd_xs)
-    std_fkl = _std(fkl_xs)
+    std_pri = _std(pri_xs)
+    std_sec = _std(sec_xs)
     std_be  = _std(be_ys)
-    mean_jsd_all = sum(jsd_xs) / n if n else float("nan")
-    mean_be_all  = sum(be_ys)  / n if n else float("nan")
+    mean_pri = sum(pri_xs) / n if n else float("nan")
+    mean_be_all = sum(be_ys) / n if n else float("nan")
 
-    # ── Bucket stats ────────────────────────────────────────────────────────
+    # ── Bucket stats — mean of PRIMARY loss per bucket ───────────────────────
+    # row layout: (prompt_idx, preview, jsd, fkl, be, bucket)
+    pri_col = 3 if trained_loss == "fwdkl" else 2   # index into row tuple
     bucket_stats: dict[str, dict] = {}
     for bkt in ("easy", "medium", "hard"):
-        pts = [(r[2], r[4]) for r in rows if r[5] == bkt]   # (jsd, be)
+        pts = [(r[pri_col], r[4]) for r in rows if r[5] == bkt]   # (pri_loss, be)
         if pts:
             bucket_stats[bkt] = dict(
                 count=len(pts),
                 mean_be=sum(b for _, b in pts) / len(pts),
-                mean_jsd=sum(j for j, _ in pts) / len(pts),
+                mean_pri=sum(j for j, _ in pts) / len(pts),
                 pct=100.0 * len(pts) / n,
             )
         else:
             bucket_stats[bkt] = dict(count=0, mean_be=float("nan"),
-                                     mean_jsd=float("nan"), pct=0.0)
+                                     mean_pri=float("nan"), pct=0.0)
 
     # ── Terminal output ─────────────────────────────────────────────────────
-    print(f"\n  n={n}  mean_JSD={mean_jsd_all:.4f}  σ(JSD)={std_jsd:.4f}  "
+    pl = primary_label    # short alias
+    sl = secondary_label
+    print(f"\n  n={n}  mean_{pl}={mean_pri:.4f}  σ({pl})={std_pri:.4f}  "
           f"mean_BE={mean_be_all:.3f}  σ(BE)={std_be:.3f}")
-    print(f"  Spearman ρ(JSD,BE)={rho_jsd:+.3f}  p≈{p_rho_jsd:.1e}  "
-          f"ρ(fwdKL,BE)={rho_fkl:+.3f}  [primary — rank-stable]")
-    print(f"  Pearson  r(JSD,BE)={r_jsd:+.3f}  p≈{p_jsd:.1e}  R²={r_jsd**2:.2f}  "
-          f"r(fwdKL,BE)={r_fkl:+.3f}  [secondary — shrinks if σ(JSD) collapses]")
-    print(f"  → if σ(JSD) shrinks + ρ stable = range restriction (model uniformly better)")
-    print(f"  → if σ(JSD) stable  + ρ drops  = true signal loss (objective decoupled from BE)")
-    print(f"\n  {'Bucket':<8} {'N':>5} {'%':>5}  {'Mean-BE':>8}  {'Mean-JSD':>9}")
-    print(f"  {'-'*44}")
+    print(f"  Spearman ρ({pl},BE)={rho_pri:+.3f}  p≈{p_rho_pri:.1e}  "
+          f"ρ({sl},BE)={rho_sec:+.3f}  [primary — rank-stable]")
+    print(f"  Pearson  r({pl},BE)={r_pri:+.3f}  p≈{p_pri:.1e}  R²={r_pri**2:.2f}  "
+          f"r({sl},BE)={r_sec:+.3f}  [secondary — shrinks if σ({pl}) collapses]")
+    print(f"  → if σ({pl}) shrinks + ρ stable = range restriction (model uniformly better)")
+    print(f"  → if σ({pl}) stable  + ρ drops  = true signal loss (objective decoupled from BE)")
+    print(f"\n  {'Bucket':<8} {'N':>5} {'%':>5}  {'Mean-BE':>8}  {f'Mean-{pl}':>11}")
+    print(f"  {'-'*47}")
     for bkt in ("easy", "medium", "hard"):
         s = bucket_stats[bkt]
         if s["count"] > 0:
             print(f"  {bkt:<8} {s['count']:>5} {s['pct']:>4.0f}%  "
-                  f"{s['mean_be']:>8.3f}  {s['mean_jsd']:>9.4f}")
+                  f"{s['mean_be']:>8.3f}  {s['mean_pri']:>11.4f}")
         else:
             print(f"  {bkt:<8} {0:>5} {0:>4.0f}%  {'--':>8}  {'--':>9}")
 
@@ -214,24 +226,25 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
     # Spearman is the primary signal: it measures rank order agreement and is
     # invariant to JSD range compression (which shrinks Pearson r as the model
     # improves, even when the underlying relationship is unchanged).
-    if rho_jsd != rho_jsd:
+    if rho_pri != rho_pri:
         h0 = "INCONCLUSIVE"
         verdict = "insufficient data (need >=2 prompts with finite divergence values)."
-    elif abs(rho_jsd) < 0.15:
+    elif abs(rho_pri) < 0.15:
         h0 = "NOT RULED OUT"
-        verdict = (f"H0 NOT RULED OUT (rho={rho_jsd:+.3f}, p≈{p_rho_jsd:.1e}): "
-                   f"JSD rank does not predict BE rank — minimising JSD/KL may not move BE.")
-    elif rho_jsd < 0:
+        verdict = (f"H0 NOT RULED OUT (rho={rho_pri:+.3f}, p≈{p_rho_pri:.1e}, "
+                   f"trained_loss={trained_loss}): {pl} rank does not predict BE rank "
+                   f"— minimising {pl} may not move BE.")
+    elif rho_pri < 0:
         h0 = "RULED OUT"
         verdict = (
-            f"H0 RULED OUT (rho={rho_jsd:+.3f}, p≈{p_rho_jsd:.1e}): "
-            f"lower JSD rank predicts higher BE rank. The objective IS connected to BE. "
-            f"Note: Pearson r={r_jsd:+.3f} may be weaker than rho if JSD range is "
-            f"compressed (better model → narrower JSD spread → smaller r, same signal)."
+            f"H0 RULED OUT (rho={rho_pri:+.3f}, p≈{p_rho_pri:.1e}, trained_loss={trained_loss}): "
+            f"lower {pl} rank predicts higher BE rank. The objective IS connected to BE. "
+            f"Note: Pearson r={r_pri:+.3f} may be weaker than rho if σ({pl}) is "
+            f"compressed (better model → narrower spread → smaller r, same signal)."
         )
     else:
         h0 = "UNEXPECTED"
-        verdict = (f"positive JSD-BE rank correlation (rho={rho_jsd:+.3f}) — unexpected; "
+        verdict = (f"positive {pl}-BE rank correlation (rho={rho_pri:+.3f}) — unexpected; "
                    f"verify orientation before trusting this result.")
     print(f"\n  [H0] {h0}")
     print(f"  [verdict] {verdict}")
@@ -245,7 +258,8 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                   f"_{args.dataset}_{mode_name}"),
             job_type="diagnose",
             config={"checkpoint": args.checkpoint, "dataset": args.dataset,
-                    "mode": mode_name, "K": args.K, "L": args.L, "n": n},
+                    "mode": mode_name, "K": args.K, "L": args.L, "n": n,
+                    "trained_loss": trained_loss},
         )
 
         # Per-prompt table: filter by bucket='hard' in W&B UI to see struggling prompts.
@@ -254,9 +268,9 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
         for row in rows:
             pp_table.add_data(*row)
 
-        # Bucket summary table: replaces the confusing scalar line charts for counts.
+        # Bucket summary: mean of PRIMARY loss per bucket.
         bkt_table = wandb.Table(
-            columns=["bucket", "n", "pct", "mean_be", "mean_jsd",
+            columns=["bucket", "n", "pct", f"mean_be", f"mean_{trained_loss}",
                      "be_thresh_lo", "be_thresh_hi"])
         for bkt, lo, hi in [("easy", _BE_EASY, None), ("medium", _BE_HARD, _BE_EASY),
                              ("hard", None, _BE_HARD)]:
@@ -264,52 +278,48 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
             bkt_table.add_data(
                 bkt, s["count"], round(s["pct"], 1),
                 round(s["mean_be"], 3) if s["count"] else None,
-                round(s["mean_jsd"], 4) if s["count"] else None,
+                round(s["mean_pri"], 4) if s["count"] else None,
                 lo, hi,
             )
 
-        # Scalars → run.summary (not run.log) so they show as numbers in the
-        # Overview tab, NOT as single-point line charts.
-        # Primary signal is Spearman rho (invariant to JSD range compression).
-        # Pearson r reported as secondary — expect it to shrink as model improves.
+        # All scalars → run.summary so they appear as numbers in Overview, not charts.
         run.summary.update({
-            "diag/n":             n,
-            # ── primary signal ──────────────────────────────────────────────
-            "diag/spearman_jsd":  round(rho_jsd, 4),
-            "diag/p_spearman":    round(p_rho_jsd, 6),
-            # ── secondary: Pearson r shrinks under range restriction ────────
-            "diag/pearson_jsd":   round(r_jsd, 4),
-            "diag/p_pearson":     round(p_jsd, 6),
-            "diag/r2_jsd":        round(r_jsd ** 2, 4),
-            # ── spread diagnostics: distinguish Case A vs Case B ────────────
-            # Case A (true degradation): σ(JSD) stable, ρ drops
-            # Case B (range restriction): σ(JSD) collapses, ρ stable, r drops
-            "diag/mean_jsd":      round(mean_jsd_all, 5),
-            "diag/std_jsd":       round(std_jsd, 5),
-            "diag/mean_be":       round(mean_be_all, 4),
-            "diag/std_be":        round(std_be, 4),
-            # ── fwdKL secondaries ───────────────────────────────────────────
-            "diag/spearman_fkl":  round(rho_fkl, 4),
-            "diag/pearson_fkl":   round(r_fkl, 4),
-            # ── verdict ─────────────────────────────────────────────────────
-            "diag/h0":            h0,
-            "diag/verdict":       verdict,
+            "diag/n":                    n,
+            "diag/trained_loss":         trained_loss,
+            # ── primary: trained loss ────────────────────────────────────────
+            f"diag/spearman_{trained_loss}":  round(rho_pri, 4),
+            f"diag/p_spearman_{trained_loss}": round(p_rho_pri, 6),
+            f"diag/pearson_{trained_loss}":   round(r_pri, 4),
+            f"diag/p_pearson_{trained_loss}":  round(p_pri, 6),
+            f"diag/r2_{trained_loss}":         round(r_pri ** 2, 4),
+            f"diag/mean_{trained_loss}":       round(mean_pri, 5),
+            f"diag/std_{trained_loss}":        round(std_pri, 5),
+            # ── secondary: other divergence ──────────────────────────────────
+            f"diag/spearman_{secondary_label.lower()}": round(rho_sec, 4),
+            f"diag/pearson_{secondary_label.lower()}":  round(r_sec, 4),
+            f"diag/std_{secondary_label.lower()}":      round(std_sec, 5),
+            # ── BE spread ────────────────────────────────────────────────────
+            "diag/mean_be":              round(mean_be_all, 4),
+            "diag/std_be":               round(std_be, 4),
+            # ── verdict ──────────────────────────────────────────────────────
+            "diag/h0":                   h0,
+            "diag/verdict":              verdict,
             "diag/n_easy":        bucket_stats["easy"]["count"],
             "diag/n_medium":      bucket_stats["medium"]["count"],
             "diag/n_hard":        bucket_stats["hard"]["count"],
         })
 
-        # JSD scatter only — fwdKL scatter omitted; fwdKL is not the trained loss
-        # and its range (0–0.7+) makes it hard to read next to JSD (0–0.12).
+        # Scatter against trained loss only (secondary omitted — different axis scale).
+        scatter_col = "fwd_kl" if trained_loss == "fwdkl" else "jsd"
         run.log({
-            "diag/jsd_vs_be":      wandb.plot.scatter(
-                pp_table, "jsd", "block_eff",
-                title=f"JSD vs BE  r={r_jsd:+.3f} p≈{p_jsd:.0e}  [H0: {h0}]"),
-            "diag/per_prompt":     pp_table,
-            "diag/bucket_summary": bkt_table,
+            f"diag/{trained_loss}_vs_be": wandb.plot.scatter(
+                pp_table, scatter_col, "block_eff",
+                title=f"{pl} vs BE  ρ={rho_pri:+.3f} p≈{p_rho_pri:.0e}  [H0: {h0}]"),
+            "diag/per_prompt":            pp_table,
+            "diag/bucket_summary":        bkt_table,
         })
         run.finish()
-        print("  [diagnose] per-prompt table + bucket summary + JSD scatter → W&B")
+        print(f"  [diagnose] per-prompt table + bucket summary + {pl} scatter → W&B")
     except Exception as e:
         print(f"  [diagnose] W&B logging skipped ({e}); values printed above.")
 
