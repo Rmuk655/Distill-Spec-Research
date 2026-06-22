@@ -445,7 +445,8 @@ def main():
                 best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
                                 state={"step": step + 1, "val_block_eff": val_be,
-                                        "best_val_block_eff": best_val_block_eff},
+                                        "best_val_block_eff": best_val_block_eff,
+                                        "loss": args.loss},
                                 use_lora=USE_LORA)
                 print(f"  [val] saved ckpt_best (block_eff={val_be:.3f})")
                 if wandb_run:
@@ -458,7 +459,8 @@ def main():
                                    "best_val_block_eff": best_val_block_eff,
                                    "sched_steps": sched_steps,
                                    "warmup_opt_steps": warmup_opt_steps,
-                                    "cmd": sys.argv},
+                                   "cmd": sys.argv,
+                                   "loss": args.loss},
                             use_lora=USE_LORA)
 
     # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
@@ -467,7 +469,7 @@ def main():
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                     state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
                            "sched_steps": sched_steps, "warmup_opt_steps": warmup_opt_steps,
-                           "cmd": sys.argv},
+                           "cmd": sys.argv, "loss": args.loss},
                     use_lora=USE_LORA)
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")

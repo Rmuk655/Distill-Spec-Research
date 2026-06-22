@@ -252,10 +252,10 @@ def parse_args():
                          "a scatter + correlation + verdict.  Adds forward passes, so it is "
                          "kept entirely outside the timed loop — throughput is unaffected.")
     ap.add_argument("--trained_loss", default=None,
-                    help="Which divergence was minimised during training: 'jsd' or 'fwdkl'. "
-                         "Used by --diagnose to select primary metrics (σ, mean, Spearman ρ). "
-                         "Defaults to auto-detect from checkpoint path (looks for 'jsd'/'kl'); "
-                         "if undetectable defaults to 'jsd'.")
+                    help="Override for which divergence family was trained: 'jsd' or 'fwdkl'. "
+                         "Normally auto-read from state.json inside the checkpoint directory "
+                         "(written by train.py as 'loss': args.loss).  Only needed for old "
+                         "checkpoints saved before this field was added.")
     ap.add_argument("--baseline_checkpoint", default=None,
                     help="Untrained base draft checkpoint for decomposition analysis "
                          "(e.g. 'Qwen/Qwen3-0.6B').  Only used together with --diagnose. "
@@ -385,14 +385,31 @@ def main():
     if args.diagnose:
         primary = modes[0]
         per_prompt_be = all_stats.get(primary, {}).get("per_prompt_be", {})
-        # Resolve which loss was trained with — explicit arg > checkpoint path heuristic.
-        _ckpt_lower = args.checkpoint.lower()
+        # Resolve which loss was trained with.
+        # Priority: explicit --trained_loss > state.json (written by train.py) > path heuristic.
+        def _loss_to_divergence(loss_name: str) -> str:
+            """Map full loss name (e.g. 'jsd_flat_enrich') to divergence family ('jsd'/'fwdkl')."""
+            l = loss_name.lower()
+            if "fwdkl" in l or ("kl" in l and "jsd" not in l):
+                return "fwdkl"
+            return "jsd"
+
         if args.trained_loss:
             trained_loss = args.trained_loss.lower()
-        elif "fwdkl" in _ckpt_lower or ("kl" in _ckpt_lower and "jsd" not in _ckpt_lower):
-            trained_loss = "fwdkl"
         else:
-            trained_loss = "jsd"   # default: jsd covers jsd_flat, jsd_flat_enrich, etc.
+            _state_file = os.path.join(args.checkpoint, "state.json")
+            try:
+                import json as _json
+                _saved_loss = _json.load(open(_state_file)).get("loss")
+                if _saved_loss:
+                    trained_loss = _loss_to_divergence(_saved_loss)
+                    print(f"  [diagnose] trained_loss='{_saved_loss}' → primary divergence: {trained_loss}")
+                else:
+                    raise ValueError("no 'loss' key")
+            except Exception:
+                # Old checkpoint without loss field — fall back to path heuristic.
+                trained_loss = _loss_to_divergence(args.checkpoint)
+                print(f"  [diagnose] state.json missing 'loss' field; inferred from path: {trained_loss}")
         if not per_prompt_be:
             print("  [diagnose] no per-prompt BE available — skipping diagnostic.")
         else:
