@@ -46,7 +46,7 @@ import torch.nn.functional as F
 from losses import (ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss,
                     is_offpolicy_tree_loss, is_enrichment_loss, is_flat_enrich_loss)
 from data_io import get_path as dataset_path
-from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff, BE_EASY, BE_HARD
+from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff, BE_EASY_FRAC, BE_HARD_FRAC
 
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
@@ -197,6 +197,8 @@ def main():
     global K, L, VAL_K, VAL_L
     K, L = args.K, args.L
     VAL_K, VAL_L = K, L
+    _VAL_BE_EASY = BE_EASY_FRAC * VAL_L   # e.g. 0.75 × 8 = 6.0
+    _VAL_BE_HARD = BE_HARD_FRAC * VAL_L   # e.g. 0.375 × 8 = 3.0
 
     output_dir = args.output or os.path.join(OUTPUT_ROOT, run_slug(args))
     os.makedirs(output_dir, exist_ok=True)
@@ -398,9 +400,9 @@ def main():
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
-                _n_easy   = sum(1 for b in _val_pp.values() if b >= BE_EASY)
-                _n_medium = sum(1 for b in _val_pp.values() if BE_HARD <= b < BE_EASY)
-                _n_hard   = sum(1 for b in _val_pp.values() if b < BE_HARD)
+                _n_easy   = sum(1 for b in _val_pp.values() if b >= _VAL_BE_EASY)
+                _n_medium = sum(1 for b in _val_pp.values() if _VAL_BE_HARD <= b < _VAL_BE_EASY)
+                _n_hard   = sum(1 for b in _val_pp.values() if b < _VAL_BE_HARD)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
                       f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
                       f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
@@ -427,9 +429,9 @@ def main():
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
-                _n_easy   = sum(1 for b in _val_pp.values() if b >= BE_EASY)
-                _n_medium = sum(1 for b in _val_pp.values() if BE_HARD <= b < BE_EASY)
-                _n_hard   = sum(1 for b in _val_pp.values() if b < BE_HARD)
+                _n_easy   = sum(1 for b in _val_pp.values() if b >= _VAL_BE_EASY)
+                _n_medium = sum(1 for b in _val_pp.values() if _VAL_BE_HARD <= b < _VAL_BE_EASY)
+                _n_hard   = sum(1 for b in _val_pp.values() if b < _VAL_BE_HARD)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
                       f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
                       f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
