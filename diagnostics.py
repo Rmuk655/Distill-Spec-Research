@@ -78,6 +78,37 @@ def _pval_pearson(r: float, n: int) -> float:
     return 2.0 * (1.0 - 0.5 * (1.0 + math.erf(abs(t) / (2.0 ** 0.5))))
 
 
+def _ranks(xs: list) -> list:
+    """Return rank vector (1-based) for xs.  Average ranks for ties."""
+    n = len(xs)
+    order = sorted(range(n), key=lambda i: xs[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j < n - 1 and xs[order[j + 1]] == xs[order[j]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0   # 1-based average rank for tied block
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg
+        i = j + 1
+    return ranks
+
+
+def _spearman(xs: list, ys: list) -> float:
+    """Spearman rank correlation.
+
+    Preferred over Pearson here because it is invariant to monotone compression
+    of either axis.  As the draft model improves, JSD values compress toward zero
+    (range restriction), which shrinks Pearson r even when the rank ordering is
+    unchanged.  Spearman rho measures whether lower JSD ranks predict higher BE
+    ranks — the right question for H0 testing.
+    """
+    if len(xs) < 2:
+        return float("nan")
+    return _pearson(_ranks(xs), _ranks(ys))
+
+
 def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                                 args, mode_name, device):
     """Correlate per-prompt training divergence with per-prompt block efficiency.
@@ -121,10 +152,13 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
         preview = prompt[:60].replace("\n", " ")
         rows.append((i, preview, round(jsd, 5), round(fkl, 5), round(be, 4), bucket))
 
-    r_jsd = _pearson(jsd_xs, be_ys)
-    r_fkl = _pearson(fkl_xs, be_ys)
+    r_jsd  = _pearson(jsd_xs, be_ys)
+    r_fkl  = _pearson(fkl_xs, be_ys)
+    rho_jsd = _spearman(jsd_xs, be_ys)   # rank correlation — invariant to JSD range compression
+    rho_fkl = _spearman(fkl_xs, be_ys)
     n = len(be_ys)
-    p_jsd = _pval_pearson(r_jsd, n)
+    p_jsd    = _pval_pearson(r_jsd, n)
+    p_rho_jsd = _pval_pearson(rho_jsd, n)  # same t-statistic formula holds for Spearman rho
 
     # ── Bucket stats ────────────────────────────────────────────────────────
     bucket_stats: dict[str, dict] = {}
@@ -142,8 +176,11 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                                      mean_jsd=float("nan"), pct=0.0)
 
     # ── Terminal output ─────────────────────────────────────────────────────
-    print(f"\n  n={n}  corr(JSD,BE)={r_jsd:+.3f}  p≈{p_jsd:.1e}  "
-          f"R²={r_jsd**2:.2f}  corr(fwdKL,BE)={r_fkl:+.3f}")
+    print(f"\n  n={n}")
+    print(f"  Pearson  r(JSD,BE)={r_jsd:+.3f}  p≈{p_jsd:.1e}  R²={r_jsd**2:.2f}  "
+          f"r(fwdKL,BE)={r_fkl:+.3f}")
+    print(f"  Spearman ρ(JSD,BE)={rho_jsd:+.3f}  p≈{p_rho_jsd:.1e}  "
+          f"ρ(fwdKL,BE)={rho_fkl:+.3f}  ← use this; invariant to JSD range compression")
     print(f"\n  {'Bucket':<8} {'N':>5} {'%':>5}  {'Mean-BE':>8}  {'Mean-JSD':>9}")
     print(f"  {'-'*44}")
     for bkt in ("easy", "medium", "hard"):
@@ -154,26 +191,28 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
         else:
             print(f"  {bkt:<8} {0:>5} {0:>4.0f}%  {'--':>8}  {'--':>9}")
 
-    # ── Verdict ─────────────────────────────────────────────────────────────
-    if r_jsd != r_jsd:
+    # ── Verdict — based on Spearman rho (primary) + Pearson r (secondary) ───
+    # Spearman is the primary signal: it measures rank order agreement and is
+    # invariant to JSD range compression (which shrinks Pearson r as the model
+    # improves, even when the underlying relationship is unchanged).
+    if rho_jsd != rho_jsd:
         h0 = "INCONCLUSIVE"
         verdict = "insufficient data (need >=2 prompts with finite divergence values)."
-    elif abs(r_jsd) < 0.15:
+    elif abs(rho_jsd) < 0.15:
         h0 = "NOT RULED OUT"
-        verdict = (f"H0 NOT RULED OUT (r={r_jsd:+.3f}, p≈{p_jsd:.1e}): "
-                   f"JSD does not predict BE — minimising JSD/KL may not move BE.")
-    elif r_jsd < 0:
+        verdict = (f"H0 NOT RULED OUT (rho={rho_jsd:+.3f}, p≈{p_rho_jsd:.1e}): "
+                   f"JSD rank does not predict BE rank — minimising JSD/KL may not move BE.")
+    elif rho_jsd < 0:
         h0 = "RULED OUT"
         verdict = (
-            f"H0 RULED OUT (r={r_jsd:+.3f}, p≈{p_jsd:.1e}, R²={r_jsd**2:.2f}): "
-            f"lower JSD predicts higher BE. The objective IS connected to BE. "
-            f"JSD explains {r_jsd**2*100:.0f}% of BE variance; remaining "
-            f"{(1-r_jsd**2)*100:.0f}% = teacher-entropy noise (high JSD but both "
-            f"models uncertain, tokens still accepted) + capacity ceiling on hard prompts."
+            f"H0 RULED OUT (rho={rho_jsd:+.3f}, p≈{p_rho_jsd:.1e}): "
+            f"lower JSD rank predicts higher BE rank. The objective IS connected to BE. "
+            f"Note: Pearson r={r_jsd:+.3f} may be weaker than rho if JSD range is "
+            f"compressed (better model → narrower JSD spread → smaller r, same signal)."
         )
     else:
         h0 = "UNEXPECTED"
-        verdict = (f"positive JSD-BE correlation (r={r_jsd:+.3f}) — unexpected; "
+        verdict = (f"positive JSD-BE rank correlation (rho={rho_jsd:+.3f}) — unexpected; "
                    f"verify orientation before trusting this result.")
     print(f"\n  [H0] {h0}")
     print(f"  [verdict] {verdict}")
@@ -212,17 +251,22 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
 
         # Scalars → run.summary (not run.log) so they show as numbers in the
         # Overview tab, NOT as single-point line charts.
+        # Primary signal is Spearman rho (invariant to JSD range compression).
+        # Pearson r reported as secondary — expect it to shrink as model improves.
         run.summary.update({
-            "diag/n":          n,
-            "diag/corr_jsd":   round(r_jsd, 4),
-            "diag/p_jsd":      round(p_jsd, 6),
-            "diag/r2_jsd":     round(r_jsd ** 2, 4),
-            "diag/corr_fkl":   round(r_fkl, 4),
-            "diag/h0":         h0,
-            "diag/verdict":    verdict,
-            "diag/n_easy":     bucket_stats["easy"]["count"],
-            "diag/n_medium":   bucket_stats["medium"]["count"],
-            "diag/n_hard":     bucket_stats["hard"]["count"],
+            "diag/n":             n,
+            "diag/spearman_jsd":  round(rho_jsd, 4),   # primary
+            "diag/p_spearman":    round(p_rho_jsd, 6),
+            "diag/pearson_jsd":   round(r_jsd, 4),      # secondary; shrinks with model quality
+            "diag/p_pearson":     round(p_jsd, 6),
+            "diag/r2_jsd":        round(r_jsd ** 2, 4),
+            "diag/spearman_fkl":  round(rho_fkl, 4),
+            "diag/pearson_fkl":   round(r_fkl, 4),
+            "diag/h0":            h0,
+            "diag/verdict":       verdict,
+            "diag/n_easy":        bucket_stats["easy"]["count"],
+            "diag/n_medium":      bucket_stats["medium"]["count"],
+            "diag/n_hard":        bucket_stats["hard"]["count"],
         })
 
         # JSD scatter only — fwdKL scatter omitted; fwdKL is not the trained loss
