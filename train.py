@@ -46,7 +46,7 @@ import torch.nn.functional as F
 from losses import (ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss,
                     is_offpolicy_tree_loss, is_enrichment_loss, is_flat_enrich_loss)
 from data_io import get_path as dataset_path
-from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff
+from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff, BE_EASY, BE_HARD
 
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
@@ -398,8 +398,12 @@ def main():
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
+                _n_easy   = sum(1 for b in _val_pp.values() if b >= BE_EASY)
+                _n_medium = sum(1 for b in _val_pp.values() if BE_HARD <= b < BE_EASY)
+                _n_hard   = sum(1 for b in _val_pp.values() if b < BE_HARD)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
-                      f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}")
+                      f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
+                      f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
 
             if wandb_run:
                 wandb_run.log({
@@ -412,6 +416,8 @@ def main():
                        if args.aux_mode == "depth_weight" else {}),
                     **({"val/block_eff": val_be} if val_be is not None else {}),
                     **({"val/forgetting": val_forget} if val_forget is not None else {}),
+                    **({"val/n_easy": _n_easy, "val/n_medium": _n_medium,
+                        "val/n_hard": _n_hard} if val_be is not None else {}),
                 }, step=step + 1)
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
@@ -421,11 +427,18 @@ def main():
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
+                _n_easy   = sum(1 for b in _val_pp.values() if b >= BE_EASY)
+                _n_medium = sum(1 for b in _val_pp.values() if BE_HARD <= b < BE_EASY)
+                _n_hard   = sum(1 for b in _val_pp.values() if b < BE_HARD)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
-                      f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}")
+                      f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
+                      f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
                 if wandb_run:
                     wandb_run.log({"val/block_eff": val_be,
-                                   "val/forgetting": val_forget}, step=step + 1)
+                                   "val/forgetting": val_forget,
+                                   "val/n_easy": _n_easy,
+                                   "val/n_medium": _n_medium,
+                                   "val/n_hard": _n_hard}, step=step + 1)
             if val_be > best_val_block_eff:
                 best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",

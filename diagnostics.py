@@ -22,16 +22,8 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from config import DEFAULT_DTYPE
+from config import DEFAULT_DTYPE, BE_EASY as _BE_EASY, BE_HARD as _BE_HARD
 from transformers import AutoModelForCausalLM
-
-# Fixed BE thresholds for easy/medium/hard buckets.
-# Comparable across checkpoints and runs (unlike percentile cuts).
-#   easy  : BE >= 6  — draft accepts most of the K-deep tree per call
-#   medium: BE 3–6   — partial acceptance
-#   hard  : BE < 3   — fewer than 3 tokens accepted per target call on average
-_BE_EASY = 6.0
-_BE_HARD = 3.0
 
 
 @torch.no_grad()
