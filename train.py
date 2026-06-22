@@ -239,9 +239,15 @@ def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
 
 def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
                              K, max_new_tokens=128, teacher_temp=1.0):
-    """Sample K stochastic teacher rollouts; score student on each; average loss."""
+    """Sample K stochastic teacher rollouts; score student on each; average loss.
+
+    Returns (loss, path_diversity) where path_diversity is the fraction of token
+    positions where at least one path disagrees with path 0 (0 = all paths identical,
+    1 = all positions differ).  Used to diagnose whether K paths add novel contexts.
+    """
     attn_mask = torch.ones_like(prompt_ids)
     losses = []
+    gen_tokens = []   # collect generated token ids for diversity measurement
     for _ in range(K):
         with torch.no_grad():
             gen = teacher.generate(
@@ -251,13 +257,23 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
                 pad_token_id=teacher.config.eos_token_id,
                 use_cache=True,
             )
+            gen_tokens.append(gen[0, prompt_ids.shape[1]:])   # [T_i]
             t_out    = teacher(gen, return_dict=True)
             t_logits = t_out.logits[0, prompt_ids.shape[1]-1:-1].float()   # [T, V]
 
         s_out    = draft(gen, return_dict=True)
         s_logits = s_out.logits[0, prompt_ids.shape[1]-1:-1].float()        # [T, V]
         losses.append(loss_fn(s_logits, t_logits))
-    return sum(losses) / K
+
+    # Path diversity: fraction of positions where paths disagree (only when K > 1).
+    if K > 1:
+        min_len = min(t.shape[0] for t in gen_tokens)
+        stacked = torch.stack([t[:min_len] for t in gen_tokens], dim=0)  # [K, T]
+        path_diversity = (stacked != stacked[0:1]).any(dim=0).float().mean().item()
+    else:
+        path_diversity = 0.0
+
+    return sum(losses) / K, path_diversity
 
 
 # ---------------------------------------------------------------------------
@@ -577,11 +593,11 @@ def try_resume(model, optimizer, scheduler, output_dir):
 # Model loading (Qwen3 only; A100; BF16; optional LoRA)
 # ---------------------------------------------------------------------------
 
-def load_models(draft_id: str, teacher_id: str, device: str = "cuda"):
+def load_models(draft_id: str, teacher_id: str, device: str = "cuda", load_in_4bit: bool = False):
     """Load draft + teacher via verifiers/util.load_models, then configure for training.
     util.load_models handles device selection and BF16 loading; we add the training-specific
     setup: re-enable grad, freeze teacher, optionally wrap draft in LoRA."""
-    tok, teacher, draft = _sot_load(teacher_id, draft_id, device=device)
+    tok, teacher, draft = _sot_load(teacher_id, draft_id, device=device, load_in_4bit=load_in_4bit)
     # util.load_models disables grad globally (inference default); restore for training.
     torch.set_grad_enabled(True)
     teacher.eval()
@@ -642,6 +658,11 @@ def parse_args():
     ap.add_argument("--draft_temp",   type=float, default=DRAFT_TEMP)
     ap.add_argument("--device",       default="cuda",
                     help="CUDA device, e.g. cuda:1 (default: auto-select freest GPU)")
+    ap.add_argument("--teacher", type=str, default=TEACHER_MODEL,
+                    help=f"Teacher model name or local path (default: {TEACHER_MODEL}).")
+    ap.add_argument("--load_in_4bit", action="store_true",
+                    help="Load teacher in 4-bit NF4 via bitsandbytes. Needed for large "
+                         "teachers (e.g. 32B) on GPUs where bf16 does not fit.")
     ap.add_argument("--aux_loss",   type=str, default=None,
                     choices=sorted(ALL_LOSSES.keys()),
                     help="Optional auxiliary loss: total = primary + aux_weight * aux. "
@@ -701,7 +722,8 @@ def main():
             print(f"*** To continue from it run: {_cmd} ***\n")
 
     # Models
-    tokenizer, draft, teacher = load_models(DRAFT_MODEL, TEACHER_MODEL, device=args.device)
+    tokenizer, draft, teacher = load_models(DRAFT_MODEL, args.teacher, device=args.device,
+                                             load_in_4bit=args.load_in_4bit)
 
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
@@ -794,6 +816,7 @@ def main():
     depth_ema: float | None = None   # running mean of E[tau_V] for --aux_mode depth_weight
     depth_w = 1.0
     depth_d = 0.0                     # last raw E[tau_V] (logged so the sweep is observable)
+    path_div = 0.0                    # last flat_enrich teacher-path diversity (K>1 only)
     t0 = time.time()
 
     for step in range(start_step, args.steps):
@@ -801,9 +824,9 @@ def main():
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
         if flat_enrich:
-            loss = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
-                                            K=K, max_new_tokens=MAX_NEW_TOKENS,
-                                            teacher_temp=args.teacher_temp)
+            loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
+                                                      K=K, max_new_tokens=MAX_NEW_TOKENS,
+                                                      teacher_temp=args.teacher_temp)
         elif enrichment:
             loss = compute_enrichment_loss(loss_fn, draft, teacher, ids,
                                            K=K, L=L,
@@ -867,7 +890,9 @@ def main():
             elapsed = time.time() - t0
             print(f"step={step+1:5d}/{args.steps}  loss={avg:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}  "
-                  f"grad={grad_norm.item():.2f}  elapsed={elapsed/60:.1f}m")
+                  f"grad={grad_norm.item():.2f}  "
+                  f"{f'pathdiv={path_div:.3f}  ' if (flat_enrich and K > 1) else ''}"
+                  f"elapsed={elapsed/60:.1f}m")
 
             # Compute val metrics at val steps BEFORE logging so train + val go
             # into a single wandb.log() call — two separate calls at the same
@@ -884,6 +909,8 @@ def main():
                     "train/loss":      avg,
                     "train/lr":        scheduler.get_last_lr()[0],
                     "train/grad_norm": grad_norm.item(),
+                    **({"train/path_diversity": path_div}
+                       if (flat_enrich and K > 1) else {}),
                     **({"train/depth_w": depth_w, "train/depth_d": depth_d}
                        if args.aux_mode == "depth_weight" else {}),
                     **({"val/block_eff": val_be} if val_be is not None else {}),
@@ -905,6 +932,8 @@ def main():
                                 state={"step": step + 1, "val_block_eff": val_be,
                                        "best_val_block_eff": best_val_block_eff})
                 print(f"  [val] saved ckpt_best (block_eff={val_be:.3f})")
+                if wandb_run:
+                    wandb_run.summary["val/best_block_eff"] = best_val_block_eff
 
         # Rolling latest checkpoint
         if (step + 1) % SAVE_EVERY == 0:
