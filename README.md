@@ -58,7 +58,7 @@ Distill-Spec-Research/
 │   └── tree.py          # 11 tree losses (3 divergences + 8 verifier-aligned)
 ├── verifiers/           # VERBATIM copy of /GBV — do not edit unless syncing upstream
 ├── data_io/
-│   ├── download.py      # fetch gsm8k / math_hard / math_val / alpaca / math500 / humaneval / mtbench
+│   ├── download.py      # fetch gsm8k / math_hard / math_val / alpaca / math500 / humaneval / mtbench / spec_bench
 │   └── raw/             # downloaded JSONL files (gitignored)
 ├── scripts/
 │   └── setup_a100.sh    # one-shot env setup wrapper
@@ -113,6 +113,19 @@ python eval.py --checkpoint checkpoints/<run>/ckpt_best --dataset math_eval
 ```
 
 `math_val` (200 problems) is only for during-training checkpoint selection — never report it as a final number. `math_eval` (1000 problems) is the held-out set, analogous to `gsm8k_eval`.
+
+### Evaluation methodology — iteration vs paper
+
+- **Day-to-day iteration:** train and eval on `math_hard` / `math_eval`. Fast feedback; in-domain.
+- **For the paper:** report on **Spec-Bench** — the field-standard speculative-decoding benchmark (480 prompts, 6 categories: multi-turn, translation, summarization, QA, math, RAG). It is *cross-domain* relative to math-only training, so it measures whether the distilled draft **transfers** beyond the training distribution — the generalization claim reviewers expect. Train on one distribution, eval on a different held-out one; never report numbers on the training distribution.
+
+```bash
+# fetch Spec-Bench (480 prompts, from the official hemingkx/Spec-Bench repo)
+python -m data_io.download --datasets spec_bench
+
+# eval a checkpoint on Spec-Bench (break down by the per-row "category" field for the paper table)
+python eval.py --checkpoint checkpoints/<run>/ckpt_best --dataset spec_bench
+```
 
 ### Combining a flat backbone with an acceptance-aligned tree loss
 

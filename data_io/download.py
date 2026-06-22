@@ -15,6 +15,7 @@ Files produced:
     raw/gsm8k_val.jsonl       — first 100 of GSM8K test (validation during training)
     raw/gsm8k_eval.jsonl      — next 200..200+n of GSM8K test (final eval)
     raw/alpaca.jsonl, math500.jsonl, humaneval.jsonl, mtbench.jsonl  — eval sets
+    raw/spec_bench.jsonl      — Spec-Bench (480 prompts, 6 categories) — paper eval
 
 The val / eval split of GSM8K test is deterministic (random.Random(42) shuffle)
 and the two pools never overlap, so val-best checkpoint selection does NOT bias
@@ -144,6 +145,53 @@ def fetch_hf(dataset_id: str, split: str, field: str, name: str,
     return path
 
 
+def fetch_spec_bench(force: bool = False) -> str:
+    """Download Spec-Bench — the standard speculative-decoding eval benchmark.
+
+    Spec-Bench (Xia et al. 2024, https://github.com/hemingkx/Spec-Bench) is the
+    field-standard multi-domain benchmark for measuring speculative-decoding
+    speedup: 480 prompts across 6 categories (80 each) — multi-turn conversation,
+    translation, summarization, question answering, mathematical reasoning, and
+    retrieval-augmented generation.
+
+    USE FOR THE PAPER: report block-eff per category to show the draft transfers
+    beyond the training domain.  For day-to-day iteration, keep using math_hard.
+
+    The per-row "category" field is preserved so eval can break results down by
+    subdomain.  Each row's first turn is taken as the prompt.
+    """
+    path = os.path.join(DATA_DIR, "spec_bench.jsonl")
+    if os.path.isfile(path) and not force:
+        print("  spec_bench.jsonl already present — skipping")
+        return path
+
+    url = ("https://raw.githubusercontent.com/hemingkx/Spec-Bench/"
+           "main/data/spec_bench/question.jsonl")
+    print(f"  fetching spec_bench from {url} ...")
+    items = []
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            for line in r:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                turns = obj.get("turns") or []
+                prompt = turns[0] if turns else obj.get("prompt", "")
+                if not (prompt and isinstance(prompt, str)):
+                    continue
+                items.append({"prompt": prompt,
+                              "category": obj.get("category", ""),
+                              "question_id": obj.get("question_id", "")})
+        save_jsonl(path, items)
+    except Exception as e:
+        print(f"  WARNING: spec_bench download failed: {e}")
+        items = [{"prompt": f"Test prompt {i} for spec_bench.", "category": "fallback"}
+                 for i in range(10)]
+        save_jsonl(path, items)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Dataset registry — eval scripts look up file paths through this.
 # ---------------------------------------------------------------------------
@@ -243,7 +291,7 @@ def fetch_math_hard_and_val(force: bool = False,
 def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
               force: bool = False) -> None:
     """Top-level entry point — fetch every dataset we evaluate on."""
-    requested = set(datasets) if datasets else set(EVAL_DATASETS) | {"gsm8k"}
+    requested = set(datasets) if datasets else set(EVAL_DATASETS) | {"gsm8k", "spec_bench"}
 
     if train:
         fetch_gsm8k_train(force=force)
@@ -256,6 +304,9 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
     if "math_hard" in requested or "math_val" in requested or "math_eval" in requested:
         fetch_math_hard_and_val(force=force)
 
+    if "spec_bench" in requested:
+        fetch_spec_bench(force=force)
+
     for name, (hf_id, split, field, config, ans) in EVAL_DATASETS.items():
         if name not in requested:
             continue
@@ -266,7 +317,7 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
 def get_path(name: str) -> str:
     """Resolve a dataset name to its on-disk JSONL path (must be downloaded)."""
     known = ({"gsm8k_train", "gsm8k_val", "gsm8k_eval",
-              "math_hard", "math_val", "math_eval"} | set(EVAL_DATASETS))
+              "math_hard", "math_val", "math_eval", "spec_bench"} | set(EVAL_DATASETS))
     if name in known:
         return os.path.join(DATA_DIR, f"{name}.jsonl")
     raise KeyError(f"Unknown dataset '{name}'. Known: {sorted(known)}")
