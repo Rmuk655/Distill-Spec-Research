@@ -435,15 +435,21 @@ def expected_depth_scalar(draft, teacher, prompt_ids, K, L, verifier,
 
 @torch.no_grad()
 def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
-    """Returns val block efficiency averaged over VAL_PROMPTS prompts.
+    """Returns (aggregate_block_eff, per_prompt_block_eff) over VAL_PROMPTS prompts.
+
+    per_prompt_block_eff is a {prompt_index: block_eff} dict — used by the caller
+    to compute a backward-transfer (forgetting) metric without any extra forward
+    passes: it is the SAME val pass, just keeping per-prompt numbers instead of
+    only their aggregate.
 
     VerifierError (from verifier_safe.py) is caught per-prompt so a bug in
     verifier.py does not abort training.  Skipped prompts are excluded from the
-    block_eff denominator; if all prompts fail, returns nan.
+    block_eff denominator; if all prompts fail, aggregate returns nan.
     """
     mode = LOSS_TO_VERIFIER.get(args.loss, "traversal")
     draft.eval()
     total_gen, total_calls, skipped = 0, 0, 0
+    per_prompt: dict[int, float] = {}
     for i, prompt in enumerate(val_prompts[:VAL_PROMPTS]):
         teacher._spec_prompt_idx = i
         try:
@@ -460,10 +466,32 @@ def compute_val_metrics(draft, teacher, tokenizer, val_prompts, args):
         s = teacher._spec_run_stats
         total_gen   += s["gen_tokens"]
         total_calls += s["target_calls"]
+        per_prompt[i] = block_eff(s["gen_tokens"], s["target_calls"])
     if skipped:
         print(f"  [val] {skipped}/{VAL_PROMPTS} prompts skipped (verifier errors)")
     draft.train()
-    return block_eff(total_gen, total_calls)
+    return block_eff(total_gen, total_calls), per_prompt
+
+
+def _update_forgetting(best_per_prompt: dict, val_pp: dict) -> float:
+    """Backward-transfer (forgetting) metric (Lopez-Paz & Ranzato 2017).
+
+    For each val prompt, track its best-ever block_eff.  Forgetting at this step
+    is the mean drop from each prompt's personal best to its current value:
+        forgetting = mean_i max(0, best_i - current_i)
+    0 = no prompt has regressed below its peak; large = the student learned
+    some prompts then lost them (signature of H3: teacher confusing the student).
+    Updates best_per_prompt in place.  Uses the SAME val prompts as block_eff —
+    no extra forward passes.
+    """
+    if not val_pp:
+        return 0.0
+    drops = []
+    for idx, be in val_pp.items():
+        prev_best = best_per_prompt.get(idx, be)
+        drops.append(max(0.0, prev_best - be))
+        best_per_prompt[idx] = max(prev_best, be)
+    return sum(drops) / len(drops)
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +845,7 @@ def main():
     depth_w = 1.0
     depth_d = 0.0                     # last raw E[tau_V] (logged so the sweep is observable)
     path_div = 0.0                    # last flat_enrich teacher-path diversity (K>1 only)
+    best_per_prompt: dict[int, float] = {}   # each val prompt's best-ever block_eff (forgetting)
     t0 = time.time()
 
     for step in range(start_step, args.steps):
@@ -898,11 +927,13 @@ def main():
             # into a single wandb.log() call — two separate calls at the same
             # step cause the second to be silently dropped in wandb ≥0.15.
             val_be = None
+            val_forget = None
             if (step + 1) % VAL_EVERY == 0:
                 _clear_node_caches()
-                val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                val_forget = _update_forgetting(best_per_prompt, _val_pp)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
-                      f"best={best_val_block_eff:.3f}")
+                      f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}")
 
             if wandb_run:
                 wandb_run.log({
@@ -914,6 +945,7 @@ def main():
                     **({"train/depth_w": depth_w, "train/depth_d": depth_d}
                        if args.aux_mode == "depth_weight" else {}),
                     **({"val/block_eff": val_be} if val_be is not None else {}),
+                    **({"val/forgetting": val_forget} if val_forget is not None else {}),
                 }, step=step + 1)
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
@@ -921,11 +953,13 @@ def main():
             if (step + 1) % LOG_EVERY != 0:
                 # VAL_EVERY not a multiple of LOG_EVERY — compute val now
                 _clear_node_caches()
-                val_be = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, args)
+                val_forget = _update_forgetting(best_per_prompt, _val_pp)
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
-                      f"best={best_val_block_eff:.3f}")
+                      f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}")
                 if wandb_run:
-                    wandb_run.log({"val/block_eff": val_be}, step=step + 1)
+                    wandb_run.log({"val/block_eff": val_be,
+                                   "val/forgetting": val_forget}, step=step + 1)
             if val_be > best_val_block_eff:
                 best_val_block_eff = val_be
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",

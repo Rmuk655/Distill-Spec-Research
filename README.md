@@ -104,6 +104,24 @@ python train.py --loss jsd        --train_dataset math_hard --val_dataset math_v
 python train.py --loss naive_tree --train_dataset math_hard --val_dataset math_val --steps 2000
 ```
 
+### Swapping the teacher (e.g. 32B)
+
+The teacher defaults to `Qwen/Qwen3-8B`.  Override it with `--teacher` (a model id
+or local path).  For a teacher too large to fit in bf16 on one GPU (e.g. 32B),
+add `--load_in_4bit` to load it in 4-bit NF4 via bitsandbytes (the frozen teacher's
+quantization loss is negligible for distillation):
+
+```bash
+# 32B teacher, draft unchanged — needs `pip install bitsandbytes accelerate`
+python train.py --loss jsd --teacher Qwen/Qwen3-32B --load_in_4bit \
+                --train_dataset math_hard --val_dataset math_val --steps 4000
+```
+
+A bigger teacher only helps when the bottleneck is teacher-side (the 8B teacher has
+little left to teach at the contexts that matter).  If the bottleneck is the draft's
+capacity, a larger teacher makes the gap *bigger*, not smaller — use `--diagnose`
+and `val/forgetting` (below) to tell which regime you are in before scaling up.
+
 ### Math eval
 
 After training, evaluate on the 1000-problem held-out set:
@@ -193,6 +211,19 @@ What happens during training (per step):
 6. Every `SAVE_EVERY` steps: write `ckpt_latest/` + `state.json` so
    `--resume` works.
 
+### W&B metrics logged during training
+
+| Metric | When | What it tells you |
+|---|---|---|
+| `train/loss`, `train/lr`, `train/grad_norm` | every `LOG_EVERY` | standard training health |
+| `val/block_eff` | every `VAL_EVERY` | the north-star metric (on the 25-prompt val set, `--val_temp` low to cut variance) |
+| `val/best_block_eff` (summary) | on each new best | pinned best — the W&B *summary* now shows best, not the last value |
+| `val/forgetting` | every `VAL_EVERY` | **backward-transfer / forgetting** (Lopez-Paz & Ranzato 2017): mean drop of each val prompt from its personal-best BE. 0 = no regression; large = the student learned prompts then lost them (signature of the teacher *confusing* a limited-capacity student). Reuses the **same 25 val prompts** — zero extra compute. |
+| `train/path_diversity` | every `LOG_EVERY`, **flat-enrich K>1 only** | fraction of token positions where the K teacher rollouts disagree. `< 0.05` → enrichment paths are near-identical (teacher has nothing diverse to add — raise `--teacher_temp`); `> 0.15` → paths are diverse, so if BE still ties the baseline the bottleneck is the student, not the signal. |
+
+`val/forgetting` and `train/path_diversity` are also echoed to the console
+(`forget=…`, `pathdiv=…`).
+
 `gsm8k_val.jsonl` and `gsm8k_eval.jsonl` use **non-overlapping** index ranges
 of the GSM8K test split (`items[0:100]` for val, `items[200:200+n]` for eval).
 With `--n 1000` the eval pool is `items[200:1200]` (within the 1319-prompt test
@@ -271,6 +302,47 @@ wait
 **Note on L2 hit rate and exact HBM GB/s:** these require DCGM
 (`sudo apt install datacenter-gpu-manager`).  The `gpu_mem_util_avg_pct` field
 (from standard NVML) is the closest available proxy without DCGM.
+
+---
+
+## Diagnostics — is the loss even connected to the metric?
+
+A standing question in this project is *why* every distillation loss tends to tie
+the JSD baseline on block efficiency (BE).  Before tuning yet another loss, it is
+worth checking whether the quantity the losses minimise (a teacher–draft
+divergence) actually **predicts** BE at all.  That check is the `--diagnose` flag.
+
+```bash
+# Diagnostic mode — runs AFTER the timed eval; throughput is unaffected.
+python eval.py --checkpoint checkpoints/<run>/ckpt_best \
+               --dataset math_eval --modes traversal --diagnose
+```
+
+What it does, as a **separate pass after the timed loop**:
+
+1. For each prompt, compute the per-prompt training divergence — **JSD** and
+   **forward-KL** between teacher and draft (the same flat objective training
+   minimises: teacher greedily rolls out, both models forwarded, divergence
+   averaged over generated tokens).
+2. Correlate that divergence against the prompt's **block efficiency**.
+3. Log two scatter plots (`diag/jsd_vs_be`, `diag/fwdkl_vs_be`), the correlations
+   (`diag/corr_jsd_be`, `diag/corr_fwdkl_be`), and a plain-English **verdict** to a
+   dedicated W&B run (`job_type=diagnose`).
+
+**Reading the verdict:**
+
+| Correlation | Meaning | Action |
+|---|---|---|
+| `\|r\| ≈ 0` (flat cloud) | Divergence does **not** predict BE → objective mismatch | Stop tuning divergence losses; the loss is not the lever |
+| `r < 0` (lower divergence ⇒ higher BE) | Objective **is** connected to BE | Keep tuning the loss; it can move BE |
+| `r > 0` | Unexpected — verify orientation before trusting | Sanity-check the implementation |
+
+> **Throughput safety:** `--diagnose` is OFF by default and **must not** be used on
+> a throughput-measurement run if you want to be cautious — but note the diagnostic
+> pass runs strictly *after* the timed eval and uses timers internal to
+> `speculative_decoding_loop`, so `throughput_tok_s` and all `time_*` columns are
+> mathematically unaffected either way.  When the flag is off, eval does no extra
+> work and never imports W&B.
 
 ---
 
