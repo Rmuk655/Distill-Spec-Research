@@ -62,3 +62,19 @@ def get_loss(name: str):
         f"Unknown loss '{name}'.  Available: "
         f"flat={sorted(FLAT_LOSSES)}, tree={sorted(TREE_LOSSES)}"
     )
+
+# Maps each tree loss to the verifier mode used for val block_eff measurement.
+# Losses not listed fall through to "traversal" (best general-purpose verifier).
+LOSS_TO_VERIFIER = {
+    "naive_tree":         "naive",
+    "naive_tree_full":    "naive",
+    "op_naive_tree":      "naive",
+    "op_naive_tree_full": "naive",
+    "nss_tree":      "nss",
+    "specinfer_tree":"specinfer",
+    "spectr_tree":   "spectr",
+    "khisti_tree":   "khisti",
+    "bv_tree":       "bv",
+    "gbv_tree":      "gbv",
+    "traversal_tree":"traversal",
+}
