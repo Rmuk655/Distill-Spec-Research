@@ -188,6 +188,12 @@ def parse_args():
     return ap.parse_args()
 
 
+def _serializable_args(args) -> dict:
+    """Return vars(args) minus hardware-specific fields that have no analysis value."""
+    skip = {"device", "cpu_threads", "resume"}
+    return {k: v for k, v in vars(args).items() if k not in skip}
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -446,7 +452,7 @@ def main():
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
                                 state={"step": step + 1, "val_block_eff": val_be,
                                         "best_val_block_eff": best_val_block_eff,
-                                        "loss": args.loss},
+                                        "train_args": _serializable_args(args)},
                                 use_lora=USE_LORA)
                 print(f"  [val] saved ckpt_best (block_eff={val_be:.3f})")
                 if wandb_run:
@@ -460,7 +466,7 @@ def main():
                                    "sched_steps": sched_steps,
                                    "warmup_opt_steps": warmup_opt_steps,
                                    "cmd": sys.argv,
-                                   "loss": args.loss},
+                                   "train_args": _serializable_args(args)},
                             use_lora=USE_LORA)
 
     # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
@@ -469,7 +475,8 @@ def main():
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                     state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
                            "sched_steps": sched_steps, "warmup_opt_steps": warmup_opt_steps,
-                           "cmd": sys.argv, "loss": args.loss},
+                           "cmd": sys.argv,
+                           "train_args": _serializable_args(args)},
                     use_lora=USE_LORA)
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}")

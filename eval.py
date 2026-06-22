@@ -400,16 +400,19 @@ def main():
             _state_file = os.path.join(args.checkpoint, "state.json")
             try:
                 import json as _json
-                _saved_loss = _json.load(open(_state_file)).get("loss")
+                _state = _json.load(open(_state_file))
+                # train_args (full vars(args)) written by train.py >= this commit;
+                # fall back to bare "loss" field from the previous commit.
+                _saved_loss = (_state.get("train_args") or {}).get("loss") \
+                              or _state.get("loss")
                 if _saved_loss:
                     trained_loss = _loss_to_divergence(_saved_loss)
-                    print(f"  [diagnose] trained_loss='{_saved_loss}' → primary divergence: {trained_loss}")
+                    print(f"  [diagnose] checkpoint loss='{_saved_loss}' → primary divergence: {trained_loss}")
                 else:
-                    raise ValueError("no 'loss' key")
+                    raise ValueError("no loss field in state.json")
             except Exception:
-                # Old checkpoint without loss field — fall back to path heuristic.
                 trained_loss = _loss_to_divergence(args.checkpoint)
-                print(f"  [diagnose] state.json missing 'loss' field; inferred from path: {trained_loss}")
+                print(f"  [diagnose] state.json unreadable/missing loss; inferred from path: {trained_loss}")
         if not per_prompt_be:
             print("  [diagnose] no per-prompt BE available — skipping diagnostic.")
         else:
