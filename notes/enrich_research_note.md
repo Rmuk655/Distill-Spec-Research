@@ -1,215 +1,212 @@
-# Enriched Speculative Decoding Training
+# Accepted-State Distillation for Speculative Draft Training
 ## A Research Note on `jsd_flat_enrich`
 
-**Status:** K=1 complete and evaluated; K=3 training complete, evaluation in progress (2026-06-23)  
-**Draft–Teacher pair:** Qwen3-0.6B draft / Qwen3-8B teacher  
-**Training data:** math_hard (hard math prompts)  
-**Eval data:** math_eval (100 prompts; final paper target: 1000)  
-**Builds on:** [2602.16994] — extends the training objective to close the distribution gap between draft training and inference-time acceptance.
+**Status:** Early internal result — promising signal, **not yet paper-ready.** K=1 (M=1) complete and evaluated; K=3 (M=3) training complete, evaluation in progress (2026-06-23).
+**Draft–Teacher pair:** Qwen3-0.6B draft / Qwen3-8B teacher
+**Training data:** math_hard. **Eval data:** math_eval (n=100; paper target n=1000).
+**Positioning:** Builds on [2602.16994]; closely related to DistillSpec, on-policy GKD, Online Speculative Decoding, and **Draft-OPD (May 2026)** — see §2 for the differentiator we must defend.
+
+> **Honest framing.** The current evidence supports: *"accepted-rollout enrichment may improve flat JSD on this Qwen3 math setup."* It does **not** yet prove a general method. This note is scoped to make the claim defensible, identify what is novel vs. incremental, and list the experiments and proofs required before submission.
 
 ---
 
 ## 1. Motivation
 
-Standard flat JSD training minimises:
+Standard flat JSD training minimises
 
-$$\mathcal{L}_{\text{JSD}} = \text{JSD}(P_\theta(\cdot \mid x_{<t}) \;\|\; Q_\phi(\cdot \mid x_{<t}))$$
+$$\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x_{<t} \sim D}\big[\text{JSD}\big(P_\theta(\cdot \mid x_{<t}) \,\|\, Q_\phi(\cdot \mid x_{<t})\big)\big]$$
 
-where $P_\theta$ is the teacher and $Q_\phi$ is the draft, evaluated at positions $x_{<t}$ drawn from the **teacher's marginal distribution**. This creates a distribution mismatch: at inference time, the draft operates in a stochastic acceptance loop where its mistakes change the context it conditions on. The training distribution (teacher greedy/sampled) is systematically cleaner than the inference distribution.
+where $P_\theta$ is the teacher, $Q_\phi$ the draft, and $D$ is **the teacher's marginal (offline) distribution** over prefixes. At inference time the draft instead operates inside a verifier-gated acceptance loop: its own proposals, partially accepted and teacher-corrected, determine the prefixes it conditions on. This is the well-known **offline-to-inference (exposure) mismatch**. The hypothesis is that training on prefixes drawn from the *verifier-accepted state distribution* reduces this gap.
 
-**Hypothesis:** Training on sequences drawn from the actual acceptance distribution $\mathcal{J}_V(Q_\phi, P_\theta)$ — the joint distribution the draft sees during speculative decoding — will reduce this gap and improve block efficiency.
-
----
-
-## 2. Method: `jsd_flat_enrich`
-
-At each training step, instead of drawing $x_{<t}$ from $P_\theta$, we run $K$ steps of stochastic speculative decoding to obtain an **enriched context** $x^*$:
-
-**Algorithm (K=1 enrichment, traversal verifier):**
-1. Sample a prompt $p$ from training set.
-2. Draft proposes $L$ tokens: $x^{(0)} \sim Q_\phi(\cdot \mid p)$ (tree of depth $L$).
-3. Teacher evaluates each token $x_t^{(0)}$: accept with probability $\min\!\left(1,\, \frac{P_\theta(x_t \mid p, x^*_{<t})}{Q_\phi(x_t \mid p, x^*_{<t})}\right)$ (naive rule); other verifiers (BV, NSS, SpecInfer) apply their respective criteria.
-4. At the first rejection, resample from the teacher-corrected distribution. Concatenate accepted prefix to get $x^*$.
-5. Compute training loss at accepted positions:
-
-$$\mathcal{L}_{\text{enrich}} = \frac{1}{|x^*|}\sum_{t=1}^{|x^*|} \text{JSD}\!\left(P_\theta(\cdot \mid p, x^*_{<t}) \;\Big\|\; Q_\phi(\cdot \mid p, x^*_{<t})\right)$$
-
-For $K > 1$: repeat steps 2–4 for $K$ independent rollouts, then average the loss across rollouts. Higher $K$ provides a richer Monte Carlo estimate of the acceptance distribution and greater diversity of training contexts.
-
-**Key distinction from flat JSD:** $x^*$ is a sample from $\mathcal{J}_V(Q_\phi, P_\theta)$, the distribution the draft actually encounters at inference time. Flat JSD trains on teacher-sampled sequences; enrich trains on verifier-accepted sequences.
-
-### 2.1 Training health signals
-
-**`train/path_diversity`** = fraction of token positions at which at least two of the $K$ rollouts differ:
-
-$$\text{pathdiv} = \frac{1}{L} \sum_{t=1}^{L} \mathbf{1}\!\left[\exists\, i \neq j : x_t^{(i)} \neq x_t^{(j)}\right]$$
-
-- pathdiv $\approx 1.0$: teacher's stochastic sampling produces genuinely diverse accepted sequences; $K > 1$ contributes real additional signal.
-- pathdiv $< 0.1$: rollout collapse — draft and teacher agree almost everywhere; $K > 1$ reduces to $K = 1$ effectively.
-- Observed in K=3 run: pathdiv $\in [0.8, 1.0]$ throughout, with occasional batch dips to $0.5$–$0.6$. **Healthy.**
-
-**`val/forgetting`** = backward transfer loss: how much block efficiency the model has lost on prompts it previously mastered:
-
-$$\text{forget}_t = \sum_{p \in \mathcal{P}} \max\!\left(0,\; \hat{b}^*(p) - b_t(p)\right)$$
-
-where $\hat{b}^*(p)$ is the best historical block efficiency for prompt $p$, and $b_t(p)$ is the current block efficiency. Oscillating forgetting (not monotonically increasing) indicates stability–plasticity tradeoff rather than catastrophic forgetting. The `ckpt_best` mechanism captures the peak before any forgetting-driven regression.
+This motivation is **not new** — it is the same mismatch DistillSpec (on-policy draft-generated data), GKD, OSD, and Draft-OPD all target. Our contribution must therefore be the *specific, low-complexity instantiation* and its *empirical robustness across verifier families*, not the mismatch observation itself (§2).
 
 ---
 
-## 3. Measurement Framework
+## 2. Novelty Positioning (the biggest risk)
 
-### 3.1 Primary metric: Block Efficiency
-
-$$\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \text{max BE} = L$$
-
-At $L = 8$: BE = 8 is the theoretical maximum (draft accepts all tokens with no teacher calls beyond the initial ones). Observed range: 3.7 (NSS, strictest) to 6.4 (traversal, current best).
-
-**L-relative bucketing (verifier-agnostic):**
-- Easy: $\text{BE} \geq 0.75L$
-- Medium: $0.375L \leq \text{BE} < 0.75L$
-- Hard: $\text{BE} < 0.375L$
-
-### 3.2 Diagnostic signals (`--diagnose` mode)
-
-**Spearman $\rho$(divergence, BE):** rank correlation between per-prompt JSD/fwd-KL and per-prompt block efficiency.
-- $\rho < -0.3$, $p < 0.01$: H0 ruled out — the training objective is tracking BE.
-- $\rho > -0.1$: objective mismatch — loss minimisation is not moving BE.
-- **Observed:** flat JSD $\rho = -0.396$; enrich K=1 $\rho = -0.568$ ($p = 8.5 \times 10^{-12}$). Enrich exhibits stronger alignment between JSD and BE — a mechanistic signal that it is training on a more informative distribution.
-
-**$\sigma$(JSD) stability (Case A vs. B):**
-- Case A: $\sigma$ stable + $\rho$ increases → true signal improvement (more calibrated on hard prompts).
-- Case B: $\sigma$ collapses + $\rho$ stable → range restriction (model uniformly better, Pearson r fooled).
-- **Observed:** $\sigma$(JSD) identical for flat and enrich checkpoints → **Case A confirmed.** The improvement is real, not an artefact of range compression.
-
-### 3.3 Verifier taxonomy and K=1 collapse
-
-| Family | Members | K=1 behaviour |
+| Prior work | What it does | Our differentiator |
 |---|---|---|
-| Single-token threshold | naive, spectr, khisti, max | **Collapse** — all identical at K=1 |
-| Tree acceptance | traversal, BV, GBV | K-sensitive; tree structure used |
-| Optimal transport | NSS | Strictest; independent of collapse |
-| SpecInfer-style | specinfer | Intermediate |
+| **DistillSpec** | On-policy distillation using draft-generated sequences | We sample from the **verifier-accepted** state distribution, not raw draft rollouts; we evaluate robustness across 9 verifier families |
+| **Draft-OPD (2026)** | Frames the same offline→inference mismatch; uses **rejected** proposals / replay | **We use accepted-context only.** This is the critical contrast: we are arguably the *weaker, simpler* variant unless we show accepted-only is competitive at lower complexity |
+| **GKD / on-policy KD** | Student-generated data, generic | We condition on the verifier kernel, specific to spec-decoding |
+| **OSD** | Online adaptation during serving | We are an offline training objective |
 
-**K=1 verifier collapse (empirically confirmed):** At $K=1$ (single-token acceptance), naive / spectr / khisti / max all produce identical BE for both checkpoints (flat JSD: 5.848; enrich: 5.859, $\Delta = +0.011$, within noise). This confirms the theoretical prediction that all threshold-based single-token verifiers reduce to the same rule at $K=1$: accept token $x$ with probability $\min(1, P(x)/Q(x))$. At $K \geq 2$, the verifiers diverge and the enrich advantage emerges.
+**Defensible claim (narrow):** *"For verifier-conditioned speculative decoding, sampling from the verifier-accepted state distribution and applying a simple accepted-context JSD objective is a low-complexity alternative to explicit rejected-token replay / tree gradients, and it improves robustness across verifier families under matched compute."*
 
-*Requires formal mathematical proof — open item.*
+**Non-defensible claim (do not pitch):** *"A new training method for speculative decoding"* — too broad, collides directly with DistillSpec/Draft-OPD.
 
-### 3.4 Capacity signals
-
-**Student (draft) at capacity:**
-- `val/block_eff` plateau over many checkpoints with no new best.
-- Training loss floor reached ($\sim 0.02$ for this setup).
-- High oscillating forgetting with no net BE gain — model is redistributing rather than growing.
-- BE bucket distribution frozen (no shift from hard → medium → easy).
-
-**Teacher at capacity (not bottlenecking):**
-- BE approaches $L$ (current best: $6.42/8 = 80\%$; teacher has room to offer).
-- `train/path_diversity` collapses to near 0 (draft matches teacher everywhere) — *not observed*.
-- At 0.6B draft / 8B teacher on math: teacher is **not** at capacity. Draft architecture is the binding constraint.
-- To test teacher scale: 32B teacher experiment (see §7 Future Directions).
+**Mandatory comparison:** We must run a Draft-OPD-style replay ablation (accepted-only vs. accepted+rejected). Otherwise reviewers correctly say we are the lossy subset of a more complete idea.
 
 ---
 
-## 4. Results
+## 3. Method: `jsd_flat_enrich`
 
-### 4.1 Training runs
+### 3.1 Notation (de-conflict the overloaded K)
+
+The codebase uses `K` for two unrelated things. For the paper we rename:
+
+| Symbol | Meaning | Code name |
+|---|---|---|
+| $M$ | number of **enrichment rollouts** per training step | `--K` (train) |
+| $K_{\text{eval}}$ | number of speculative **draft branches/steps** at inference | `--K` (eval) |
+| $L$ | rollout/tree **horizon** (depth) | `--L` |
+
+This note uses $M$, $K_{\text{eval}}$, $L$ throughout. (M=1 ⇔ old "K=1 train"; M=3 ⇔ old "K=3 train".)
+
+### 3.2 The accepted-state distribution (formal)
+
+Let $\pi$ be the prompt distribution. Define the **verifier-induced prefix kernel** $\mathcal{J}_V$ as the distribution over accepted prefixes $x^*$ generated by:
+
+1. $p \sim \pi$;
+2. draft proposes a horizon-$L$ tree/sequence, $x \sim Q_\phi(\cdot \mid p)$;
+3. verifier $V$ accepts a prefix $x^*_{\leq \tau}$ where $\tau$ is the (random) first-rejection index under $V$'s acceptance rule;
+4. at position $\tau{+}1$, resample from the teacher-corrected residual $P_\theta^{\text{res}}$;
+5. concatenate to form $x^*$.
+
+Write $x^* \sim \mathcal{J}_V(Q_\phi, P_\theta; \pi)$. The training objective is the **accepted-context** JSD:
+
+$$\mathcal{L}_{\text{enrich}} = \mathbb{E}_{x^* \sim \mathcal{J}_V}\!\left[\frac{1}{|x^*|}\sum_{t=1}^{|x^*|} \text{JSD}\big(P_\theta(\cdot \mid p, x^*_{<t}) \,\|\, Q_\phi(\cdot \mid p, x^*_{<t})\big)\right].$$
+
+For $M>1$: average over $M$ independent rollouts (Monte Carlo estimate of the expectation; more rollouts ⇒ lower-variance estimate + more diverse contexts).
+
+### 3.3 Stop-gradient disclosure (important)
+
+The kernel $\mathcal{J}_V$ depends on $\phi$ (the draft generates the rollouts). **We do not differentiate through the sampling distribution.** $\mathcal{L}_{\text{enrich}}$ is therefore a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The paper must state this explicitly; the NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, and enrich is best framed as a cheap approximation to it.
+
+### 3.4 Accepted-only vs. learning-from-mistakes
+
+The motivation invokes "inference-time mistakes," but the loss is computed on **accepted positions only**. Rejected draft tokens are discarded. So strictly, the draft learns from **verified/accepted states**, not from its own failed proposals. This is exactly the axis on which Draft-OPD differs (it replays rejected proposals). We must either (a) own "accepted-only" as the simplicity advantage and prove it suffices, or (b) add a rejected-replay variant and show accepted-only is competitive. **Do not blur this in the writeup.**
+
+### 3.5 Acceptance–divergence link (to be proven)
+
+For vanilla single-token speculative decoding, per-state acceptance probability is
+
+$$\alpha(p,q) = \sum_x \min\big(p(x), q(x)\big) = 1 - \text{TV}(p, q).$$
+
+JSD bounds TV via $\text{TV}^2 \leq \tfrac{1}{2}\ln 2 \cdot \text{JSD}$ (and TV $\leq \sqrt{\tfrac{1}{2}\,\text{KL}}$). So minimising accepted-context JSD ⇒ lower TV at accepted states ⇒ higher single-token acceptance **at those states**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open proof obligation (§7).
+
+---
+
+## 4. Measurement Framework
+
+### 4.1 Primary metric: Block Efficiency
+
+$$\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \text{BE}_{\max} = L.$$
+
+At $L=8$: observed range 3.7 (NSS, strictest) to 6.4 (traversal). **Report wall-clock tokens/sec alongside BE** — BE and throughput correlate at ~0.95 globally but can decouple; a method that raises BE but not throughput is not useful. Also report output quality/exactness for any approximate verifier.
+
+L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
+
+### 4.2 Diagnostics (`--diagnose`)
+
+**Spearman $\rho$(divergence, BE):** rank correlation, robust to JSD range compression as the model improves (unlike Pearson r).
+- Observed: flat JSD $\rho=-0.396$; enrich M=1 $\rho=-0.568$ ($p=8.5\times10^{-12}$). Stronger objective–BE alignment under enrich.
+
+**$\sigma$(JSD) stability (Case A vs B):** Case A (σ stable, ρ↑) = true signal; Case B (σ collapses, ρ stable) = range restriction. Observed: σ(JSD) identical for both checkpoints ⇒ **Case A** (improvement not an artefact).
+
+### 4.3 Capacity signals (measured along the way)
+
+**Student (draft) at capacity:** val/block_eff plateau with no new best; train loss floor (~0.02); high oscillating forgetting with no net BE gain; frozen BE bucket distribution.
+
+**Teacher at capacity / not bottlenecking:** BE → $L$; path_diversity → 0 (draft matches teacher everywhere — *not observed*). At 0.6B/8B on math, BE=6.42/8=80%, path_diversity ∈ [0.8,1.0] ⇒ **teacher is not the bottleneck; the 0.6B draft is.** A 32B-teacher run would test teacher-scale sensitivity but is **not** required to establish the accepted-state claim for this pair (future work, §8).
+
+**`train/path_diversity`** = fraction of positions where ≥2 of the $M$ rollouts disagree. ~1.0 ⇒ diverse signal, $M>1$ contributes; <0.1 ⇒ rollout collapse, $M>1$ ≈ $M=1$. Observed M=3: ∈[0.8,1.0], healthy.
+
+**`val/forgetting`** = backward-transfer loss (Σ max(0, best_historical_BE(p) − current_BE(p))). Oscillating (not monotonic) ⇒ stability–plasticity churn, not catastrophic forgetting; `ckpt_best` captures the peak.
+
+---
+
+## 5. Results (encouraging but inconclusive)
+
+### 5.1 Training runs
 
 | Run | Steps | Best val BE | Status |
 |---|---|---|---|
-| `jsd_mathhard_s123` (flat JSD) | 8 K | 6.01 | Complete |
-| `jsd_flat_enrich_K1_mathhard_s123` | 8 K | 6.409 | Complete |
-| `jsd_flat_enrich_K3_mathhard_s123` | 8 K | 6.420 | Complete; eval in progress |
-| `jsd_flat_enrich_K1_mathhard_s456` | 8 K | — | Pending (second seed) |
-| `jsd_mathhard_s456` | 8 K | — | Pending (second seed baseline) |
+| `jsd_mathhard_s123` (flat JSD) | 8K | 6.01 | Complete |
+| `jsd_flat_enrich_M1_s123` | 8K | 6.409 | Complete |
+| `jsd_flat_enrich_M3_s123` | 8K | 6.420 | Complete; eval in progress |
+| `…_M1_s456`, `jsd_mathhard_s456` | 8K | — | Pending (second seed) |
 
-### 4.2 K=1 enrich vs. flat JSD (n=100, math_eval)
+### 5.2 M=1 enrich vs. flat JSD (n=100, math_eval)
 
-Delta = enrich K=1 $-$ flat JSD. Bold = $|\Delta| > 0.10$ (estimated significance at paired $n=100$).
+Δ = enrich(M=1) − flat JSD. **Caveat: these are exploratory point estimates, not significance-tested.** See §5.4.
 
-| Verifier | K=1 | K=2 | K=3 | K=4 | Pattern |
+| Verifier | $K_{\text{eval}}{=}1$ | $2$ | $3$ | $4$ | Pattern |
 |---|---|---|---|---|---|
-| traversal | **+0.186** | **+0.265** | −0.041 | **+0.171** | Flat positive |
-| BV | +0.031 | **+0.156** | **+0.268** | **+0.265** | **Grows with K** |
-| naive | +0.011† | +0.065 | **+0.135** | **+0.324** | **Grows with K** |
-| specinfer | +0.097 | +0.015 | **+0.136** | **+0.158** | Weakly up |
-| spectr | +0.011† | **+0.370** | +0.052 | **+0.224** | Noisy positive |
-| NSS | **+0.149** | −0.030 | +0.103 | +0.095 | Flat positive |
-| GBV | +0.031 | **+0.327** | −0.113 | −0.015 | Peaks K=2 |
-| khisti | +0.011† | **−0.135** | **+0.189** | **−0.161** | Alternating |
-| max | +0.011† | −0.069 | +0.056 | **+0.151** | Weakly positive |
+| traversal | +0.186 | +0.265 | **−0.041** | +0.171 | Mostly positive, one negative |
+| BV | +0.031 | +0.156 | +0.268 | +0.265 | Grows with $K_{\text{eval}}$ |
+| naive | +0.011† | +0.065 | +0.135 | +0.324 | Grows with $K_{\text{eval}}$ |
+| specinfer | +0.097 | +0.015 | +0.136 | +0.158 | Weakly up |
+| spectr | +0.011† | +0.370 | +0.052 | +0.224 | Noisy positive |
+| NSS | +0.149 | −0.030 | +0.103 | +0.095 | Flat positive |
+| GBV | +0.031 | +0.327 | **−0.113** | −0.015 | Peaks then vanishes |
+| khisti | +0.011† | **−0.135** | +0.189 | **−0.161** | Alternating / negative |
+| max | +0.011† | −0.069 | +0.056 | +0.151 | Weakly positive |
 
-† K=1 collapse — these four verifiers are theoretically equivalent at $K=1$.
+† $K_{\text{eval}}{=}1$ collapse (§6) — these four are theoretically the same cell, **not independent evidence.**
 
-**Win rate:** 29/36 positive deltas (80.6%). Under the null, $P(\geq 29\,|\,n=36) \approx 10^{-6}$ (binomial). Direction is established.
+### 5.3 The K-scaling pattern (a conjecture, not a result)
 
-**Stat note:** Runs are paired (same 100 prompts, both checkpoints). Estimated $\sigma_\Delta \approx 0.5$ per prompt $\Rightarrow$ SE $\approx 0.05$ for $n=100$; $2\sigma$ threshold $\approx 0.10$. Results with $|\Delta| < 0.05$ are noise-level.
+For naive and BV the gap appears to grow with $K_{\text{eval}}$. This is the most interesting signal *if it survives seeds and n=1000*, but it is currently a single-seed, n=100 observation with notable exceptions (traversal $K_{\text{eval}}{=}3$ negative; GBV reverses; khisti negative at 2 and 4). **Do not state K-scaling as established.**
 
-### 4.3 K=3 enrich (preliminary)
+### 5.4 Statistics — corrected
 
-Training best val BE: **6.420** (step 7500/8000), marginally above K=1 (6.409) — within 25-prompt val noise. Full eval across all verifiers $\times$ K=1..4 in progress. *This table will be filled once eval completes.*
+The earlier "29/36 wins, $p\approx10^{-6}$" binomial is **invalid**: the 36 cells are highly correlated (same prompts, same checkpoint, related verifiers, shared $K_{\text{eval}}$ grid), and the four $K_{\text{eval}}{=}1$ collapsed cells are duplicate counts. The independence assumption is false.
 
-| Verifier | K=1 | K=2 | K=3 | K=4 |
-|---|---|---|---|---|
-| traversal | 6.213 | — | — | — |
-| BV | 6.157 | — | — | — |
-| naive | (running) | — | — | — |
-| … | … | … | … | … |
+**Correct approach:**
+- Pre-declare a small set of aggregate metrics (e.g. mean BE on traversal; mean BE on naive; one strict-verifier metric).
+- Paired **prompt-level bootstrap / permutation** CIs (resample prompts, both checkpoints evaluated on the same resample).
+- n=1000 to bring SE from ~0.05 to ~0.016 so the ±0.14 traversal effect and the borderline cells resolve.
 
----
-
-## 5. Open Questions for Mathematical Verification
-
-1. **K=1 collapse proof:** Formally show that naive, spectr, khisti, and max acceptance criteria all reduce to $\min(1, P/Q)$ comparison per token at $K=1$, $L=1$. The empirical confirmation (four verifiers give identical BE for both checkpoints) is strong, but the proof would clarify boundary conditions.
-
-2. **Gap-grows-with-K conjecture:** Explain why a model trained on $K=1$ enrich shows monotonically growing advantage at higher eval-$K$ for naive and BV. Likely connected to: the $K=1$ acceptance distribution having heavier tails than teacher-greedy sampling, so the draft learns to handle suboptimal token choices more gracefully — generalising to the multi-step correction setting even when only trained on single-step rollouts.
-
-3. **NSS strict advantage:** At $K=1$, enrich shows larger absolute gain under NSS (+0.149) than under naive (+0.011). Why? NSS uses optimal-transport acceptance, meaning only high-quality drafts pass. Enrich may produce a higher fraction of "clean" accepted sequences that NSS approves of, compared to teacher-sampled training contexts.
-
-4. **Khisti antagonism:** Khisti shows clearly negative deltas at $K=2$ ($-0.135$) and $K=4$ ($-0.161$). This is the only verifier with consistent negatives. Hypothesis: Khisti's acceptance criterion penalises a specific calibration pattern that enrich training inadvertently introduces. Needs investigation of how khisti's function differs from naive at $K=2$.
-
-5. **GBV peak at K=2:** GBV shows the largest single-cell gain (+0.327 at K=2) but no benefit at K=3,4. Why is GBV uniquely sensitive at exactly K=2?
+**K=3 (M=3) training:** best val 6.420 vs M=1's 6.409 is **within validation noise** (25-prompt val, SE≈0.15). No K-scaling-in-training claim until full eval + seeds.
 
 ---
 
-## 6. Next Steps (Near Term)
+## 6. Verifier-Level Math (open obligations)
 
-| Action | Rationale |
-|---|---|
-| Full eval of K=3 enrich (in progress) | Determine if enrichment K scales: K=3 > K=1 |
-| Second seed (`s456`) for K=1 and K=3 | Reproducibility; required for any paper claim |
-| $n=1000$ eval on best checkpoint | Reduce SE from 0.05 to 0.016; borderline results will resolve |
-| Extend K=3 to 12–15K steps | Best checkpoint appeared at 93% of training; model may still be improving |
-| `--diagnose` on K=3 checkpoint | Check if $\rho$ further strengthens vs K=1 ($-0.568$) |
-| NSS tree gradient integration | Rahul's exact $\partial\text{BE}/\partial\theta$ via survival-weighted NSS; ablation vs enrich |
-| Spec-Bench evaluation (480 prompts, 6 domains) | Cross-domain generalisation test |
+1. **$K_{\text{eval}}{=}1$ collapse — prove, don't assert.** Define naive, spectr, khisti, max acceptance rules formally; show that at $K_{\text{eval}}{=}1, L{=}1$ each reduces to the singleton rule accept-w.p.-$\min(1,P/Q)$, under explicitly stated assumptions. Empirically the four give identical BE for both checkpoints (5.848 / 5.859), which is strong but not a proof.
+2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why accepted-context JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
+3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does accepted-context JSD induce that khisti penalises?
+4. **Acceptance–divergence transfer (§3.5)** beyond naive.
 
 ---
 
-## 7. Future Directions
+## 7. Must-Add Experiments (minimum for a credible paper)
 
-**Scaling:**
-- **32B teacher:** Current 8B teacher is not at capacity on math (BE = 6.42/8 = 80%). Upgrading to 32B would test whether teacher scale adds information for a fixed 0.6B draft. Likely a future-work item — not needed to establish the enrich claim for the 0.6B/8B pair.
+| # | Experiment | Why |
+|---|---|---|
+| 1 | 2–3 seeds for flat JSD **and** enrich | Reproducibility — non-negotiable |
+| 2 | n=1000 eval with paired bootstrap CIs | Resolve effect size |
+| 3 | **Compute-matched** baseline (same wall-clock / teacher calls / tokens, not just steps) | Enrich does extra rollouts; step-matched is unfair to baseline |
+| 4 | DistillSpec baseline | Closest on-policy prior work |
+| 5 | **Draft-OPD-style replay ablation** (accepted-only vs accepted+rejected) | The core novelty contrast |
+| 6 | Stochastic-teacher baseline (teacher-sampled JSD, no acceptance gating) | Isolate "stochasticity" from "accepted distribution" |
+| 7 | ≥1 more dataset (code / Spec-Bench mixed) | Generalisation beyond math |
+| 8 | ≥1 more model pair | Method, not setup-specific quirk |
+| 9 | Temperature robustness (esp. temp=1.0) | Current uses teacher_temp=1.5 |
+| 10 | Wall-clock tokens/sec + output quality/exactness | BE alone is insufficient |
 
-**Training distribution:**
-- **Adaptive curriculum (hard-prompt up-weighting):** Weight training prompts by inverse BE during rollout — easy prompts (high BE) already have low loss, hard prompts (low BE) have the most signal. Deferred pending K=3 confirmation.
-- **Teacher temperature scheduling:** `teacher_temp=1.5` creates more diverse rollouts (higher pathdiv) at the cost of lower-quality accepted sequences. `teacher_temp=1.0` is the current default; adaptive scheduling (warm → cool) may combine both benefits.
-- **Soft teacher curriculum:** Instead of binary accept/reject, weight gradient by teacher confidence; allows gradient through "near-accepts." Requires changes to the acceptance sampling logic.
-
-**Gradient signal:**
-- **NSS tree gradients:** Exact survival-weighted $\partial\text{BE}/\partial\theta$ from Rahul. Theoretically the gold standard; enrich is a Monte Carlo approximation of this. Direct comparison will quantify how much the distribution sampling approach recovers.
-- **Tree depth experiments:** K and L are both training hyperparameters (K controls enrichment depth, L controls tree width). Current: K=1/3, L=8. Ablation: fix K, vary L; fix L, vary K.
-- **Adaptive tree depth:** Use per-prompt BE to dynamically choose L during training. Easy prompts use smaller L (less compute); hard prompts use larger L (more signal).
-
-**Evaluation:**
-- **Multi-domain (Spec-Bench):** 480 prompts across 6 categories (math, code, QA, translation, summarisation, chat). Needed to establish that enrich generalises beyond math.
-- **Longer drafts (L=16):** Does enrich advantage scale with L?
+Near-term order: finish M=3 eval → run s456 (flat + enrich) → n=1000 on best checkpoints → compute-matched + stochastic-teacher baselines → Draft-OPD replay ablation.
 
 ---
 
-## 8. Scope Note
+## 8. Future Directions (parking lot — prioritise later)
 
-`jsd_flat_enrich` (this note) is scoped as a potential standalone paper: the distribution-mismatch motivation, the enrichment mechanism, and the empirical win across 9 verifiers are a self-contained contribution. The NSS tree gradients, depth experiments, and curriculum variants are candidates for either inclusion (as ablations showing enrich is one rung of a hierarchy) or a follow-on paper.
+- **NSS tree gradients (Rahul):** exact survival-weighted $\partial\text{BE}/\partial\theta$; enrich is a stop-gradient MC approximation of this — direct comparison quantifies the gap. Candidate to unify in one paper as a hierarchy, or a follow-on.
+- **NSS-depth and broader tree gradients / tree-depth ablations** (vary $L$, vary $M$).
+- **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
+- **Adaptive teacher using tree depth** to decide where to guide the student.
+- **32B teacher** to test teacher-scale sensitivity (not required for the core 0.6B/8B claim).
+- **Longer horizon ($L{=}16$).**
+
+These are explicitly deferred. Whether they fold into this paper (as ablations along a gradient-approximation hierarchy) or a follow-on is a research-lead scope decision.
 
 ---
 
-*For questions or to request raw eval CSVs, contact: rkrishna@adobe.com*
+## 9. Scope Verdict
+
+**Promising early signal; not yet conclusive.** Novel enough to publish **only if** (a) framed narrowly as *accepted-state distillation* and hard-differentiated from DistillSpec/Draft-OPD, (b) backed by the §6 verifier math, and (c) supported by the §7 matched-compute, multi-seed, multi-dataset evidence. As-is it is a strong internal / workshop-direction result.
+
+---
+
+*Raw eval CSVs and W&B links available on request — rkrishna@adobe.com*
