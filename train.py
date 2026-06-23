@@ -195,6 +195,8 @@ def _serializable_args(args) -> dict:
 
 
 def main():
+    import datetime
+    print(f"\n{'='*72}\n[session] {datetime.datetime.now().isoformat(timespec='seconds')}  pid={os.getpid()}\n{'='*72}")
     args = parse_args()
     set_seed(args.seed)
 
