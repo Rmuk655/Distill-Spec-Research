@@ -118,7 +118,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 | `jsd_mathhard_s123` (flat JSD) | 8K | 6.01 | Complete |
 | `jsd_flat_enrich_M1_s123` | 8K | 6.409 | Complete |
 | `jsd_flat_enrich_M3_s123` | 8K | 6.420 | Complete; eval done |
-| `jsd_flat_enrich_K3_mathhard_s123_ttemp1.5` | 8K | — | Complete (teacher_temp=1.5 variant); K=1 traversal/BV: 6.128/6.145 vs default 6.213/6.157 — slight decline, within noise; preliminary no-benefit signal |
+| `jsd_flat_enrich_K3_mathhard_s123_ttemp1.5` | 8K | — | Complete; **teacher_temp=1.5 hurts**: diagnose traversal ρ=−0.543 vs default ρ=−0.645; mean_JSD=0.0321 vs 0.0296 (8% worse); mean_BE=6.340 vs 6.386. σ(JSD) stable → true signal loss, not range restriction. Mechanism: student learns to match noisier teacher; inference verifier uses ttemp=1.0, creating training-inference temperature mismatch. **teacher_temp=1.0 confirmed; no further temp variants needed.** |
 | `…_M1_s456`, `jsd_mathhard_s456` | 8K | — | Pending (second seed) |
 
 ### 4.2 Three-checkpoint comparison at K_eval=1 (n=100, math_eval)
@@ -292,7 +292,7 @@ Consequences:
 | 6 | Greedy teacher (M=1) vs stochastic teacher (M=1) vs stochastic teacher (M=3) | Isolate stochasticity from multi-trajectory averaging |
 | 7 | ≥1 more dataset (code / Spec-Bench mixed) | Generalisation beyond math |
 | 8 | ≥1 more model pair | Method, not setup-specific quirk |
-| 9 | Temperature robustness (esp. eval temp=1.0 and teacher_temp sweep) | Temperature sensitivity is known in SD/KD; current default teacher_temp is 1.0 |
+| 9 | ~~Temperature robustness — teacher_temp~~ | **Answered**: ttemp=1.5 run shows ρ=−0.543 vs default ρ=−0.645; higher teacher_temp causes training-inference mismatch. teacher_temp=1.0 confirmed. Eval temperature sweep (not training) still needed if running approximate verifiers. |
 | 10 | Wall-clock tokens/sec + output quality/exactness | BE alone is insufficient |
 
 Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) → n=1000 on best checkpoints → compute-matched greedy/stochastic/M ablations → Draft-OPD-style replay ablation.
