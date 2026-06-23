@@ -92,9 +92,10 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 ### 3.2 Diagnostics (`--diagnose`)
 
 **Spearman $\rho$(divergence, BE):** rank correlation, robust to JSD range compression as the model improves (unlike Pearson r).
-- Observed (traversal, K_eval=1, n=100): flat JSD $\rho=-0.396$; M=1 $\rho=-0.568$ ($p=8.5\times10^{-12}$); M=3 $\rho=-0.645$ ($p\approx0$). Monotonically strengthening objective–BE alignment with M.
+- Observed (K_eval=1, n=100): flat JSD $\rho=-0.396$; M=1 $\rho=-0.568$ ($p=8.5\times10^{-12}$); M=3 $\rho=-0.645$ ($p\approx0$). Monotonically strengthening objective–BE alignment with M (all traversal mode).
+- Per-verifier ρ for M=3: traversal $\rho=-0.645$ ($p\approx0$); BV $\rho=-0.518$ ($p\approx2\times10^{-9}$). σ(JSD)=0.0200 identical for both — σ is stable, so the ρ difference is real, not range restriction. Traversal (permissive, longest-prefix acceptance) has tighter JSD→BE coupling than BV (budget-limited tree). **This per-verifier ρ hierarchy is the empirical anchor for the §5 acceptance-functional theory.**
 
-**$\sigma$(JSD) stability (Case A vs B):** Case A (σ stable, ρ↑) = true signal; Case B (σ collapses, ρ stable) = range restriction. M=3 diagnose: σ(JSD)=0.0200, mean_JSD=0.0296 — σ not collapsed ⇒ **Case A** (ρ increase is genuine signal, not range restriction).
+**$\sigma$(JSD) stability (Case A vs B):** Case A (σ stable, ρ↑) = true signal; Case B (σ collapses, ρ stable) = range restriction. M=3 σ(JSD)=0.0200, mean_JSD=0.0296 across both diagnose runs — σ not collapsed ⇒ **Case A** confirmed.
 
 ### 3.3 Capacity signals (measured along the way)
 
@@ -117,6 +118,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 | `jsd_mathhard_s123` (flat JSD) | 8K | 6.01 | Complete |
 | `jsd_flat_enrich_M1_s123` | 8K | 6.409 | Complete |
 | `jsd_flat_enrich_M3_s123` | 8K | 6.420 | Complete; eval done |
+| `jsd_flat_enrich_K3_mathhard_s123_ttemp1.5` | 8K | — | Complete (teacher_temp=1.5 variant); K=1 traversal/BV: 6.128/6.145 vs default 6.213/6.157 — slight decline, within noise; preliminary no-benefit signal |
 | `…_M1_s456`, `jsd_mathhard_s456` | 8K | — | Pending (second seed) |
 
 ### 4.2 Three-checkpoint comparison at K_eval=1 (n=100, math_eval)
@@ -138,9 +140,27 @@ Block efficiency for all three checkpoints at K_eval=1, L=8. **M=3 beats flat JS
 
 † K_eval=1 collapse (§5) — naive/spectr/khisti/max give identical BE; four cells are one effective measurement, not independent.
 
-### 4.2b M=1 vs flat JSD across K_eval=1..4 (n=100, math_eval; M=3 multi-K pending)
+### 4.2b M=3 K_eval=2 results (n=100, math_eval)
 
-Δ = enrich(M=1) − flat JSD per K_eval. Single seed; M=3 multi-K eval not yet run.
+M=3 beats flat JSD on all 9 verifiers at K_eval=2 — the all-positive pattern from K_eval=1 holds.
+
+| Verifier | flat K=2 | M=1 K=2 | M=3 K=2 | Δ(M=3−flat) | Δ(M=3−M=1) |
+|---|---|---|---|---|---|
+| traversal | 5.920 | 6.185 | 6.163 | +0.243 | −0.022 |
+| BV | 5.992 | 6.148 | 6.224 | +0.232 | +0.076 |
+| naive | 5.619 | 5.684 | 6.012 | **+0.393** | +0.328 |
+| specinfer | 4.979 | 4.994 | 5.330 | **+0.351** | +0.336 |
+| spectr | 5.359 | 5.729 | 5.620 | +0.261 | −0.109 |
+| khisti | 5.163 | 5.028 | 5.242 | +0.079 | +0.214 |
+| GBV | 5.210 | 5.537 | 5.586 | **+0.376** | +0.049 |
+| NSS | 4.019 | 3.988 | 4.106 | +0.087 | +0.118 |
+| max | 5.205 | 5.136 | 5.260 | +0.055 | +0.124 |
+
+Δ(M=3−flat) growth from K=1 to K=2: naive +0.104→+0.393, GBV +0.264→+0.376, specinfer +0.336→+0.351 (stable). Traversal/BV stable. NSS/max/khisti slight decline. K_eval=3,4 pending.
+
+### 4.2c M=1 vs flat JSD across K_eval=1..4 (n=100, math_eval; M=3 K_eval=3,4 pending)
+
+Δ = enrich(M=1) − flat JSD per K_eval. Single seed; M=3 multi-K eval not yet run beyond K=2.
 
 | Verifier | $K_{\text{eval}}{=}1$ | $2$ | $3$ | $4$ | Pattern |
 |---|---|---|---|---|---|
@@ -158,7 +178,7 @@ Block efficiency for all three checkpoints at K_eval=1, L=8. **M=3 beats flat JS
 
 ### 4.3 Two empirical patterns (conjectures, not results)
 
-**Pattern 1 — K_eval scaling within M=1:** for naive and BV the Δ gap appears to grow with K_eval. Notable exceptions: traversal K_eval=3 negative; GBV reverses at K_eval=3,4; khisti alternating. Single-seed, n=100 observation. **Do not state as established.**
+**Pattern 1 — K_eval scaling of Δ(M−flat):** at M=1, naive and BV gaps grow with K_eval (exceptions: traversal K=3 negative; GBV reverses at 3,4; khisti alternating). The signal is cleaner at M=3 (K=2 data, §4.2b): naive +0.104→+0.393 (+0.289 growth); GBV +0.264→+0.376; specinfer +0.336→+0.351 (stable). NSS/max/khisti decline slightly at M=3 K=2 — the declining subset needs a mechanism (NSS OT-global, max envelope, khisti pairwise). **Growing-Δ subset (naive, GBV, specinfer) is the cleaner K_eval-scaling signal.** Single-seed, n=100; M=3 K=3,4 pending. **Do not state as established.**
 
 **Pattern 2 — Selective verifiers gain more from M (new, K_eval=1):** The M=3 vs M=1 column in §4.2 splits clearly along verifier selectivity: BV/GBV/SpecInfer gain +0.23–0.24, while traversal gains only +0.054 and NSS is flat (−0.018, within SE≈0.10). One interpretation: verifiers with tighter intermediate-position acceptance criteria (BV/GBV require budget-limited token trees; SpecInfer uses multi-token speculation) expose misalignment at positions a single stochastic teacher trajectory never trains; M=3 adds diverse teacher contexts that cover those positions. Traversal (most permissive, accepts any length path) and NSS (global OT criterion, already partially addressed at M=1) are less sensitive to this. **This is the cross-verifier story — if it survives second seed and n=1000, it is the empirical headline.** Do not claim it before then.
 
