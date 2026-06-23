@@ -27,28 +27,43 @@ This motivation is **not new** — it is the same mismatch DistillSpec (on-polic
 | Prior work | What it does | Our differentiator |
 |---|---|---|
 | **DistillSpec** | On-policy distillation using draft-generated sequences | We sample from the **verifier-accepted** state distribution, not raw draft rollouts; we evaluate robustness across 9 verifier families |
-| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Frames the same offline→inference mismatch; anchors on **observed rejection positions** from real spec-decoding runs, replays from them, and uses an **asymmetric loss** — forward KL on accepted tokens (student covers teacher), reverse KL on rejected tokens (penalise overconfident wrong modes) | **We use accepted-context only with a symmetric JSD.** Critical contrast: we are arguably the *weaker, simpler* variant unless we show accepted-only is competitive at lower complexity |
+| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Same offline→inference mismatch. Target-assisted rollout for stable continuations; **replays drafting from verification-exposed error positions**; **asymmetric loss** — forward KL on accepted, reverse KL on rejected with fixed geometric decay $w_k=\gamma^{k-1}$. Qwen3-4B/8B/30B targets, **DFlash/EAGLE-head drafters** (5–8 layers, block 16). Tested on **one** acceptance scheme; **no theorems** (Appendix B is intuitive only); reports speedup / acceptance-length / throughput. Explicitly punts *"approximate or lossy verification"* to future work | (1) **Cross-verifier robustness** — they test one scheme; we cover 9 families. (2) **Theory** — they have none; per-verifier acceptance math is open. (3) Different draft regime (standalone 0.6B vs. EAGLE head). (4) Accepted-only symmetric JSD vs. their accepted+rejected asymmetric KL — we are the simpler variant, must show it is competitive |
 | **GKD / on-policy KD** | Student-generated data, generic | We condition on the verifier kernel, specific to spec-decoding |
 | **OSD** | Online adaptation during serving | We are an offline training objective |
 
-**Defensible claim (narrow):** *"For verifier-conditioned speculative decoding, sampling from the verifier-accepted state distribution and applying a simple accepted-context JSD objective is a low-complexity alternative to explicit rejected-token replay / tree gradients, and it improves robustness across verifier families under matched compute."*
+**What Draft-OPD leaves genuinely open (verified against the full paper):** cross-verifier behaviour and any supporting theory. Their own future-work line — extending OPD to *approximate/lossy verification* — is adjacent to our verifier work, so we are not contradicting them, we are entering the gap they flagged.
 
-**Non-defensible claim (do not pitch):** *"A new training method for speculative decoding"* — too broad, collides directly with DistillSpec/Draft-OPD.
+**Defensible claims (narrow):**
+- *"For verifier-conditioned speculative decoding, how acceptance-aware training transfers across verifier families is unexplored; we map it empirically (9 verifiers × eval-K) and explain the differential with a per-verifier acceptance-functional analysis."*
+- *"Accepted-context symmetric JSD is a low-complexity alternative to rejected-token replay; we measure the gap to Draft-OPD-style replay under matched compute."*
 
-**Mandatory comparison:** We must run a Draft-OPD-style replay ablation (accepted-only vs. accepted+rejected, and symmetric JSD vs. their asymmetric fwd/rev-KL split). Otherwise reviewers correctly say we are the lossy subset of a more complete idea.
+**Non-defensible claims (do not pitch):** *"State distribution matters / train on inference-time states"* (DistillSpec + Draft-OPD own this) and *"a new training method for speculative decoding"* (too broad).
 
-### 2.1 Relationship to expected-depth selection (a separate, future method)
+**Mandatory comparison:** accepted-only vs. accepted+rejected, and symmetric JSD vs. asymmetric fwd/rev-KL with $\gamma^{k-1}$ decay. Otherwise reviewers correctly say we are the lossy subset of a more complete method.
 
-A parked idea is to use Rahul's **expected acceptance depth** $E[\tau_V]$ predictor (survival-weighted, the [nss-gradient ladder] estimator) to decide where to train. It is tempting to equate this with Draft-OPD, but they differ on two axes:
+### 2.1 The design space is 2-D, not a 1-D ladder (corrected)
 
-| Axis | Draft-OPD | Expected-depth weighting (ours, future) |
+An earlier draft of this note called Draft-OPD a "discrete special case" of an enrich→depth-weight→exact-gradient *ladder*. **That was wrong** — it conflated two orthogonal axes. The honest structure:
+
+- **Axis A — state distribution** (where training contexts come from): offline teacher trajectories (flat JSD / SFT) → verifier-**accepted** states (**enrich**) → target-assisted rollout replayed from error positions (**Draft-OPD**).
+- **Axis B — objective / weighting** (what loss, weighted how, at each context): uniform JSD (**enrich**) → fixed geometric decay $\gamma^{k-1}$ asymmetric KL (**Draft-OPD**) → predicted depth/survival weight (Rahul's depth_weight) → exact survival-weighted $\partial\text{BE}/\partial\theta$ (Rahul's depth gradient).
+
+Reading off the space:
+
+| Method | Axis A (states) | Axis B (objective/weight) |
 |---|---|---|
-| **Anchor source** | *Observed* rejections from running spec-decoding (empirical, post-hoc) | *Predicted* $E[\tau_V]$ from an estimator (anticipatory, no full decode needed) |
-| **Granularity of signal** | *Discrete* — a token was rejected → replay there | *Continuous* — weight each position's JSD by its expected marginal acceptance-length gain |
+| flat JSD | offline teacher | uniform JSD |
+| **enrich** | **accepted states** | uniform JSD |
+| Draft-OPD | rollout + error-anchored | asymmetric KL, $\gamma^{k-1}$ |
+| Rahul depth_weight | (any) | crude `depth × JSD` multiply, **no gradient** |
+| Rahul depth gradient | (any) | exact survival-weighted BE gradient |
 
-The shared *slogan* ("train where spec-decoding loses efficiency") is **not** claimable as novel. The defensible differentiator is the **continuous, predicted survival-weight**: it makes Draft-OPD's discrete failure-anchoring a special case of a differentiable surrogate for the exact $\partial\text{BE}/\partial\theta$.
+Consequences (these correct my earlier overstatements):
+1. **Enrich and the depth gradient are largely orthogonal** — enrich moves on Axis A, the depth gradient moves on Axis B. They compose (enrich states × depth-weighted objective) but are independent knobs, not the same idea. *(This matches the intuition that depth-in-enrich would "optimise what the student learns" — i.e. an Axis-B change layered on Axis-A enrich.)*
+2. **Draft-OPD is not a special case of our method.** Both Draft-OPD and a hypothetical enrich+survival-weight method are *distinct populated corners of the same 2-D space*. The only precise "special case" statement that holds is narrow: **Draft-OPD's $w_k=\gamma^{k-1}$ is a fixed, hand-set special case of a general Axis-B survival weight**; Rahul's depth weight would replace that hand-set decay with a *predicted* one.
+3. **The unifying contribution, if any, is a design-space map + analysis, not a ladder** — and it only becomes real once runs populate the empty cells. As of now it is unvalidated: the depth_weight rung in progress is a crude `depth × JSD` multiply with no gradient and is not expected to be promising; the exact depth gradient is not yet implemented.
 
-**Honest expectation (do not oversell):** This is novel in *framing* but **unlikely to beat the current M=3 enrich runs by a meaningful margin empirically.** Reasons: (a) it reweights positions enrich already trains on rather than adding new data; (b) the closely-related *scalar* `depth_weight` already underperformed flat JSD in our [depth-weighting-loss-hierarchy] — position-level weighting is a finer member of the same family; (c) a noisy $E[\tau_V]$ estimate injects estimator error into the gradient, and at ~80% of max BE the headroom is compressed. Its role in the paper is therefore a **theoretical bridge + ablation rung** (Draft-OPD as the discrete limit; Rahul's exact NSS gradient as the top rung), framed as *"matches enrich at lower variance / with interpretability,"* not as a new headline number. Validate cheaply with a short single-seed probe, gated behind confirming the M=3 signal first.
+**Honest expectation for survival-weighting (do not oversell):** novel in framing, but **unlikely to beat M=3 enrich by a meaningful margin** — it reweights positions enrich already trains on; the related scalar `depth_weight` already underperformed flat JSD ([depth-weighting-loss-hierarchy]); a noisy $E[\tau_V]$ injects estimator error; headroom at ~80% of max BE is compressed. If pursued, **position-level only** (prompt-level on/off collides with both Draft-OPD and curriculum learning), validated with a cheap single-seed probe.
 
 > **Prompt-level vs. position-level (decision required):** prompt-level on/off selection (train hard prompts, skip easy) is the weakest framing — it collides with both Draft-OPD *and* generic curriculum learning. Only the **position-level continuous weighting** carries the differentiation above. If we pursue this, commit to position-level.
 
@@ -179,7 +194,9 @@ The earlier "29/36 wins, $p\approx10^{-6}$" binomial is **invalid**: the 36 cell
 
 ## 6. Verifier-Level Math (open obligations)
 
-1. **$K_{\text{eval}}{=}1$ collapse — prove, don't assert.** Define naive, spectr, khisti, max acceptance rules formally; show that at $K_{\text{eval}}{=}1, L{=}1$ each reduces to the singleton rule accept-w.p.-$\min(1,P/Q)$, under explicitly stated assumptions. Empirically the four give identical BE for both checkpoints (5.848 / 5.859), which is strong but not a proof.
+**Core question — why does accepted-context JSD help verifiers differently?** Each verifier's per-state acceptance probability is a *different functional* of $(P,Q)$. For naive single-token acceptance, $\alpha_{\text{naive}}(P,Q)=\sum_x\min(P(x),Q(x))=1-\text{TV}(P,Q)$, and JSD bounds TV ($\text{TV}^2\le\tfrac{1}{2}\ln 2\cdot\text{JSD}$), so lowering accepted-context JSD *directly* raises naive acceptance. For NSS (optimal-transport), BV/GBV (tree/budget), and SpecInfer, the acceptance functional is **not** TV, so the same JSD reduction maps to a *different* marginal acceptance gain — that mapping is the explanation for the differential cross-verifier benefit, and deriving it per verifier is the central theory contribution (Draft-OPD has no such analysis).
+
+1. **$K_{\text{eval}}{=}1$ collapse — likely a one-line remark, not a theorem.** At $K_{\text{eval}}{=}1, L{=}1$ naive/spectr/khisti/max plausibly all reduce to accept-w.p.-$\min(1,P/Q)$. If the reduction is trivial, state it as a remark for completeness — **do not present it as a contribution.** Empirically the four give identical BE for both checkpoints (5.848 / 5.859).
 2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why accepted-context JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
 3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does accepted-context JSD induce that khisti penalises?
 4. **Acceptance–divergence transfer (§3.5)** beyond naive.
@@ -207,7 +224,7 @@ Near-term order: finish M=3 eval → run s456 (flat + enrich) → n=1000 on best
 
 ## 8. Future Directions (parking lot — prioritise later)
 
-- **NSS tree gradients (Rahul):** exact survival-weighted $\partial\text{BE}/\partial\theta$; enrich is a stop-gradient MC approximation of this — direct comparison quantifies the gap. Candidate to unify in one paper as a hierarchy, or a follow-on.
+- **NSS tree gradients (Rahul):** exact survival-weighted $\partial\text{BE}/\partial\theta$ — an **Axis-B** (objective) change, **orthogonal to enrich's Axis-A** (state-distribution) change; they compose rather than approximate each other. The exact gradient is the strongest unscooped asset (Draft-OPD has no theory). Not yet implemented; depth_weight (crude `depth × JSD` multiply, no gradient) is the only Axis-B experiment so far and is not expected to be promising.
 - **NSS-depth and broader tree gradients / tree-depth ablations** (vary $L$, vary $M$).
 - **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
 - **Adaptive teacher using tree depth** to decide where to guide the student.
@@ -221,7 +238,11 @@ These are explicitly deferred. Whether they fold into this paper (as ablations a
 
 ## 9. Scope Verdict
 
-**Promising early signal; not yet conclusive.** Novel enough to publish **only if** (a) framed narrowly as *accepted-state distillation* and hard-differentiated from DistillSpec/Draft-OPD, (b) backed by the §6 verifier math, and (c) supported by the §7 matched-compute, multi-seed, multi-dataset evidence. As-is it is a strong internal / workshop-direction result.
+**Promising early signal; not yet conclusive — and after Draft-OPD, the defensible contribution has relocated.** Draft-OPD (verified against the full paper) tested one acceptance scheme with no theory, so two things remain genuinely open and are where the contribution now lives:
+1. **Cross-verifier behaviour + the per-verifier acceptance-functional math (§6)** — they punted this; it is the clearest open ground.
+2. **The exact survival-weighted gradient (Rahul, Axis B)** — no theory in their paper; the strongest unscooped asset.
+
+Enrich itself is best understood as **one corner of the 2-D design space (§2.1)**, not the headline. Publishable **only if** (a) framed as the cross-verifier analysis + design-space map rather than "accepted-state distillation works," (b) backed by §6 math, (c) supported by §7 matched-compute / multi-seed / multi-dataset evidence, and ideally (d) anchored on the exact gradient once implemented. As-is it is a strong internal / workshop-direction result. **The pivot decision (re-anchor headline on cross-verifier + exact gradient) is Rahul's to make** — and should not be taken until the M=3 eval lands and the empty design-space cells start to fill.
 
 ---
 
