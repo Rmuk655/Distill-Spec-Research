@@ -188,12 +188,38 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 
 ## 6. Novelty Positioning (the biggest risk)
 
-| Prior work | What it does | Our differentiator |
+**Emerging research direction: acceptance-aware distillation.** The common thread across recent papers is not "how closely does the student match the teacher globally?" but **"which states and tokens matter for speculative acceptance?"** Methods differ along two orthogonal axes: (A) *state selection* — which contexts to train on; (B) *token selection* — which positions within those contexts to supervise. Current `jsd_flat_enrich` occupies a simple point: stochastic teacher states, uniform token coverage, multiple trajectories.
+
+**State-selection axis:**
+
+| Prior work | State source | Our differentiator |
 |---|---|---|
-| **DistillSpec** | On-policy distillation using draft-generated sequences; highlights data-generation and divergence choice for SD | Current method averages over $M$ stochastic teacher trajectories rather than a single greedy teacher sequence, giving broader teacher-context coverage. This is weaker than DistillSpec's on-policy framing and must be sold as a simple teacher-sampling variant, not as a new exposure-mismatch solution |
-| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Same offline→inference mismatch. Target-assisted rollout for stable continuations; **replays drafting from verification-exposed error positions**; **asymmetric loss** — forward KL on accepted, reverse KL on rejected with fixed geometric decay $w_k=\gamma^{k-1}$. Qwen3-4B/8B/30B targets, **DFlash/EAGLE-head drafters** (5–8 layers, block 16). Tested on **one** acceptance scheme; gives local accepted/rejected KL rationale; reports speedup / acceptance-length / throughput. Explicitly punts *"approximate or lossy verification"* to future work | (1) **Cross-verifier robustness** — they test one scheme; we cover 9 families. (2) **Cross-verifier theory** — per-verifier acceptance math is open. (3) Different draft regime (standalone 0.6B vs. EAGLE/DFlash-style head). (4) Current stochastic-teacher JSD is simpler but also weaker; we must compare to Draft-OPD-style replay rather than implying we already sample verifier-accepted states |
-| **GKD / on-policy KD** | Student-generated data, generic | Current method is not on-policy; a future draft-gated extension would condition on the verifier kernel, specific to spec-decoding |
-| **OSD** | Online adaptation during serving | We are an offline training objective |
+| **DistillSpec ([arXiv:2310.08461](https://arxiv.org/abs/2310.08461))** | Draft-generated (on-policy); highlights divergence choice for SD | Stronger state alignment; no multi-trajectory. Current method is simpler and weaker — must be sold as stochastic-teacher sampling, not as a new on-policy solution |
+| **GKD / On-Policy KD ([arXiv:2306.13649](https://arxiv.org/abs/2306.13649))** | Student-generated states; gradual teacher→student curriculum | Most principled student-state framing; orthogonal to our trajectory-diversity axis (see 2×2 below) |
+| **VSD ([arXiv:2602.05774](https://arxiv.org/abs/2602.05774))** | Latent draft paths; ELBO/EM maximises acceptance probability directly | Most principled objective; variational inference overhead. Our method is a simpler approximation without the ELBO. |
+| **SKD ([arXiv:2410.11325](https://arxiv.org/abs/2410.11325))** | Teacher-corrected student states | Bridges offline and on-policy columns; does not use multiple teacher trajectories per context |
+| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Error-anchored rollout from observed failures; accepted+rejected asymmetric KL, $w_k=\gamma^{k-1}$; Qwen3-4B/8B/30B, EAGLE/DFlash heads; one acceptance scheme; no theory; punts cross-verifier | (1) Cross-verifier coverage (9 vs 1). (2) Per-verifier acceptance-functional theory. (3) Standalone 0.6B draft vs. EAGLE head. (4) Stochastic-teacher JSD is simpler — must show competitive under matched compute |
+| **OSD ([arXiv:2310.07177](https://arxiv.org/abs/2310.07177))** | Live serving traffic (online) | Online regime targeting deployment distribution; different setting |
+| **Current `jsd_flat_enrich`** | **Stochastic teacher trajectories × M; no draft gating** | Simplest multi-trajectory point; no within-context state selection |
+
+**Token-selection axis (orthogonal to state source):**
+
+| Prior work | Token strategy | State source |
+|---|---|---|
+| **AdaSPEC ([arXiv:2510.19779](https://arxiv.org/abs/2510.19779))** | Informative tokens only | Greedy/corpus teacher |
+| **SelecTKD ([arXiv:2510.24021](https://arxiv.org/abs/2510.24021))** | Teacher-consistent tokens only | Teacher |
+| **Current `jsd_flat_enrich`** | All tokens, uniform JSD | Stochastic teacher |
+
+Both axes compose: any state source can combine with any token-selection strategy.
+
+**2×2 position of current method:**
+
+|  | Single teacher trajectory | Multiple teacher trajectories |
+|---|---|---|
+| **Teacher states (offline)** | Standard flat JSD | **Current `jsd_flat_enrich`** (M=1, 3) |
+| **Student states (on-policy)** | DistillSpec / GKD | **Unexplored** |
+
+The bottom-right corner — student-generated contexts with M teacher continuations per rollout — is the natural adaptive variant: the student's own failures determine where the teacher supervises. See §8 (Curriculum Enrichment).
 
 **What Draft-OPD leaves genuinely open:** cross-verifier behaviour and theory for verifier-specific acceptance functionals. Their own future-work line — extending OPD to *approximate/lossy verification* — is adjacent to our verifier work, so we are not contradicting them, we are entering the gap they flagged.
 
@@ -260,6 +286,9 @@ Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) �
 - **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
 - **Adaptive teacher using tree depth** to decide where to guide the student.
 - **Expected-depth survival weighting (§6.1):** weight per-position JSD by predicted marginal acceptance-length gain $E[\tau_V]$. A distinct Axis-B corner between Draft-OPD's $\gamma^{k-1}$ and the exact NSS gradient; **expected to roughly match, not clearly beat, M=3 stochastic-teacher JSD** (it reweights existing positions). Pursue **position-level only**; validate with a cheap short probe gated behind M=3 confirmation.
+- **Curriculum Enrichment / adaptive state selection (*Curriculum Enrichment Distillation*):** the strongest version of `jsd_flat_enrich` is not uniform M-path sampling but selective enrichment — sample M teacher branches where the verifier rejects (acceptance low); use standard flat JSD where acceptance is high. Teacher compute is spent only where BE is weakest. This is conceptually closer to active learning / a "Socratic teacher" than a fixed loss: *train where the student needs it.* Logically prior to any fixed-M scale-up; if it works at M=3, the adaptive version should be strictly more compute-efficient.
+- **Verifier-failure-targeted enrichment (unexplored corner of 2×2):** the student generates a draft → verifier rejects at position $\tau$ → teacher generates M alternative continuations from $\tau$. This is student-generated states × multiple teacher trajectories — the bottom-right corner of §6's 2×2. Combines on-policy state quality (the student's actual failures) with trajectory diversity (M teacher fixes per failure). The natural successor to fixed enrichment once the 0.6B/8B pair is confirmed.
+- **Student uncertainty gating (entropy proxy):** where entropy($Q_\phi$) is high, reveal M teacher continuations; where it is low, use single-path JSD. Computationally cheaper than full per-step rejection sampling as a proxy for verifier-guided routing.
 - **32B teacher** to test teacher-scale sensitivity (not required for the core 0.6B/8B claim).
 - **Longer horizon ($L{=}16$).**
 
