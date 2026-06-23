@@ -410,9 +410,9 @@ def main():
                     print(f"  [diagnose] checkpoint loss='{_saved_loss}' → primary divergence: {trained_loss}")
                 else:
                     raise ValueError("no loss field in state.json")
-            except Exception:
+            except Exception as _e:
                 trained_loss = _loss_to_divergence(args.checkpoint)
-                print(f"  [diagnose] state.json unreadable/missing loss; inferred from path: {trained_loss}")
+                print(f"  [diagnose] state.json unreadable/missing loss ({type(_e).__name__}: {_e}); inferred from path: {trained_loss}")
         if not per_prompt_be:
             print("  [diagnose] no per-prompt BE available — skipping diagnostic.")
         else:

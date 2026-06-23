@@ -102,10 +102,12 @@ LORA_ALPHA      = 32
 LORA_DROPOUT    = 0.05
 
 # Validation & checkpointing cadence
-VAL_EVERY       = 100                        # gradient-accum steps between val checks
-VAL_PROMPTS     = 25                         # val loss averaged over this many prompts (kept small to limit val overhead)
-SAVE_EVERY      = 200                        # ckpt_latest write cadence
+VAL_EVERY       = 400                        # gradient-accum steps between val checks
+VAL_PROMPTS     = 100                        # larger set → lower SE, less winner's-curse bias
+SAVE_EVERY      = 400                        # ckpt_latest write cadence (matches VAL_EVERY)
 LOG_EVERY       = 10                         # console + W&B step-log cadence
+VAL_EMA_ALPHA   = 0.3                        # smoothed-val EMA weight for checkpoint selection (α=0.3 → ~3-4 check window)
+EARLY_STOP_PAT  = 5                          # default patience: 5 × 400 = 2000 steps without smoothed improvement
 
 # Dataset names (resolved via data_io.get_path)
 TRAIN_DATASET   = "gsm8k_train"
@@ -185,6 +187,11 @@ def parse_args():
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
                          "the 0.8 training temp.  Cannot be 0 (softmax/temp divide).")
+    ap.add_argument("--early_stop_patience", type=int, default=EARLY_STOP_PAT,
+                    help=f"Stop training if smoothed val BE has not improved for this many "
+                         f"consecutive val checks (default {EARLY_STOP_PAT}; 0 = disabled). "
+                         f"Each check is VAL_EVERY={VAL_EVERY} steps, so default = "
+                         f"{EARLY_STOP_PAT * VAL_EVERY} steps without improvement.")
     return ap.parse_args()
 
 
@@ -278,6 +285,9 @@ def main():
     if args.resume:
         start_step, train_state = try_resume(draft, optimizer, scheduler, output_dir)
     best_val_block_eff = train_state.get("best_val_block_eff", 0.0)
+    best_smoothed_be   = train_state.get("best_smoothed_be", 0.0)
+    val_be_ema         = train_state.get("val_be_ema", None)
+    no_improve_count   = train_state.get("no_improve_count", 0)
 
     # W&B
     wandb_run = setup_wandb(args, output_dir, resumed=(start_step > 0), wandb_project=WANDB_PROJECT)
@@ -322,6 +332,8 @@ def main():
     depth_d = 0.0                     # last raw E[tau_V] (logged so the sweep is observable)
     path_div = 0.0                    # last flat_enrich teacher-path diversity (K>1 only)
     best_per_prompt: dict[int, float] = {}   # each val prompt's best-ever block_eff (forgetting)
+    # smoothed-val state (restored from train_state on resume above)
+    # val_be_ema / best_smoothed_be / no_improve_count already loaded from train_state
     t0 = time.time()
 
     for step in range(start_step, args.steps):
@@ -407,11 +419,12 @@ def main():
             if (step + 1) % VAL_EVERY == 0:
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
+                val_be_ema = val_be if val_be_ema is None else (1 - VAL_EMA_ALPHA) * val_be_ema + VAL_EMA_ALPHA * val_be
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
                 _n_easy   = sum(1 for b in _val_pp.values() if b >= _VAL_BE_EASY)
                 _n_medium = sum(1 for b in _val_pp.values() if _VAL_BE_HARD <= b < _VAL_BE_EASY)
                 _n_hard   = sum(1 for b in _val_pp.values() if b < _VAL_BE_HARD)
-                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  smoothed={val_be_ema:.3f}  "
                       f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
                       f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
 
@@ -424,7 +437,8 @@ def main():
                        if (flat_enrich and K > 1) else {}),
                     **({"train/depth_w": depth_w, "train/depth_d": depth_d}
                        if args.aux_mode == "depth_weight" else {}),
-                    **({"val/block_eff": val_be} if val_be is not None else {}),
+                    **({"val/block_eff": val_be,
+                        "val/smoothed_block_eff": val_be_ema} if val_be is not None else {}),
                     **({"val/forgetting": val_forget} if val_forget is not None else {}),
                     **({"val/n_easy": _n_easy, "val/n_medium": _n_medium,
                         "val/n_hard": _n_hard} if val_be is not None else {}),
@@ -436,35 +450,66 @@ def main():
                 # VAL_EVERY not a multiple of LOG_EVERY — compute val now
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
+                val_be_ema = val_be if val_be_ema is None else (1 - VAL_EMA_ALPHA) * val_be_ema + VAL_EMA_ALPHA * val_be
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
                 _n_easy   = sum(1 for b in _val_pp.values() if b >= _VAL_BE_EASY)
                 _n_medium = sum(1 for b in _val_pp.values() if _VAL_BE_HARD <= b < _VAL_BE_EASY)
                 _n_hard   = sum(1 for b in _val_pp.values() if b < _VAL_BE_HARD)
-                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  "
+                print(f"  [val] step={step+1}  block_eff={val_be:.3f}  smoothed={val_be_ema:.3f}  "
                       f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
                       f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
                 if wandb_run:
                     wandb_run.log({"val/block_eff": val_be,
+                                   "val/smoothed_block_eff": val_be_ema,
                                    "val/forgetting": val_forget,
                                    "val/n_easy": _n_easy,
                                    "val/n_medium": _n_medium,
                                    "val/n_hard": _n_hard}, step=step + 1)
             if val_be > best_val_block_eff:
                 best_val_block_eff = val_be
+                if wandb_run:
+                    wandb_run.summary["val/best_block_eff"] = best_val_block_eff
+            if val_be_ema > best_smoothed_be:
+                best_smoothed_be = val_be_ema
+                no_improve_count = 0
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
                                 state={"step": step + 1, "val_block_eff": val_be,
                                         "best_val_block_eff": best_val_block_eff,
+                                        "best_smoothed_be": best_smoothed_be,
+                                        "val_be_ema": val_be_ema,
+                                        "no_improve_count": no_improve_count,
                                         "train_args": _serializable_args(args)},
                                 use_lora=USE_LORA)
-                print(f"  [val] saved ckpt_best (block_eff={val_be:.3f})")
+                print(f"  [val] saved ckpt_best (smoothed={val_be_ema:.3f}  raw={val_be:.3f})")
                 if wandb_run:
-                    wandb_run.summary["val/best_block_eff"] = best_val_block_eff
+                    wandb_run.summary["val/best_smoothed_be"] = best_smoothed_be
+            else:
+                no_improve_count += 1
+                print(f"  [val] no improve {no_improve_count}/{args.early_stop_patience}  "
+                      f"(smoothed={val_be_ema:.3f}  best_smoothed={best_smoothed_be:.3f})")
+                if args.early_stop_patience > 0 and no_improve_count >= args.early_stop_patience:
+                    print(f"  [early stop] patience exhausted at step {step+1}; saving and stopping.")
+                    save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
+                                    state={"step": step + 1,
+                                           "best_val_block_eff": best_val_block_eff,
+                                           "best_smoothed_be": best_smoothed_be,
+                                           "val_be_ema": val_be_ema,
+                                           "no_improve_count": no_improve_count,
+                                           "sched_steps": sched_steps,
+                                           "warmup_opt_steps": warmup_opt_steps,
+                                           "cmd": sys.argv,
+                                           "train_args": _serializable_args(args)},
+                                    use_lora=USE_LORA)
+                    break
 
         # Rolling latest checkpoint
         if (step + 1) % SAVE_EVERY == 0:
             save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                             state={"step": step + 1,
                                    "best_val_block_eff": best_val_block_eff,
+                                   "best_smoothed_be": best_smoothed_be,
+                                   "val_be_ema": val_be_ema,
+                                   "no_improve_count": no_improve_count,
                                    "sched_steps": sched_steps,
                                    "warmup_opt_steps": warmup_opt_steps,
                                    "cmd": sys.argv,
@@ -476,12 +521,15 @@ def main():
     # not blow the disk quota).  ckpt_best holds the val-best model.
     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                     state={"step": args.steps, "best_val_block_eff": best_val_block_eff,
+                           "best_smoothed_be": best_smoothed_be,
+                           "val_be_ema": val_be_ema,
+                           "no_improve_count": no_improve_count,
                            "sched_steps": sched_steps, "warmup_opt_steps": warmup_opt_steps,
                            "cmd": sys.argv,
                            "train_args": _serializable_args(args)},
                     use_lora=USE_LORA)
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
-          f"best_val_block_eff = {best_val_block_eff:.3f}")
+          f"best_val_block_eff = {best_val_block_eff:.3f}  best_smoothed = {best_smoothed_be:.3f}")
     if wandb_run:
         wandb_run.finish()
 
