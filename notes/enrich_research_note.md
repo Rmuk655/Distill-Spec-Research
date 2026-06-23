@@ -27,7 +27,7 @@ This motivation is **not new** — it is the same mismatch DistillSpec (on-polic
 | Prior work | What it does | Our differentiator |
 |---|---|---|
 | **DistillSpec** | On-policy distillation using draft-generated sequences | We sample from the **verifier-accepted** state distribution, not raw draft rollouts; we evaluate robustness across 9 verifier families |
-| **Draft-OPD (2026)** | Frames the same offline→inference mismatch; uses **rejected** proposals / replay | **We use accepted-context only.** This is the critical contrast: we are arguably the *weaker, simpler* variant unless we show accepted-only is competitive at lower complexity |
+| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Frames the same offline→inference mismatch; anchors on **observed rejection positions** from real spec-decoding runs, replays from them, and uses an **asymmetric loss** — forward KL on accepted tokens (student covers teacher), reverse KL on rejected tokens (penalise overconfident wrong modes) | **We use accepted-context only with a symmetric JSD.** Critical contrast: we are arguably the *weaker, simpler* variant unless we show accepted-only is competitive at lower complexity |
 | **GKD / on-policy KD** | Student-generated data, generic | We condition on the verifier kernel, specific to spec-decoding |
 | **OSD** | Online adaptation during serving | We are an offline training objective |
 
@@ -35,7 +35,22 @@ This motivation is **not new** — it is the same mismatch DistillSpec (on-polic
 
 **Non-defensible claim (do not pitch):** *"A new training method for speculative decoding"* — too broad, collides directly with DistillSpec/Draft-OPD.
 
-**Mandatory comparison:** We must run a Draft-OPD-style replay ablation (accepted-only vs. accepted+rejected). Otherwise reviewers correctly say we are the lossy subset of a more complete idea.
+**Mandatory comparison:** We must run a Draft-OPD-style replay ablation (accepted-only vs. accepted+rejected, and symmetric JSD vs. their asymmetric fwd/rev-KL split). Otherwise reviewers correctly say we are the lossy subset of a more complete idea.
+
+### 2.1 Relationship to expected-depth selection (a separate, future method)
+
+A parked idea is to use Rahul's **expected acceptance depth** $E[\tau_V]$ predictor (survival-weighted, the [nss-gradient ladder] estimator) to decide where to train. It is tempting to equate this with Draft-OPD, but they differ on two axes:
+
+| Axis | Draft-OPD | Expected-depth weighting (ours, future) |
+|---|---|---|
+| **Anchor source** | *Observed* rejections from running spec-decoding (empirical, post-hoc) | *Predicted* $E[\tau_V]$ from an estimator (anticipatory, no full decode needed) |
+| **Granularity of signal** | *Discrete* — a token was rejected → replay there | *Continuous* — weight each position's JSD by its expected marginal acceptance-length gain |
+
+The shared *slogan* ("train where spec-decoding loses efficiency") is **not** claimable as novel. The defensible differentiator is the **continuous, predicted survival-weight**: it makes Draft-OPD's discrete failure-anchoring a special case of a differentiable surrogate for the exact $\partial\text{BE}/\partial\theta$.
+
+**Honest expectation (do not oversell):** This is novel in *framing* but **unlikely to beat the current M=3 enrich runs by a meaningful margin empirically.** Reasons: (a) it reweights positions enrich already trains on rather than adding new data; (b) the closely-related *scalar* `depth_weight` already underperformed flat JSD in our [depth-weighting-loss-hierarchy] — position-level weighting is a finer member of the same family; (c) a noisy $E[\tau_V]$ estimate injects estimator error into the gradient, and at ~80% of max BE the headroom is compressed. Its role in the paper is therefore a **theoretical bridge + ablation rung** (Draft-OPD as the discrete limit; Rahul's exact NSS gradient as the top rung), framed as *"matches enrich at lower variance / with interpretability,"* not as a new headline number. Validate cheaply with a short single-seed probe, gated behind confirming the M=3 signal first.
+
+> **Prompt-level vs. position-level (decision required):** prompt-level on/off selection (train hard prompts, skip easy) is the weakest framing — it collides with both Draft-OPD *and* generic curriculum learning. Only the **position-level continuous weighting** carries the differentiation above. If we pursue this, commit to position-level.
 
 ---
 
@@ -196,6 +211,7 @@ Near-term order: finish M=3 eval → run s456 (flat + enrich) → n=1000 on best
 - **NSS-depth and broader tree gradients / tree-depth ablations** (vary $L$, vary $M$).
 - **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
 - **Adaptive teacher using tree depth** to decide where to guide the student.
+- **Expected-depth survival weighting (§2.1):** weight per-position JSD by predicted marginal acceptance-length gain $E[\tau_V]$. Theoretical bridge between Draft-OPD (discrete failure-anchoring) and the exact NSS gradient; **expected to roughly match, not clearly beat, M=3 enrich** (it reweights existing positions; cf. scalar `depth_weight` underperforming flat in [depth-weighting-loss-hierarchy]). Pursue **position-level only**; validate with a cheap short probe gated behind M=3 confirmation.
 - **32B teacher** to test teacher-scale sensitivity (not required for the core 0.6B/8B claim).
 - **Longer horizon ($L{=}16$).**
 
