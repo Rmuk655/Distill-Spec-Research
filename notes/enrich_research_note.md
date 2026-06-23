@@ -4,7 +4,7 @@
 **Status:** Early internal result — promising signal, **not yet paper-ready.** K=1 (M=1) complete and evaluated; K=3 (M=3) training complete, evaluation in progress (2026-06-23).
 **Draft–Teacher pair:** Qwen3-0.6B draft / Qwen3-8B teacher
 **Training data:** math_hard. **Eval data:** math_eval (n=100; paper target n=1000).
-**Positioning:** Builds on [2602.16994]; closely related to DistillSpec, on-policy GKD, Online Speculative Decoding, and **Draft-OPD (May 2026)** — see §2 for the differentiator we must defend.
+**Positioning:** Builds on [2602.16994]; closely related to DistillSpec, on-policy GKD, Online Speculative Decoding, and **Draft-OPD (May 2026)** — see §6 for the differentiator we must defend.
 
 > **Honest framing.** The current evidence supports: *"accepted-rollout enrichment may improve flat JSD on this Qwen3 math setup."* It does **not** yet prove a general method. This note is scoped to make the claim defensible, identify what is novel vs. incremental, and list the experiments and proofs required before submission.
 
@@ -18,60 +18,13 @@ $$\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x_{<t} \sim D}\big[\text{JSD}\big(P_\th
 
 where $P_\theta$ is the teacher, $Q_\phi$ the draft, and $D$ is **the teacher's marginal (offline) distribution** over prefixes. At inference time the draft instead operates inside a verifier-gated acceptance loop: its own proposals, partially accepted and teacher-corrected, determine the prefixes it conditions on. This is the well-known **offline-to-inference (exposure) mismatch**. The hypothesis is that training on prefixes drawn from the *verifier-accepted state distribution* reduces this gap.
 
-This motivation is **not new** — it is the same mismatch DistillSpec (on-policy draft-generated data), GKD, OSD, and Draft-OPD all target. Our contribution must therefore be the *specific, low-complexity instantiation* and its *empirical robustness across verifier families*, not the mismatch observation itself (§2).
+This motivation is **not new** — it is the same mismatch DistillSpec (on-policy draft-generated data), GKD, OSD, and Draft-OPD all target. Our contribution must therefore be the *specific, low-complexity instantiation* and its *empirical robustness across verifier families*, not the mismatch observation itself (§6).
 
 ---
 
-## 2. Novelty Positioning (the biggest risk)
+## 2. Method: `jsd_flat_enrich`
 
-| Prior work | What it does | Our differentiator |
-|---|---|---|
-| **DistillSpec** | On-policy distillation using draft-generated sequences | We sample from the **verifier-accepted** state distribution, not raw draft rollouts; we evaluate robustness across 9 verifier families |
-| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Same offline→inference mismatch. Target-assisted rollout for stable continuations; **replays drafting from verification-exposed error positions**; **asymmetric loss** — forward KL on accepted, reverse KL on rejected with fixed geometric decay $w_k=\gamma^{k-1}$. Qwen3-4B/8B/30B targets, **DFlash/EAGLE-head drafters** (5–8 layers, block 16). Tested on **one** acceptance scheme; **no theorems** (Appendix B is intuitive only); reports speedup / acceptance-length / throughput. Explicitly punts *"approximate or lossy verification"* to future work | (1) **Cross-verifier robustness** — they test one scheme; we cover 9 families. (2) **Theory** — they have none; per-verifier acceptance math is open. (3) Different draft regime (standalone 0.6B vs. EAGLE head). (4) Accepted-only symmetric JSD vs. their accepted+rejected asymmetric KL — we are the simpler variant, must show it is competitive |
-| **GKD / on-policy KD** | Student-generated data, generic | We condition on the verifier kernel, specific to spec-decoding |
-| **OSD** | Online adaptation during serving | We are an offline training objective |
-
-**What Draft-OPD leaves genuinely open (verified against the full paper):** cross-verifier behaviour and any supporting theory. Their own future-work line — extending OPD to *approximate/lossy verification* — is adjacent to our verifier work, so we are not contradicting them, we are entering the gap they flagged.
-
-**Defensible claims (narrow):**
-- *"For verifier-conditioned speculative decoding, how acceptance-aware training transfers across verifier families is unexplored; we map it empirically (9 verifiers × eval-K) and explain the differential with a per-verifier acceptance-functional analysis."*
-- *"Accepted-context symmetric JSD is a low-complexity alternative to rejected-token replay; we measure the gap to Draft-OPD-style replay under matched compute."*
-
-**Non-defensible claims (do not pitch):** *"State distribution matters / train on inference-time states"* (DistillSpec + Draft-OPD own this) and *"a new training method for speculative decoding"* (too broad).
-
-**Mandatory comparison:** accepted-only vs. accepted+rejected, and symmetric JSD vs. asymmetric fwd/rev-KL with $\gamma^{k-1}$ decay. Otherwise reviewers correctly say we are the lossy subset of a more complete method.
-
-### 2.1 The design space is 2-D, not a 1-D ladder (corrected)
-
-An earlier draft of this note called Draft-OPD a "discrete special case" of an enrich→depth-weight→exact-gradient *ladder*. **That was wrong** — it conflated two orthogonal axes. The honest structure:
-
-- **Axis A — state distribution** (where training contexts come from): offline teacher trajectories (flat JSD / SFT) → verifier-**accepted** states (**enrich**) → target-assisted rollout replayed from error positions (**Draft-OPD**).
-- **Axis B — objective / weighting** (what loss, weighted how, at each context): uniform JSD (**enrich**) → fixed geometric decay $\gamma^{k-1}$ asymmetric KL (**Draft-OPD**) → predicted depth/survival weight (Rahul's depth_weight) → exact survival-weighted $\partial\text{BE}/\partial\theta$ (Rahul's depth gradient).
-
-Reading off the space:
-
-| Method | Axis A (states) | Axis B (objective/weight) |
-|---|---|---|
-| flat JSD | offline teacher | uniform JSD |
-| **enrich** | **accepted states** | uniform JSD |
-| Draft-OPD | rollout + error-anchored | asymmetric KL, $\gamma^{k-1}$ |
-| Rahul depth_weight | (any) | crude `depth × JSD` multiply, **no gradient** |
-| Rahul depth gradient | (any) | exact survival-weighted BE gradient |
-
-Consequences (these correct my earlier overstatements):
-1. **Enrich and the depth gradient are largely orthogonal** — enrich moves on Axis A, the depth gradient moves on Axis B. They compose (enrich states × depth-weighted objective) but are independent knobs, not the same idea. *(This matches the intuition that depth-in-enrich would "optimise what the student learns" — i.e. an Axis-B change layered on Axis-A enrich.)*
-2. **Draft-OPD is not a special case of our method.** Both Draft-OPD and a hypothetical enrich+survival-weight method are *distinct populated corners of the same 2-D space*. The only precise "special case" statement that holds is narrow: **Draft-OPD's $w_k=\gamma^{k-1}$ is a fixed, hand-set special case of a general Axis-B survival weight**; Rahul's depth weight would replace that hand-set decay with a *predicted* one.
-3. **The unifying contribution, if any, is a design-space map + analysis, not a ladder** — and it only becomes real once runs populate the empty cells. As of now it is unvalidated: the depth_weight rung in progress is a crude `depth × JSD` multiply with no gradient and is not expected to be promising; the exact depth gradient is not yet implemented.
-
-**Honest expectation for survival-weighting (do not oversell):** novel in framing, but **unlikely to beat M=3 enrich by a meaningful margin** — it reweights positions enrich already trains on; the related scalar `depth_weight` already underperformed flat JSD ([depth-weighting-loss-hierarchy]); a noisy $E[\tau_V]$ injects estimator error; headroom at ~80% of max BE is compressed. If pursued, **position-level only** (prompt-level on/off collides with both Draft-OPD and curriculum learning), validated with a cheap single-seed probe.
-
-> **Prompt-level vs. position-level (decision required):** prompt-level on/off selection (train hard prompts, skip easy) is the weakest framing — it collides with both Draft-OPD *and* generic curriculum learning. Only the **position-level continuous weighting** carries the differentiation above. If we pursue this, commit to position-level.
-
----
-
-## 3. Method: `jsd_flat_enrich`
-
-### 3.1 Notation (de-conflict the overloaded K)
+### 2.1 Notation (de-conflict the overloaded K)
 
 The codebase uses `K` for two unrelated things. For the paper we rename:
 
@@ -83,7 +36,7 @@ The codebase uses `K` for two unrelated things. For the paper we rename:
 
 This note uses $M$, $K_{\text{eval}}$, $L$ throughout. (M=1 ⇔ old "K=1 train"; M=3 ⇔ old "K=3 train".)
 
-### 3.2 The accepted-state distribution (formal)
+### 2.2 The accepted-state distribution (formal)
 
 Let $\pi$ be the prompt distribution. Define the **verifier-induced prefix kernel** $\mathcal{J}_V$ as the distribution over accepted prefixes $x^*$ generated by:
 
@@ -99,27 +52,27 @@ $$\mathcal{L}_{\text{enrich}} = \mathbb{E}_{x^* \sim \mathcal{J}_V}\!\left[\frac
 
 For $M>1$: average over $M$ independent rollouts (Monte Carlo estimate of the expectation; more rollouts ⇒ lower-variance estimate + more diverse contexts).
 
-### 3.3 Stop-gradient disclosure (important)
+### 2.3 Stop-gradient disclosure (important)
 
-The kernel $\mathcal{J}_V$ depends on $\phi$ (the draft generates the rollouts). **We do not differentiate through the sampling distribution.** $\mathcal{L}_{\text{enrich}}$ is therefore a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The paper must state this explicitly; the NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, and enrich is best framed as a cheap approximation to it.
+The kernel $\mathcal{J}_V$ depends on $\phi$ (the draft generates the rollouts). **We do not differentiate through the sampling distribution.** $\mathcal{L}_{\text{enrich}}$ is therefore a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The paper must state this explicitly; the NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, which composes with — rather than is approximated by — enrich (see §6.1).
 
-### 3.4 Accepted-only vs. learning-from-mistakes
+### 2.4 Accepted-only vs. learning-from-mistakes
 
 The motivation invokes "inference-time mistakes," but the loss is computed on **accepted positions only**. Rejected draft tokens are discarded. So strictly, the draft learns from **verified/accepted states**, not from its own failed proposals. This is exactly the axis on which Draft-OPD differs (it replays rejected proposals). We must either (a) own "accepted-only" as the simplicity advantage and prove it suffices, or (b) add a rejected-replay variant and show accepted-only is competitive. **Do not blur this in the writeup.**
 
-### 3.5 Acceptance–divergence link (to be proven)
+### 2.5 Acceptance–divergence link
 
 For vanilla single-token speculative decoding, per-state acceptance probability is
 
 $$\alpha(p,q) = \sum_x \min\big(p(x), q(x)\big) = 1 - \text{TV}(p, q).$$
 
-JSD bounds TV via $\text{TV}^2 \leq \tfrac{1}{2}\ln 2 \cdot \text{JSD}$ (and TV $\leq \sqrt{\tfrac{1}{2}\,\text{KL}}$). So minimising accepted-context JSD ⇒ lower TV at accepted states ⇒ higher single-token acceptance **at those states**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open proof obligation (§7).
+JSD bounds TV via $\text{TV}^2 \leq \tfrac{1}{2}\ln 2 \cdot \text{JSD}$ (and TV $\leq \sqrt{\tfrac{1}{2}\,\text{KL}}$). So minimising accepted-context JSD ⇒ lower TV at accepted states ⇒ higher single-token acceptance **at those states**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open obligation (§5).
 
 ---
 
-## 4. Measurement Framework
+## 3. Measurement Framework
 
-### 4.1 Primary metric: Block Efficiency
+### 3.1 Primary metric: Block Efficiency
 
 $$\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \text{BE}_{\max} = L.$$
 
@@ -127,14 +80,14 @@ At $L=8$: observed range 3.7 (NSS, strictest) to 6.4 (traversal). **Report wall-
 
 L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 
-### 4.2 Diagnostics (`--diagnose`)
+### 3.2 Diagnostics (`--diagnose`)
 
 **Spearman $\rho$(divergence, BE):** rank correlation, robust to JSD range compression as the model improves (unlike Pearson r).
 - Observed: flat JSD $\rho=-0.396$; enrich M=1 $\rho=-0.568$ ($p=8.5\times10^{-12}$). Stronger objective–BE alignment under enrich.
 
 **$\sigma$(JSD) stability (Case A vs B):** Case A (σ stable, ρ↑) = true signal; Case B (σ collapses, ρ stable) = range restriction. Observed: σ(JSD) identical for both checkpoints ⇒ **Case A** (improvement not an artefact).
 
-### 4.3 Capacity signals (measured along the way)
+### 3.3 Capacity signals (measured along the way)
 
 **Student (draft) at capacity:** val/block_eff plateau with no new best; train loss floor (~0.02); high oscillating forgetting with no net BE gain; frozen BE bucket distribution.
 
@@ -146,9 +99,9 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 
 ---
 
-## 5. Results (encouraging but inconclusive)
+## 4. Results (encouraging but inconclusive)
 
-### 5.1 Training runs
+### 4.1 Training runs
 
 | Run | Steps | Best val BE | Status |
 |---|---|---|---|
@@ -157,9 +110,9 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 | `jsd_flat_enrich_M3_s123` | 8K | 6.420 | Complete; eval in progress |
 | `…_M1_s456`, `jsd_mathhard_s456` | 8K | — | Pending (second seed) |
 
-### 5.2 M=1 enrich vs. flat JSD (n=100, math_eval)
+### 4.2 M=1 enrich vs. flat JSD (n=100, math_eval)
 
-Δ = enrich(M=1) − flat JSD. **Caveat: these are exploratory point estimates, not significance-tested.** See §5.4.
+Δ = enrich(M=1) − flat JSD. **Caveat: these are exploratory point estimates, not significance-tested.** See §4.4.
 
 | Verifier | $K_{\text{eval}}{=}1$ | $2$ | $3$ | $4$ | Pattern |
 |---|---|---|---|---|---|
@@ -173,15 +126,15 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 | khisti | +0.011† | **−0.135** | +0.189 | **−0.161** | Alternating / negative |
 | max | +0.011† | −0.069 | +0.056 | +0.151 | Weakly positive |
 
-† $K_{\text{eval}}{=}1$ collapse (§6) — these four are theoretically the same cell, **not independent evidence.**
+† $K_{\text{eval}}{=}1$ collapse (§5) — these four are theoretically the same cell, **not independent evidence.**
 
-### 5.3 The K-scaling pattern (a conjecture, not a result)
+### 4.3 The K-scaling pattern (a conjecture, not a result)
 
 For naive and BV the gap appears to grow with $K_{\text{eval}}$. This is the most interesting signal *if it survives seeds and n=1000*, but it is currently a single-seed, n=100 observation with notable exceptions (traversal $K_{\text{eval}}{=}3$ negative; GBV reverses; khisti negative at 2 and 4). **Do not state K-scaling as established.**
 
-### 5.4 Statistics — corrected
+### 4.4 Statistics
 
-The earlier "29/36 wins, $p\approx10^{-6}$" binomial is **invalid**: the 36 cells are highly correlated (same prompts, same checkpoint, related verifiers, shared $K_{\text{eval}}$ grid), and the four $K_{\text{eval}}{=}1$ collapsed cells are duplicate counts. The independence assumption is false.
+A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 36 cells are highly correlated (same prompts, same checkpoint, related verifiers, shared $K_{\text{eval}}$ grid), and the four $K_{\text{eval}}{=}1$ collapsed cells are duplicate counts. The independence assumption is false.
 
 **Correct approach:**
 - Pre-declare a small set of aggregate metrics (e.g. mean BE on traversal; mean BE on naive; one strict-verifier metric).
@@ -192,14 +145,61 @@ The earlier "29/36 wins, $p\approx10^{-6}$" binomial is **invalid**: the 36 cell
 
 ---
 
-## 6. Verifier-Level Math (open obligations)
+## 5. Verifier-Level Math (open obligations)
 
 **Core question — why does accepted-context JSD help verifiers differently?** Each verifier's per-state acceptance probability is a *different functional* of $(P,Q)$. For naive single-token acceptance, $\alpha_{\text{naive}}(P,Q)=\sum_x\min(P(x),Q(x))=1-\text{TV}(P,Q)$, and JSD bounds TV ($\text{TV}^2\le\tfrac{1}{2}\ln 2\cdot\text{JSD}$), so lowering accepted-context JSD *directly* raises naive acceptance. For NSS (optimal-transport), BV/GBV (tree/budget), and SpecInfer, the acceptance functional is **not** TV, so the same JSD reduction maps to a *different* marginal acceptance gain — that mapping is the explanation for the differential cross-verifier benefit, and deriving it per verifier is the central theory contribution (Draft-OPD has no such analysis).
 
 1. **$K_{\text{eval}}{=}1$ collapse — likely a one-line remark, not a theorem.** At $K_{\text{eval}}{=}1, L{=}1$ naive/spectr/khisti/max plausibly all reduce to accept-w.p.-$\min(1,P/Q)$. If the reduction is trivial, state it as a remark for completeness — **do not present it as a contribution.** Empirically the four give identical BE for both checkpoints (5.848 / 5.859).
 2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why accepted-context JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
 3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does accepted-context JSD induce that khisti penalises?
-4. **Acceptance–divergence transfer (§3.5)** beyond naive.
+4. **Acceptance–divergence transfer (§2.5)** beyond naive.
+
+---
+
+## 6. Novelty Positioning (the biggest risk)
+
+| Prior work | What it does | Our differentiator |
+|---|---|---|
+| **DistillSpec** | On-policy distillation using draft-generated sequences | We sample from the **verifier-accepted** state distribution, not raw draft rollouts; we evaluate robustness across 9 verifier families |
+| **Draft-OPD (2026, [arXiv:2605.29343](https://arxiv.org/abs/2605.29343))** | Same offline→inference mismatch. Target-assisted rollout for stable continuations; **replays drafting from verification-exposed error positions**; **asymmetric loss** — forward KL on accepted, reverse KL on rejected with fixed geometric decay $w_k=\gamma^{k-1}$. Qwen3-4B/8B/30B targets, **DFlash/EAGLE-head drafters** (5–8 layers, block 16). Tested on **one** acceptance scheme; **no theorems** (Appendix B is intuitive only); reports speedup / acceptance-length / throughput. Explicitly punts *"approximate or lossy verification"* to future work | (1) **Cross-verifier robustness** — they test one scheme; we cover 9 families. (2) **Theory** — they have none; per-verifier acceptance math is open. (3) Different draft regime (standalone 0.6B vs. EAGLE head). (4) Accepted-only symmetric JSD vs. their accepted+rejected asymmetric KL — we are the simpler variant, must show it is competitive |
+| **GKD / on-policy KD** | Student-generated data, generic | We condition on the verifier kernel, specific to spec-decoding |
+| **OSD** | Online adaptation during serving | We are an offline training objective |
+
+**What Draft-OPD leaves genuinely open:** cross-verifier behaviour and any supporting theory. Their own future-work line — extending OPD to *approximate/lossy verification* — is adjacent to our verifier work, so we are not contradicting them, we are entering the gap they flagged.
+
+**Defensible claims (narrow):**
+- *"For verifier-conditioned speculative decoding, how acceptance-aware training transfers across verifier families is unexplored; we map it empirically (9 verifiers × eval-K) and explain the differential with a per-verifier acceptance-functional analysis."*
+- *"Accepted-context symmetric JSD is a low-complexity alternative to rejected-token replay; we measure the gap to Draft-OPD-style replay under matched compute."*
+
+**Non-defensible claims (do not pitch):** *"State distribution matters / train on inference-time states"* (DistillSpec + Draft-OPD own this) and *"a new training method for speculative decoding"* (too broad).
+
+**Mandatory comparison:** accepted-only vs. accepted+rejected, and symmetric JSD vs. asymmetric fwd/rev-KL with $\gamma^{k-1}$ decay. Otherwise reviewers correctly say we are the lossy subset of a more complete method.
+
+### 6.1 The design space is 2-D, not a 1-D ladder
+
+The methods in this area separate cleanly along two orthogonal axes:
+
+- **Axis A — state distribution** (where training contexts come from): offline teacher trajectories (flat JSD / SFT) → verifier-**accepted** states (**enrich**) → target-assisted rollout replayed from error positions (**Draft-OPD**).
+- **Axis B — objective / weighting** (what loss, weighted how, at each context): uniform JSD (**enrich**) → fixed geometric decay $\gamma^{k-1}$ asymmetric KL (**Draft-OPD**) → predicted depth/survival weight (Rahul's depth_weight) → exact survival-weighted $\partial\text{BE}/\partial\theta$ (Rahul's depth gradient).
+
+Reading off the space:
+
+| Method | Axis A (states) | Axis B (objective/weight) |
+|---|---|---|
+| flat JSD | offline teacher | uniform JSD |
+| **enrich** | **accepted states** | uniform JSD |
+| Draft-OPD | rollout + error-anchored | asymmetric KL, $\gamma^{k-1}$ |
+| Rahul depth_weight | (any) | crude `depth × JSD` multiply, **no gradient** |
+| Rahul depth gradient | (any) | exact survival-weighted BE gradient |
+
+Consequences:
+1. **Enrich and the depth gradient are largely orthogonal** — enrich moves on Axis A, the depth gradient moves on Axis B. They compose (enrich states × depth-weighted objective) but are independent knobs, not the same idea. *(So using depth in enrich would "optimise what the student learns" — an Axis-B change layered on Axis-A enrich.)*
+2. **Draft-OPD is not a special case of our method.** Both Draft-OPD and a hypothetical enrich+survival-weight method are *distinct populated corners of the same 2-D space*. The only precise "special case" statement that holds is narrow: **Draft-OPD's $w_k=\gamma^{k-1}$ is a fixed, hand-set special case of a general Axis-B survival weight**; Rahul's depth weight would replace that hand-set decay with a *predicted* one.
+3. **The unifying contribution, if any, is a design-space map + analysis, not a ladder** — and it only becomes real once runs populate the empty cells. As of now it is unvalidated: the depth_weight cell in progress is a crude `depth × JSD` multiply with no gradient and is not expected to be promising; the exact depth gradient is not yet implemented.
+
+**Honest expectation for survival-weighting (do not oversell):** novel in framing, but **unlikely to beat M=3 enrich by a meaningful margin** — it reweights positions enrich already trains on; the related scalar `depth_weight` already underperformed flat JSD; a noisy $E[\tau_V]$ injects estimator error; headroom at ~80% of max BE is compressed. If pursued, **position-level only** (prompt-level on/off collides with both Draft-OPD and curriculum learning), validated with a cheap single-seed probe.
+
+> **Prompt-level vs. position-level (decision required):** prompt-level on/off selection (train hard prompts, skip easy) is the weakest framing — it collides with both Draft-OPD *and* generic curriculum learning. Only the **position-level continuous weighting** carries the differentiation above. If we pursue this, commit to position-level.
 
 ---
 
@@ -228,22 +228,18 @@ Near-term order: finish M=3 eval → run s456 (flat + enrich) → n=1000 on best
 - **NSS-depth and broader tree gradients / tree-depth ablations** (vary $L$, vary $M$).
 - **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
 - **Adaptive teacher using tree depth** to decide where to guide the student.
-- **Expected-depth survival weighting (§2.1):** weight per-position JSD by predicted marginal acceptance-length gain $E[\tau_V]$. Theoretical bridge between Draft-OPD (discrete failure-anchoring) and the exact NSS gradient; **expected to roughly match, not clearly beat, M=3 enrich** (it reweights existing positions; cf. scalar `depth_weight` underperforming flat in [depth-weighting-loss-hierarchy]). Pursue **position-level only**; validate with a cheap short probe gated behind M=3 confirmation.
+- **Expected-depth survival weighting (§6.1):** weight per-position JSD by predicted marginal acceptance-length gain $E[\tau_V]$. A distinct Axis-B corner between Draft-OPD's $\gamma^{k-1}$ and the exact NSS gradient; **expected to roughly match, not clearly beat, M=3 enrich** (it reweights existing positions). Pursue **position-level only**; validate with a cheap short probe gated behind M=3 confirmation.
 - **32B teacher** to test teacher-scale sensitivity (not required for the core 0.6B/8B claim).
 - **Longer horizon ($L{=}16$).**
 
-These are explicitly deferred. Whether they fold into this paper (as ablations along a gradient-approximation hierarchy) or a follow-on is a research-lead scope decision.
+These are explicitly deferred. Whether they fold into this paper (as ablations) or a follow-on is a research-lead scope decision.
 
 ---
 
 ## 9. Scope Verdict
 
-**Promising early signal; not yet conclusive — and after Draft-OPD, the defensible contribution has relocated.** Draft-OPD (verified against the full paper) tested one acceptance scheme with no theory, so two things remain genuinely open and are where the contribution now lives:
-1. **Cross-verifier behaviour + the per-verifier acceptance-functional math (§6)** — they punted this; it is the clearest open ground.
+**Promising early signal; not yet conclusive — and given Draft-OPD, the defensible contribution sits in two places.** Draft-OPD tested one acceptance scheme with no theory, so two things remain genuinely open and are where the contribution lives:
+1. **Cross-verifier behaviour + the per-verifier acceptance-functional math (§5)** — they punted this; it is the clearest open ground.
 2. **The exact survival-weighted gradient (Rahul, Axis B)** — no theory in their paper; the strongest unscooped asset.
 
-Enrich itself is best understood as **one corner of the 2-D design space (§2.1)**, not the headline. Publishable **only if** (a) framed as the cross-verifier analysis + design-space map rather than "accepted-state distillation works," (b) backed by §6 math, (c) supported by §7 matched-compute / multi-seed / multi-dataset evidence, and ideally (d) anchored on the exact gradient once implemented. As-is it is a strong internal / workshop-direction result. **The pivot decision (re-anchor headline on cross-verifier + exact gradient) is Rahul's to make** — and should not be taken until the M=3 eval lands and the empty design-space cells start to fill.
-
----
-
-*Raw eval CSVs and W&B links available on request — rkrishna@adobe.com*
+Enrich itself is best understood as **one corner of the 2-D design space (§6.1)**, not the headline. Publishable **only if** (a) framed as the cross-verifier analysis + design-space map rather than "accepted-state distillation works," (b) backed by §5 math, (c) supported by §7 matched-compute / multi-seed / multi-dataset evidence, and ideally (d) anchored on the exact gradient once implemented. As-is it is a strong internal / workshop-direction result. **The pivot decision (re-anchor headline on cross-verifier + exact gradient) is the research lead's to make** — and should not be taken until the M=3 eval lands and the empty design-space cells start to fill.
