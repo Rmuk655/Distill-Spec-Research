@@ -235,7 +235,7 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 
 ### 4.5 Convergence / matched-compute: enrich vs converged flat
 
-**The converged-flat eval now exists** and is in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) as `jsd_mathhard_s123_25k` (the 25K flat run, `train_steps=25000`; flat JSD converges ~15K so 25K is at/past ceiling). `block_eff` is hardware-independent, so its BE is directly comparable to the 8K A100 runs. The decisive deltas (full table in §4.4):
+**The converged-flat eval is now complete** and is in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) as `jsd_mathhard_s123_25k` (the 25K flat run, `train_steps=25000`; flat JSD converges ~15K so 25K is at/past ceiling; evaluated on H100 — throughput not comparable to A100 but `block_eff` is hardware-independent). All 9 verifiers × K_eval=1..4 are now present in the CSV. `block_eff` is directly comparable to the 8K A100 runs. The decisive deltas (full table in §4.4):
 
 - **flat-25K − flat-8K = +0.109 overall** — 3× longer flat training is a real ~+0.11 gain (so flat-8K was genuinely under-trained; the comparison had to be made against converged flat).
 - **M=3 enrich-8K − flat-25K = +0.074 overall, +0.100 bv/traversal, traversal K=3 = +0.346.** **M=3 enrich at 8K beats flat trained to its 25K ceiling**, concentrated on the prefix/budget verifiers and high K — exactly the §4.2c multi-path/verifier–K alignment signature.
