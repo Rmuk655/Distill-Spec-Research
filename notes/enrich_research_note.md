@@ -239,6 +239,19 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 
 - **flat-25K − flat-8K = +0.109 overall** — 3× longer flat training is a real ~+0.11 gain (so flat-8K was genuinely under-trained; the comparison had to be made against converged flat).
 - **M=3 enrich-8K − flat-25K = +0.074 overall, +0.100 bv/traversal, traversal K=3 = +0.346.** **M=3 enrich at 8K beats flat trained to its 25K ceiling**, concentrated on the prefix/budget verifiers and high K — exactly the §4.2c multi-path/verifier–K alignment signature. This is the result that was at risk; it survives.
+
+  **As percentages, with the load-bearing nuance** (vs matched-step flat-8K | vs converged flat-25K):
+
+  | cell | vs flat-8K | vs flat-25K |
+  |---|---|---|
+  | traversal K=2 | +4.1% | +0.4% |
+  | **traversal K=3** | **+5.5%** | **+5.9%** |
+  | traversal K=4 | +4.1% | (n/a — 25K run stopped at K=3) |
+  | bv K=2 | +3.9% | +1.9% |
+  | bv K=3 | +7.4% | +1.9% |
+  | bv K=4 | +7.0% | (n/a) |
+
+  **The bankable claim against converged flat is `traversal K=3 ≈ +6%`.** BV looks strong vs flat-8K (+7%) but **most of that is a convergence-speed effect** — flat's own 8K→25K gain is largest exactly on bv K=3 (+0.31), so vs converged flat the bv margin shrinks to ~+2%. So: **traversal K=3 is structural; BV is mostly "enrich converges faster."** Both are real wins, but only the traversal one is a ceiling improvement.
 - **M=1 enrich-8K − flat-25K = −0.022.** Single-path enrich loses to converged flat → M=1 enrich is just flat with fewer steps, **no structural edge.**
 
 **Compute accounting.** M=3-8K ≈ 24K teacher-rollouts ≈ flat-25K's ~25K rollouts → **roughly matched compute, and M=3 still wins.** The only place converged flat catches M=3 is **K_eval=1** (saturated single path: flat-25K traversal K=1=6.28 vs M=3-8K=6.213, −0.068); the M=3 advantage is entirely a **K≥2 tree-width effect**, which is the honest and defensible framing.
