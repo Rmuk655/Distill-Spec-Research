@@ -109,6 +109,53 @@ def _spearman(xs: list, ys: list) -> float:
     return _pearson(_ranks(xs), _ranks(ys))
 
 
+@torch.no_grad()
+def compute_train_diag_scalars(p_model, q_model, tok, prompts, per_prompt_be,
+                                max_new_tokens: int, device,
+                                trained_loss: str = "jsd") -> dict:
+    """Lightweight in-training diagnose: returns scalar metrics only.
+
+    Designed to be called every VAL_EVERY steps and logged into the *existing*
+    training wandb run (caller does wandb_run.log({**scalars}, step=step)).
+    No wandb.init(), no Tables, no scatter plots — those live in the post-hoc
+    run_objective_be_diagnostic call.
+
+    Overhead: ~1 teacher greedy generate + 2 forward passes per val prompt.
+    At 100 prompts this is roughly the same wall-clock as one val pass.
+
+    Returns dict with keys:
+      diag/rho        — Spearman ρ(trained_loss, BE) [primary signal]
+      diag/sigma_jsd  — σ(JSD)  [range compression tracker]
+      diag/mean_jsd   — mean(JSD)
+      diag/sigma_be   — σ(BE) across val prompts
+    """
+    jsd_xs, fkl_xs, be_ys = [], [], []
+    for i, prompt in enumerate(prompts):
+        if i not in per_prompt_be:
+            continue
+        jsd, fkl = _prompt_divergence(p_model, q_model, tok, prompt,
+                                      max_new_tokens, device)
+        if jsd is None:
+            continue
+        jsd_xs.append(jsd); fkl_xs.append(fkl); be_ys.append(per_prompt_be[i])
+
+    pri_xs = fkl_xs if trained_loss == "fwdkl" else jsd_xs
+    rho   = _spearman(pri_xs, be_ys)
+
+    def _std(xs):
+        if len(xs) < 2:
+            return float("nan")
+        mu = sum(xs) / len(xs)
+        return (sum((x - mu) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
+
+    return {
+        "diag/rho":       round(rho, 4),
+        "diag/sigma_jsd": round(_std(jsd_xs), 5),
+        "diag/mean_jsd":  round(sum(jsd_xs) / len(jsd_xs), 5) if jsd_xs else float("nan"),
+        "diag/sigma_be":  round(_std(be_ys), 4),
+    }
+
+
 def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                                 args, mode_name, device, trained_loss: str = "jsd"):
     """Correlate per-prompt training divergence with per-prompt block efficiency.

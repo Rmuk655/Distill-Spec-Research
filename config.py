@@ -24,11 +24,14 @@ def block_eff(gen_tokens: int, target_calls: int) -> float:
 
 # BE difficulty threshold fractions of L (shared by diagnostics.py and train.py).
 # Multiply by the actual L used at runtime — do NOT hardcode absolute values.
-#   easy  : BE >= BE_EASY_FRAC * L  (0.75 × 8 = 6.0 at default L=8)
+#   easy  : BE >= BE_EASY_FRAC * L  (0.875 × 8 = 7.0 at default L=8)
 #   medium: BE_HARD_FRAC * L <= BE < BE_EASY_FRAC * L
-#   hard  : BE <  BE_HARD_FRAC * L  (0.375 × 8 = 3.0 at default L=8)
-BE_EASY_FRAC = 0.75
-BE_HARD_FRAC = 0.375
+#   hard  : BE <  BE_HARD_FRAC * L  (0.625 × 8 = 5.0 at default L=8)
+# Rationale: trained models on math_hard cluster in 5-7 BE range.
+# Old thresholds (6.0/3.0) left hard≈0 always; new thresholds spread 100 val prompts
+# across all three buckets so you can see medium→easy and hard→medium transitions.
+BE_EASY_FRAC = 0.875
+BE_HARD_FRAC = 0.625
 
 # Verifier modes understood by speculative_decoding_loop (main.py)
 VERIFIER_MODES = [

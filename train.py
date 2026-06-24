@@ -62,6 +62,7 @@ def _clear_node_caches():
     Node.khisti_cache.clear()
 from verifier_safe  import VerifierError
 
+from diagnostics import compute_train_diag_scalars
 from losses.compute import (draft_tree_forward_with_grad, compute_flat_loss,
                              compute_flat_enrich_loss, compute_tree_loss,
                              compute_offpolicy_tree_loss, compute_enrichment_loss,
@@ -187,6 +188,12 @@ def parse_args():
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
                          "the 0.8 training temp.  Cannot be 0 (softmax/temp divide).")
+    ap.add_argument("--train_diagnose", action="store_true",
+                    help="Run lightweight JSD-vs-BE diagnostic at every val check. "
+                         "Logs diag/rho, diag/sigma_jsd, diag/mean_jsd, diag/sigma_be "
+                         "to the training W&B run as a time series. "
+                         "Overhead: ~1 teacher greedy generate + 2 forward passes per val "
+                         "prompt — roughly same wall-clock as one val pass (≈2x val time).")
     ap.add_argument("--early_stop_patience", type=int, default=EARLY_STOP_PAT,
                     help=f"Stop training if smoothed val BE has not improved for this many "
                          f"consecutive val checks (default {EARLY_STOP_PAT}; 0 = disabled). "
@@ -416,6 +423,7 @@ def main():
             # step cause the second to be silently dropped in wandb ≥0.15.
             val_be = None
             val_forget = None
+            _diag = {}
             if (step + 1) % VAL_EVERY == 0:
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
@@ -427,6 +435,17 @@ def main():
                 print(f"  [val] step={step+1}  block_eff={val_be:.3f}  smoothed={val_be_ema:.3f}  "
                       f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
                       f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
+                if args.train_diagnose:
+                    _diag = compute_train_diag_scalars(
+                        teacher, draft, tokenizer, val_prompts, _val_pp,
+                        MAX_NEW_TOKENS, draft.device,
+                        trained_loss=args.loss,
+                    )
+                    print(f"  [diag]  rho={_diag['diag/rho']:+.3f}  "
+                          f"σ(JSD)={_diag['diag/sigma_jsd']:.4f}  "
+                          f"mean(JSD)={_diag['diag/mean_jsd']:.4f}")
+                else:
+                    _diag = {}
 
             if wandb_run:
                 wandb_run.log({
@@ -442,6 +461,7 @@ def main():
                     **({"val/forgetting": val_forget} if val_forget is not None else {}),
                     **({"val/n_easy": _n_easy, "val/n_medium": _n_medium,
                         "val/n_hard": _n_hard} if val_be is not None else {}),
+                    **_diag,
                 }, step=step + 1)
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
