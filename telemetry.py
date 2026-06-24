@@ -8,6 +8,7 @@ Public API:
   _gpu_index_from_device("cuda:2") -> 2
   GpuMonitor(device_idx)  — 1-Hz background thread; call .start(), .stop(), .summary()
   _machine_specs(gpu_idx) -> dict  — one-shot hardware snapshot stored in every CSV row
+  _model_attn_backend(*models) -> str  — selected HF backend from loaded model configs
   _auto_cpu_threads()     -> int   — physical_cores // num_gpus heuristic
 """
 from __future__ import annotations
@@ -327,6 +328,27 @@ def _machine_specs(gpu_idx: int = 0) -> dict:
             specs["attn_backend"] = "eager"
 
     return specs
+
+
+def _model_attn_backend(*models) -> str:
+    """Return the attention backend selected by Transformers for loaded models."""
+    impls: list[str] = []
+    for model in models:
+        cfg = getattr(model, "config", None)
+        impl = getattr(cfg, "_attn_implementation", None)
+        if impl and impl not in impls:
+            impls.append(str(impl))
+
+    try:
+        import flash_attn
+        flash_pkg = f"flash_attn-{flash_attn.__version__}"
+    except ImportError:
+        flash_pkg = ""
+
+    if impls:
+        backend = "+".join(impls)
+        return f"{backend} ({flash_pkg})" if flash_pkg else backend
+    return flash_pkg or "unknown"
 
 
 def _auto_cpu_threads() -> int:

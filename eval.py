@@ -65,7 +65,8 @@ from data_io import get_path as dataset_path
 from config  import (TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS,
                      DEFAULT_TEMP, DEFAULT_DTYPE, DEFAULT_SEED, VERIFIER_MODES, block_eff)
 
-from telemetry import GpuMonitor, _gpu_index_from_device, _machine_specs, _auto_cpu_threads
+from telemetry import (GpuMonitor, _gpu_index_from_device, _machine_specs,
+                       _model_attn_backend, _auto_cpu_threads)
 from eval_io import (_state_path, _load_state, CSV_COLUMNS, append_csv_row,
                      log_result, _resolve_training_url, _FLOAT_FMT)
 from diagnostics import run_objective_be_diagnostic, run_decomposition_radar
@@ -329,6 +330,8 @@ def main():
         print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
         tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
                                             device=torch_device, dtype=DEFAULT_DTYPE)
+        specs["attn_backend"] = _model_attn_backend(p_model, q_model)
+        print(f"[load] attention_backend={specs['attn_backend']}")
         # Log GPU memory after model load — both models share the same device.
         if torch.cuda.is_available():
             _alloc = torch.cuda.memory_allocated() / 1024**2
