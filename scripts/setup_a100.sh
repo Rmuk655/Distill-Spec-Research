@@ -118,8 +118,10 @@ fi
 SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])")
 PATCH_MOD="${SITE_PKG}/fa2_default_patch.py"
 PATCH_PTH="${SITE_PKG}/fa2_default_patch.pth"
-if [ ! -f "${PATCH_PTH}" ]; then
-    cat > "${PATCH_MOD}" << 'PATCHMOD'
+# Always overwrite the .py so content changes in this script are picked up on
+# subsequent setup runs.  The .pth only needs to be created once — its presence
+# is what tells Python's site module to `import fa2_default_patch` at startup.
+cat > "${PATCH_MOD}" << 'PATCHMOD'
 # DistillSpec: default to flash_attention_2 when flash_attn is installed.
 # transformers 4.51 get_correct_attn_implementation() hardcodes "sdpa" when
 # requested_attention is None; this patches that one line's effect.
@@ -137,6 +139,7 @@ try:
 except Exception:
     pass  # silent — never break Python startup
 PATCHMOD
+if [ ! -f "${PATCH_PTH}" ]; then
     echo "import fa2_default_patch" > "${PATCH_PTH}"
     echo "[setup] flash_attention_2 default patch installed (.pth) — verifying ..."
     python -c "
@@ -149,7 +152,7 @@ ok = PreTrainedModel.get_correct_attn_implementation.__name__ == '_fa2_get_corre
 print('[setup] flash_attention_2 patch active:', ok)
 " 2>/dev/null || echo "[setup] (patch verification skipped)"
 else
-    echo "[setup] flash_attention_2 default patch already present — skipping"
+    echo "[setup] flash_attention_2 default patch already present (content refreshed)"
 fi
 
 # 6. datasets (skip with --no-data)
