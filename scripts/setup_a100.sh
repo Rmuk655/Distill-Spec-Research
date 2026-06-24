@@ -115,22 +115,20 @@ SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])")
 SITECUST="${SITE_PKG}/sitecustomize.py"
 if ! grep -qF "fa2_from_pretrained" "${SITECUST}" 2>/dev/null; then
     cat > "${SITECUST}" << 'SITEOF'
-# Inject flash_attention_2 when flash_attn is installed.
-# Patch PreTrainedModel._autoset_attn_implementation — called from
-# from_pretrained on the concrete model class after Auto dispatch, so
-# it works regardless of which Auto class or path was used.
+# Inject flash_attention_2 as default when flash_attn is installed.
+# In transformers 4.51, get_correct_attn_implementation() hardcodes
+# "sdpa" when requested_attention is None. Patch that one line's effect.
 try:
     import flash_attn  # only activate when flash_attn is actually installed
     from transformers.modeling_utils import PreTrainedModel
-    _orig = PreTrainedModel._autoset_attn_implementation.__func__
+    _orig = PreTrainedModel.get_correct_attn_implementation
 
-    @classmethod
-    def _fa2_autoset(cls, config, attn_implementation=None, **kwargs):
-        if attn_implementation is None:
-            attn_implementation = "flash_attention_2"
-        return _orig(cls, config, attn_implementation=attn_implementation, **kwargs)
+    def _fa2_get_correct(self, requested_attention=None, is_init_check=False):
+        if requested_attention is None:
+            requested_attention = "flash_attention_2"
+        return _orig(self, requested_attention, is_init_check=is_init_check)
 
-    PreTrainedModel._autoset_attn_implementation = _fa2_autoset
+    PreTrainedModel.get_correct_attn_implementation = _fa2_get_correct
 except Exception:
     pass  # silent — never break Python startup
 SITEOF
