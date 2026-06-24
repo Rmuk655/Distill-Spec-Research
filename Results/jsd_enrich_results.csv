@@ -1,0 +1,247 @@
+train_run,train_seed,train_M,eval_batch,gpu,verifier,K_eval,block_eff
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,1,5.8923
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,bv,1,6.0878
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,2,5.9918
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,bv,2,6.1104
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,3,5.8016
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,bv,3,6.1140
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,4,5.8723
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,1,5.8923
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,gbv,1,6.0497
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,2,5.2104
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,gbv,2,5.4305
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,5.0351
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,gbv,3,4.8757
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,4,4.6341
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,1,5.8481
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,khisti,1,5.9493
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,2,5.1632
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,khisti,2,5.2294
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,3,4.4199
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,khisti,3,4.5777
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,4,4.3840
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,max,1,5.8481
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,max,1,5.8108
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,max,2,5.2053
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,max,2,5.0667
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,max,3,4.9709
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,max,3,4.8820
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,max,4,4.6677
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,1,5.8481
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,naive,1,5.8498
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,2,5.6194
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,naive,2,5.8840
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,3,5.5422
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,naive,3,5.7744
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,4,5.4845
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,1,4.2240
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,nss,1,4.3945
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,2,4.0185
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,nss,2,4.1563
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,3,3.8454
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,nss,3,3.9089
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,4,3.6490
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,1,5.6675
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,specinfer,1,5.9175
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,2,4.9791
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,specinfer,2,5.0895
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,3,4.7792
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,specinfer,3,4.7821
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,4,4.5791
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,specinfer,4,4.5816
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,1,5.8481
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,spectr,1,5.8452
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,2,5.3587
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,spectr,2,5.7085
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,3,5.2197
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,spectr,3,5.2874
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,4,5.0928
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,1,5.9722
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,traversal,1,6.2804
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,2,5.9197
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,traversal,2,6.1407
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,3,5.8938
+jsd_mathhard_s123,123,0,H100_reeval,NVIDIA H100 80GB HBM3,traversal,3,5.8696
+jsd_mathhard_s123,123,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,4,5.6622
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,1,5.9995
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,2,5.9773
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,3,5.9615
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,bv,4,5.9434
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,1,5.9995
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,2,5.5417
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,4.8574
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,4.8574
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,gbv,4,4.5676
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,1,5.8185
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,2,5.1119
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,3,4.7743
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,khisti,4,4.4144
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,max,1,5.8185
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,max,2,5.2835
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,max,3,5.0729
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,max,4,4.9455
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,1,5.8185
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,2,5.7921
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,3,5.4792
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,naive,4,5.7404
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,1,4.5088
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,2,4.0818
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,3,3.9068
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,nss,4,3.6898
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,1,5.8818
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,2,5.1527
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,4,4.5968
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,1,5.8185
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,2,5.5736
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,3,5.4230
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,spectr,4,5.1031
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,1,6.0105
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,2,6.0548
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,3,5.9805
+jsd_mathhard_s456,456,0,A100_paired,NVIDIA A100-SXM4-80GB,traversal,4,5.8204
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,1,5.9230
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,2,6.1475
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,3,6.0701
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,4,6.1369
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,1,5.9230
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,2,5.5374
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,4.9215
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,4,4.6186
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,khiiti,1,nan
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,khiiti,2,nan
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,1,5.8591
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,2,5.0277
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,3,4.6086
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,4,4.2230
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,max,1,5.8591
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,max,2,5.1360
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,max,3,5.0269
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,max,4,4.8188
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,1,5.8591
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,2,5.6843
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,3,5.6772
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,4,5.8079
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,1,4.3734
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,2,3.9884
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,3,3.9480
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,4,3.7441
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,1,5.7649
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,2,4.9943
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,3,4.9154
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,4,4.7368
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,1,5.8591
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,2,5.7285
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,3,5.2720
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,4,5.3165
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,1,6.1584
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,2,6.1849
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,3,5.8533
+jsd_flat_enrich_K1_mathhard_s123,123,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,4,5.8329
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,1,6.1364
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,2,6.1352
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,3,6.0399
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,bv,4,6.0974
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,1,6.1364
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,2,5.2972
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,4.9215
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,gbv,4,4.6583
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,1,5.8979
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,2,5.1151
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,3,4.4528
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,khisti,4,4.3600
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,max,1,5.8979
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,max,2,5.1342
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,max,3,5.1174
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,max,4,4.8662
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,1,5.8979
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,2,5.7670
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,3,5.8225
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,naive,4,5.8216
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,1,4.4737
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,2,3.9373
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,3,4.0272
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,nss,4,3.8302
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,1,5.9316
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,2,5.1222
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,3,4.6707
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,4,4.5816
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,1,5.8979
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,2,5.8012
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,3,5.3619
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,spectr,4,5.2084
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,1,6.0655
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,2,6.1113
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,3,6.0548
+jsd_flat_enrich_K1_mathhard_s456,456,1,A100_paired,NVIDIA A100-SXM4-80GB,traversal,4,5.8419
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,bv,1,6.1566
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,bv,2,6.2241
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,bv,3,6.2325
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,bv,4,6.2826
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,gbv,1,6.1566
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,gbv,2,5.5855
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,4.9947
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,gbv,4,4.6901
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,khisti,1,5.9525
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,khisti,2,5.2418
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,khisti,3,4.6066
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,khisti,4,4.4515
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,max,1,5.9525
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,max,2,5.2595
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,max,3,4.9962
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,max,4,4.8733
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,naive,1,5.9525
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,naive,2,6.0124
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,naive,3,5.8053
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,naive,4,5.6859
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,nss,1,4.3554
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,nss,2,4.1059
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,nss,3,3.8547
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,nss,4,3.7442
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,1,6.0037
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,2,5.3297
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,3,4.7947
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,4,4.5998
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,spectr,1,5.9525
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,spectr,2,5.6201
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,spectr,3,5.3767
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,spectr,4,5.2414
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,traversal,1,6.2128
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,traversal,2,6.1634
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,traversal,3,6.2158
+jsd_flat_enrich_K3_mathhard_s123,123,3,A100_paired,NVIDIA A100-SXM4-80GB,traversal,4,5.8940
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,bv,1,6.1455
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,bv,2,6.1223
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,bv,3,6.2110
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,bv,4,6.1213
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,gbv,1,6.1455
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,gbv,2,5.4115
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,gbv,3,4.9081
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,gbv,4,4.7891
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,khisti,1,5.6357
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,khisti,2,5.1193
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,khisti,3,4.5732
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,khisti,4,4.3407
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,max,1,5.6357
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,max,2,5.3966
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,max,3,4.8492
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,max,4,4.8434
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,naive,1,5.6357
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,naive,2,6.0220
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,naive,3,5.8088
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,naive,4,5.7040
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,nss,1,4.3839
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,nss,2,4.0003
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,nss,3,3.8310
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,nss,4,3.7186
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,1,5.8543
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,2,5.0977
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,3,4.7995
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,specinfer,4,4.6367
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,spectr,1,5.6357
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,spectr,2,5.6543
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,spectr,3,5.2719
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,spectr,4,5.1998
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,traversal,1,6.1284
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,traversal,2,6.1657
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,traversal,3,6.0950
+jsd_flat_enrich_K3_mathhard_s123_ttemp1.5,123,3_ttemp1.5,A100_paired,NVIDIA A100-SXM4-80GB,traversal,4,5.8474
