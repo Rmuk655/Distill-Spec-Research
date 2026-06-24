@@ -108,33 +108,48 @@ PATCHEOF
     fi
 fi
 
-# 5. sitecustomize — auto-enable flash_attention_2 for all from_pretrained calls.
-#    Newer transformers requires explicit attn_implementation="flash_attention_2";
-#    this injects it transparently without touching researcher source files.
+# 5. force flash_attention_2 as the default — without touching researcher source.
+#    Newer transformers (4.51) hardcodes "sdpa" in
+#    PreTrainedModel.get_correct_attn_implementation() when none is requested.
+#    We patch that via a .pth file (NOT sitecustomize.py — the system
+#    /usr/lib/python3.12/sitecustomize.py shadows the venv one). Python's site
+#    module executes `import` lines in every .pth at startup regardless of
+#    sys.path ordering, so this is never shadowed.
 SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])")
-SITECUST="${SITE_PKG}/sitecustomize.py"
-if ! grep -qF "fa2_from_pretrained" "${SITECUST}" 2>/dev/null; then
-    cat > "${SITECUST}" << 'SITEOF'
-# Inject flash_attention_2 as default when flash_attn is installed.
-# In transformers 4.51, get_correct_attn_implementation() hardcodes
-# "sdpa" when requested_attention is None. Patch that one line's effect.
+PATCH_MOD="${SITE_PKG}/fa2_default_patch.py"
+PATCH_PTH="${SITE_PKG}/fa2_default_patch.pth"
+if [ ! -f "${PATCH_PTH}" ]; then
+    cat > "${PATCH_MOD}" << 'PATCHMOD'
+# DistillSpec: default to flash_attention_2 when flash_attn is installed.
+# transformers 4.51 get_correct_attn_implementation() hardcodes "sdpa" when
+# requested_attention is None; this patches that one line's effect.
 try:
     import flash_attn  # only activate when flash_attn is actually installed
     from transformers.modeling_utils import PreTrainedModel
     _orig = PreTrainedModel.get_correct_attn_implementation
 
-    def _fa2_get_correct(self, requested_attention=None, is_init_check=False):
+    def _fa2_get_correct(self, requested_attention=None, *args, **kwargs):
         if requested_attention is None:
             requested_attention = "flash_attention_2"
-        return _orig(self, requested_attention, is_init_check=is_init_check)
+        return _orig(self, requested_attention, *args, **kwargs)
 
     PreTrainedModel.get_correct_attn_implementation = _fa2_get_correct
 except Exception:
     pass  # silent — never break Python startup
-SITEOF
-    echo "[setup] sitecustomize.py written — flash_attention_2 will be used automatically"
+PATCHMOD
+    echo "import fa2_default_patch" > "${PATCH_PTH}"
+    echo "[setup] flash_attention_2 default patch installed (.pth) — verifying ..."
+    python -c "
+from transformers import AutoModelForCausalLM
+import torch, sys
+# light check: confirm the patch is live without loading weights
+import fa2_default_patch  # noqa
+from transformers.modeling_utils import PreTrainedModel
+ok = PreTrainedModel.get_correct_attn_implementation.__name__ == '_fa2_get_correct'
+print('[setup] flash_attention_2 patch active:', ok)
+" 2>/dev/null || echo "[setup] (patch verification skipped)"
 else
-    echo "[setup] sitecustomize.py already present — skipping"
+    echo "[setup] flash_attention_2 default patch already present — skipping"
 fi
 
 # 6. datasets (skip with --no-data)
