@@ -316,17 +316,6 @@ def _machine_specs(gpu_idx: int = 0) -> dict:
 
     specs["machine_os"] = platform.platform(terse=True)
 
-    # Attention backend — throughput is order-of-magnitude lower without flash_attn
-    try:
-        import flash_attn
-        specs["attn_backend"] = f"flash_attn-{flash_attn.__version__}"
-    except ImportError:
-        if torch.cuda.is_available():
-            flash_ok = torch.backends.cuda.flash_sdp_enabled()
-            specs["attn_backend"] = "sdpa-flash" if flash_ok else "sdpa-math"
-        else:
-            specs["attn_backend"] = "eager"
-
     return specs
 
 
