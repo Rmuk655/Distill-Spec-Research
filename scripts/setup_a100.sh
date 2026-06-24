@@ -116,20 +116,20 @@ SITECUST="${SITE_PKG}/sitecustomize.py"
 if ! grep -qF "fa2_from_pretrained" "${SITECUST}" 2>/dev/null; then
     cat > "${SITECUST}" << 'SITEOF'
 # Inject flash_attention_2 as default attn_implementation when flash_attn is
-# installed. Newer transformers requires explicit opt-in via _BaseAutoModelClass
-# (the actual entry point for AutoModelForCausalLM); this makes it transparent
-# so util.py does not need modification.
+# installed. Newer transformers (4.36+) requires explicit opt-in. The Auto
+# classes each get their own from_pretrained (not inherited from
+# _BaseAutoModelClass), so we patch AutoModelForCausalLM directly.
 try:
     import flash_attn  # only activate when flash_attn is actually installed
-    from transformers.models.auto.auto_factory import _BaseAutoModelClass
-    _orig = _BaseAutoModelClass.from_pretrained.__func__
+    from transformers import AutoModelForCausalLM
+    _orig = AutoModelForCausalLM.from_pretrained.__func__
 
     @classmethod
     def _fa2_from_pretrained(cls, *args, **kwargs):
         kwargs.setdefault("attn_implementation", "flash_attention_2")
         return _orig(cls, *args, **kwargs)
 
-    _BaseAutoModelClass.from_pretrained = _fa2_from_pretrained
+    AutoModelForCausalLM.from_pretrained = _fa2_from_pretrained
 except Exception:
     pass  # silent — never break Python startup
 SITEOF
