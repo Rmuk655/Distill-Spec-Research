@@ -350,6 +350,22 @@ Reading off the space:
 | Rahul depth_weight | (any) | crude `depth × JSD` multiply, **no gradient** |
 | Rahul depth gradient | (any) | exact survival-weighted BE gradient |
 
+**Detailed comparison: `depth_weight` (Axis B only) vs `jsd_flat_enrich` (Axis A only):**
+
+| Dimension | `depth_weight` (researcher) | `jsd_flat_enrich` (our method) |
+|---|---|---|
+| Who generates K paths | Student (draft paths via `iid_draft`) | Teacher (stochastic rollouts, `do_sample=True`) |
+| Tree structure | Yes — K paths share prefixes, branching tree | No — K paths are fully independent sequences |
+| What K means | K simultaneous draft branches under verifier | K independent teacher continuations per prompt |
+| Verifier involved | Yes — DP simulates acceptance over student tree | None — pure JSD on teacher trajectories |
+| Scalar/loss | E[τ_V] under verifier V × flat JSD | Average of M per-sequence JSD losses |
+| Gradient | No gradient through depth scalar (`@no_grad`) — only reweights | Full gradient through student forward on each teacher path |
+| Teacher path | One **greedy** teacher rollout (do_sample=False) | M **stochastic** teacher rollouts (do_sample=True) |
+| Axis | **Axis B:** same states, verifier-informed loss weighting | **Axis A:** different training states (broader teacher coverage), uniform JSD |
+| Intuition | Targeted remediation — find where student fails under V, amplify loss | Breadth coverage — show student M diverse teacher approaches |
+
+**Supported verifiers for `depth_weight`** (those with `expected_*_depths` in `TreeVerifier`, picked up from `--aux_loss` → `LOSS_TO_VERIFIER`): **naive, nss, specinfer, spectr, khisti, traversal**. BV and GBV have no `expected_bv/gbv_depths` method and are not supported.
+
 Consequences:
 1. **Stochastic teacher rollout and the depth gradient are largely orthogonal** — the former moves on Axis A, the depth gradient moves on Axis B. They compose (stochastic or accepted states × depth-weighted objective) but are independent knobs, not the same idea. *(So using depth in enrich would "optimise what the student learns" — an Axis-B change layered on Axis-A sampling.)*
 2. **Draft-OPD is not a special case of our method.** Both Draft-OPD and a hypothetical enrich+survival-weight method are *distinct populated corners of the same 2-D space*. The only precise "special case" statement that holds is narrow: **Draft-OPD's $w_k=\gamma^{k-1}$ is a fixed, hand-set special case of a general Axis-B survival weight**; Rahul's depth weight would replace that hand-set decay with a *predicted* one.
@@ -382,6 +398,7 @@ Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) �
 
 ## 8. Future Directions (parking lot — prioritise later)
 
+- **Verifier-weighted stochastic teacher JSD (Axis A × Axis B combination):** the natural synthesis of `depth_weight` and `jsd_flat_enrich`. Sample M stochastic teacher rollouts (Axis A); for each rollout context, run `expected_depth_scalar` with the student draft to get E[τ_V] for that specific context (Axis B); weight JSD_m by d_m/EMA(d). Loss: $\frac{1}{M}\sum_m \frac{d_m}{\text{EMA}(d)} \cdot \text{JSD}(Q_\phi(\cdot|y^{(m)}), P_\theta(\cdot|y^{(m)}))$. Answers "which of the M diverse teacher contexts is the student weakest on under verifier V?" — neither axis alone can ask this. Occupies the currently **empty** cell (stochastic teacher states × verifier-informed weighting). Implementation: M additional student tree passes per step. Approximation: share one flat-draft depth weight across all M rollouts (cheap proxy). Validate with a short probe (M=3, traversal, s123) before committing.
 - **NSS tree gradients (Rahul):** exact survival-weighted $\partial\text{BE}/\partial\theta$ — an **Axis-B** (objective) change, **orthogonal to enrich's Axis-A** (state-distribution) change; they compose rather than approximate each other. The exact gradient is the strongest unscooped asset (Draft-OPD has no theory). Not yet implemented; depth_weight (crude `depth × JSD` multiply, no gradient) is the only Axis-B experiment so far and is not expected to be promising.
 - **NSS-depth and broader tree gradients / tree-depth ablations** (vary $L$, vary $M$).
 - **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
