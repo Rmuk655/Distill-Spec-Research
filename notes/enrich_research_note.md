@@ -93,7 +93,20 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 
 **Spearman $\rho$(divergence, BE):** rank correlation, robust to JSD range compression as the model improves (unlike Pearson r).
 - Observed (K_eval=1, n=100): flat JSD $\rho=-0.396$; M=1 $\rho=-0.568$ ($p=8.5\times10^{-12}$); M=3 $\rho=-0.645$ ($p\approx0$). Monotonically strengthening objective–BE alignment with M (all traversal mode).
-- Per-verifier ρ for M=3: traversal $\rho=-0.645$ ($p\approx0$); BV $\rho=-0.518$ ($p\approx2\times10^{-9}$). σ(JSD)=0.0200 identical for both — σ is stable, so the ρ difference is real, not range restriction. Traversal (permissive, longest-prefix acceptance) has tighter JSD→BE coupling than BV (budget-limited tree). **This per-verifier ρ hierarchy is the empirical anchor for the §5 acceptance-functional theory.**
+- Per-verifier ρ for M=3 (all n=100, same σ(JSD)=0.0200, mean_JSD=0.0296 — JSD is model-only, independent of verifier):
+
+| Verifier | mean_BE | ρ(JSD,BE) | ρ(fwdKL,BE) | R²(JSD) | % easy | % medium | % hard | σ(BE) |
+|---|---|---|---|---|---|---|---|---|
+| traversal | 6.386 | **−0.645** | −0.647 | 0.37 | 62% | 38% | 0% | 1.064 |
+| BV | 6.433 | **−0.518** | −0.503 | 0.24 | 67% | 33% | 0% | 1.110 |
+| naive | 6.089 | **−0.413** | −0.410 | 0.19 | 50% | 50% | 0% | 1.307 |
+| specinfer | 4.867 | **−0.402** | −0.395 | 0.20 | 22% | 75% | 3% | 1.136 |
+
+  σ(JSD) stable across all four → ρ differences are Case A (true signal, not range restriction). ρ(fwdKL,BE) ≈ ρ(JSD,BE) within 0.015 for every verifier — fwdKL and JSD are interchangeable as BE predictors. ρ ordering (traversal > BV > naive ≈ specinfer): traversal aggregates path-level acceptance products (strong JSD→BE slope); BV has a budget cap that truncates marginal gains; naive reduces to per-token min(1,P/Q), a coarser aggregation; specinfer is the strictest verifier here (mean_BE=4.867, the only one with hard prompts), and its multi-candidate residual acceptance depends on token-specific ratios rather than aggregate JSD → loosest coupling.
+
+  **Coupling (ρ) and improvement (Δ from enrich) are orthogonal axes — do not conflate them.** specinfer has the *lowest* ρ (−0.402) yet the *largest* K_eval=1 enrich gain (+0.336, §4.2). ρ measures how reliably JSD predicts BE rank *for a fixed checkpoint* (surrogate quality); Δ measures how much enrich's broadened distribution *moves* BE (realized headroom). A verifier can have loose JSD coupling but large headroom (specinfer) or tight coupling and moderate headroom (traversal). The §5 theory must account for both: per-verifier JSD→acceptance *slope* (predicts ρ) and per-verifier acceptance *headroom* (predicts Δ).
+
+  **ρ is a supplementary mechanism diagnostic, NOT a paper deliverable.** The four verifiers above (M=3 s123) + the traversal progression (flat −0.396 → M=1 −0.568 → M=3 −0.645) already suffice to anchor the §5 coupling story; completing all 9 modes is optional polish. A full diagnose grid (every checkpoint × 9 verifiers) is being recorded to W&B (`diag/*` keys) but is not required and need not be scraped from stdout. If ever assembled, keep two axes separate: (1) per-checkpoint hierarchy (fix checkpoint, sweep modes); (2) cross-checkpoint progression (fix mode, sweep flat→M=1→M=3). Mixed-checkpoint cells (e.g. NSS ρ=−0.335 on M=1 s456; GBV ρ=−0.308 on M=3 ttemp1.5) belong to their own checkpoint's row, not this table. Directionally the loose tail already matches theory (NSS = survival-weighted/OT = weakest JSD surrogate). **The paper rests on eval BE, not ρ.**
 
 **$\sigma$(JSD) stability (Case A vs B):** Case A (σ stable, ρ↑) = true signal; Case B (σ collapses, ρ stable) = range restriction. M=3 σ(JSD)=0.0200, mean_JSD=0.0296 across both diagnose runs — σ not collapsed ⇒ **Case A** confirmed.
 
@@ -119,12 +132,15 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 | `jsd_flat_enrich_M1_s123` | 8K | 6.409 | Complete |
 | `jsd_flat_enrich_M3_s123` | 8K | 6.420 | Complete; eval done |
 | `jsd_flat_enrich_K3_mathhard_s123_ttemp1.5` | 8K | — | Complete; **teacher_temp=1.5 hurts**: diagnose traversal ρ=−0.543 vs default ρ=−0.645; mean_JSD=0.0321 vs 0.0296 (8% worse); mean_BE=6.340 vs 6.386. σ(JSD) stable → true signal loss, not range restriction. Mechanism: student learns to match noisier teacher; inference verifier uses ttemp=1.0, creating training-inference temperature mismatch. **teacher_temp=1.0 confirmed; no further temp variants needed.** |
-| `…_M1_s456`, `jsd_mathhard_s456` | 8K | — | Pending (second seed) |
+| `jsd_flat_enrich_M1_s456` | 8K | — | Complete; **full K_eval=1..4 eval done.** vs flat-s456 (paired): overall +0.037, bv/trav +0.092 — **below the seed-noise floor** (§4.4); M=1 enrich ≈ plain jsd on both seeds. M=3 s456 pending (load-bearing). |
+| `jsd_mathhard_s456` (flat JSD) | 8K | 6.291 | Complete (total 1052 min); second-seed flat baseline |
 
 ### 4.2 Three-checkpoint comparison at K_eval=1 (n=100, math_eval)
 
+> **Raw per-cell BE for every (run × seed × verifier × K_eval) lives in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).** This note holds only the derived deltas and insights — do not paste new raw eval dumps here; append them to that file and update the insight prose.
+
 Block efficiency for all three checkpoints at K_eval=1, L=8. **M=3 beats flat JSD on all 9 verifiers — no exceptions.** Monotonic improvement on 8/9 verifiers (NSS: M=3 ≈ M=1).
-**Caveat: single-seed, n=100 point estimates, not significance-tested.** See §4.4.
+**Caveat: single-seed, n=100 point estimates, not significance-tested.** See §4.4 — and note the measured noise floor (~+0.09 mean / 0.13 std) below before reading any single cell as a result.
 
 | Verifier | flat JSD | M=1 | M=3 | Δ(M=3−flat) | Δ(M=3−M=1) |
 |---|---|---|---|---|---|
@@ -140,49 +156,65 @@ Block efficiency for all three checkpoints at K_eval=1, L=8. **M=3 beats flat JS
 
 † K_eval=1 collapse (§5) — naive/spectr/khisti/max give identical BE; four cells are one effective measurement, not independent.
 
-### 4.2b M=3 K_eval=2 results (n=100, math_eval)
+### 4.2b M=3 full eval across K_eval=1..4 (n=100, math_eval) — complete
 
-M=3 beats flat JSD on all 9 verifiers at K_eval=2 — the all-positive pattern from K_eval=1 holds.
+M=3 vs flat JSD, Δ = M=3 − flat, per verifier per K_eval. **M=3 beats flat JSD on every verifier at K_eval=1 and K_eval=2; at K_eval=3,4 it still wins on all but GBV-K3 (−0.040).**
 
-| Verifier | flat K=2 | M=1 K=2 | M=3 K=2 | Δ(M=3−flat) | Δ(M=3−M=1) |
+| Verifier | Δ K=1 | Δ K=2 | Δ K=3 | Δ K=4 | M=3 raw across K (1→4) |
 |---|---|---|---|---|---|
-| traversal | 5.920 | 6.185 | 6.163 | +0.243 | −0.022 |
-| BV | 5.992 | 6.148 | 6.224 | +0.232 | +0.076 |
-| naive | 5.619 | 5.684 | 6.012 | **+0.393** | +0.328 |
-| specinfer | 4.979 | 4.994 | 5.330 | **+0.351** | +0.336 |
-| spectr | 5.359 | 5.729 | 5.620 | +0.261 | −0.109 |
-| khisti | 5.163 | 5.028 | 5.242 | +0.079 | +0.214 |
-| GBV | 5.210 | 5.537 | 5.586 | **+0.376** | +0.049 |
-| NSS | 4.019 | 3.988 | 4.106 | +0.087 | +0.118 |
-| max | 5.205 | 5.136 | 5.260 | +0.055 | +0.124 |
+| traversal | +0.241 | +0.244 | **+0.322** | +0.232 | 6.213 / 6.163 / 6.216 / 5.894 |
+| BV | +0.264 | +0.232 | **+0.431** | **+0.411** | 6.157 / 6.224 / 6.233 / **6.283** |
+| GBV | +0.264 | +0.376 | −0.040 | +0.056 | 6.157 / 5.586 / 4.995 / 4.690 |
+| naive | +0.104 | **+0.393** | +0.263 | +0.202 | 5.952 / 6.012 / 5.805 / 5.686 |
+| specinfer | **+0.336** | **+0.351** | +0.016 | +0.021 | 6.004 / 5.330 / 4.795 / 4.600 |
+| spectr | +0.104 | +0.261 | +0.157 | +0.148 | 5.952 / 5.620 / 5.377 / 5.241 |
+| khisti | +0.104 | +0.079 | +0.187 | +0.068 | 5.952 / 5.242 / 4.607 / 4.452 |
+| NSS | +0.131 | +0.087 | +0.010 | +0.095 | 4.355 / 4.106 / 3.855 / 3.744 |
+| max | +0.104 | +0.054 | +0.025 | +0.205 | 5.952 / 5.260 / 4.996 / 4.873 |
 
-Δ(M=3−flat) growth from K=1 to K=2: naive +0.104→+0.393, GBV +0.264→+0.376, specinfer +0.336→+0.351 (stable). Traversal/BV stable. NSS/max/khisti slight decline. K_eval=3,4 pending.
+### 4.2c Verifier–K alignment: does train-M match eval-K? (CONFIRMED for traversal/BV)
 
-### 4.2c M=1 vs flat JSD across K_eval=1..4 (n=100, math_eval; M=3 K_eval=3,4 pending)
+The sharpest single finding in the multi-K data. Compare each enrich checkpoint's Δ-vs-flat across K_eval:
 
-Δ = enrich(M=1) − flat JSD per K_eval. Single seed; M=3 multi-K eval not yet run beyond K=2.
+| Verifier | M=1 Δ vs flat (K=1/2/3/4) | M=3 Δ vs flat (K=1/2/3/4) |
+|---|---|---|
+| traversal | +0.186 / +0.265 / **−0.041** / +0.171 | +0.241 / +0.244 / **+0.322** / +0.232 |
+| BV | +0.031 / +0.156 / +0.268 / +0.265 | +0.264 / +0.232 / **+0.431** / **+0.411** |
 
-| Verifier | $K_{\text{eval}}{=}1$ | $2$ | $3$ | $4$ | Pattern |
-|---|---|---|---|---|---|
-| traversal | +0.186 | +0.265 | **−0.041** | +0.171 | Mostly positive, one negative |
-| BV | +0.031 | +0.156 | +0.268 | +0.265 | Grows with $K_{\text{eval}}$ |
-| naive | +0.011† | +0.065 | +0.135 | +0.324 | Grows with $K_{\text{eval}}$ |
-| specinfer | +0.097 | +0.015 | +0.136 | +0.158 | Weakly up |
-| spectr | +0.011† | +0.370 | +0.052 | +0.224 | Noisy positive |
-| NSS | +0.149 | −0.030 | +0.103 | +0.095 | Flat positive |
-| GBV | +0.031 | +0.327 | **−0.113** | −0.015 | Peaks then vanishes |
-| khisti | +0.011† | **−0.135** | +0.189 | **−0.161** | Alternating / negative |
-| max | +0.011† | −0.069 | +0.056 | +0.151 | Weakly positive |
+- **M=1 traversal *loses to flat* at K_eval=3 (−0.041)** — the lone negative in the M=1 traversal row. **M=3 erases that dip** (+0.322 at K_eval=3) and posts its single best traversal Δ there. Directly: M=3 traversal at K_eval=3 = 6.216 vs M=1 = 5.853, a **+0.363** within-K gap. *Caveat (§4.4): the −0.041 itself is within the ±0.13 per-cell noise floor — do not lean on the dip being real; the load-bearing fact is the **+0.322 / +0.363**, which is ~2.5× the floor.*
+- **BV: M=3 advantage grows with K_eval and peaks at K=3/4** (+0.431, +0.411); M=3 BV raw BE *increases monotonically* with K (6.157→6.283), while flat BV is flat-to-declining. M=3 > M=1 at every K for BV.
 
-† K_eval=1 collapse — not independent evidence.
+**Mechanism (the deployable claim):** training with M diverse teacher rollouts calibrates the draft across M parallel contexts. At inference, K_eval branches demand the draft be well-aligned on K simultaneous paths. M=1 calibrates one path → excellent at K_eval≤2, degrades when K_eval exceeds training diversity (traversal K=3 dip). M=3 calibrates three → sustains acceptance through K_eval=3,4 for the prefix/budget verifiers (traversal, BV) whose acceptance reward grows with tree width. **Prediction: set train-M ≥ target inference K_eval.** This matters for production tree-SD (K=3–8 branches): matched M gives higher acceptance at high branch counts without extra inference cost.
+
+**Caveat — not universal.** The alignment is verifier-specific. specinfer is *anti-aligned*: M=3 gain concentrates at K=1,2 (+0.336, +0.351) and collapses at K=3,4 (+0.016, +0.021). specinfer's multi-candidate residual acceptance dilutes per-candidate gain as branch count rises, so coverage from enrich pays off most with few candidates. naive peaks at K=2; NSS is flat across K. The §5 functional analysis must explain why prefix/budget verifiers align with train-M while residual/OT verifiers do not.
 
 ### 4.3 Two empirical patterns (conjectures, not results)
 
-**Pattern 1 — K_eval scaling of Δ(M−flat):** at M=1, naive and BV gaps grow with K_eval (exceptions: traversal K=3 negative; GBV reverses at 3,4; khisti alternating). The signal is cleaner at M=3 (K=2 data, §4.2b): naive +0.104→+0.393 (+0.289 growth); GBV +0.264→+0.376; specinfer +0.336→+0.351 (stable). NSS/max/khisti decline slightly at M=3 K=2 — the declining subset needs a mechanism (NSS OT-global, max envelope, khisti pairwise). **Growing-Δ subset (naive, GBV, specinfer) is the cleaner K_eval-scaling signal.** Single-seed, n=100; M=3 K=3,4 pending. **Do not state as established.**
+**Pattern 1 — K_eval scaling of Δ(M=3−flat) is verifier-split:** prefix/budget verifiers (traversal, BV) keep or grow their Δ through K_eval=3,4; residual/competition verifiers (specinfer) lose it at high K; OT (NSS) stays flat-small. The growth subset (BV +0.264→+0.431, naive +0.104→+0.393 peaking at K=2) is the cleaner K_eval-scaling signal. Single-seed, n=100. **Do not state as established.**
 
-**Pattern 2 — Selective verifiers gain more from M (new, K_eval=1):** The M=3 vs M=1 column in §4.2 splits clearly along verifier selectivity: BV/GBV/SpecInfer gain +0.23–0.24, while traversal gains only +0.054 and NSS is flat (−0.018, within SE≈0.10). One interpretation: verifiers with tighter intermediate-position acceptance criteria (BV/GBV require budget-limited token trees; SpecInfer uses multi-token speculation) expose misalignment at positions a single stochastic teacher trajectory never trains; M=3 adds diverse teacher contexts that cover those positions. Traversal (most permissive, accepts any length path) and NSS (global OT criterion, already partially addressed at M=1) are less sensitive to this. **This is the cross-verifier story — if it survives second seed and n=1000, it is the empirical headline.** Do not claim it before then.
+**Pattern 2 — Coupling vs headroom are distinct (revised, see §3.2):** ρ(JSD,BE) and Δ(enrich−flat) do *not* track together. specinfer has the loosest coupling (ρ=−0.402) yet the largest K_eval=1 gain (+0.336); traversal has the tightest coupling (ρ=−0.645) and a moderate gain (+0.241). The M=3−M=1 column at K_eval=1 splits along verifier selectivity (BV/GBV/specinfer gain +0.23–0.24 from the extra rollouts; traversal +0.054; NSS flat) — selective verifiers extract more from added teacher diversity because they probe positions a single rollout never trains. **This cross-verifier story is the empirical headline — if it survives second seed and n=1000.** Do not claim it before then.
 
 ### 4.4 Statistics
+
+**Measured noise floor (new — this gates every cell-level claim).** Two null comparisons in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) bound the per-cell eval noise:
+- **Same checkpoint, re-evaluated** (`jsd_mathhard_s123` on A100 vs H100, different days): mean Δ **+0.109**, std **0.134**, range −0.16 to **+0.35** across the 28 shared cells. A bit-identical model moves this much between eval batches.
+- **Same method, different seed** (`jsd_mathhard_s456 − s123`, both plain flat JSD): mean Δ **+0.093**, std **0.123** across 35 cells.
+
+So **a single-cell BE difference below ≈0.13 is indistinguishable from noise, and a whole-grid mean shift of ≈+0.09 is what you get from changing nothing but the seed (or the GPU).** Consequence: any individual cell in §4.2b/§4.2c — including the "M=1 traversal loses at K=3 (−0.041)" dip — is within noise and must not be read alone. Only grid-aggregate means and patterns that repeat across many cells survive.
+
+**Enrich effects measured against that floor** (all paired *within the A100 batch* — never cross-batch, which carries the +0.11 hardware offset):
+
+| Comparison | overall mean Δ (n≈36) | bv/traversal mean Δ | verdict vs noise floor |
+|---|---|---|---|
+| M=1 enrich − flat jsd [s123] | +0.097 | +0.163 | ≈ floor (not distinguishable) |
+| M=1 enrich − flat jsd [s456] | +0.037 | +0.092 | **below** floor |
+| **M=3 enrich − flat jsd [s123]** | **+0.182** | **+0.297** | **~2× floor — only clear signal** |
+| M=3 − M=1 enrich [s123] | +0.084 | +0.134 | ≈ floor |
+| ttemp1.5 − ttemp1.0 (M=3 neg-control) | −0.079 | −0.068 | correctly negative |
+
+**Reading:** (1) **M=1 enrich is statistically indistinguishable from plain flat JSD** — exactly what a single-path control should do; the s456 leg (+0.037) sits below the seed-noise floor. (2) **The only effect that clears the floor is M=3 (multi-path), concentrated in prefix/budget verifiers (bv/traversal, +0.30).** The signal is *multi-path teaching*, not the enrich framing per se. (3) The negative control behaves (higher teacher temp hurts). **This is the honest headline: there is a real but modest multi-path effect at matched 8K; everything else is within noise.**
+
+**Cross-seed status:** M=1 replicates *directionally* on both seeds but the magnitude is seed-sensitive (+0.097 vs +0.037). M=3 has only s123 — **the s456 M=3 run is the single most load-bearing missing experiment** (it must reproduce the +0.30 bv/traversal multi-path effect for any claim to stand).
 
 A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 36 cells are highly correlated (same prompts, same checkpoint, related verifiers, shared $K_{\text{eval}}$ grid), and the four $K_{\text{eval}}{=}1$ collapsed cells are duplicate counts. The independence assumption is false.
 
@@ -192,6 +224,27 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 - n=1000 to bring SE from ~0.05 to ~0.016 so the ±0.14 traversal effect and the borderline cells resolve.
 
 **M=3 full eval result:** best val 6.420 (25-prompt val, SE≈0.15 — indistinguishable from M=1's 6.409). Full n=100 eval shows M=3 traversal BE=6.213 vs M=1=6.158 — a gap of +0.054, just above SE≈0.10 but not significant at n=100 alone. No M-scaling-in-training claim until second seed confirms.
+
+### 4.5 Convergence / matched-compute confound (TOP OPEN RISK — outranks n=1000 and 2nd dataset)
+
+**All enrich-vs-flat comparisons are at 8K steps, but neither arm is converged.** Flat JSD trained to ~25K reaches traversal K_eval=1 = **6.28** (peak val ~15K), which *exceeds* enrich M=3-at-8K (6.213). Three hypotheses for the 8K gain: (a) **ceiling** — enrich's final BE is higher; (b) **speed** — enrich converges faster to the same ceiling; (c) **head-start** — flat erases the 8K gap with more steps. The 25K flat number is evidence against (a) at K_eval=1 and for (b)/(c).
+
+**Compute asymmetry compounds this for M=3.** M=3 runs 3 teacher rollouts/step → M=3-8K ≈ 24K teacher-rollouts of compute. Matched-*compute* comparison is M=3-8K vs **flat-24K**, and flat-24K (6.28) > M=3-8K (6.213) at K_eval=1 traversal. So at equal compute M=3 does **not** beat flat at K_eval=1.
+- **Exception — M=1 vs flat at 8K is matched-compute** (1 rollout/step each); M=1 wins (+0.186 traversal K=1). This is the cleanest comparison, but still needs the converged check.
+
+**What is at risk vs structural:**
+- *At risk (likely speed effect):* the K_eval=1 mean-BE gain. Flat single-path training, given enough steps, may close it.
+- *Likely structural (flat cannot replicate by training longer):* the high-K verifier–K alignment (§4.2c). Flat JSD trains on **one greedy path**; more steps only sharpen single-path matching and cannot manufacture the multi-path calibration that produces the traversal-K=3 dip-erasure and BV-K=3/4 growth. **Bet the paper on this — but demonstrate it at convergence.**
+
+**s456 baseline flag (now measured):** flat s456 n=100 eval is in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv). Paired `flat_s456 − flat_s123` = +0.093 mean / 0.123 std — i.e. **baseline seed variance (~+0.09) is the same magnitude as the M=1 enrich "gain"**, which is why M=1 enrich cannot be claimed. It is smaller than the M=3 effect (+0.18 overall, +0.30 bv/trav), which is what lets M=3 survive — for now, at one seed.
+
+**jsd-25K not in this data (important scope note):** the comparison the project actually needs — enrich vs *converged* flat (the 25K run) — **cannot be made from the current CSVs.** They contain only `jsd_mathhard` (the **8K** flat baseline). Every delta above is enrich-8K vs flat-**8K** (matched steps, and for M=1 matched compute). The converged-flat comparison still requires evaluating the 15K `ckpt_best` of `jsd_K3_math_hard_s123` at n=100 — unchanged top priority.
+
+**Convergence point measured (40K flat run `jsd_K3_math_hard_s123`):** flat JSD **converges at ~15K** — val plateaus (oscillating 5.74–6.42), `best`=6.608 frozen since ~15K, forgetting climbs 0.0→1.28 (post-convergence churn, not learning), loss at floor, LR in cosine tail. **Two consequences:** (1) converged runs (incl. enrich) need only ~15–20K with early stopping, not 40K — shrinks the "several days" estimate. (2) **This run's 15K `ckpt_best` IS the converged flat baseline** — eval it at n=100, K=1..4, all 9 verifiers (eval-only, hours) to get the converged-flat-vs-M=3-8K comparison *now*, without waiting for enrich-to-convergence. Decision rule unchanged (§ above).
+
+**Checkpoint-selection caveat (methodology):** `best`-on-25-prompt-val is winner's-curse biased — it is the max over hundreds of evals of a noisy metric (SE≈0.15–0.20), so it overestimates true val, and the bias grows with run length / eval frequency. Reported BE tables are unaffected (they are n=100 offline re-evals of `ckpt_best`), but *checkpoint selection* is noisy. Best practice going forward: select by rolling-mean/EMA val, use ≥100-prompt val less frequently, and early-stop with patience.
+
+**Required decisive experiment (now top priority):** train flat / M=1 / M=3 to convergence (~20–25K) and compare as **learning curves + at convergence**, K_eval=1..4, all verifiers. Decision rule: if enrich still wins at high K (traversal K=3, BV K=3/4) at convergence → structural alignment claim holds; if flat-converged closes the high-K gaps → downgrade to a matched-compute "converges faster" efficiency result. Do this **before** n=1000 / 2nd dataset — no point tightening 8K numbers that may not survive convergence.
 
 ---
 
@@ -203,6 +256,8 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why stochastic-teacher JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
 3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does stochastic-teacher JSD induce that khisti penalises?
 4. **Acceptance–divergence transfer (§2.6)** beyond naive.
+5. **Verifier–K alignment (§4.2c).** Why do prefix/budget verifiers (traversal, BV) keep or grow their enrich Δ as $K_{\text{eval}}\to M$ and beyond, while residual verifiers (specinfer) lose it at high $K_{\text{eval}}$? Conjecture: traversal/BV acceptance reward is monotone increasing in tree width given per-branch calibration, so M parallel-calibrated branches compound; specinfer's residual normalisation across candidates is sub-additive in branch count, so added branches dilute. Derive the $K_{\text{eval}}$-dependence of expected-BE per verifier and show it predicts the observed alignment/anti-alignment.
+6. **Coupling vs headroom (§3.2).** Two separate per-verifier functionals: the JSD→acceptance *slope* (predicts ρ) and the acceptance *headroom* relative to a flat-JSD-trained draft (predicts Δ). These are empirically orthogonal (specinfer: low ρ, high Δ). A complete theory derives both from the verifier's acceptance functional.
 
 ---
 
