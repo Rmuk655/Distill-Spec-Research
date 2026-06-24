@@ -56,7 +56,16 @@ else
         python -c "import flash_attn; print('[setup] flash-attn', flash_attn.__version__, 'installed OK')"
     else
         echo "[setup] precompiled wheel unavailable — building from source (~15 min) ..."
-        SYSTEM_CUDA=$(find /usr/local -maxdepth 2 -name "nvcc" 2>/dev/null | head -1 | xargs dirname | xargs dirname)
+        # Locate nvcc: check common install roots, then fall back to PATH.
+        # Avoid piping into xargs dirname — empty find output makes dirname exit 1
+        # and set -euo pipefail kills the script before the warning can fire.
+        _NVCC=$(find /usr/local /usr/cuda* /usr 2>/dev/null -maxdepth 3 -name "nvcc" 2>/dev/null | head -1)
+        [ -z "${_NVCC}" ] && _NVCC=$(command -v nvcc 2>/dev/null || true)
+        if [ -n "${_NVCC}" ]; then
+            SYSTEM_CUDA=$(dirname "$(dirname "${_NVCC}")")
+        else
+            SYSTEM_CUDA=""
+        fi
         if [ -z "${SYSTEM_CUDA}" ]; then
             echo "[setup] WARNING: no system nvcc found; skipping flash-attn (eval will use SDPA fallback)"
         else
