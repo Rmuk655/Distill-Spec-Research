@@ -115,21 +115,22 @@ SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])")
 SITECUST="${SITE_PKG}/sitecustomize.py"
 if ! grep -qF "fa2_from_pretrained" "${SITECUST}" 2>/dev/null; then
     cat > "${SITECUST}" << 'SITEOF'
-# Inject flash_attention_2 as default attn_implementation when flash_attn is
-# installed. Newer transformers (4.36+) requires explicit opt-in. The Auto
-# classes each get their own from_pretrained (not inherited from
-# _BaseAutoModelClass), so we patch AutoModelForCausalLM directly.
+# Inject flash_attention_2 when flash_attn is installed.
+# Patch PreTrainedModel._autoset_attn_implementation — called from
+# from_pretrained on the concrete model class after Auto dispatch, so
+# it works regardless of which Auto class or path was used.
 try:
     import flash_attn  # only activate when flash_attn is actually installed
-    from transformers import AutoModelForCausalLM
-    _orig = AutoModelForCausalLM.from_pretrained.__func__
+    from transformers.modeling_utils import PreTrainedModel
+    _orig = PreTrainedModel._autoset_attn_implementation.__func__
 
     @classmethod
-    def _fa2_from_pretrained(cls, *args, **kwargs):
-        kwargs.setdefault("attn_implementation", "flash_attention_2")
-        return _orig(cls, *args, **kwargs)
+    def _fa2_autoset(cls, config, attn_implementation=None, **kwargs):
+        if attn_implementation is None:
+            attn_implementation = "flash_attention_2"
+        return _orig(cls, config, attn_implementation=attn_implementation, **kwargs)
 
-    AutoModelForCausalLM.from_pretrained = _fa2_from_pretrained
+    PreTrainedModel._autoset_attn_implementation = _fa2_autoset
 except Exception:
     pass  # silent — never break Python startup
 SITEOF
