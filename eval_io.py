@@ -82,6 +82,9 @@ CSV_COLUMNS = [
     "machine_cpu_physical_cores",
     "machine_ram_gb",
     "machine_os",
+    # Attention backend (flash_attn | sdpa | eager) — throughput is order-of-magnitude
+    # lower without flash_attn, so this must be logged for valid comparisons.
+    "attn_backend",
     # Link back to the training run that produced this checkpoint
     "training_wandb_url",
 ]
