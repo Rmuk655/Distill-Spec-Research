@@ -448,7 +448,10 @@ def main():
                     _diag = {}
 
             if wandb_run:
+                # No explicit step= — x-axis is the defined train/step metric, so
+                # resume appends cleanly even when ckpt_latest lags W&B history.
                 wandb_run.log({
+                    "train/step":      step + 1,
                     "train/loss":      avg,
                     "train/lr":        scheduler.get_last_lr()[0],
                     "train/grad_norm": grad_norm.item(),
@@ -462,7 +465,7 @@ def main():
                     **({"val/n_easy": _n_easy, "val/n_medium": _n_medium,
                         "val/n_hard": _n_hard} if val_be is not None else {}),
                     **_diag,
-                }, step=step + 1)
+                })
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
         if (step + 1) % VAL_EVERY == 0:
@@ -479,12 +482,13 @@ def main():
                       f"best={best_val_block_eff:.3f}  forget={val_forget:.3f}  "
                       f"easy={_n_easy} med={_n_medium} hard={_n_hard}")
                 if wandb_run:
-                    wandb_run.log({"val/block_eff": val_be,
+                    wandb_run.log({"train/step": step + 1,
+                                   "val/block_eff": val_be,
                                    "val/smoothed_block_eff": val_be_ema,
                                    "val/forgetting": val_forget,
                                    "val/n_easy": _n_easy,
                                    "val/n_medium": _n_medium,
-                                   "val/n_hard": _n_hard}, step=step + 1)
+                                   "val/n_hard": _n_hard})
             if val_be > best_val_block_eff:
                 best_val_block_eff = val_be
                 if wandb_run:

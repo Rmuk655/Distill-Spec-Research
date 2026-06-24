@@ -30,6 +30,24 @@ def run_slug(args) -> str:
     return slug
 
 
+def _define_step_metric(run):
+    """Drive every chart's x-axis off an explicit `train/step` field instead of
+    W&B's internal auto-increment step counter.
+
+    Why this matters for resume: we log every LOG_EVERY steps but checkpoint only
+    every SAVE_EVERY steps, so on a kill+resume the W&B history is *ahead* of
+    ckpt_latest. Replaying those steps with an explicit `step=` arg makes W&B
+    drop/overwrite them ("step must be monotonically increasing"), which shows up
+    as a gap + overwritten train/loss, train/lr, train/grad_norm. Logging against
+    a defined `train/step` metric (and NOT passing step=) lets W&B append cleanly
+    and plot by true training step regardless of the internal counter."""
+    try:
+        run.define_metric("train/step")
+        run.define_metric("*", step_metric="train/step")
+    except Exception as e:
+        print(f"[wandb] define_metric skipped ({e})")
+
+
 def setup_wandb(args, output_dir, resumed: bool, wandb_project: str):
     """Initialise W&B, resuming the saved run id if <output>/wandb_run.json exists."""
     if args.no_wandb:
@@ -66,6 +84,7 @@ def setup_wandb(args, output_dir, resumed: bool, wandb_project: str):
         init_kw["resume"] = "must"
         try:
             run = wandb.init(**init_kw)
+            _define_step_metric(run)
             print(f"[wandb] resumed run {saved['run_id']}: {run.url}")
             return run
         except Exception as e:
@@ -74,6 +93,7 @@ def setup_wandb(args, output_dir, resumed: bool, wandb_project: str):
 
     init_kw["resume"] = "allow"
     run = wandb.init(**init_kw)
+    _define_step_metric(run)
     json.dump({"run_id": run.id, "name": run.name, "project": wandb_project, "url": run.url},
               open(meta_path, "w", encoding="utf-8"))
     print(f"[wandb] {run.url}")
