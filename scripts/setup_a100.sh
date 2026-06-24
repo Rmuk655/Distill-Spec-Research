@@ -122,9 +122,17 @@ PATCH_PTH="${SITE_PKG}/fa2_default_patch.pth"
 # subsequent setup runs.  The .pth only needs to be created once — its presence
 # is what tells Python's site module to `import fa2_default_patch` at startup.
 cat > "${PATCH_MOD}" << 'PATCHMOD'
-# DistillSpec: default to flash_attention_2 when flash_attn is installed.
+# DistillSpec: default to flash_attention_2 for small (draft) models only.
 # transformers 4.51 get_correct_attn_implementation() hardcodes "sdpa" when
 # requested_attention is None; this patches that one line's effect.
+#
+# We cannot apply flash_attention_2 globally: the target (large) model is called
+# with attention_mask={"full_attention": mask} — a custom dict for tree speculative
+# decoding that flash_attention_2 cannot handle (triggers CUDA index OOB).  The
+# draft (small) model uses standard causal attention and is safe for flash_attention_2.
+#
+# Heuristic: hidden_size < 3000 → draft (Qwen3-0.6B = 1024) → FA2
+#            hidden_size ≥ 3000 → target (Qwen3-8B = 4096) → keep SDPA default
 try:
     import flash_attn  # only activate when flash_attn is actually installed
     from transformers.modeling_utils import PreTrainedModel
@@ -132,7 +140,10 @@ try:
 
     def _fa2_get_correct(self, requested_attention=None, *args, **kwargs):
         if requested_attention is None:
-            requested_attention = "flash_attention_2"
+            cfg = getattr(self, 'config', None)
+            hidden = getattr(cfg, 'hidden_size', 0)
+            if 0 < hidden < 3000:
+                requested_attention = "flash_attention_2"
         return _orig(self, requested_attention, *args, **kwargs)
 
     PreTrainedModel.get_correct_attn_implementation = _fa2_get_correct
