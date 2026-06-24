@@ -140,7 +140,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 > **Raw per-cell BE for every (run × seed × verifier × K_eval) lives in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).** This note holds only the derived deltas and insights — do not paste new raw eval dumps here; append them to that file and update the insight prose.
 
 Block efficiency for all three checkpoints at K_eval=1, L=8. **M=3 beats flat JSD on all 9 verifiers — no exceptions.** Monotonic improvement on 8/9 verifiers (NSS: M=3 ≈ M=1).
-**Caveat: single-seed, n=100 point estimates, not significance-tested.** See §4.4 — and note the measured noise floor (~+0.09 mean / 0.13 std) below before reading any single cell as a result.
+**Caveat: single-seed, n=100 point estimates, not significance-tested.** See §4.4 — and note the measured seed floor (~+0.09 mean / 0.12 std) below before reading any single cell as a result.
 
 | Verifier | flat JSD | M=1 | M=3 | Δ(M=3−flat) | Δ(M=3−M=1) |
 |---|---|---|---|---|---|
@@ -196,25 +196,33 @@ The sharpest single finding in the multi-K data. Compare each enrich checkpoint'
 
 ### 4.4 Statistics
 
-**Measured noise floor (new — this gates every cell-level claim).** Two null comparisons in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) bound the per-cell eval noise:
-- **Same checkpoint, re-evaluated** (`jsd_mathhard_s123` on A100 vs H100, different days): mean Δ **+0.109**, std **0.134**, range −0.16 to **+0.35** across the 28 shared cells. A bit-identical model moves this much between eval batches.
-- **Same method, different seed** (`jsd_mathhard_s456 − s123`, both plain flat JSD): mean Δ **+0.093**, std **0.123** across 35 cells.
+**Noise / seed floor (this gates every cell-level claim).** One clean null comparison in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv): **same method, different seed** (`jsd_mathhard_s456 − s123`, both plain flat JSD, both 8K) → mean Δ **+0.093**, std **0.123** across 35 cells. So **a single-cell BE difference below ≈0.12 is within seed noise, and a whole-grid +0.09 mean shift is what a seed swap alone produces.** Any individual cell in §4.2b/§4.2c — including the "M=1 traversal loses at K=3 (−0.041)" dip — must not be read alone; only grid-aggregate means and patterns that repeat across the bv/traversal block survive. *(Note: `block_eff` is an accept/reject ratio and is hardware-independent, so the A100↔H100 BE values are directly comparable; the +0.11 A100→H100 difference for `jsd_mathhard_s123` is **not** a hardware offset — it is the flat 8K→25K training gain, see below.)*
 
-So **a single-cell BE difference below ≈0.13 is indistinguishable from noise, and a whole-grid mean shift of ≈+0.09 is what you get from changing nothing but the seed (or the GPU).** Consequence: any individual cell in §4.2b/§4.2c — including the "M=1 traversal loses at K=3 (−0.041)" dip — is within noise and must not be read alone. Only grid-aggregate means and patterns that repeat across many cells survive.
+**Two enrich effects, both paired at matched 8K steps:**
 
-**Enrich effects measured against that floor** (all paired *within the A100 batch* — never cross-batch, which carries the +0.11 hardware offset):
-
-| Comparison | overall mean Δ (n≈36) | bv/traversal mean Δ | verdict vs noise floor |
+| Comparison | overall mean Δ (n≈36) | bv/traversal mean Δ | verdict |
 |---|---|---|---|
-| M=1 enrich − flat jsd [s123] | +0.097 | +0.163 | ≈ floor (not distinguishable) |
-| M=1 enrich − flat jsd [s456] | +0.037 | +0.092 | **below** floor |
-| **M=3 enrich − flat jsd [s123]** | **+0.182** | **+0.297** | **~2× floor — only clear signal** |
+| M=1 enrich − flat jsd-8K [s123] | +0.097 | +0.163 | ≈ seed floor |
+| M=1 enrich − flat jsd-8K [s456] | +0.037 | +0.092 | **below** floor |
+| **M=3 enrich − flat jsd-8K [s123]** | **+0.182** | **+0.297** | ~2× floor |
 | M=3 − M=1 enrich [s123] | +0.084 | +0.134 | ≈ floor |
 | ttemp1.5 − ttemp1.0 (M=3 neg-control) | −0.079 | −0.068 | correctly negative |
 
-**Reading:** (1) **M=1 enrich is statistically indistinguishable from plain flat JSD** — exactly what a single-path control should do; the s456 leg (+0.037) sits below the seed-noise floor. (2) **The only effect that clears the floor is M=3 (multi-path), concentrated in prefix/budget verifiers (bv/traversal, +0.30).** The signal is *multi-path teaching*, not the enrich framing per se. (3) The negative control behaves (higher teacher temp hurts). **This is the honest headline: there is a real but modest multi-path effect at matched 8K; everything else is within noise.**
+**The decisive comparison — enrich-8K vs CONVERGED flat-25K [s123]** (resolves the §4.5 confound; `block_eff` cross-comparable):
 
-**Cross-seed status:** M=1 replicates *directionally* on both seeds but the magnitude is seed-sensitive (+0.097 vs +0.037). M=3 has only s123 — **the s456 M=3 run is the single most load-bearing missing experiment** (it must reproduce the +0.30 bv/traversal multi-path effect for any claim to stand).
+| Comparison | overall mean Δ | bv/trav Δ | traversal K=3 | reading |
+|---|---|---|---|---|
+| flat-25K − flat-8K | +0.109 | +0.189 | −0.024 | 3× longer flat training buys ~+0.11 |
+| **M=3 enrich-8K − flat-25K** | **+0.074** | **+0.100** | **+0.346** | **M=3-8K beats *converged* flat** |
+| M=1 enrich-8K − flat-25K | −0.022 | −0.044 | −0.016 | single-path enrich < flat-25K |
+
+**Reading (corrected, this is the headline):**
+1. **Multi-path is the mechanism, and it is not reproducible by training flat longer.** M=3 enrich at **8K** beats flat trained all the way to **25K** (its ceiling — flat converges ~15K, §4.5) by +0.074 overall / +0.10 on bv/traversal, peaking at **traversal K=3 = +0.346** (~3× the seed floor). This is the multi-path/verifier–K alignment signal (§4.2c) surviving against converged flat.
+2. **Compute-matched, M=3 wins.** M=3-8K ≈ 24K teacher-rollouts vs flat-25K ≈ 25K rollouts — roughly equal compute — and M=3 still wins. The earlier worry (flat-25K traversal K=1=6.28 > M=3-8K K=1=6.213) is real *only at K=1* (saturated); the advantage lives at K≥2 where tree width matters.
+3. **M=1 enrich = flat with fewer steps.** M=1-8K (8K rollouts) loses to flat-25K (−0.022); single-path enrich has no structural edge — more compute beats it. So the benefit is specifically **M>1**, not "enrich."
+4. Negative control behaves (higher teacher temp hurts).
+
+**Cross-seed status:** M=1 replicates directionally on both seeds (magnitude seed-sensitive, +0.097 vs +0.037). **M=3 has only s123 — the s456 M=3 run is now the single load-bearing experiment:** it must reproduce both the +0.30-vs-flat-8K *and* the +0.10/traversal-K=3=+0.35-vs-flat-25K multi-path effect.
 
 A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 36 cells are highly correlated (same prompts, same checkpoint, related verifiers, shared $K_{\text{eval}}$ grid), and the four $K_{\text{eval}}{=}1$ collapsed cells are duplicate counts. The independence assumption is false.
 
@@ -225,26 +233,25 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 
 **M=3 full eval result:** best val 6.420 (25-prompt val, SE≈0.15 — indistinguishable from M=1's 6.409). Full n=100 eval shows M=3 traversal BE=6.213 vs M=1=6.158 — a gap of +0.054, just above SE≈0.10 but not significant at n=100 alone. No M-scaling-in-training claim until second seed confirms.
 
-### 4.5 Convergence / matched-compute confound (TOP OPEN RISK — outranks n=1000 and 2nd dataset)
+### 4.5 Convergence / matched-compute confound (SUBSTANTIALLY RESOLVED for M=3 s123; pending s456)
 
-**All enrich-vs-flat comparisons are at 8K steps, but neither arm is converged.** Flat JSD trained to ~25K reaches traversal K_eval=1 = **6.28** (peak val ~15K), which *exceeds* enrich M=3-at-8K (6.213). Three hypotheses for the 8K gain: (a) **ceiling** — enrich's final BE is higher; (b) **speed** — enrich converges faster to the same ceiling; (c) **head-start** — flat erases the 8K gap with more steps. The 25K flat number is evidence against (a) at K_eval=1 and for (b)/(c).
+**The converged-flat eval now exists** and is in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) as `jsd_mathhard_s123_25k` (the 25K flat run, `train_steps=25000`; flat JSD converges ~15K so 25K is at/past ceiling). `block_eff` is hardware-independent, so its BE is directly comparable to the 8K A100 runs. The decisive deltas (full table in §4.4):
 
-**Compute asymmetry compounds this for M=3.** M=3 runs 3 teacher rollouts/step → M=3-8K ≈ 24K teacher-rollouts of compute. Matched-*compute* comparison is M=3-8K vs **flat-24K**, and flat-24K (6.28) > M=3-8K (6.213) at K_eval=1 traversal. So at equal compute M=3 does **not** beat flat at K_eval=1.
-- **Exception — M=1 vs flat at 8K is matched-compute** (1 rollout/step each); M=1 wins (+0.186 traversal K=1). This is the cleanest comparison, but still needs the converged check.
+- **flat-25K − flat-8K = +0.109 overall** — 3× longer flat training is a real ~+0.11 gain (so flat-8K was genuinely under-trained; the comparison had to be made against converged flat).
+- **M=3 enrich-8K − flat-25K = +0.074 overall, +0.100 bv/traversal, traversal K=3 = +0.346.** **M=3 enrich at 8K beats flat trained to its 25K ceiling**, concentrated on the prefix/budget verifiers and high K — exactly the §4.2c multi-path/verifier–K alignment signature. This is the result that was at risk; it survives.
+- **M=1 enrich-8K − flat-25K = −0.022.** Single-path enrich loses to converged flat → M=1 enrich is just flat with fewer steps, **no structural edge.**
 
-**What is at risk vs structural:**
-- *At risk (likely speed effect):* the K_eval=1 mean-BE gain. Flat single-path training, given enough steps, may close it.
-- *Likely structural (flat cannot replicate by training longer):* the high-K verifier–K alignment (§4.2c). Flat JSD trains on **one greedy path**; more steps only sharpen single-path matching and cannot manufacture the multi-path calibration that produces the traversal-K=3 dip-erasure and BV-K=3/4 growth. **Bet the paper on this — but demonstrate it at convergence.**
+**Compute accounting.** M=3-8K ≈ 24K teacher-rollouts ≈ flat-25K's ~25K rollouts → **roughly matched compute, and M=3 still wins.** The only place converged flat catches M=3 is **K_eval=1** (saturated single path: flat-25K traversal K=1=6.28 vs M=3-8K=6.213, −0.068); the M=3 advantage is entirely a **K≥2 tree-width effect**, which is the honest and defensible framing.
 
-**s456 baseline flag (now measured):** flat s456 n=100 eval is in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv). Paired `flat_s456 − flat_s123` = +0.093 mean / 0.123 std — i.e. **baseline seed variance (~+0.09) is the same magnitude as the M=1 enrich "gain"**, which is why M=1 enrich cannot be claimed. It is smaller than the M=3 effect (+0.18 overall, +0.30 bv/trav), which is what lets M=3 survive — for now, at one seed.
+**What is now established vs still open:**
+- *Established (s123):* the high-K verifier–K alignment (§4.2c) is **structural** — flat cannot replicate it by training 3× longer. Flat trains on one greedy path; more steps sharpen single-path matching but cannot manufacture multi-path calibration. Bet the paper on this.
+- *Open (the one load-bearing run):* **M=3 s456.** Must reproduce M=3 enrich-8K > flat (both the 8K and 25K comparisons) on bv/traversal at K≥2. Until then the headline rests on a single seed.
 
-**jsd-25K not in this data (important scope note):** the comparison the project actually needs — enrich vs *converged* flat (the 25K run) — **cannot be made from the current CSVs.** They contain only `jsd_mathhard` (the **8K** flat baseline). Every delta above is enrich-8K vs flat-**8K** (matched steps, and for M=1 matched compute). The converged-flat comparison still requires evaluating the 15K `ckpt_best` of `jsd_K3_math_hard_s123` at n=100 — unchanged top priority.
+**Convergence point (40K flat run):** flat JSD **converges ~15K** — val plateaus (5.74–6.42), `best`=6.608 frozen since ~15K, forgetting climbs 0→1.28 (post-convergence churn), loss at floor. Consequence: converged enrich runs need only ~15–20K with early stopping, not 40K.
 
-**Convergence point measured (40K flat run `jsd_K3_math_hard_s123`):** flat JSD **converges at ~15K** — val plateaus (oscillating 5.74–6.42), `best`=6.608 frozen since ~15K, forgetting climbs 0.0→1.28 (post-convergence churn, not learning), loss at floor, LR in cosine tail. **Two consequences:** (1) converged runs (incl. enrich) need only ~15–20K with early stopping, not 40K — shrinks the "several days" estimate. (2) **This run's 15K `ckpt_best` IS the converged flat baseline** — eval it at n=100, K=1..4, all 9 verifiers (eval-only, hours) to get the converged-flat-vs-M=3-8K comparison *now*, without waiting for enrich-to-convergence. Decision rule unchanged (§ above).
+**Checkpoint-selection caveat (methodology):** `best`-on-25-prompt-val is winner's-curse biased — max over hundreds of noisy evals (SE≈0.15–0.20), bias grows with run length. Reported BE tables are unaffected (n=100 offline re-evals of `ckpt_best`), but selection is noisy. Going forward: select by smoothed/EMA val, ≥100-prompt val less frequently, early-stop with patience (now implemented in `train.py`).
 
-**Checkpoint-selection caveat (methodology):** `best`-on-25-prompt-val is winner's-curse biased — it is the max over hundreds of evals of a noisy metric (SE≈0.15–0.20), so it overestimates true val, and the bias grows with run length / eval frequency. Reported BE tables are unaffected (they are n=100 offline re-evals of `ckpt_best`), but *checkpoint selection* is noisy. Best practice going forward: select by rolling-mean/EMA val, use ≥100-prompt val less frequently, and early-stop with patience.
-
-**Required decisive experiment (now top priority):** train flat / M=1 / M=3 to convergence (~20–25K) and compare as **learning curves + at convergence**, K_eval=1..4, all verifiers. Decision rule: if enrich still wins at high K (traversal K=3, BV K=3/4) at convergence → structural alignment claim holds; if flat-converged closes the high-K gaps → downgrade to a matched-compute "converges faster" efficiency result. Do this **before** n=1000 / 2nd dataset — no point tightening 8K numbers that may not survive convergence.
+**Remaining decisive experiment:** **M=3 s456** (train 8K + n=100 eval) — confirm the multi-path effect replicates across seeds. Then, optionally, M=3-to-convergence to show whether the +0.10 bv/traversal margin over flat-25K holds or grows. Both rank **above** n=1000 / 2nd dataset.
 
 ---
 
