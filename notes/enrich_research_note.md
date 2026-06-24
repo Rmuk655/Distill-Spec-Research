@@ -1,7 +1,7 @@
 # Stochastic Teacher Rollout JSD for Speculative Draft Training
 ## A Research Note on `jsd_flat_enrich`
 
-**Status:** Early internal result — promising signal, **not yet paper-ready.** M=1 and M=3 training and evaluation complete (s123); second seed (s456) pending.
+**Status:** Early internal result — promising signal, **not yet paper-ready.** M=1 complete on both seeds (s123, s456); M=3 complete on s123. The one remaining replication is **M=3 on the second seed (s456)**.
 **Draft–Teacher pair:** Qwen3-0.6B draft / Qwen3-8B teacher
 **Training data:** math_hard. **Eval data:** math_eval (n=100; paper target n=1000).
 **Positioning:** Builds on [2602.16994]; closely related to DistillSpec, on-policy GKD, Online Speculative Decoding, and **Draft-OPD (May 2026)** — see §6 for the differentiator we must defend.
@@ -14,7 +14,7 @@
 
 Standard flat JSD training minimises
 
-$$\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x_{<t} \sim D}\big[\text{JSD}\big(P_\theta(\cdot \mid x_{<t}) \,\|\, Q_\phi(\cdot \mid x_{<t})\big)\big]$$
+$$\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x_{\lt t} \sim D}\big[\text{JSD}\big(P_\theta(\cdot \mid x_{\lt t}) \,\|\, Q_\phi(\cdot \mid x_{\lt t})\big)\big]$$
 
 where $P_\theta$ is the teacher, $Q_\phi$ the draft, and $D$ is the **offline teacher rollout distribution** over prefixes. In the current baseline implementation, this is a greedy teacher rollout (`do_sample=False`), not a sample from the full teacher marginal. At inference time the draft instead operates inside a verifier-gated acceptance loop: its own proposals, partially accepted and teacher-corrected, determine the prefixes it conditions on. This is the well-known **offline-to-inference (exposure) mismatch**. The implemented hypothesis is weaker than full on-policy training: replacing a single greedy teacher trajectory with stochastic teacher rollouts gives the draft broader teacher-context coverage and may improve speculative acceptance.
 
@@ -47,17 +47,17 @@ where sampling is implemented by `teacher.generate(..., do_sample=True, temperat
 $$\mathcal{L}_{\text{stoch-teacher}} =
 \frac{1}{M}\sum_{m=1}^M
 \frac{1}{|y^{(m)}|}\sum_{t=1}^{|y^{(m)}|}
-\text{JSD}\big(P_\theta(\cdot \mid p, y^{(m)}_{<t}) \,\|\, Q_\phi(\cdot \mid p, y^{(m)}_{<t})\big).$$
+\text{JSD}\big(P_\theta(\cdot \mid p, y^{(m)}_{\lt t}) \,\|\, Q_\phi(\cdot \mid p, y^{(m)}_{\lt t})\big).$$
 
-There are **no draft proposals, no verifier accept/reject decisions, and no teacher-corrected residuals** in the current flat-enrich code path. $M=1$ isolates greedy-vs-stochastic teacher training; $M>1$ adds multiple stochastic teacher trajectories per prompt and tests whether path diversity gives useful extra contexts.
+There are **no draft proposals, no verifier accept/reject decisions, and no teacher-corrected residuals** in the current flat-enrich code path. $M=1$ isolates greedy-vs-stochastic teacher training; $M \gt 1$ adds multiple stochastic teacher trajectories per prompt and tests whether path diversity gives useful extra contexts.
 
 ### 2.3 Ideal extension: verifier-accepted state distribution
 
-The stronger objective we originally wanted to approximate is the **verifier-induced prefix kernel** $\mathcal{J}_V$: sample draft proposals, verify them with $V$, keep the accepted prefix, resample the first rejected position from the teacher residual, and train on the resulting verified prefix. Formally, $x^* \sim \mathcal{J}_V(Q_\phi, P_\theta; \pi)$ and
+The stronger objective we originally wanted to approximate is the **verifier-induced prefix kernel** $\mathcal{J}_V$: sample draft proposals, verify them with $V$, keep the accepted prefix, resample the first rejected position from the teacher residual, and train on the resulting verified prefix. Formally, $x^{\star} \sim \mathcal{J}_V(Q_\phi, P_\theta; \pi)$ and
 
 $$\mathcal{L}_{\text{accepted-state}} =
-\mathbb{E}_{x^* \sim \mathcal{J}_V}\!\left[\frac{1}{|x^*|}\sum_{t=1}^{|x^*|}
-\text{JSD}\big(P_\theta(\cdot \mid p, x^*_{<t}) \,\|\, Q_\phi(\cdot \mid p, x^*_{<t})\big)\right].$$
+\mathbb{E}_{x^{\star} \sim \mathcal{J}_V}\!\left[\frac{1}{|x^{\star}|}\sum_{t=1}^{|x^{\star}|}
+\text{JSD}\big(P_\theta(\cdot \mid p, x^{\star}_{\lt t}) \,\|\, Q_\phi(\cdot \mid p, x^{\star}_{\lt t})\big)\right].$$
 
 This is a **proposed extension / idealized objective**, not the current `jsd_flat_enrich` implementation.
 
@@ -87,7 +87,7 @@ $$\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \
 
 At $L=8$: observed range 3.7 (NSS, strictest) to 6.4 (traversal). **Report wall-clock tokens/sec alongside BE** — BE and throughput correlate at ~0.95 globally but can decouple; a method that raises BE but not throughput is not useful. Also report output quality/exactness for any approximate verifier.
 
-L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
+L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $\lt 0.375L$.
 
 ### 3.2 Diagnostics (`--diagnose`)
 
@@ -116,7 +116,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 
 **Teacher / data diversity signal:** BE → $L$ suggests limited headroom; path_diversity → 0 means stochastic teacher rollouts have collapsed to near-identical continuations. At 0.6B/8B on math, BE≈6.4/8 and path_diversity ∈ [0.8,1.0] for M=3, so the teacher is still producing diverse contexts. This does **not** prove the teacher is not a bottleneck; it only says stochastic teacher sampling has not collapsed. A 32B-teacher run would test teacher-scale sensitivity (future work, §8).
 
-**`train/path_diversity`** = fraction of positions where ≥2 of the $M$ rollouts disagree. ~1.0 ⇒ diverse signal, $M>1$ contributes; <0.1 ⇒ rollout collapse, $M>1$ ≈ $M=1$. Observed M=3: ∈[0.8,1.0], healthy.
+**`train/path_diversity`** = fraction of positions where ≥2 of the $M$ rollouts disagree. ~1.0 ⇒ diverse signal, $M \gt 1$ contributes; <0.1 ⇒ rollout collapse, $M \gt 1$ ≈ $M=1$. Observed M=3: ∈[0.8,1.0], healthy.
 
 **`val/forgetting`** = backward-transfer loss (Σ max(0, best_historical_BE(p) − current_BE(p))). Oscillating (not monotonic) ⇒ stability–plasticity churn, not catastrophic forgetting; `ckpt_best` captures the peak.
 
@@ -132,7 +132,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $<0.375L$.
 | `jsd_flat_enrich_M1_s123` | 8K | 6.409 | Complete |
 | `jsd_flat_enrich_M3_s123` | 8K | 6.420 | Complete; eval done |
 | `jsd_flat_enrich_K3_mathhard_s123_ttemp1.5` | 8K | — | Complete; **teacher_temp=1.5 hurts**: diagnose traversal ρ=−0.543 vs default ρ=−0.645; mean_JSD=0.0321 vs 0.0296 (8% worse); mean_BE=6.340 vs 6.386. σ(JSD) stable → true signal loss, not range restriction. Mechanism: student learns to match noisier teacher; inference verifier uses ttemp=1.0, creating training-inference temperature mismatch. **teacher_temp=1.0 confirmed; no further temp variants needed.** |
-| `jsd_flat_enrich_M1_s456` | 8K | — | Complete; **full K_eval=1..4 eval done.** vs flat-s456 (paired): overall +0.037, bv/trav +0.092 — **below the seed-noise floor** (§4.4); M=1 enrich ≈ plain jsd on both seeds. M=3 s456 pending (load-bearing). |
+| `jsd_flat_enrich_M1_s456` | 8K | — | Complete; **full K_eval=1..4 eval done** (best n=100 traversal BE 6.111 at K=2). vs flat-s456 (paired): overall +0.037, bv/trav +0.092 — within the seed-variance band (§4.4); M=1 enrich ≈ plain jsd on both seeds. |
 | `jsd_mathhard_s456` (flat JSD) | 8K | 6.291 | Complete (total 1052 min); second-seed flat baseline |
 
 ### 4.2 Three-checkpoint comparison at K_eval=1 (n=100, math_eval)
@@ -208,7 +208,7 @@ The sharpest single finding in the multi-K data. Compare each enrich checkpoint'
 | M=3 − M=1 enrich [s123] | +0.084 | +0.134 | ≈ floor |
 | ttemp1.5 − ttemp1.0 (M=3 neg-control) | −0.079 | −0.068 | correctly negative |
 
-**The decisive comparison — enrich-8K vs CONVERGED flat-25K [s123]** (resolves the §4.5 confound; `block_eff` cross-comparable):
+**The decisive comparison — enrich-8K vs converged flat-25K [s123]** (`block_eff` is an accept/reject ratio, so it is hardware-independent and these values compare directly):
 
 | Comparison | overall mean Δ | bv/trav Δ | traversal K=3 | reading |
 |---|---|---|---|---|
@@ -216,7 +216,7 @@ The sharpest single finding in the multi-K data. Compare each enrich checkpoint'
 | **M=3 enrich-8K − flat-25K** | **+0.074** | **+0.100** | **+0.346** | **M=3-8K beats *converged* flat** |
 | M=1 enrich-8K − flat-25K | −0.022 | −0.044 | −0.016 | single-path enrich < flat-25K |
 
-**Reading (corrected, this is the headline):**
+**Reading:**
 1. **Multi-path is the mechanism, and it is not reproducible by training flat longer.** M=3 enrich at **8K** beats flat trained all the way to **25K** (its ceiling — flat converges ~15K, §4.5) by +0.074 overall / +0.10 on bv/traversal, peaking at **traversal K=3 = +0.346** (~3× the seed floor). This is the multi-path/verifier–K alignment signal (§4.2c) surviving against converged flat.
 2. **Compute-matched, M=3 wins.** M=3-8K ≈ 24K teacher-rollouts vs flat-25K ≈ 25K rollouts — roughly equal compute — and M=3 still wins. The earlier worry (flat-25K traversal K=1=6.28 > M=3-8K K=1=6.213) is real *only at K=1* (saturated); the advantage lives at K≥2 where tree width matters.
 3. **M=1 enrich = flat with fewer steps.** M=1-8K (8K rollouts) loses to flat-25K (−0.022); single-path enrich has no structural edge — more compute beats it. So the benefit is specifically **M>1**, not "enrich."
@@ -233,12 +233,12 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 
 **M=3 full eval result:** best val 6.420 (25-prompt val, SE≈0.15 — indistinguishable from M=1's 6.409). Full n=100 eval shows M=3 traversal BE=6.213 vs M=1=6.158 — a gap of +0.054, just above SE≈0.10 but not significant at n=100 alone. No M-scaling-in-training claim until second seed confirms.
 
-### 4.5 Convergence / matched-compute confound (SUBSTANTIALLY RESOLVED for M=3 s123; pending s456)
+### 4.5 Convergence / matched-compute: enrich vs converged flat
 
 **The converged-flat eval now exists** and is in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) as `jsd_mathhard_s123_25k` (the 25K flat run, `train_steps=25000`; flat JSD converges ~15K so 25K is at/past ceiling). `block_eff` is hardware-independent, so its BE is directly comparable to the 8K A100 runs. The decisive deltas (full table in §4.4):
 
 - **flat-25K − flat-8K = +0.109 overall** — 3× longer flat training is a real ~+0.11 gain (so flat-8K was genuinely under-trained; the comparison had to be made against converged flat).
-- **M=3 enrich-8K − flat-25K = +0.074 overall, +0.100 bv/traversal, traversal K=3 = +0.346.** **M=3 enrich at 8K beats flat trained to its 25K ceiling**, concentrated on the prefix/budget verifiers and high K — exactly the §4.2c multi-path/verifier–K alignment signature. This is the result that was at risk; it survives.
+- **M=3 enrich-8K − flat-25K = +0.074 overall, +0.100 bv/traversal, traversal K=3 = +0.346.** **M=3 enrich at 8K beats flat trained to its 25K ceiling**, concentrated on the prefix/budget verifiers and high K — exactly the §4.2c multi-path/verifier–K alignment signature.
 
   **As percentages, with the load-bearing nuance** (vs matched-step flat-8K | vs converged flat-25K):
 
