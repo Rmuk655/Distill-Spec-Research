@@ -341,8 +341,6 @@ def main():
     best_per_prompt: dict[int, float] = {}   # each val prompt's best-ever block_eff (forgetting)
     # smoothed-val state (restored from train_state on resume above)
     # val_be_ema / best_smoothed_be / no_improve_count already loaded from train_state
-    # diag chart history — accumulated across the run so line_series shows full trajectory
-    _diag_hist: dict[str, list] = {"step": [], "rho": [], "sigma_jsd": [], "mean_jsd": [], "sigma_be": []}
     t0 = time.time()
 
     for step in range(start_step, args.steps):
@@ -446,21 +444,6 @@ def main():
                     print(f"  [diag]  rho={_diag['diag/rho']:+.3f}  "
                           f"σ(JSD)={_diag['diag/sigma_jsd']:.4f}  "
                           f"mean(JSD)={_diag['diag/mean_jsd']:.4f}")
-                    _diag_hist["step"].append(step + 1)
-                    _diag_hist["rho"].append(_diag["diag/rho"])
-                    _diag_hist["sigma_jsd"].append(_diag["diag/sigma_jsd"])
-                    _diag_hist["mean_jsd"].append(_diag["diag/mean_jsd"])
-                    _diag_hist["sigma_be"].append(_diag["diag/sigma_be"])
-                    if wandb_run and len(_diag_hist["step"]) >= 1:
-                        import wandb as _wandb
-                        _diag["diag/chart"] = _wandb.plot.line_series(
-                            xs=_diag_hist["step"],
-                            ys=[_diag_hist["rho"], _diag_hist["sigma_jsd"],
-                                _diag_hist["mean_jsd"], _diag_hist["sigma_be"]],
-                            keys=["ρ(JSD,BE)", "σ(JSD)", "mean(JSD)", "σ(BE)"],
-                            title="Diagnostic metrics over training",
-                            xname="step",
-                        )
                 else:
                     _diag = {}
 
