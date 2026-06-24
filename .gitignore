@@ -23,3 +23,19 @@ Thumbs.db
 # Local-only directories — kept on disk but not tracked in git
 Claude/
 Results/
+
+# Local-only planning / proposal docs — kept on disk, not tracked
+PROPOSAL.md
+PUBLICATION_SCOPE.md
+_gr_paper.txt
+
+# Local-only offline analysis scripts + reports (not part of train/eval/diagnose pipeline)
+analyze_all_pairs.py
+analyze_complementarity.py
+experiment_log.md
+depth_jsd_investigation_report.md
+
+# Local-only / external artifacts — never commit
+.claude/
+adaspec-main.zip
+results (1).csv
