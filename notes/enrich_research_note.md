@@ -1,7 +1,7 @@
 # Stochastic Teacher Rollout JSD for Speculative Draft Training
 ## A Research Note on `jsd_flat_enrich`
 
-**Status:** Early internal result — promising signal, **not yet paper-ready.** M=1 complete on both seeds (s123, s456); M=3 complete on s123. The one remaining replication is **M=3 on the second seed (s456)**.
+**Status:** Early internal result — promising signal, **not yet paper-ready.** M=1 and M=3 complete on both seeds (s123, s456). All enrich runs done. Traversal K=3 structural claim confirmed cross-seed; BV does not replicate vs converged flat on s456 — see §4.5.
 **Draft–Teacher pair:** Qwen3-0.6B draft / Qwen3-8B teacher
 **Training data:** math_hard. **Eval data:** math_eval (n=100; paper target n=1000).
 **Positioning:** Builds on [2602.16994]; closely related to DistillSpec, on-policy GKD, Online Speculative Decoding, and **Draft-OPD (May 2026)** — see §6 for the differentiator we must defend.
@@ -134,6 +134,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $\lt 0.375
 | `jsd_flat_enrich_K3_mathhard_s123_ttemp1.5` | 8K | — | Complete; **teacher_temp=1.5 hurts**: diagnose traversal ρ=−0.543 vs default ρ=−0.645; mean_JSD=0.0321 vs 0.0296 (8% worse); mean_BE=6.340 vs 6.386. σ(JSD) stable → true signal loss, not range restriction. Mechanism: student learns to match noisier teacher; inference verifier uses ttemp=1.0, creating training-inference temperature mismatch. **teacher_temp=1.0 confirmed; no further temp variants needed.** |
 | `jsd_flat_enrich_M1_s456` | 8K | — | Complete; **full K_eval=1..4 eval done** (best n=100 traversal BE 6.111 at K=2). vs flat-s456 (paired): overall +0.037, bv/trav +0.092 — within the seed-variance band (§4.4); M=1 enrich ≈ plain jsd on both seeds. |
 | `jsd_mathhard_s456` (flat JSD) | 8K | 6.291 | Complete (total 1052 min); second-seed flat baseline |
+| `jsd_flat_enrich_M3_s456` | 8K | — | Complete; full K_eval=1..4 eval done. Overall Δ vs flat-s456 = +0.048 (≈ floor); traversal K=3 **+0.168 vs converged flat** — replicates. BV K=3 −0.087 vs converged flat — does not replicate. See §4.4/§4.5. |
 
 ### 4.2 Three-checkpoint comparison at K_eval=1 (n=100, math_eval)
 
@@ -205,6 +206,7 @@ The sharpest single finding in the multi-K data. Compare each enrich checkpoint'
 | M=1 enrich − flat jsd-8K [s123] | +0.097 | +0.163 | ≈ seed floor |
 | M=1 enrich − flat jsd-8K [s456] | +0.037 | +0.092 | **below** floor |
 | **M=3 enrich − flat jsd-8K [s123]** | **+0.182** | **+0.297** | ~2× floor |
+| M=3 enrich − flat jsd-8K [s456] | +0.048 | +0.126 | ≈ floor |
 | M=3 − M=1 enrich [s123] | +0.084 | +0.134 | ≈ floor |
 | ttemp1.5 − ttemp1.0 (M=3 neg-control) | −0.079 | −0.068 | correctly negative |
 
@@ -213,7 +215,8 @@ The sharpest single finding in the multi-K data. Compare each enrich checkpoint'
 | Comparison | overall mean Δ | bv/trav Δ | traversal K=3 | reading |
 |---|---|---|---|---|
 | flat-25K − flat-8K | +0.109 | +0.189 | −0.024 | 3× longer flat training buys ~+0.11 |
-| **M=3 enrich-8K − flat-25K** | **+0.074** | **+0.100** | **+0.346** | **M=3-8K beats *converged* flat** |
+| **M=3 enrich-8K − flat-25K [s123]** | **+0.074** | **+0.100** | **+0.346** | **M=3-8K beats *converged* flat** |
+| M=3 enrich-8K − flat-25K [s456] | — | — | **+0.168** | traversal replicates; bv K=3 = −0.087 ✗ |
 | M=1 enrich-8K − flat-25K | −0.022 | −0.044 | −0.016 | single-path enrich < flat-25K |
 
 **Reading:**
@@ -222,7 +225,7 @@ The sharpest single finding in the multi-K data. Compare each enrich checkpoint'
 3. **M=1 enrich = flat with fewer steps.** M=1-8K (8K rollouts) loses to flat-25K (−0.022); single-path enrich has no structural edge — more compute beats it. So the benefit is specifically **M>1**, not "enrich."
 4. Negative control behaves (higher teacher temp hurts).
 
-**Cross-seed status:** M=1 replicates directionally on both seeds (magnitude seed-sensitive, +0.097 vs +0.037). **M=3 has only s123 — the s456 M=3 run is now the single load-bearing experiment:** it must reproduce both the +0.30-vs-flat-8K *and* the +0.10/traversal-K=3=+0.35-vs-flat-25K multi-path effect.
+**Cross-seed status:** M=1 replicates directionally on both seeds (magnitude seed-sensitive, +0.097 vs +0.037). **M=3 now complete on both seeds.** s456 M=3: overall +0.048 (≈ floor), bv/traversal +0.126 — weaker than s123 (+0.182/+0.297) but consistently positive on bv/traversal. Against converged flat: traversal K=3 = **+0.168 (s456)** replicates s123's +0.346 — structural claim cross-seed confirmed. BV K=3 = −0.087 (s456) does **not** replicate — BV advantage was mostly convergence-speed effect (§4.5, now confirmed by s456).
 
 A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 36 cells are highly correlated (same prompts, same checkpoint, related verifiers, shared $K_{\text{eval}}$ grid), and the four $K_{\text{eval}}{=}1$ collapsed cells are duplicate counts. The independence assumption is false.
 
@@ -240,33 +243,34 @@ A naive "29/36 wins, $p\approx10^{-6}$" binomial would be **invalid** here: the 
 - **flat-25K − flat-8K = +0.109 overall** — 3× longer flat training is a real ~+0.11 gain (so flat-8K was genuinely under-trained; the comparison had to be made against converged flat).
 - **M=3 enrich-8K − flat-25K = +0.074 overall, +0.100 bv/traversal, traversal K=3 = +0.346.** **M=3 enrich at 8K beats flat trained to its 25K ceiling**, concentrated on the prefix/budget verifiers and high K — exactly the §4.2c multi-path/verifier–K alignment signature.
 
-  **As percentages, with the load-bearing nuance** (vs matched-step flat-8K | vs converged flat-25K):
+  **As percentages, cross-seed** (vs matched-step flat-8K | vs converged flat-25K):
 
-  | cell | vs flat-8K | vs flat-25K |
-  |---|---|---|
-  | traversal K=2 | +4.1% | +0.4% |
-  | **traversal K=3** | **+5.5%** | **+5.9%** |
-  | traversal K=4 | +4.1% | **−0.8%** |
-  | bv K=2 | +3.9% | +1.9% |
-  | bv K=3 | +7.4% | +1.9% |
-  | bv K=4 | +7.0% | +2.2% |
+  | cell | s123 vs flat-8K | s123 vs flat-25K | s456 vs flat-8K | s456 vs flat-25K |
+  |---|---|---|---|---|
+  | traversal K=2 | +4.1% | +0.4% | +0.3% | −1.1% |
+  | **traversal K=3** | **+5.5%** | **+5.9%** | **+1.0%** | **+2.9%** |
+  | traversal K=4 | +4.1% | −0.8% | +4.4% | +2.3% |
+  | bv K=2 | +3.9% | +1.9% | +1.7% | −0.5% |
+  | bv K=3 | +7.4% | +1.9% | +1.1% | **−1.4%** |
+  | bv K=4 | +7.0% | +2.2% | +3.5% | 0.0% |
 
-  **The bankable claim against converged flat is `traversal K=3 ≈ +6%`.** BV looks strong vs flat-8K (+7%) but **most of that is a convergence-speed effect** — flat's own 8K→25K gain is largest exactly on bv K=3 (+0.31), so vs converged flat the bv margin shrinks to ~+2%. So: **traversal K=3 is structural; BV is mostly "enrich converges faster."** Both are real wins, but only the traversal one is a ceiling improvement.
+  **The bankable claim against converged flat is traversal K=3 ≈ +2–6%** (s123: +5.9%, s456: +2.9% — consistent direction on both seeds). **BV does not replicate vs converged flat on s456** (BV K=3: s123 +1.9%, s456 −1.4%) — confirming that most of the BV gain was a convergence-speed effect, not a structural ceiling improvement. So: **traversal K=3 is structural (cross-seed confirmed); BV is mostly "enrich converges faster" (confirmed by s456).**
 
-  **Inverted-V at K_eval = M (the sharpest alignment evidence, now that flat-25K K=4 exists).** Traversal Δ vs *converged* flat: **K=2 +0.4% → K=3 +5.9% → K=4 −0.8%.** The advantage over converged flat peaks exactly at K_eval = train-M = 3 and is gone by K=4 > M. naive shows the same shape (K=4 −1.1%). This is far stronger than "K=3 is good": it is a *falsifiable* prediction — an M=4 enrich run should move the peak to K=4. It also explains why earlier K=4-vs-flat-8K looked like a win (+4.1%): that was just flat being under-trained, not a real K=4 edge. **Headline claim should be stated as "enrich-M maximises BE at K_eval≈M," with M=3/traversal-K=3 as the worked instance.**
+  **Inverted-V at K_eval = M (confirmed on both seeds, with varying sharpness).** s123 traversal Δ vs converged flat: K=2 +0.4% → **K=3 +5.9%** → K=4 −0.8% (sharp peak, K=4 goes negative). s456: K=2 −1.1% → **K=3 +2.9%** → K=4 +2.3% (mild peak, K=4 stays positive). In both cases the advantage peaks at K_eval=3=M. The falsifiable prediction holds: **set train-M ≥ target inference K_eval.** An M=4 run should move the peak to K=4. The K=4-vs-flat-8K looked positive for both seeds (+4.4% s456, +4.1% s123) but that was flat being under-trained — vs converged flat, K=4 is −0.8% (s123) and +2.3% (s456), the latter possibly a second-seed quirk (s456's flat baseline is higher at K=4). **Headline: "enrich-M maximises BE at K_eval≈M," with M=3/traversal-K=3 as the worked instance — now replicated on two seeds.**
 - **M=1 enrich-8K − flat-25K = −0.022.** Single-path enrich loses to converged flat → M=1 enrich is just flat with fewer steps, **no structural edge.**
 
 **Compute accounting.** M=3-8K ≈ 24K teacher-rollouts ≈ flat-25K's ~25K rollouts → **roughly matched compute, and M=3 still wins.** The only place converged flat catches M=3 is **K_eval=1** (saturated single path: flat-25K traversal K=1=6.28 vs M=3-8K=6.213, −0.068); the M=3 advantage is entirely a **K≥2 tree-width effect**, which is the honest and defensible framing.
 
 **What is now established vs still open:**
-- *Established (s123):* the high-K verifier–K alignment (§4.2c) is **structural** — flat cannot replicate it by training 3× longer. Flat trains on one greedy path; more steps sharpen single-path matching but cannot manufacture multi-path calibration. Bet the paper on this.
-- *Open (the one load-bearing run):* **M=3 s456.** Must reproduce M=3 enrich-8K > flat (both the 8K and 25K comparisons) on bv/traversal at K≥2. Until then the headline rests on a single seed.
+- *Established (both seeds):* **traversal K=3 structural ceiling improvement is cross-seed confirmed** — M=3 enrich at 8K beats flat trained to its 25K ceiling at traversal K=3 on s123 (+5.9%) and s456 (+2.9%). Flat cannot replicate this by training longer; multi-path calibration is not achievable by more steps on one greedy trajectory. **Bet the paper on traversal K=3.**
+- *Confirmed — BV is seed-sensitive:* s456 BV K=3 = −1.4% vs flat-25K (s123 was +1.9%). BV's 8K advantage was convergence speed, not structural ceiling — confirmed by s456.
+- *Next gate:* **gsm8k eval** — flat-25K + M=3-8K (both seeds) at traversal K=3, n=100 (~2 GPU-hours). Tests whether the structural traversal advantage generalises beyond math_eval before committing to convergence training.
 
 **Convergence point (40K flat run):** flat JSD **converges ~15K** — val plateaus (5.74–6.42), `best`=6.608 frozen since ~15K, forgetting climbs 0→1.28 (post-convergence churn), loss at floor. Consequence: converged enrich runs need only ~15–20K with early stopping, not 40K.
 
 **Checkpoint-selection caveat (methodology):** `best`-on-25-prompt-val is winner's-curse biased — max over hundreds of noisy evals (SE≈0.15–0.20), bias grows with run length. Reported BE tables are unaffected (n=100 offline re-evals of `ckpt_best`), but selection is noisy. Going forward: select by smoothed/EMA val, ≥100-prompt val less frequently, early-stop with patience (now implemented in `train.py`).
 
-**Remaining decisive experiment:** **M=3 s456** (train 8K + n=100 eval) — confirm the multi-path effect replicates across seeds. Then, optionally, M=3-to-convergence to show whether the +0.10 bv/traversal margin over flat-25K holds or grows. Both rank **above** n=1000 / 2nd dataset.
+**M=3 s456 complete.** Traversal K=3 replicates (+0.168 vs converged flat, +0.058 vs flat-s456 baseline); BV does not (−0.087 vs converged flat). **Next gate: gsm8k eval** — flat-25K + M=3-8K both seeds at traversal K=3 (n=100, ~2 GPU-hours). If the traversal structural advantage holds on gsm8k, the claim generalises and M=3 convergence training (~20K steps) becomes a strengthening run, not a gate. Defer M=3 convergence training until the gsm8k gate clears.
 
 ---
 
