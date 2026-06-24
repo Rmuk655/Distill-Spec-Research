@@ -173,21 +173,46 @@ M=3 vs flat JSD, Δ = M=3 − flat, per verifier per K_eval. **M=3 beats flat JS
 | NSS | +0.131 | +0.087 | +0.010 | +0.095 | 4.355 / 4.106 / 3.855 / 3.744 |
 | max | +0.104 | +0.054 | +0.025 | +0.205 | 5.952 / 5.260 / 4.996 / 4.873 |
 
-### 4.2c Verifier–K alignment: does train-M match eval-K? (CONFIRMED for traversal/BV)
+### 4.2c Verifier–K alignment: does train-M match eval-K? (s123 only — does NOT replicate on s456)
 
-The sharpest single finding in the multi-K data. Compare each enrich checkpoint's Δ-vs-flat across K_eval:
+The multi-K data for s123 suggested a clean alignment pattern. The full cross-seed paired analysis (M=1, M=3 each vs their own flat-8K baseline, and M=3 vs M=1 directly) gives a more conservative picture.
 
-| Verifier | M=1 Δ vs flat (K=1/2/3/4) | M=3 Δ vs flat (K=1/2/3/4) |
-|---|---|---|
-| traversal | +0.186 / +0.265 / **−0.041** / +0.171 | +0.241 / +0.244 / **+0.322** / +0.232 |
-| BV | +0.031 / +0.156 / +0.268 / +0.265 | +0.264 / +0.232 / **+0.431** / **+0.411** |
+**Same-seed paired deltas — traversal and BV:**
 
-- **M=1 traversal *loses to flat* at K_eval=3 (−0.041)** — the lone negative in the M=1 traversal row. **M=3 erases that dip** (+0.322 at K_eval=3) and posts its single best traversal Δ there. Directly: M=3 traversal at K_eval=3 = 6.216 vs M=1 = 5.853, a **+0.363** within-K gap. *Caveat (§4.4): the −0.041 itself is within the ±0.13 per-cell noise floor — do not lean on the dip being real; the load-bearing fact is the **+0.322 / +0.363**, which is ~2.5× the floor.*
-- **BV: M=3 advantage grows with K_eval and peaks at K=3/4** (+0.431, +0.411); M=3 BV raw BE *increases monotonically* with K (6.157→6.283), while flat BV is flat-to-declining. M=3 > M=1 at every K for BV.
+| Comparison | K=1 | K=2 | K=3 | K=4 |
+|---|---|---|---|---|
+| M=1 s123 − flat s123 (traversal) | +0.186 | **+0.265** | **−0.041 ✗** | +0.171 |
+| M=3 s123 − flat s123 (traversal) | +0.241 | +0.244 | **+0.322** | +0.232 |
+| M=1 s456 − flat s456 (traversal) | +0.055 | +0.057 | **+0.074** | +0.022 |
+| M=3 s456 − flat s456 (traversal) | +0.098 | +0.019 | +0.058 | **+0.258** |
+| M=1 s123 − flat s123 (bv) | +0.031 | +0.156 | +0.269 | **+0.265** |
+| M=3 s123 − flat s123 (bv) | +0.264 | +0.232 | **+0.431** | +0.410 |
+| M=1 s456 − flat s456 (bv) | +0.137 | **+0.158** | +0.078 | +0.154 |
+| M=3 s456 − flat s456 (bv) | **+0.195** | +0.101 | +0.065 | +0.209 |
 
-**Mechanism (the deployable claim):** training with M diverse teacher rollouts calibrates the draft across M parallel contexts. At inference, K_eval branches demand the draft be well-aligned on K simultaneous paths. M=1 calibrates one path → excellent at K_eval≤2, degrades when K_eval exceeds training diversity (traversal K=3 dip). M=3 calibrates three → sustains acceptance through K_eval=3,4 for the prefix/budget verifiers (traversal, BV) whose acceptance reward grows with tree width. **Prediction: set train-M ≥ target inference K_eval.** This matters for production tree-SD (K=3–8 branches): matched M gives higher acceptance at high branch counts without extra inference cost.
+**M=3 − M=1 (traversal and BV):**
 
-**Caveat — not universal.** The alignment is verifier-specific. specinfer is *anti-aligned*: M=3 gain concentrates at K=1,2 (+0.336, +0.351) and collapses at K=3,4 (+0.016, +0.021). specinfer's multi-candidate residual acceptance dilutes per-candidate gain as branch count rises, so coverage from enrich pays off most with few candidates. naive peaks at K=2; NSS is flat across K. The §5 functional analysis must explain why prefix/budget verifiers align with train-M while residual/OT verifiers do not.
+| | K=1 | K=2 | K=3 | K=4 |
+|---|---|---|---|---|
+| s123 traversal | +0.054 | −0.022 ✗ | **+0.363** | +0.061 |
+| s456 traversal | +0.043 | −0.038 ✗ | **−0.017 ✗** | +0.237 |
+| s123 bv | **+0.234** | +0.077 | +0.162 | +0.146 |
+| s456 bv | **+0.059** | −0.057 ✗ | −0.013 ✗ | +0.055 |
+
+**What replicates on both seeds:**
+- **M=3 beats own flat-8K on bv+traversal at every K value** — both Table B rows uniformly positive for these two verifiers. The headline is safe.
+- **M=1 beats own flat-8K on bv at every K** — smaller, consistent positive.
+- **M=3 beats flat at traversal K=3** — s123: +0.322, s456: +0.058 (both positive).
+- **Specinfer anti-alignment at K≥3: M=3 worse than M=1 on both seeds** — M=3−M=1 for specinfer K=3,4 is negative on both seeds (s123: −0.121/−0.137; s456: −0.117/−0.174). specinfer's multi-candidate residual acceptance dilutes per-candidate gain at high K; enrich pays off only at K=1,2.
+- **Traversal K=2 slightly negative in M=3 − M=1, both seeds** — small (−0.022, −0.038) but consistent.
+
+**What does NOT replicate:**
+- **Inverted-V peak at K_eval=M=3 (vs flat-8K):** s123 peak is at K=3 (+0.322); s456 peak is at K=**4** (+0.258). The peak cell shifted.
+- **M=3 > M=1 at traversal K=3:** s123: +0.363; s456: −0.017 (reversed — M=1 slightly better at K=3 on s456).
+- **BV M=3 > M=1 at K=2,3:** true on s123, reversed on s456 (−0.057, −0.013).
+- **Naive M=3 > M=1:** s123 mostly positive; s456 ALL FOUR cells negative.
+
+**Revised deployable claim:** M=3 enrich gives a consistent ceiling improvement on bv+traversal vs the same-seed flat-8K baseline (uniformly positive, both seeds). The specific "M=3 advantage peaks at K_eval=M=3" alignment is established on s123 but not robustly confirmed by s456. Treat the inverted-V as a plausible mechanism, not an established result. The specinfer anti-alignment at K≥3 IS consistent across seeds and is the more robust cross-verifier pattern.
 
 ### 4.3 Two empirical patterns (conjectures, not results)
 
