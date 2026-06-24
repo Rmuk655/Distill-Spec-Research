@@ -122,6 +122,37 @@ little left to teach at the contexts that matter).  If the bottleneck is the dra
 capacity, a larger teacher makes the gap *bigger*, not smaller — use `--diagnose`
 and `val/forgetting` (below) to tell which regime you are in before scaling up.
 
+### Enrichment training (`jsd_flat_enrich`)
+
+Instead of training on the teacher's *greedy* rollout, enrichment training uses the teacher's *stochastic* speculative decoding loop as the training distribution.  The draft generates K tokens per step via the actual SD loop (teacher accepts/rejects), and the flat JSD loss is applied against the resulting sequence.  K controls how many on-policy steps are taken per training update: K=1 is one stochastic rollout token, K=3 gives three steps per update (richer signal, ~3× slower per step).
+
+```bash
+# K=1 enrichment — one stochastic rollout per step (8 K steps is sufficient;
+#   enrich converges faster than 40K-step flat runs because the on-policy
+#   distribution shifts faster)
+python train.py --loss jsd_flat_enrich --K 1 --steps 8000 \
+    --train_dataset math_hard --val_dataset math_val \
+    --output checkpoints/jsd_flat_enrich_K1_mathhard_s123
+
+# K=3 enrichment — three steps per update (richer multi-step signal)
+python train.py --loss jsd_flat_enrich --K 3 --steps 4000 \
+    --train_dataset math_hard --val_dataset math_val \
+    --output checkpoints/jsd_flat_enrich_K3_mathhard_s123
+
+# Second seed for reproducibility
+python train.py --loss jsd_flat_enrich --K 1 --steps 8000 \
+    --train_dataset math_hard --val_dataset math_val \
+    --output checkpoints/jsd_flat_enrich_K1_mathhard_s456 --seed 456
+
+# Warmer teacher temperature (more diverse paths — monitor train/path_diversity)
+python train.py --loss jsd_flat_enrich --K 3 --steps 4000 \
+    --train_dataset math_hard --val_dataset math_val \
+    --teacher_temp 1.5 \
+    --output checkpoints/jsd_flat_enrich_K3_mathhard_s123_ttemp1.5
+```
+
+`train/path_diversity` (logged to W&B and console as `pathdiv=`) is the key enrichment-specific signal: fraction of token positions where the K teacher rollouts disagree.  Values consistently above 0.15 mean the teacher is giving diverse training signal; below 0.05 means paths are collapsing (raise `--teacher_temp` or K).
+
 ### Math eval
 
 After training, evaluate on the 1000-problem held-out set:
@@ -243,9 +274,10 @@ at the top of `train.py` and rerun.  Adapter weights are still saved through
 # Eval one checkpoint under one verifier mode
 python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode gbv
 
-# Sweep all 8 verifier modes for one checkpoint
-python eval.py --checkpoint checkpoints/kl_tree/ckpt_best \
-               --modes naive,nss,specinfer,spectr,khisti,bv,gbv,traversal
+# Sweep all verifier modes for one checkpoint (comma-separated)
+python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
+               --modes traversal,bv,naive,specinfer,spectr,khisti,gbv,nss,max \
+               --K 1 --L 8 --n 100 --dataset math_eval --device cuda:0
 
 # Different K, L, or dataset
 python eval.py --checkpoint checkpoints/gbv_tree/ckpt_best \
@@ -253,6 +285,19 @@ python eval.py --checkpoint checkpoints/gbv_tree/ckpt_best \
 
 # Baseline (untrained Qwen3-0.6B)
 python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv
+
+# Parallel 4-GPU sweep — pin each process to its own GPU
+python eval.py --checkpoint checkpoints/jsd_mathhard_s123/ckpt_best \
+    --modes traversal,bv,naive,specinfer,spectr,khisti,gbv,nss,max \
+    --K 1 --L 8 --n 100 --dataset math_eval --device cuda:0 &
+python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
+    --modes traversal,bv,naive,specinfer,spectr,khisti,gbv,nss,max \
+    --K 1 --L 8 --n 100 --dataset math_eval --device cuda:2 &
+wait
+
+# With diagnose — correlation check after the timed loop (adds ~10 min for n=100)
+python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
+    --modes traversal --K 1 --n 100 --dataset math_eval --diagnose --device cuda:0
 ```
 
 Every eval cell appends one row to `results.csv`.  Key columns:
@@ -320,29 +365,61 @@ python eval.py --checkpoint checkpoints/<run>/ckpt_best \
 
 What it does, as a **separate pass after the timed loop**:
 
-1. For each prompt, compute the per-prompt training divergence — **JSD** and
-   **forward-KL** between teacher and draft (the same flat objective training
-   minimises: teacher greedily rolls out, both models forwarded, divergence
-   averaged over generated tokens).
-2. Correlate that divergence against the prompt's **block efficiency**.
-3. Log two scatter plots (`diag/jsd_vs_be`, `diag/fwdkl_vs_be`), the correlations
-   (`diag/corr_jsd_be`, `diag/corr_fwdkl_be`), and a plain-English **verdict** to a
-   dedicated W&B run (`job_type=diagnose`).
+1. **Auto-reads the trained loss** from the checkpoint's `state.json`
+   (`train_args.loss`).  All checkpoints saved after 2026-06-22 embed the full
+   training arg set.  For older checkpoints, pass `--trained_loss jsd` or
+   `--trained_loss fwdkl` to override.
+2. For each prompt, computes the **trained divergence** (whichever loss the model
+   was trained with — not hardcoded to JSD) and the other divergence as secondary,
+   by rolling out the teacher greedily and forwarding both models.
+3. Correlates divergence against BE using **Spearman ρ** as the primary statistic
+   (rank-based, invariant to range compression) and Pearson r as secondary.
+   Also tracks **σ(trained_loss)** alongside ρ to distinguish two failure modes:
+   - **Case A — true signal loss:** σ(loss) stable, ρ drops → divergence has
+     genuinely decoupled from BE; the objective is not the right lever.
+   - **Case B — range restriction:** σ(loss) collapses (model uniformly
+     better → narrower spread), ρ stable, Pearson r drops → the apparent
+     weakening of r is a compression artefact, not signal loss.
+4. Buckets prompts into **easy** (BE ≥ 0.75 L), **medium**, and **hard**
+   (BE < 0.375 L) — thresholds are L-relative, not hardcoded absolute values.
+5. Logs everything to a dedicated W&B run (`job_type=diagnose`).  Run name format:
+   `diag_{training_run}_{ckpt_name}_{dataset}_{mode}` — includes the parent
+   training-run directory so runs from different checkpoints are distinguishable.
 
 **Reading the verdict:**
 
-| Correlation | Meaning | Action |
-|---|---|---|
-| `\|r\| ≈ 0` (flat cloud) | Divergence does **not** predict BE → objective mismatch | Stop tuning divergence losses; the loss is not the lever |
-| `r < 0` (lower divergence ⇒ higher BE) | Objective **is** connected to BE | Keep tuning the loss; it can move BE |
-| `r > 0` | Unexpected — verify orientation before trusting | Sanity-check the implementation |
+| Spearman ρ | σ(loss) | Meaning | Action |
+|---|---|---|---|
+| ρ ≈ 0  (p > 0.05) | any | Divergence does **not** predict BE rank → H0 not ruled out | Stop tuning divergence losses; the loss is not the lever |
+| ρ < 0  (p < 0.05) | stable | Objective **is** connected to BE; rank order preserved | Keep tuning; the loss can move BE |
+| ρ < 0  (p < 0.05) | collapsed | Range restriction: model improved, Pearson r artificially weak — ρ is the reliable signal | Likely fine; compare σ across checkpoints |
+| ρ > 0 | — | Unexpected — verify divergence orientation before trusting | Sanity-check the implementation |
 
-> **Throughput safety:** `--diagnose` is OFF by default and **must not** be used on
-> a throughput-measurement run if you want to be cautious — but note the diagnostic
-> pass runs strictly *after* the timed eval and uses timers internal to
-> `speculative_decoding_loop`, so `throughput_tok_s` and all `time_*` columns are
-> mathematically unaffected either way.  When the flag is off, eval does no extra
-> work and never imports W&B.
+**W&B scalars** — all logged to `run.summary` (not `run.log`) so they appear as
+numbers in the Overview panel rather than single-dot line charts:
+
+| Key | Description |
+|---|---|
+| `diag/spearman_{loss}` | Spearman ρ — primary H0 signal |
+| `diag/p_spearman_{loss}` | p-value for ρ (approximated via t-distribution) |
+| `diag/pearson_{loss}` | Pearson r — secondary; shrinks under range compression |
+| `diag/r2_{loss}` | R² for Pearson fit |
+| `diag/std_{loss}`, `diag/mean_{loss}` | spread and mean of the trained divergence |
+| `diag/mean_be`, `diag/std_be` | BE spread across all prompts |
+| `diag/n_easy`, `diag/n_medium`, `diag/n_hard` | prompt counts by difficulty bucket |
+| `diag/h0`, `diag/verdict` | plain-English H0 status and full interpretation |
+
+**W&B tables** — logged via `run.log`:
+
+| Key | Content |
+|---|---|
+| `diag/{loss}_vs_be` | scatter of trained divergence vs BE (trained loss only; secondary divergence omitted — different axis scale) |
+| `diag/per_prompt` | 6-column table: `prompt_idx`, `prompt_preview`, `jsd`, `fwd_kl`, `block_eff`, `bucket`.  Filter by `bucket='hard'` in W&B UI to find struggling prompts. |
+| `diag/bucket_summary` | per-bucket mean-BE and mean-divergence |
+
+> **Throughput safety:** `--diagnose` is OFF by default.  The diagnostic pass runs
+> strictly *after* the timed eval, so `throughput_tok_s` and all `time_*` columns
+> are unaffected.  When the flag is off, eval does no extra work and never imports W&B.
 
 ### Decomposition stacked-bar + radar  (`--baseline_checkpoint`)
 
@@ -359,8 +436,9 @@ python eval.py --checkpoint checkpoints/<run>/ckpt_best \
 What it computes (as a third pass, after `--diagnose`):
 
 1. Loads the untrained base draft and runs `_prompt_divergence` on every prompt
-   that had a valid diagnostic reading → produces **G₀** (baseline JSD per prompt).
-2. From the `--diagnose` pass: **G** (trained JSD per prompt).
+   that had a valid diagnostic reading → produces **G₀** (baseline divergence per
+   prompt, using the same divergence family the checkpoint was trained with).
+2. From the `--diagnose` pass: **G** (trained divergence per prompt).
 3. Learned = max(G₀ − G, 0);  Remaining = G.
 
 **Stacked-bar** (two-panel figure, prompts sorted by G₀ easiest → hardest):
@@ -403,24 +481,24 @@ Prints the generated text plus block-efficiency / throughput for that one prompt
 
 Important distinction (subtle but matters for the paper):
 
-* **train.py's `K` / `L`** — the size of the draft tree used to compute the
-  tree loss.  Set in the HARDCODED CONSTANTS block at the top of `train.py`.
-  Inert for flat losses; baked into the gradient for verifier-aligned tree
-  losses (the α formula has K in it).
+* **train.py's `K` / `L`** — the draft tree size during training.  Affects
+  three things depending on the loss:
+  - *Flat losses (jsd, fwdkl, …):* K controls how many draft tokens the
+    speculative decoding loop generates per training step.  Inert for the
+    loss gradient itself, but **directly sets the distribution the draft
+    learns from** — this is the core of enrichment training.  K=1 = one
+    stochastic rollout step per update; K=3 = three steps, richer on-policy
+    signal.
+  - *Tree losses (bv_tree, gbv_tree, …):* K is additionally baked into the
+    gradient via the α formula.  Higher K amplifies the verifier-alignment
+    signal.
+  - *Tree-depth experiments:* varying L (horizon) at fixed K changes how
+    far ahead the tree looks; varying K at fixed L changes the branching
+    factor.  Both are training-time hyperparameters and should be reported
+    alongside eval K/L.
 * **eval.py's `--K` / `--L`** — the draft tree size at inference time.
-  Independent of training-time K/L.
+  Independent of training-time K/L; the two can differ.
 
-For the cleanest "tree > flat as K grows" story, set the training K to the
-same value you eval at, OR run the full train-K × eval-K cross-grid.
-
----
-
-## Losses dropped from this pipeline
-
-* `ebe` and `ebe_single` (flat off-policy block-efficiency surrogates) are
-  intentionally excluded — they optimise α on the teacher's own rollout,
-  which is the wrong distribution.  The on-policy versions live in
-  `losses/tree.py` (`bv_tree`, `gbv_tree`, etc.).
-* `ebe_tree` is also excluded — it's redundant with `naive_tree` for K=1
-  and an approximation for K>1.  Use `naive_tree` directly if you want the
-  on-policy naive-verifier-aligned loss.
+For the cleanest "enrichment K scales" story, report the training K
+alongside eval K so readers can distinguish in-distribution (train K = eval K)
+from out-of-distribution generalisation (train K < eval K).

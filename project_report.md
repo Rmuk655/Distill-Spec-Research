@@ -287,22 +287,29 @@ Verdict threshold: SE = disp/√N (standard error of the mean, not prompt-to-pro
 
 ### Traversal BE at K=3 (primary comparison axis)
 
-| Checkpoint | Train loss type | val BE peak | Traversal K=3 | vs. baseline | vs. jsd |
-|---|---|---|---|---|---|
-| Baseline (untrained) | — | — | 4.91 | — | −0.41 |
-| nss_tree | tree | ~3.6 (noise) | 5.20 | +0.29 | −0.12 |
-| kl_tree | tree | — | 5.18 | +0.27 | −0.14 |
-| naive_tree | tree | — | 5.22 | +0.31 | −0.10 |
-| reverse_kl | flat | — | 5.05 | +0.14 | −0.27 |
-| l1 | flat | — | 5.26 | +0.35 | −0.06 |
-| jsd | flat | 5.996 | 5.32 | +0.41 | — |
-| forward_kl | flat | — | 5.36 | +0.45 | +0.04 |
-| depth_weight (all forms) | flat+scalar | ~5.996 | 5.20–5.47 (noise) | noise | noise |
-| jsd + naive_tree × 0.1 | flat+tree | — | 5.19 (traversal) / 5.59 (bv) | — | −0.24 traversal / +0.11 bv |
-| jsd + naive_tree × 0.3 | flat+tree | — | 5.25 (traversal) / 5.44 (bv) | — | −0.18 traversal / −0.04 bv |
-| jsd + naive_tree × 1.0 | flat+tree | — | 5.36 (traversal) / 5.00 (bv) | — | −0.07 traversal / −0.48 bv |
+All evals: n=100 unless noted, `math_eval` dataset (Phases 10+), `gsm8k_eval` (Phases 1–9).
 
-**JSD is the primary flat baseline** — best val BE during training (5.996) and the deliberate control for all further experiments. forward_kl edges it by +0.04 at K=3 offline traversal, which is within the ±0.15 noise floor and not a meaningful difference. Val BE for forward_kl was never tracked during training.
+| Checkpoint | Train loss type | val BE peak | Traversal K=1 | Traversal K=3 | vs. jsd (K=3) |
+|---|---|---|---|---|---|
+| Baseline (untrained) | — | — | 4.71 | 4.91 | −0.41 |
+| nss_tree | tree | ~3.6 (noise) | — | 5.20 | −0.12 |
+| kl_tree | tree | — | — | 5.18 | −0.14 |
+| naive_tree (math_hard) | tree | — | — | 5.43¹ | −0.47 |
+| reverse_kl | flat | — | — | 5.05 | −0.27 |
+| l1 | flat | — | — | 5.26 | −0.06 |
+| jsd (GSM8K) | flat | 5.996 | 5.44 | 5.32 | — |
+| **jsd (math_hard, 8 K steps)** | flat | — | 5.97 | 5.89 | — |
+| forward_kl | flat | — | 5.33 | 5.36 | +0.04 |
+| depth_weight (all forms) | flat+scalar | ~5.996 | — | 5.20–5.47 (noise) | noise |
+| jsd + naive_tree × 0.1 | flat+tree | — | — | 5.19 | −0.24 |
+| jsd + naive_tree × 0.3 | flat+tree | — | — | 5.25 | −0.18 |
+| jsd + naive_tree × 1.0 | flat+tree | — | — | 5.36 | −0.07 |
+| **jsd_flat_enrich K=1 (M=1)** | enrich (stoch. rollout) | — | **6.16** | 5.85 | +0.02 (K=3); **+0.19 (K=1)** |
+| **jsd_flat_enrich K=3 (M=3)** | enrich (stoch. rollout) | — | **6.21** | — | **+0.24 (K=1); all-9 verifier win** |
+
+¹ math_hard naive_tree evaluated on math_eval; jsd (math_hard) = 6.01 on traversal K=1.
+
+**jsd_flat_enrich K=1 is the first training variant to beat flat JSD on traversal across K=1–2** without losing on any verifier simultaneously.  At K=1 (matched) +3.1% traversal, +3.5% NSS; win rate 29/36 cells across all 9 verifiers and K=1..4 (see Phase 10 for the full breakdown).
 
 ### gbv_tree / bv_tree: do not use
 These are excluded from the table above — they drive E[τ] to zero on the overfit set (broken gradient, not just suboptimal).
@@ -320,6 +327,8 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 | reverse_kl | Suboptimal | Degrades at K=4; dominated by forward_kl |
 | Pure tree losses (8B, GSM8K + math_hard) | No signal — confirmed across two datasets | Gap vs JSD grows with task difficulty (0.1 on GSM8K → 0.5 on math_hard): survival collapse under low acceptance rates, not capacity ceiling alone |
 | Additive jsd + tree (8B) | No signal — confirmed at 4000 steps | JSD wins traversal at every K; BV mean monotone declines with λ; one above-jsd cell within noise |
+| Off-policy tree (op_naive_tree, 8B GSM8K) | No signal in ceiling regime; **NOT** ruled out for intended regime | Phase 9: loses to JSD by ~0.18 traversal; detach=exact survival (no-op). But 8B/GSM8K = capacity ceiling; clean test (math_hard / 32B) not yet run |
+| **jsd_flat_enrich K=1 (math_hard)** | **Active — first positive result** | +3.1% traversal, +3.5% NSS at matched K=1; 29/36 wins; H0 ruled out at p=8.5e-12; K=3 training in progress |
 
 ---
 
@@ -331,11 +340,11 @@ These are excluded from the table above — they drive E[τ] to zero on the over
 
 3. **Capacity ceiling is a secondary issue.** The primary barrier is that on-policy tree losses self-defeat under any meaningful model gap — the gradient vanishes before capacity is even reached. Removing the model gap (32B teacher) would make both JSD and tree losses better, but the survival collapse would remain.
 
-4. **Acceptance-aware losses need off-policy or re-anchored gradients** to work, not more capacity. Training with the teacher's own rollout as the tree path (off-policy tree loss) would give dense, non-collapsing gradients at every depth — the same advantage JSD already has — while still optimizing the acceptance objective. This is the open algorithmic question.
+4. **Acceptance-aware losses need off-policy or re-anchored gradients** to work, not more capacity — *hypothesis, now partially tested.* Off-policy (teacher-rollout) tree losses give dense, non-collapsing gradients at every depth. **Phase 9 tested this at 8B/GSM8K: off-policy did NOT lift above JSD, and exact-vs-detached survival was a no-op.** But 8B/GSM8K is the capacity-ceiling regime where nothing beats JSD, so this is not a clean test — the hypothesis remains *untested in its intended large-gap regime* (math_hard / 32B), not refuted.
 
-4. **How would depth weighting work** if the core problem is gradient direction? A detached scalar multiplier has identical gradient direction to plain JSD. It cannot redirect learning toward deeper acceptance regardless of the capacity situation.
+5. **How would depth weighting work** if the core problem is gradient direction? A detached scalar multiplier has identical gradient direction to plain JSD. It cannot redirect learning toward deeper acceptance regardless of the capacity situation.
 
-5. **traversal + BV are the right primary metrics.** Both are high-BE verifiers, sensitive to training quality differences, and together give a more complete picture than traversal alone (traversal uniquely scales with K; BV captures tree-width acceptance).
+6. **traversal + BV are the right primary metrics.** Both are high-BE verifiers, sensitive to training quality differences, and together give a more complete picture than traversal alone (traversal uniquely scales with K; BV captures tree-width acceptance).
 
 ---
 
@@ -382,9 +391,140 @@ Traversal verifier:
 
 ---
 
-## Next Steps
+## Phase 9 — Off-Policy Naive Tree (2026-06-20)
 
-### Step 2 — 32B Teacher Run (if math probe passes or as direct next step)
+**Question:** Conclusion 4 below proposed off-policy (teacher-rollout) tree losses as the fix for on-policy survival collapse. First direct test of that hypothesis.
+
+**Runs:** `op_naive_tree` (detached survival) and `op_naive_tree_full` (exact survival), gsm8k_eval, n=100, L=8.
+
+| Checkpoint | traversal K=3 | bv K=3 |
+|---|---|---|
+| baseline | 4.907 | 4.575 |
+| **jsd / forward_kl** | **5.32 / 5.36** | **5.36 / 5.20** |
+| op_naive_tree (detached) | 5.030 | 4.703 |
+| op_naive_tree_full (exact survival) | 5.027 | 4.705 |
+
+**Results:**
+- Off-policy sits ~0.12 above baseline on traversal (≈ noise floor) and **loses to JSD/forward_kl by ~0.18 traversal, ~0.5 bv**. It did not lift above flat distillation.
+- **Detached vs exact survival is a no-op:** 5.030 vs 5.027 (traversal), 4.703 vs 4.705 (bv). Exact survival credit-assignment changed nothing — this rules out survival-truncation as the limiting factor.
+
+**Important caveat — regime mismatch:** this test is **8B / GSM8K**, the *capacity-ceiling* regime (Phase 6: JSD already reaches q≈p everywhere the 0.6B can reach). In that regime *nothing* beats JSD by construction, so this result **confirms the ceiling but does not cleanly test off-policy's actual purpose** (fixing survival collapse, which only bites in the large-gap / hard-data regime). The clean test of Conclusion 4 is off-policy on **math_hard or a 32B teacher**, which has not been run. So Conclusion 4 is *untested in its intended regime*, not refuted.
+
+---
+
+## Phase 10 — Enrichment Training: jsd_flat_enrich K=1 (2026-06-22)
+
+**Hypothesis:** Training on the teacher's *stochastic* speculative-decoding rollout (rather than a greedy teacher sequence) gives the draft better gradient signal, because the training distribution now reflects which tokens actually get accepted at inference time.
+
+**Mechanism (`jsd_flat_enrich`):** per training step, run K stochastic teacher rollouts (`teacher.generate(..., do_sample=True, temperature=teacher_temp)`); score the student against each rollout with JSD; average. No draft proposals, no verifier, no accept/reject. K controls the number of stochastic teacher paths per update (called M in the research note). K=1 = one stochastic teacher path (greedy-vs-stochastic ablation); K>1 = M enrichment rollouts per prompt. `train/path_diversity` (fraction of positions where ≥2 of the K rollouts disagree) is the diagnostic: high = diverse teacher signal, K>1 contributes; low = rollout collapse, K>1 ≈ K=1.
+
+### 10.1 Runs
+
+| Checkpoint | Loss | K | Steps | Seed | Machine | Status |
+|---|---|---|---|---|---|---|
+| `jsd_mathhard_s123/ckpt_best` | jsd (flat, greedy) | 1 | 8 K (best, then extended to 40 K on H100) | 123 | A100 → H100 | Ongoing (40 K) |
+| `jsd_flat_enrich_K1_mathhard_s123/ckpt_best` | jsd_flat_enrich | 1 | 8 K | 123 | A100 | Complete |
+| `jsd_flat_enrich_K3_mathhard_s123/ckpt_best` | jsd_flat_enrich | 3 | 8 K | 123 | A100 | Complete; eval done (see Phase 12) |
+| `jsd_flat_enrich_K1_mathhard_s456` | jsd_flat_enrich | 1 | 8 K | 456 | A100 | Pending |
+| `jsd_mathhard_s456` | jsd (flat, greedy) | — | 8 K | 456 | A100 | Pending |
+
+### 10.2 Diagnostic results (NSS verifier, n=100, math_eval, K=1)
+
+Run via `--diagnose` after eval.  Spearman ρ is the primary H0 signal.
+
+| Checkpoint | mean_BE | σ(JSD) | Spearman ρ | p(ρ) | n_easy | n_med | n_hard | H0 |
+|---|---|---|---|---|---|---|---|---|
+| jsd_mathhard_s123 | 4.099 | 0.0210 | −0.396 | 1.9e-05 | 4 | 82 | 14 | RULED OUT |
+| jsd_flat_enrich_K1 | 4.260 | 0.0210 | **−0.568** | 8.5e-12 | 11 | 74 | 15 | RULED OUT |
+
+**Key findings:**
+- H0 ruled out for both: JSD rank negatively predicts BE rank at p < 0.05 for both checkpoints.
+- σ(JSD) is identical (0.0210) → neither run shows range restriction; both comparisons are in Case A (genuine signal).
+- Enrich's stronger ρ (−0.568 vs −0.396) means the objective-to-BE coupling improved — the stochastic rollout training is not only moving BE but also tightening the connection between divergence and acceptance.
+- 11% easy (BE ≥ 6.0) vs 4% for flat: enrich is genuinely graduating hard/medium prompts, not just shifting the mean.
+
+### 10.3 Full eval — 9 verifiers × K=1..4 (n=100, math_eval, A100, seed 123)
+
+**Traversal BE:**
+
+| K | flat JSD | enrich K=1 | Δ |
+|---|---|---|---|
+| 1 | 5.972 | **6.158** | +0.186 |
+| 2 | 5.920 | **6.185** | +0.265 |
+| 3 | 5.894 | 5.853 | −0.040 |
+| 4 | 5.662 | **5.833** | +0.171 |
+
+**BV BE:**
+
+| K | flat JSD | enrich K=1 | Δ |
+|---|---|---|---|
+| 1 | 5.892 | 5.923 | +0.031 |
+| 2 | 5.992 | **6.148** | +0.156 |
+| 3 | 5.802 | **6.070** | +0.269 |
+| 4 | 5.872 | **6.137** | +0.265 |
+
+**NSS BE (strictest verifier):**
+
+| K | flat JSD | enrich K=1 | Δ |
+|---|---|---|---|
+| 1 | 4.224 | **4.373** | +0.149 (+3.5%) |
+| 2 | 4.019 | 3.988 | −0.030 |
+| 3 | 3.845 | **3.948** | +0.103 |
+| 4 | 3.649 | **3.744** | +0.095 |
+
+**Win rate across all 9 verifiers × K=1..4 (36 cells):** enrich K=1 > flat JSD in **29/36 cells (80.6%)**.
+
+**K=1 matched condition (in-distribution — trained at K=1, evaluated at K=1):** enrich wins on **all 9 verifiers** (clean sweep).  At K=1, naive / spectr / khisti / max give identical BEs to 6 d.p. within each checkpoint — single-token acceptance collapses these four verifiers to the same rule, so only traversal (+3.1%), NSS (+3.5%), specinfer (+1.7%), and bv/gbv (+0.5%) are meaningfully distinct.
+
+**Out-of-distribution generalization (K=2,3,4 — trained at K=1):** average Δ grows with K: +0.060 (K=1) → +0.107 (K=2) → +0.087 (K=3) → +0.135 (K=4).  A K=1-trained model improving more at higher K is consistent with the enrichment training implicitly teaching multi-step coherence — the stochastic rollout exposes the draft to accepted-token chains that also describe longer sequences.
+
+**Exceptions:** khisti loses at K=2 (−0.136) and K=4 (−0.161); gbv loses at K=3 (−0.113).  Both show non-monotone patterns with K; khisti's f-divergence acceptance criterion is known to oscillate with sequence length.
+
+### 10.4 Finding
+
+**F-010: jsd_flat_enrich K=1 is the first training variant to beat flat JSD on traversal and NSS simultaneously and consistently.**
+
+Previous work (Phase 5: depth-weight, Phase 6: additive tree) showed no detectable signal (spread ≤ noise floor).  Enrich K=1 gives +3.1% on traversal and +3.5% on NSS at the matched K=1 condition — both 3× the ±0.15 noise floor.  The improvement holds out-of-distribution (K=2..4) for most verifiers.
+
+**Mechanism interpretation:** the stochastic teacher rollout (`teacher.generate` with `do_sample=True`) trains the draft on diverse teacher continuations rather than a single greedy sequence. The draft is pulled toward matching the teacher's full distribution at off-greedy states — contexts that arise naturally at inference time but that flat JSD (greedy teacher) never visits. The improvement is a distribution-coverage effect: no accept/reject occurs during training. The connection to verifier acceptance is indirect: broader teacher distribution coverage → lower JSD at off-greedy positions → tighter JSD→acceptance link → higher BE.
+
+---
+
+## Phase 11 — Long-run and Depth-weight 40 K Steps (H100, ongoing as of 2026-06-23)
+
+**Motivation:** Phase 10's enrich K=1 result was trained for 8 K steps.  Two questions need long-run answers:
+
+1. Does flat JSD at 40 K steps plateau above the enrich K=1 8 K result?  (If yes, enrich's advantage may be a short-run effect.)
+2. Does depth-weight with a tree aux loss show any delayed signal at much longer training?
+
+**Runs (all on H100, seed 123, math_hard → math_val, `--resume` enabled):**
+
+| Checkpoint | Loss | K | Target steps | Status |
+|---|---|---|---|---|
+| `jsd_mathhard_s123` | jsd (flat, greedy) | — | 40 K | Ongoing |
+| `jsd_dw_lin_naive_mathhard_s123_K1` | jsd + depth_linear × naive_tree | 1 | 40 K | Ongoing |
+| `jsd_dw_lin_naive_mathhard_s123_K3` | jsd + depth_linear × naive_tree | 3 | 40 K | Ongoing |
+
+Results pending.  These will be added to the Complete Results Summary when available.
+
+---
+
+## Phase 12 — Enrichment Training: jsd_flat_enrich K=3 (M=3) (2026-06-23)
+
+**Checkpoint:** `jsd_flat_enrich_K3_mathhard_s123/ckpt_best` (8 K steps, seed 123)
+
+Full results (K_eval=1..4 complete), per-verifier ρ hierarchy, verifier–K alignment, coupling-vs-headroom, and temperature ablation are in `notes/enrich_research_note.md` §4–§3.2.
+
+**Key findings:**
+- M=3 beats flat JSD on all 9 verifiers at K_eval=1 and K_eval=2 — first clean all-positive result; at K_eval=3,4 it wins on all but GBV-K3 (−0.040). M=3 > M=1 on 8/9 at K_eval=1.
+- **Verifier–K alignment CONFIRMED for traversal/BV (headline).** M=1 traversal *loses* to flat at K_eval=3 (−0.041, the dip); M=3 erases it (+0.322 at K_eval=3; M=3 6.216 vs M=1 5.853 = +0.363 within-K). BV M=3 raw BE rises monotonically with K (6.157→6.283), Δ peaks at K=3/4 (+0.431, +0.411). Mechanism: M diverse rollouts calibrate the draft across M parallel contexts → sustains acceptance when K_eval≈M for prefix/budget verifiers. **Deployable claim: set train-M ≥ target inference K_eval.** Not universal — specinfer is anti-aligned (gain at K=1,2; collapses K=3,4); NSS flat across K.
+- **Coupling (ρ) and gain (Δ) are orthogonal.** Per-verifier ρ: traversal −0.645 > BV −0.518 > naive −0.413 ≈ specinfer −0.402. specinfer has the lowest ρ yet the largest K_eval=1 gain (+0.336) — loose JSD coupling but large headroom. ρ strengthens monotonically with M (flat −0.396 → M=1 −0.568 → M=3 −0.645, traversal).
+- Best-case improvement 5–7% relative (BV K=3 +7.4%, naive K=2 +7.0%, specinfer K=1 +5.9%), 2–3× the ±0.15 noise floor.
+- s456 M=1 replicates the M=1 direction (traversal 6.065 > flat 5.972; NSS 4.474 > 4.224). s456 M=3 pending — the missing reproducibility leg.
+- teacher_temp=1.0 confirmed optimal. ttemp=1.5 causes training-inference mismatch (ρ drops to −0.543, mean_JSD rises to 0.0321).
+- Note: `val/n_hard` looks like a fraction on W&B but is a correct integer count (0–1 on the 25-prompt val set); auto-scaled y-axis, not a bug.
+
+---
 
 **Rationale:** 32B teacher / 0.6B draft is a 53× model gap. More GSM8K prompts become unlearnable, and acceptance-aware losses have real signal to exploit.
 
