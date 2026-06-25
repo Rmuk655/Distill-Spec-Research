@@ -7,14 +7,14 @@
 # the system-CUDA-12.8-vs-torch-cu130 mismatch is handled by setup_a100.sh's
 # flash-attn source build.
 #
-# transformers: verifiers/util.py expand_cache/slice_cache require the layers-based
-# DynamicCache API (cache.layers, layer_cache.keys) introduced in the ~4.54 cache
-# refactor — 4.51 has the old key_cache/value_cache lists and crashes with
-# "'DynamicCache' object has no attribute 'layers'".  The flash_attention_2 .pth
-# patch (get_correct_attn_implementation) also needs >=4.54.  Floor set to 4.54;
-# replace with the exact working version once confirmed via `pip show transformers`.
+# transformers is PINNED to 5.12.1 — the version confirmed working on both boxes.
+# verifiers/util.py expand_cache/slice_cache require the layers-based DynamicCache
+# API (cache.layers, layer_cache.keys) from the 5.x cache refactor; the older
+# key_cache/value_cache layout (<=4.51) crashes with "'DynamicCache' object has no
+# attribute 'layers'".  The flash_attention_2 .pth patch also targets 5.x's
+# get_correct_attn_implementation().  Do not loosen this without re-testing both.
 torch==2.12.0
-transformers>=4.54
+transformers==5.12.1
 tokenizers>=0.20
 accelerate>=0.30
 peft>=0.10              # only used when USE_LORA=True in train.py
