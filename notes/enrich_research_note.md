@@ -17,7 +17,7 @@
 **Key analysis:**
 - **Verifier responses are heterogeneous.** M=3 wins on 7–9 of 9 verifiers at every K_eval. Traversal and bv gains grow with K_eval; gbv/specinfer/max fade or go negative at high K_eval; naive/spectr/nss/khisti are K-agnostic across K_eval.
 - **No matched-K diagonal** (contrast with depth_weight): M=3 gains are positive at all K_eval and are largest at K_eval=1,2 (+0.136, +0.130 seed-avg), not at the "matched" K_eval=3 (+0.082). Broader training coverage transfers regardless of inference tree width.
-- **JSD–BE coupling (ρ) strengthens with M** (flat −0.396 → M=1 −0.568 → M=3 −0.645) and varies across verifiers. Coupling and enrich gain are orthogonal: specinfer has the weakest coupling (ρ=−0.402) but the largest K_eval=1 gain (+0.336).
+- **JSD–BE coupling (ρ) strengthens with M** (flat −0.396 → M=1 −0.568 → M=3 −0.645) and varies across verifiers — traversal tightest (−0.645), specinfer loosest (−0.402). ρ reflects verifier acceptance-aggregation structure. Gain (Δ) depends on headroom: specinfer's large K_eval=1 gain (+0.336) is better attributed to its low baseline BE (4.867 — it has the most hard prompts) than to coupling strength.
 
 **Next steps** (suggested order):
 1. Compute-matched M=3-vs-flat baseline (gates any efficiency claim — [§7](#7-must-add-experiments-minimum-for-a-credible-paper) #3)
@@ -137,7 +137,7 @@ Per-verifier ρ for M=3 (n=100, s123). JSD is computed solely from draft and tea
 
 **ρ ordering reflects how each verifier aggregates acceptance.** Traversal has the tightest coupling (−0.645): it aggregates path-level acceptance products across the tree, so a JSD reduction along a path compounds into a strong BE lift. BV is next (−0.518): a budget cap limits marginal gain beyond a threshold. Naive is looser (−0.413): it reduces to per-token min(1,P/Q), a coarser aggregation than path products. SpecInfer is loosest (−0.402): it has the most hard prompts (3%) and uses multi-candidate residual acceptance based on token-specific ratios, not aggregate JSD. fwdKL and JSD are interchangeable predictors (Δρ < 0.015 for every verifier). σ(JSD) is stable across all four verifiers, confirming that ρ differences are genuine and not an artifact of JSD range compression for one verifier.
 
-**Coupling (ρ) and enrich gain (Δ) are orthogonal.** specinfer has the weakest coupling (ρ=−0.402) yet the largest K_eval=1 enrich gain (+0.336, [§4.2](#42-primary-eval-n1000-k_eval3-math_eval)). ρ measures how reliably JSD predicts BE rank for a fixed checkpoint; Δ measures how much enrich's broader training distribution moves BE. A verifier can have loose JSD coupling but large gain headroom (specinfer), or tight coupling with moderate headroom (traversal). The [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) theory must account for both: per-verifier JSD→acceptance slope (predicts ρ) and per-verifier acceptance headroom (predicts Δ).
+**ρ reflects verifier acceptance-aggregation structure; gain (Δ) reflects headroom.** ρ measures how reliably JSD predicts BE rank for a fixed checkpoint — a property of the verifier's acceptance functional. Δ depends on how far that verifier's BE sits below its ceiling and how sensitive it is to the training distribution. specinfer has both the loosest coupling (ρ=−0.402) and the lowest baseline BE (4.867 — the only verifier with hard prompts); its large K_eval=1 gain (+0.336, [§4.2](#42-primary-eval-n1000-k_eval3-math_eval)) is better attributed to that headroom than to coupling strength. The [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) theory should treat per-verifier JSD→acceptance slope (predicts ρ) and per-verifier acceptance headroom (predicts Δ) as distinct quantities to derive.
 
 ρ is a mechanism diagnostic; the findings rest on eval BE (§4). The traversal progression (−0.396 → −0.568 → −0.645) and the four-verifier table suffice to anchor the §5 coupling story; completing all 9 verifier modes is optional.
 
@@ -275,7 +275,7 @@ This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over 
 - **Worsen with K** (front-loaded, fade or go negative by K≥3): **gbv, specinfer, max** — residual/competition verifiers whose cross-candidate normalisation is sub-additive in branch count.
 - **K-agnostic** (flat positive across K): **naive, spectr, nss, khisti**.
 
-**ρ and Δ are orthogonal.** specinfer has a large low-K gain despite the weakest ρ(JSD,BE) (−0.402, [§4.6](#46-objectivebe-alignment-diagnostics-ρ)). ρ measures surrogate alignment for a fixed checkpoint; Δ measures realized headroom — a verifier can have loose coupling but high headroom.
+**ρ reflects verifier structure; Δ reflects headroom.** specinfer has both the loosest coupling (ρ=−0.402, [§4.6](#46-objectivebe-alignment-diagnostics-ρ)) and the lowest baseline BE (4.867); its large low-K gain is better attributed to headroom than to coupling strength. ρ (surrogate quality for a fixed checkpoint) and Δ (realized improvement from enrich) are distinct quantities driven by different verifier properties.
 
 **Same-seed paired deltas — traversal and BV:**
 
@@ -386,7 +386,7 @@ All conclusions are scoped to this setup (one model pair, one dataset, two seeds
 3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does stochastic-teacher JSD induce that khisti penalises?
 4. **Acceptance–divergence transfer ([§2.6](#26-acceptancedivergence-link))** beyond naive.
 5. **Verifier–K alignment ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).** Why do prefix/budget verifiers (traversal, BV) keep or grow their enrich Δ as $K_{\text{eval}}\to M$ and beyond, while residual verifiers (specinfer) lose it at high $K_{\text{eval}}$? Conjecture: traversal/BV acceptance reward is monotone increasing in tree width given per-branch calibration, so M parallel-calibrated branches compound; specinfer's residual normalisation across candidates is sub-additive in branch count, so added branches dilute. Derive the $K_{\text{eval}}$-dependence of expected-BE per verifier and show it predicts the observed alignment/anti-alignment.
-6. **Coupling vs headroom ([§3.2](#32-diagnostics---diagnose)).** Two separate per-verifier functionals: the JSD→acceptance *slope* (predicts ρ) and the acceptance *headroom* relative to a flat-JSD-trained draft (predicts Δ). These are empirically orthogonal (specinfer: low ρ, high Δ). A complete theory derives both from the verifier's acceptance functional.
+6. **Coupling vs headroom ([§3.2](#32-diagnostics---diagnose)).** Two separate per-verifier quantities to derive: the JSD→acceptance *slope* (predicts ρ) and the acceptance *headroom* relative to a flat-JSD-trained draft (predicts Δ). specinfer illustrates the distinction — low ρ from verifier structure (multi-candidate residual acceptance), large Δ from low baseline BE (most hard prompts, most room to improve). A complete theory derives both from the verifier's acceptance functional.
 
 ---
 
