@@ -1,7 +1,15 @@
-# DistillSpec Pipeline — A100, Qwen3, PyTorch 2.x with CUDA 12.x.
+# DistillSpec Pipeline — A100/H100, Qwen3, PyTorch 2.12 (bundled CUDA 13.0).
 # pip install -r requirements.txt
-torch>=2.4
-transformers>=4.51
+#
+# torch and transformers are PINNED (not >=) on purpose: unpinned deps drift on
+# every fresh venv, which silently changed kernel/dispatch perf between runs and
+# made throughput non-comparable.  torch==2.12.0 is the build both boxes run;
+# the system-CUDA-12.8-vs-torch-cu130 mismatch is handled by setup_a100.sh's
+# flash-attn source build.  transformers is pinned to the 4.51 series because the
+# flash_attention_2 .pth patch targets 4.51's get_correct_attn_implementation()
+# — a newer transformers could rename/move it and silently disable the patch.
+torch==2.12.0
+transformers==4.51.*
 tokenizers>=0.20
 accelerate>=0.30
 peft>=0.10              # only used when USE_LORA=True in train.py
