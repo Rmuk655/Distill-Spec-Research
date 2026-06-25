@@ -14,7 +14,9 @@
 
 Standard flat JSD training minimises
 
-$$\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x_{\lt t} \sim D}\big[\text{JSD}\big(P_\theta(\cdot \mid x_{\lt t}) \,\|\, Q_\phi(\cdot \mid x_{\lt t})\big)\big]$$
+$$
+\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x_{<t} \sim D}\big[\text{JSD}\big(P_\theta(\cdot \mid x_{<t}) \,\|\, Q_\phi(\cdot \mid x_{<t})\big)\big]
+$$
 
 where $P_\theta$ is the teacher, $Q_\phi$ the draft, and $D$ is the **offline teacher rollout distribution** over prefixes. In the current baseline implementation, this is a greedy teacher rollout (`do_sample=False`), not a sample from the full teacher marginal. At inference time the draft instead operates inside a verifier-gated acceptance loop: its own proposals, partially accepted and teacher-corrected, determine the prefixes it conditions on. This is the well-known **offline-to-inference (exposure) mismatch**. The implemented hypothesis is weaker than full on-policy training: replacing a single greedy teacher trajectory with stochastic teacher rollouts gives the draft broader teacher-context coverage and may improve speculative acceptance.
 
@@ -44,20 +46,24 @@ $$y^{(m)} \sim P_\theta^{T_{\text{teacher}}}(\cdot \mid p), \qquad m=1,\dots,M,$
 
 where sampling is implemented by `teacher.generate(..., do_sample=True, temperature=teacher_temp)`. It then scores both teacher and draft distributions on the same teacher-generated sequence and averages the per-token JSD:
 
-$$\mathcal{L}_{\text{stoch-teacher}} =
+$$
+\mathcal{L}_{\text{stoch-teacher}} =
 \frac{1}{M}\sum_{m=1}^M
 \frac{1}{|y^{(m)}|}\sum_{t=1}^{|y^{(m)}|}
-\text{JSD}\big(P_\theta(\cdot \mid p, y^{(m)}_{\lt t}) \,\|\, Q_\phi(\cdot \mid p, y^{(m)}_{\lt t})\big).$$
+\text{JSD}\big(P_\theta(\cdot \mid p, y^{(m)}_{<t}) \,\|\, Q_\phi(\cdot \mid p, y^{(m)}_{<t})\big)
+$$
 
-There are **no draft proposals, no verifier accept/reject decisions, and no teacher-corrected residuals** in the current flat-enrich code path. $M=1$ isolates greedy-vs-stochastic teacher training; $M \gt 1$ adds multiple stochastic teacher trajectories per prompt and tests whether path diversity gives useful extra contexts.
+There are **no draft proposals, no verifier accept/reject decisions, and no teacher-corrected residuals** in the current flat-enrich code path. $M=1$ isolates greedy-vs-stochastic teacher training; $M > 1$ adds multiple stochastic teacher trajectories per prompt and tests whether path diversity gives useful extra contexts.
 
 ### 2.3 Ideal extension: verifier-accepted state distribution
 
 The stronger objective we originally wanted to approximate is the **verifier-induced prefix kernel** $\mathcal{J}_V$: sample draft proposals, verify them with $V$, keep the accepted prefix, resample the first rejected position from the teacher residual, and train on the resulting verified prefix. Formally, $x^{\star} \sim \mathcal{J}_V(Q_\phi, P_\theta; \pi)$ and
 
-$$\mathcal{L}_{\text{accepted-state}} =
+$$
+\mathcal{L}_{\text{accepted-state}} =
 \mathbb{E}_{x^{\star} \sim \mathcal{J}_V}\!\left[\frac{1}{|x^{\star}|}\sum_{t=1}^{|x^{\star}|}
-\text{JSD}\big(P_\theta(\cdot \mid p, x^{\star}_{\lt t}) \,\|\, Q_\phi(\cdot \mid p, x^{\star}_{\lt t})\big)\right].$$
+\text{JSD}\!\left(P_\theta(\cdot \mid p, x^{\star}_{<t}) \,\|\, Q_\phi(\cdot \mid p, x^{\star}_{<t})\right)\right]
+$$
 
 This is a **proposed extension / idealized objective**, not the current `jsd_flat_enrich` implementation.
 
@@ -69,7 +75,9 @@ Three concerns, with current status:
 
 **Non-differentiable accept/reject boundary.** The rejection-sampling criterion $\mathbb{1}[u \leq p(x_t)/q(x_t)]$ is a discrete decision; standard backprop does not pass through it. REINFORCE, straight-through, and Gumbel-softmax relaxations are all imperfect. However, if Rahul's survival-weighted NSS gradient generalises to traversal/BV, this problem is solved entirely without approximation. The exact gradient is:
 
-$$\frac{\partial}{\partial \phi}\,\mathbb{E}[\tau_V] = \mathbb{E}\!\left[\sum_{t=1}^{\tau_V} \underbrace{\prod_{j < t}\alpha_j}_{\text{survival weight}} \cdot \nabla_\phi \log q_\phi(x_t)\right]$$
+$$
+\frac{\partial}{\partial \phi}\,\mathbb{E}[\tau_V] = \mathbb{E}\!\left[\sum_{t=1}^{\tau_V} \underbrace{\prod_{j < t}\alpha_j}_{\text{survival weight}} \cdot \nabla_\phi \log q_\phi(x_t)\right]
+$$
 
 The survival weight $\prod_{j<t}\alpha_j$ is exactly the reach-probability to position $t$ — the natural weight for the accepted-state objective. **Open question for Rahul: does this gradient generalise from NSS to traversal and BV? If yes, §2.3 becomes a tractable implementation project with known pieces.**
 
@@ -110,7 +118,7 @@ $$\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \
 
 At $L=8$: observed range 3.7 (NSS, strictest) to 6.4 (traversal). **Report wall-clock tokens/sec alongside BE** — BE and throughput correlate at ~0.95 globally but can decouple; a method that raises BE but not throughput is not useful. Also report output quality/exactness for any approximate verifier.
 
-L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $\lt 0.375L$.
+L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $< 0.375L$.
 
 ### 3.2 Diagnostics (`--diagnose`)
 
@@ -139,7 +147,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $\lt 0.375
 
 **Teacher / data diversity signal:** BE → $L$ suggests limited headroom; path_diversity → 0 means stochastic teacher rollouts have collapsed to near-identical continuations. At 0.6B/8B on math, BE≈6.4/8 and path_diversity ∈ [0.8,1.0] for M=3, so the teacher is still producing diverse contexts. This does **not** prove the teacher is not a bottleneck; it only says stochastic teacher sampling has not collapsed. A 32B-teacher run would test teacher-scale sensitivity (future work, §8).
 
-**`train/path_diversity`** = fraction of positions where ≥2 of the $M$ rollouts disagree. ~1.0 ⇒ diverse signal, $M \gt 1$ contributes; <0.1 ⇒ rollout collapse, $M \gt 1$ ≈ $M=1$. Observed M=3: ∈[0.8,1.0], healthy.
+**`train/path_diversity`** = fraction of positions where ≥2 of the $M$ rollouts disagree. ~1.0 ⇒ diverse signal, $M > 1$ contributes; <0.1 ⇒ rollout collapse, $M > 1$ ≈ $M=1$. Observed M=3: ∈[0.8,1.0], healthy.
 
 **`val/forgetting`** = backward-transfer loss (Σ max(0, best_historical_BE(p) − current_BE(p))). Oscillating (not monotonic) ⇒ stability–plasticity churn, not catastrophic forgetting; `ckpt_best` captures the peak.
 
