@@ -159,18 +159,18 @@ Per-verifier ρ for M=3 (n=100, s123). JSD is computed solely from draft and tea
 
 ### 4.1 Training runs
 
-| Run | Steps | Best val BE | Notes |
+| Run | Steps | traversal K=1 (n=100) | Notes |
 |---|---|---|---|
-| `jsd_mathhard_s123` (flat JSD) | 8K | 6.01 | Flat baseline, seed 1 |
-| `jsd_mathhard_s456` (flat JSD) | 8K | 6.291 | Flat baseline, seed 2 |
-| `jsd_mathhard_s123` (flat, converged) | 40K | trav K=1 = 6.280 (n=100) | Flat JSD converges ~15K; trained to 40K as the ceiling. Same checkpoint used as the flat baseline in the depth_weight ablation ([40K CSV](https://github.com/Rmuk655/Distill-Spec-Research/blob/Pipeline/Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv)). BE is hardware-independent. |
-| `jsd_flat_enrich_M1_s123` | 8K | 6.409 | M=1 enrich, seed 1 |
-| `jsd_flat_enrich_M1_s456` | 8K | — | M=1 enrich, seed 2 |
-| `jsd_flat_enrich_M3_s123` | 8K | 6.420 | M=3 enrich, seed 1 |
-| `jsd_flat_enrich_M3_s456` | 8K | — | M=3 enrich, seed 2 |
-| `jsd_flat_enrich_M3_s123_ttemp1.5` | 8K | — | Negative control: teacher_temp=1.5 |
+| `jsd_mathhard_s123` (flat JSD) | 8K | 5.972 | Flat baseline, seed 1 |
+| `jsd_mathhard_s456` (flat JSD) | 8K | 6.011 | Flat baseline, seed 2 |
+| `jsd_mathhard_s123` (flat, converged) | 40K | 6.280 | Flat JSD converges ~15K; trained to 40K as the ceiling. Same checkpoint used as the flat baseline in the depth_weight ablation ([40K CSV](https://github.com/Rmuk655/Distill-Spec-Research/blob/Pipeline/Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv)). BE is hardware-independent. |
+| `jsd_flat_enrich_M1_s123` | 8K | 6.158 | M=1 enrich, seed 1 |
+| `jsd_flat_enrich_M1_s456` | 8K | 6.066 | M=1 enrich, seed 2 |
+| `jsd_flat_enrich_M3_s123` | 8K | 6.213 | M=3 enrich, seed 1 |
+| `jsd_flat_enrich_M3_s456` | 8K | 6.109 | M=3 enrich, seed 2 |
+| `jsd_flat_enrich_M3_s123_ttemp1.5` | 8K | 6.128 | Negative control: teacher_temp=1.5 |
 
-`ckpt_best` is winner's-curse biased (max over ~hundreds of 25-prompt val evals, SE≈0.15–0.20). All reported BE uses n=100 or n=1000 offline re-evals of `ckpt_best`, unaffected by selection noise.
+All BE values are offline re-evals of `ckpt_best` at traversal K=1 (n=100), unaffected by training-time selection noise.
 
 ### 4.2 Primary eval: n=1000, K_eval=3, math_eval
 
