@@ -99,7 +99,7 @@ Mean Δ over all 9 verifiers × K_eval=1..4 (36 cells each):
 
 Noise floor: ~±0.12 per cell (cross-seed null from enrich note). Both conditions are within this floor in aggregate.
 
-### 3.2 Top positive Δ cells (math_eval, dw_lin only)
+### 3.2 Extreme Δ cells (math_eval, dw_lin only) — both tails
 
 The largest individual gains, ranked (ckpt=K_train, K_eval, verifier):
 
@@ -120,7 +120,32 @@ The largest individual gains, ranked (ckpt=K_train, K_eval, verifier):
 | 3 | 1 | specinfer | +0.124 |
 | 1 | 1 | spectr | +0.119 |
 
-Note: gbv appears 3 times, max 4 times, nss twice. For every positive cell there are corresponding negative cells; the mean over the full 36-cell grid is near zero.
+**This table is the positive tail only — it must be read against the negative tail of equal magnitude.** The largest negative Δ cells:
+
+| K_train | K_eval | Verifier | Δ |
+|---|---|---|---|
+| 1 | 2 | khisti | **−0.266** |
+| 3 | 4 | spectr | −0.228 |
+| 1 | 4 | traversal | −0.212 |
+| 3 | 2 | naive | −0.187 |
+| 3 | 4 | gbv | −0.179 |
+| 1 | 4 | naive | −0.141 |
+| 1 | 2 | naive | −0.135 |
+| 3 | 4 | specinfer | −0.131 |
+| 3 | 3 | naive | −0.130 |
+| 1 | 3 | max | −0.130 |
+
+The single biggest negative cell (−0.266) is *larger* in magnitude than the biggest positive one (+0.242). Full-grid balance:
+
+| | K_train=1 (36 cells) | K_train=3 (36 cells) |
+|---|---|---|
+| positive / negative cells | 17 / 19 | 18 / 18 |
+| beyond +0.12 floor / beyond −0.12 floor | 5 / 6 | 8 / 5 |
+| max Δ / min Δ | +0.217 / −0.266 | +0.242 / −0.228 |
+| Σ positive / Σ negative | +1.53 / −1.71 | +1.72 / −1.65 |
+| mean Δ | −0.005 | +0.002 |
+
+The distribution is symmetric about zero. K_train=3 has a mild positive tilt in the count beyond the floor (8 vs 5), but the magnitude sums still cancel (Σ +1.72 vs −1.65 → mean +0.002). The positive-tail table looks impressive only because it is sorted and truncated; that is precisely why the aggregate carries no signal.
 
 ### 3.3 gsm8k ablation: Δ across λ variants
 
