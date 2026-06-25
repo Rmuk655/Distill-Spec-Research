@@ -71,10 +71,17 @@ else
         if [ -z "${SYSTEM_CUDA}" ]; then
             echo "[setup] WARNING: no system nvcc found; skipping flash-attn (eval will use SDPA fallback)"
         else
-            # Python dev headers required for C++ extension builds
-            if ! dpkg -s python3.12-dev &>/dev/null 2>&1; then
-                echo "[setup] installing python3.12-dev ..."
-                sudo apt-get install -y python3.12-dev
+            # Python dev headers (Python.h) required for C++ extension builds.
+            # Check for the header directly (more reliable than dpkg — the venv's
+            # python may not come from the apt python3.12 package).  Make the apt
+            # install NON-FATAL: a failed/absent package must not kill the whole
+            # setup via set -euo pipefail.  apt-get update first fixes the common
+            # "Unable to locate package" on containers with a stale package list.
+            if ! python -c "import os,sysconfig; raise SystemExit(0 if os.path.exists(os.path.join(sysconfig.get_path('include'),'Python.h')) else 1)" 2>/dev/null; then
+                echo "[setup] Python.h missing — installing python3.12-dev ..."
+                sudo apt-get update -qq || true
+                sudo apt-get install -y python3.12-dev || \
+                    echo "[setup] WARNING: could not install python3.12-dev — flash-attn build may fail (eval will use SDPA fallback)"
             fi
             # Use Python for the patch+build+restore so the restore always runs
             # even if the build fails (set -e would skip it in bash).
