@@ -1,15 +1,20 @@
 # DistillSpec Pipeline — A100/H100, Qwen3, PyTorch 2.12 (bundled CUDA 13.0).
 # pip install -r requirements.txt
 #
-# torch and transformers are PINNED (not >=) on purpose: unpinned deps drift on
-# every fresh venv, which silently changed kernel/dispatch perf between runs and
-# made throughput non-comparable.  torch==2.12.0 is the build both boxes run;
+# torch is PINNED (not >=) on purpose: unpinned torch>=2.4 drifted on every fresh
+# venv (boxes ended up on 2.12.0 vs 2.12.1), silently changing kernel/dispatch
+# perf and making throughput non-comparable.  torch==2.12.0 is the canonical build;
 # the system-CUDA-12.8-vs-torch-cu130 mismatch is handled by setup_a100.sh's
-# flash-attn source build.  transformers is pinned to the 4.51 series because the
-# flash_attention_2 .pth patch targets 4.51's get_correct_attn_implementation()
-# — a newer transformers could rename/move it and silently disable the patch.
+# flash-attn source build.
+#
+# transformers: verifiers/util.py expand_cache/slice_cache require the layers-based
+# DynamicCache API (cache.layers, layer_cache.keys) introduced in the ~4.54 cache
+# refactor — 4.51 has the old key_cache/value_cache lists and crashes with
+# "'DynamicCache' object has no attribute 'layers'".  The flash_attention_2 .pth
+# patch (get_correct_attn_implementation) also needs >=4.54.  Floor set to 4.54;
+# replace with the exact working version once confirmed via `pip show transformers`.
 torch==2.12.0
-transformers==4.51.*
+transformers>=4.54
 tokenizers>=0.20
 accelerate>=0.30
 peft>=0.10              # only used when USE_LORA=True in train.py
