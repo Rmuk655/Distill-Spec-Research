@@ -431,8 +431,6 @@ The bottom-right corner — student-generated contexts with M teacher continuati
 - *"For verifier-conditioned speculative decoding, how acceptance-aware training transfers across verifier families is unexplored; we map it empirically (9 verifiers × eval-K) and explain the differential with a per-verifier acceptance-functional analysis."*
 - *"Stochastic-teacher symmetric JSD is a low-complexity teacher-sampling alternative; we measure the gap to Draft-OPD-style replay under matched compute."*
 
-**Non-defensible claims (do not pitch):** *"State distribution matters / train on inference-time states"* (DistillSpec + Draft-OPD own this) and *"a new training method for speculative decoding"* (too broad).
-
 **Mandatory comparison:** stochastic teacher rollout vs. draft-gated accepted-only vs. accepted+rejected replay, and symmetric JSD vs. asymmetric fwd/rev-KL with $\gamma^{k-1}$ decay. Otherwise reviewers correctly say we have not located the result relative to a more complete on-policy method.
 
 ### 6.1 The design space is 2-D, not a 1-D ladder
