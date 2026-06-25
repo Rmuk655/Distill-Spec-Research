@@ -10,17 +10,17 @@
 
 **Confirmed (cross-seed):**
 - **Multi-trajectory enrich (M=3) beats flat JSD.** At K_eval=3, n=1000: traversal +1.3%, bv +3.2%, naive +2.5%, both seeds, all >4×SE. [§4.2]
-- **The gain is structural, not just faster convergence — for traversal.** M=3 at 8K beats *converged* flat-25K at traversal K=3 (+5.9% s123 / +2.9% s456); more flat training cannot reach it. [§4.5]
+- **The gain is structural, not just faster convergence — for traversal.** M=3 at 8K beats *converged* flat-40K at traversal K=3 (+5.9% s123 / +2.9% s456); more flat training cannot reach it. [§4.5]
 - **Enrich is initialization-robust.** Flat JSD's ~0.19 cross-seed spread collapses to ~0.03 (M=1) / ~0.06 (M=3). [§4.2]
 - **The benefit is broad across verifiers and K_eval, not diagonal.** M=3 wins on 7–9 of 9 verifiers at every K_eval (mean Δ > 0 at K=1,2,3,4). [§4.4]
 
 **Debunked:**
-- **M=1 (single stochastic trajectory) has no structural edge** — loses to converged flat-25K (−0.022). The M>1 mechanism is required; teacher-sampling stochasticity alone is insufficient. [§4.5]
+- **M=1 (single stochastic trajectory) has no structural edge** — loses to converged flat-40K (−0.022). The M>1 mechanism is required; teacher-sampling stochasticity alone is insufficient. [§4.5]
 - **"Matched K_eval = M is optimal" is false for enrich.** M=3 does not peak at K_eval=3; it is strongest at K_eval=1,2 and wins at all K. Enrich's gain is K-agnostic — the opposite of the depth_weight ablation, whose gain *was* concentrated on the K_train=K_eval diagonal. [§4.4]
 - **Higher teacher temperature does not help.** teacher_temp=1.5 degrades alignment (training-inference mismatch); teacher_temp=1.0 confirmed. [§4.6]
 
 **Needs more data:**
-- **BV: convergence-speed or raised ceiling?** M=3 wins on BV vs flat-8K at all K, both seeds, but the advantage over *converged* flat-25K reverses on s456. Likely convergence-speed only. Needs n=1000 BV K_eval=2 + a tie-break seed. [§4.5]
+- **BV: convergence-speed or raised ceiling?** M=3 wins on BV vs flat-8K at all K, both seeds, but the advantage over *converged* flat-40K reverses on s456. Likely convergence-speed only. Needs n=1000 BV K_eval=2 + a tie-break seed. [§4.5]
 - **specinfer/max anti-alignment at high K_eval.** M=3 goes negative at K≥3 for specinfer (and K=3 for max), cross-seed. Real, but unexplained — gated on the §5 per-verifier theory before it can be claimed.
 - **Paired bootstrap CIs** for the headline cells (§7 #2).
 
@@ -60,7 +60,9 @@ This note uses $M$, $K_{\text{eval}}$, $L$ throughout. (M=1 ⇔ old "K=1 train";
 
 Let $\pi$ be the prompt distribution. The implemented `jsd_flat_enrich` objective samples $M$ independent teacher continuations:
 
-$$y^{(m)} \sim P_\theta^{T_{\text{teacher}}}(\cdot \mid p), \qquad m=1,\dots,M,$$
+$$
+y^{(m)} \sim P_\theta^{T_{\text{teacher}}}(\cdot \mid p), \qquad m=1,\dots,M,
+$$
 
 where sampling is implemented by `teacher.generate(..., do_sample=True, temperature=teacher_temp)`. It then scores both teacher and draft distributions on the same teacher-generated sequence and averages the per-token JSD:
 
@@ -75,11 +77,11 @@ There are **no draft proposals, no verifier accept/reject decisions, and no teac
 
 ### 2.3 What this is *not*: the verifier-accepted state distribution
 
-The stronger objective we originally wanted to approximate — training on draft proposals that the verifier actually accepts (the verifier-induced prefix kernel $\mathcal{J}_V$) — is **not** what `jsd_flat_enrich` implements. It is a proposed future extension; the full objective, why it was not implemented, and what would make it tractable are in **§8.1**. The current method trains on teacher-sampled contexts only.
+The stronger objective we originally wanted to approximate — training on draft proposals that the verifier actually accepts (the verifier-accepted state distribution) — is **not** what `jsd_flat_enrich` implements. It is a proposed future extension; the full objective, why it was not implemented, and what would make it tractable are in **§8.1**. The current method trains on teacher-sampled contexts only.
 
 ### 2.4 Stop-gradient disclosure (important)
 
-For the current stochastic-teacher variant, the sampling distribution is teacher-only and has no $\phi$-gradient to block. Stop-gradient only becomes a substantive issue for the ideal $\mathcal{J}_V$ objective, where draft proposals would feed back into the training distribution. In that future draft-gated variant, if we do not differentiate through sampling, the objective is a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, which composes with — rather than is approximated by — stochastic teacher rollout (see §6.1).
+For the current stochastic-teacher variant, the sampling distribution is teacher-only and has no $\phi$-gradient to block. Stop-gradient only becomes a substantive issue for the ideal verifier-accepted-state objective (§8.1), where draft proposals would feed back into the training distribution. In that future draft-gated variant, if we do not differentiate through sampling, the objective is a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, which composes with — rather than is approximated by — stochastic teacher rollout (see §6.1).
 
 ### 2.5 Accepted/rejected framing belongs to draft-gated variants
 
@@ -89,7 +91,9 @@ The current implementation trains on teacher-sampled contexts and has no rejecti
 
 For vanilla single-token speculative decoding, per-state acceptance probability is
 
-$$\alpha(p,q) = \sum_x \min\big(p(x), q(x)\big) = 1 - \text{TV}(p, q).$$
+$$
+\alpha(p,q) = \sum_x \min\big(p(x), q(x)\big) = 1 - \text{TV}(p, q).
+$$
 
 With JSD measured in nats, Pinsker's inequality applied to the KL sub-terms gives the safe bound $\text{TV}^2 \leq 2\,\text{JSD}$. So minimising JSD ⇒ lower TV ⇒ higher single-token acceptance **on the states being trained**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open obligation (§5).
 
@@ -99,7 +103,9 @@ With JSD measured in nats, Pinsker's inequality applied to the KL sub-terms give
 
 ### 3.1 Primary metric: Block Efficiency
 
-$$\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \text{BE}_{\max} = L.$$
+$$
+\text{BE} = \frac{\text{generated tokens}}{\text{target model calls}}, \quad \text{BE}_{\max} = L.
+$$
 
 At $L=8$: observed range 3.7 (NSS, strictest) to 6.4 (traversal). **Report wall-clock tokens/sec alongside BE** — BE and throughput correlate at ~0.95 globally but can decouple; a method that raises BE but not throughput is not useful. Also report output quality/exactness for any approximate verifier.
 
@@ -148,7 +154,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $< 0.375L$
 |---|---|---|---|
 | `jsd_mathhard_s123` (flat JSD) | 8K | 6.01 | Flat baseline, seed 1 |
 | `jsd_mathhard_s456` (flat JSD) | 8K | 6.291 | Flat baseline, seed 2 |
-| `jsd_mathhard_s123_25K` (flat, converged) | 25K | 6.608 | Flat JSD converges ~15K; 25K is the ceiling; eval on H100 (BE hardware-independent) |
+| `jsd_mathhard_s123` (flat, converged) | 40K | trav K=1 = 6.280 (n=100) | Flat JSD converges ~15K; trained to 40K as the ceiling. Same checkpoint used as the flat baseline in the depth_weight ablation ([40K CSV](https://github.com/Rmuk655/Distill-Spec-Research/blob/Pipeline/Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv)). BE is hardware-independent. |
 | `jsd_flat_enrich_M1_s123` | 8K | 6.409 | M=1 enrich, seed 1 |
 | `jsd_flat_enrich_M1_s456` | 8K | — | M=1 enrich, seed 2 |
 | `jsd_flat_enrich_M3_s123` | 8K | 6.420 | M=3 enrich, seed 1 |
@@ -211,7 +217,7 @@ Flat JSD has a large systematic seed spread (~0.19 per mode; s456 consistently h
 
 ### 4.4 Cross-verifier and K_eval-dependence (n=100, seed-averaged, vs flat-8K)
 
-This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over s123+s456, baseline = flat-8K (the under-trained baseline — the converged flat-25K comparison is §4.5). Raw cells in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).
+This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over s123+s456, baseline = flat-8K (the under-trained baseline — the converged flat-40K comparison is §4.5). Raw cells in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).
 
 **M=3 − flat-8K Δ, seed-averaged:**
 
@@ -277,18 +283,18 @@ This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over 
 
 M=3 beats its own flat-8K baseline at every K value on both traversal and BV — both seeds, all cells positive.
 
-### 4.5 Compute efficiency: M=3 at 8K steps vs flat JSD at 25K steps (converged)
+### 4.5 Compute efficiency: M=3 at 8K steps vs flat JSD at 40K steps (converged)
 
-Flat JSD converges ~15K; 25K is its ceiling. M=3 at 8K ≈ 24K teacher rollouts; flat-25K ≈ 25K rollouts — roughly matched compute. flat-25K evaluated on H100; BE is hardware-independent and directly comparable to the A100 8K runs.
+Flat JSD converges ~15K; we trained it to 40K as the ceiling. M=3 at 8K does ≈24K teacher rollouts (3 per step); flat-40K does ≈40K rollouts (1 per step) — so M=3 wins below using **~60% of the teacher-generation compute and 1/5 the optimizer steps**. This is *not* matched compute; it is M=3 winning with strictly less. flat-40K evaluated on H100; BE is hardware-independent and directly comparable to the A100 8K runs.
 
 | comparison | overall mean Δ | bv/traversal Δ | traversal K=3 Δ |
 |---|---|---|---|
-| flat-25K − flat-8K | +0.109 | +0.189 | −0.024 |
-| **M=3-8K − flat-25K [s123]** | **+0.074** | **+0.100** | **+0.346 (+5.9%)** |
-| **M=3-8K − flat-25K [s456]** | — | — | **+0.168 (+2.9%)** |
-| M=1-8K − flat-25K | −0.022 | −0.044 | −0.016 |
+| flat-40K − flat-8K | +0.109 | +0.189 | −0.024 |
+| **M=3-8K − flat-40K [s123]** | **+0.074** | **+0.100** | **+0.346 (+5.9%)** |
+| **M=3-8K − flat-40K [s456]** | — | — | **+0.168 (+2.9%)** |
+| M=1-8K − flat-40K | −0.022 | −0.044 | −0.016 |
 
-**Cross-seed % vs flat-25K (the structural comparison):**
+**Cross-seed % vs flat-40K (the structural comparison):**
 
 | cell | s123 | s456 |
 |---|---|---|
@@ -299,16 +305,16 @@ Flat JSD converges ~15K; 25K is its ceiling. M=3 at 8K ≈ 24K teacher rollouts;
 | bv K=3 | +1.9% | −1.4% |
 | bv K=4 | +2.2% | 0.0% |
 
-**M=3 enrich at 8K beats flat at 25K (its ceiling) at traversal K=3: +5.9% (s123) and +2.9% (s456).** More flat steps cannot reach this — flat-25K traversal K=3 is −0.024 vs flat-8K (more training regresses this cell). Multi-path calibration provides structural uplift that flat optimization cannot replicate.
+**M=3 enrich at 8K beats flat at 40K (its ceiling) at traversal K=3: +5.9% (s123) and +2.9% (s456).** More flat steps cannot reach this — flat-40K traversal K=3 is −0.024 vs flat-8K (more training regresses this cell). Multi-path calibration provides structural uplift that flat optimization cannot replicate.
 
 **BV gain is convergence-speed, not a raised ceiling.** This is the meaning of "BV does not replicate vs converged flat on s456":
 - *vs flat-8K* (under-trained baseline): M=3 wins on BV at every K_eval, both seeds (§4.4). Real and robust.
-- *vs flat-25K* (converged baseline): the BV advantage holds on s123 (+1.9% at K=3) but **reverses on s456 (−1.4%)** — the two seeds disagree once flat is trained to convergence.
-- **Interpretation:** M=3 reaches a strong BV checkpoint *faster* than flat (8K vs ~15–25K steps), but flat catches up on BV once converged. M=3 does **not** lift the BV ceiling.
-- **Contrast — traversal:** at K=3, M=3 beats *converged* flat-25K on **both** seeds (+5.9% / +2.9%). That is a genuine ceiling gain — the bankable structural claim. BV is not.
+- *vs flat-40K* (converged baseline): the BV advantage holds on s123 (+1.9% at K=3) but **reverses on s456 (−1.4%)** — the two seeds disagree once flat is trained to convergence.
+- **Interpretation:** M=3 reaches a strong BV checkpoint *faster* than flat (8K vs ~15K convergence), but flat catches up on BV once converged. M=3 does **not** lift the BV ceiling.
+- **Contrast — traversal:** at K=3, M=3 beats *converged* flat-40K on **both** seeds (+5.9% / +2.9%). That is a genuine ceiling gain — the bankable structural claim. BV is not.
 - **Open:** the n=1000 BV K_eval=2 cell is unrun, and a third seed would break the s123/s456 tie.
 
-**M=1 has no structural edge.** M=1-8K loses to flat-25K (−0.022). Single-path stochastic teacher sampling is flat JSD with broader context but no structural gain — additional flat steps overcome it. The multi-path mechanism (M>1) is required.
+**M=1 has no structural edge.** M=1-8K loses to flat-40K (−0.022). Single-path stochastic teacher sampling is flat JSD with broader context but no structural gain — additional flat steps overcome it. The multi-path mechanism (M>1) is required.
 
 ### 4.6 Objective–BE alignment diagnostics (ρ)
 
@@ -336,20 +342,20 @@ From `--diagnose` mode (n=100, math_eval):
 **Proven (cross-seed):**
 
 1. **M=3 enrich beats flat JSD** across traversal (+1.3%), bv (+3.2%), naive (+2.5%), both seeds, n=1000, K_eval=3, all >4×SE. [§4.2]
-2. **The traversal gain is structural, not convergence-speed.** M=3 at 8K beats *converged* flat-25K at traversal K=3 (+5.9% s123 / +2.9% s456) — unreachable by more flat training. [§4.5]
+2. **The traversal gain is structural, not convergence-speed.** M=3 at 8K beats *converged* flat-40K at traversal K=3 (+5.9% s123 / +2.9% s456) — unreachable by more flat training. [§4.5]
 3. **Enrich is initialization-robust.** Flat seed spread ~0.19/mode collapses to ~0.03 (M=1) / ~0.06 (M=3). Seed-averaged flat baselines are mandatory. [§4.2]
 4. **Wins are broad, not diagonal.** M=3 beats flat-8K on 7–9 of 9 verifiers at every K_eval (mean Δ > 0 at all K). The strongest verifiers are bv and traversal, whose gains *grow* with K_eval. [§4.4]
 5. **Objective–BE alignment strengthens monotonically with M** (ρ: flat −0.396 → M=1 −0.568 → M=3 −0.645). [§4.6]
 
 **Debunked:**
 
-6. **M=1 has no structural edge** — loses to flat-25K (−0.022). The M>1 multi-path mechanism is the operative component. [§4.5]
+6. **M=1 has no structural edge** — loses to flat-40K (−0.022). The M>1 multi-path mechanism is the operative component. [§4.5]
 7. **"Matched K_eval = M is optimal" is false for enrich.** M=3 is strongest at K_eval=1,2 (mean +0.136/+0.130), not at matched K_eval=3 (+0.082). Enrich's benefit is K-agnostic — directly opposite to the depth_weight ablation, whose gain *was* diagonal. [§4.4]
 8. **Higher teacher temperature does not help** — teacher_temp=1.5 degrades alignment (ρ −0.645 → −0.543); teacher_temp=1.0 confirmed. [§4.6]
 
 **Needs more data:**
 
-9. **BV: convergence-speed vs ceiling unresolved.** M=3 wins on BV vs flat-8K everywhere, but the advantage over converged flat-25K reverses on s456. Likely convergence-speed; needs n=1000 BV K_eval=2 + tie-break seed. [§4.5]
+9. **BV: convergence-speed vs ceiling unresolved.** M=3 wins on BV vs flat-8K everywhere, but the advantage over converged flat-40K reverses on s456. Likely convergence-speed; needs n=1000 BV K_eval=2 + tie-break seed. [§4.5]
 10. **specinfer/max anti-alignment at high K_eval.** M=3 goes negative at K≥3 (specinfer) / K=3 (max), cross-seed. Real but unexplained — gated on §5 per-verifier theory.
 11. **Paired bootstrap CIs** for the headline cells (§7 #2).
 
@@ -484,36 +490,26 @@ Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) �
 
 ### 8.1 The ideal extension: verifier-accepted state distribution
 
-The strongest version of this idea — and the one originally motivating it — is to train not on teacher-sampled contexts but on **draft proposals the verifier actually accepts**: the verifier-induced prefix kernel $\mathcal{J}_V$. Sample draft proposals, verify them with $V$, keep the accepted prefix, resample the first rejected position from the teacher residual, and train on the resulting verified prefix. Formally, $x^{\star} \sim \mathcal{J}_V(Q_\phi, P_\theta; \pi)$ and
+> **Note:** the formalism below is left for the researcher to fill in. This section states the idea and the open design questions in plain terms; the exact objective and gradient are Rahul's to specify.
 
-$$
-\mathcal{L}_{\text{accepted-state}} =
-\mathbb{E}_{x^{\star} \sim \mathcal{J}_V}\!\left[\frac{1}{|x^{\star}|}\sum_{t=1}^{|x^{\star}|}
-\text{JSD}\!\left(P_\theta(\cdot \mid p, x^{\star}_{<t}) \,\|\, Q_\phi(\cdot \mid p, x^{\star}_{<t})\right)\right]
-$$
+**The idea.** Today `jsd_flat_enrich` trains on contexts the *teacher* produces. The stronger version trains on contexts the *draft itself* would produce at inference and that the *verifier actually accepts*: let the draft propose tokens, run them through the real verifier, keep the accepted prefix, fix the first rejected position from the teacher, and train on that verified prefix. This closes the offline-to-inference gap directly — the draft learns on exactly the states it will be scored on — instead of approximating it with broader teacher sampling.
 
-This is the genuine on-policy / verifier-aligned objective; current `jsd_flat_enrich` is a teacher-only approximation of it. **Why it was not implemented, and what would make it tractable:**
+**How it could be done — and the open questions for the researcher:**
 
-**Compute cost of draft generation in the training loop.** The accepted-state objective requires autoregressive draft *generation* (running $Q_\phi$ token-by-token to produce proposals before verifying), on top of the forward pass already done. At 0.6B this is cheap; the dominant cost remains the 8B teacher forward pass. Minor objection.
+1. **Generating the draft proposals.** We already run the draft forward each step; this additionally needs the draft to *generate* autoregressively before verifying. At 0.6B that is cheap and the 8B teacher pass still dominates, so compute is not the blocker. *Question:* batch the draft generation + verification efficiently enough to keep step time acceptable?
 
-**Non-differentiable accept/reject boundary.** The rejection criterion $\mathbb{1}[u \leq p(x_t)/q(x_t)]$ is discrete; backprop does not pass through it. REINFORCE/straight-through/Gumbel are all imperfect. But if Rahul's survival-weighted NSS gradient generalises to traversal/BV, the problem is solved without approximation — the exact gradient is
+2. **Learning through the accept/reject decision.** The verifier's keep-or-reject choice is a hard, discrete decision, so an ordinary loss on the accepted prefix does not tell the draft *how* to change its proposal probabilities to get more tokens accepted. *Question for Rahul:* his survival-weighted acceptance gradient (developed for NSS) is exactly the mechanism that assigns credit through this discrete step — **does it generalise from NSS to the traversal and BV verifiers?** If it does, the discreteness stops being an obstacle and this becomes an implementation task with known parts; if not, we fall back to a stop-gradient surrogate (train on the accepted states but don't differentiate through the acceptance), which is weaker.
 
-$$
-\frac{\partial}{\partial \phi}\,\mathbb{E}[\tau_V] = \mathbb{E}\!\left[\sum_{t=1}^{\tau_V} \underbrace{\prod_{j < t}\alpha_j}_{\text{survival weight}} \cdot \nabla_\phi \log q_\phi(x_t)\right]
-$$
+3. **The training distribution moves as the draft learns.** Because the accepted-state distribution depends on the current draft, it shifts every update — a moving target, unlike the fixed teacher distribution we use now. *Question:* is a replay buffer of recently accepted prefixes (or periodic, not per-step, regeneration) enough to stabilise it, or do we need a PPO-style trust region? This is the genuine remaining difficulty.
 
-where $\prod_{j<t}\alpha_j$ is exactly the reach-probability to position $t$. **Open question for Rahul: does this generalise from NSS to traversal/BV?** If yes, this becomes a tractable implementation project with known pieces.
+4. **Verifier specificity is the goal, not a side-effect.** Training against a given verifier should lift *that* verifier — aligning the loss to traversal should help traversal, to BV should help BV. That is the whole point (verifier-aligned losses), not a limitation to mitigate.
 
-**Non-stationary training distribution.** $\mathcal{J}_V(Q_\phi)$ shifts every step as $Q_\phi$ updates — the genuine remaining difficulty. Mitigation: replay buffer of recently accepted prefixes, or periodic (not per-step) regeneration; PPO-style trust region for full stability.
-
-**Verifier specificity is the goal, not a problem.** Training $\mathcal{J}_{\text{traversal}}$ lifts traversal; $\mathcal{J}_{\text{BV}}$ lifts BV. Verifier-aligned losses are the research program.
-
-| Concern | Status |
-|---|---|
-| Compute (draft gen in loop) | Minor — 0.6B is cheap |
-| Non-differentiable accept/reject | Solved if Rahul's gradient generalises to traversal/BV |
-| Non-stationary training distribution | Real — replay buffer or periodic regen needed |
-| Verifier specificity | Not a problem — it's the goal |
+| Open question | For whom | Blocker? |
+|---|---|---|
+| Efficient draft-gen + verify in the loop | us (engineering) | No — 0.6B is cheap |
+| Credit through the accept/reject step | **Rahul** — does the survival-weighted gradient extend to traversal/BV? | Decides whether it's exact or a surrogate |
+| Stabilising the moving training distribution | us | Real — replay buffer / periodic regen / trust region |
+| Verifier specificity | — | Not a blocker — it's the objective |
 
 ### 8.2 Other parked directions
 
