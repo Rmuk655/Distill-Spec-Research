@@ -237,6 +237,13 @@ def parse_args():
     ap.add_argument("--warmup_n",  type=int, default=3,
                     help="Prompts to run (untimed) before the timed loop to prime CUDA kernels. "
                          "Default 3.  Set 0 to skip (faster iteration, less accurate throughput).")
+    ap.add_argument("--compile_draft", action="store_true",
+                    help="torch.compile the DRAFT model only (reduce-overhead, dynamic). "
+                         "This eval is dispatch-bound — GPU sits idle waiting on Python kernel "
+                         "launches — so compiling the draft cuts per-iter overhead substantially. "
+                         "The target model is NEVER compiled: its custom tree-attention mask "
+                         "changes shape every iteration and breaks CUDA-graph capture. "
+                         "First few prompts are slow (warm-up); raise --warmup_n if timing.")
     ap.add_argument("--no_gpu_monitor", action="store_true",
                     help="Disable the background GPU/CPU telemetry thread.  "
                          "The thread polls pynvml at 1 Hz (~10 μs per call, 0.001%% overhead) "
@@ -329,7 +336,8 @@ def main():
         print(f"[load] draft={args.checkpoint}")
         print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
         tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
-                                            device=torch_device, dtype=DEFAULT_DTYPE)
+                                            device=torch_device, dtype=DEFAULT_DTYPE,
+                                            compile_draft=args.compile_draft)
         specs["attn_backend"] = _model_attn_backend(p_model, q_model)
         print(f"[load] attention_backend={specs['attn_backend']}")
         # Log GPU memory after model load — both models share the same device.
