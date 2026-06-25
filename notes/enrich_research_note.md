@@ -1,30 +1,37 @@
 # Stochastic Teacher Rollout JSD for Speculative Draft Training
 ## A Research Note on `jsd_flat_enrich`
 
-**Status:** Internal result, not yet paper-ready. The core signal is settled; the gap to submission is the [§7](#7-must-add-experiments-minimum-for-a-credible-paper) ablations (compute-matched baseline, Draft-OPD replay, second dataset/model pair), not more evidence that enrich works on this setup.
-**Draft–Teacher pair:** Qwen3-0.6B draft / Qwen3-8B teacher
-**Training data:** math_hard. **Eval data:** math_eval — n=1000 for the headline traversal/bv/naive claims ([§4.2](#42-primary-eval-n1000-k_eval3-math_eval)–4.3); n=100 for the 9-verifier × K_eval mechanism sweep ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).
-**Positioning:** Builds on [2602.16994]; closest competitor is **Draft-OPD (May 2026)** — see [§6](#6-novelty-positioning-the-biggest-risk) for the differentiator we must defend.
+**Status:** Internal research note — **not paper-ready, and not claimed to be.** It records the raw results and findings on this one setup so we can decide what to run next. A reviewer-style read (summarised below) flags what must be fixed before any submission; claims that earlier versions of this note overstated have been softened or retired here. Treat every number as *observed on this setup*, not established in general.
+**Scope of evidence:** one draft (Qwen3-0.6B) / one teacher (Qwen3-8B), one training dataset (math_hard), one eval domain (math_eval), **two seeds**. n=1000 for traversal/bv/naive ([§4.2](#42-primary-eval-n1000-k_eval3-math_eval)–4.3); n=100 for the 9-verifier × K_eval sweep ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).
+**Positioning:** closest competitor is **Draft-OPD (May 2026)** — *not yet compared against experimentally* ([§6](#6-novelty-positioning-the-biggest-risk)).
 
-### Hypothesis ledger (final read)
+### What this note actually shows (this setup only)
 
-**Confirmed (cross-seed):**
-- **Multi-trajectory enrich (M=3) beats flat JSD.** At K_eval=3, n=1000: traversal +1.3%, bv +3.2%, naive +2.5%, both seeds, all >4×SE. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
-- **The gain is structural, not just faster convergence — for traversal.** M=3 at 8K beats *converged* flat-40K at traversal K=3 (+5.9% s123 / +2.9% s456); more flat training cannot reach it. [[§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)]
-- **Enrich is initialization-robust.** Flat JSD's ~0.19 cross-seed spread collapses to ~0.03 (M=1) / ~0.06 (M=3). [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
-- **The benefit is broad across verifiers and K_eval, not diagonal.** M=3 wins on 7–9 of 9 verifiers at every K_eval (mean Δ > 0 at K=1,2,3,4). [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+Stated as observations, not general claims:
+- **M=3 enrich scores above flat JSD** on traversal/bv/naive at K_eval=3, n=1000, both seeds (+1.3–3.2%). [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)] — **but M=3 spends ~3× the teacher generation per step; whether this is an algorithmic gain or just extra compute is unresolved (no compute-matched baseline yet).**
+- **A single stochastic rollout (M=1) is not enough** — M=1 does not beat our converged flat baseline; the effect needs M>1. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
+- **Verifiers respond heterogeneously** to the same distribution-matching objective: traversal/bv gains grow with K_eval, gbv/specinfer/max fade or reverse at high K_eval, naive/spectr/nss/khisti are roughly flat. **This is the most interesting and best-supported finding.** [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+- **Cross-seed spread is smaller under enrich** (flat ~0.19 → enrich ~0.03–0.06), *suggesting* better robustness to initialization — but N=2 cannot estimate variance, so this is tentative. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
 
-**Debunked:**
-- **M=1 (single stochastic trajectory) has no structural edge** — loses to converged flat-40K (−0.022). The M>1 mechanism is required; teacher-sampling stochasticity alone is insufficient. [[§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)]
-- **"Matched K_eval = M is optimal" is false for enrich.** M=3 does not peak at K_eval=3; it is strongest at K_eval=1,2 and wins at all K. Enrich's gain is K-agnostic — the opposite of the depth_weight ablation, whose gain *was* concentrated on the K_train=K_eval diagonal. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
-- **Higher teacher temperature does not help.** teacher_temp=1.5 degrades alignment (training-inference mismatch); teacher_temp=1.0 confirmed. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
+### Claims being retired (they outpace the evidence)
 
-**Needs more data:**
-- **BV: convergence-speed or raised ceiling?** M=3 wins on BV vs flat-8K at all K, both seeds, but the advantage over *converged* flat-40K reverses on s456. Likely convergence-speed only. Needs n=1000 BV K_eval=2 + a tie-break seed. [[§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)]
-- **specinfer/max anti-alignment at high K_eval.** M=3 goes negative at K≥3 for specinfer (and K=3 for max), cross-seed. Real, but unexplained — gated on the [§5](#5-verifier-level-math-open-obligations) per-verifier theory before it can be claimed.
-- **Paired bootstrap CIs** for the headline cells ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #2).
+| Earlier wording | Replaced with |
+|---|---|
+| "structural ceiling improvement / flat cannot reach it" | not reached by *our strongest flat baseline* on a single trajectory |
+| "compute-efficient" | not claimable — no compute-matched baseline |
+| "initialization-robust (confirmed)" | tentative; N=2 is too few to estimate variance |
+| per-verifier acceptance theory | [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) is conjecture, **not derived** |
+| novelty over Draft-OPD | not established without an experimental comparison |
 
-**Pending before submission:** compute-matched baseline, Draft-OPD replay ablation, ≥1 more dataset, ≥1 more model pair ([§7](#7-must-add-experiments-minimum-for-a-credible-paper)).
+### Where the real contribution likely is
+
+**Not** "multi-trajectory stochastic teacher JSD" — that overlaps DistillSpec / GKD / OSD / Draft-OPD / VSD and is not enough on its own. The defensible core, if completed, is: **(1) a systematic cross-verifier study showing speculative verifiers respond differently to the same distribution-matching objective ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)); (2) the state-distribution × objective-weighting design-space map ([§6.1](#61-the-design-space-is-2-d-not-a-1-d-ladder)); and (3) — only if actually derived — a per-verifier acceptance-functional explanation of (1) ([§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation)).**
+
+### What is required before this is submittable (reviewer-flagged, not optional)
+
+Compute-matched M=3-vs-flat baseline · experimental Draft-OPD comparison · ≥1 more dataset · ≥1 more model pair · **≥5 seeds** · paired bootstrap CIs · actual [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) derivations (or drop the theory claim) · cut length ~35%. Detail in [§7](#7-must-add-experiments-minimum-for-a-credible-paper).
+
+> **Open question for the team — what do we run first?** Suggested order: (1) compute-matched M=3 vs flat, (2) 5-seed re-run of the headline cells, (3) second dataset, (4) Draft-OPD replay ablation. This is a research-lead call; the note does not presume it.
 
 ---
 
@@ -95,7 +102,7 @@ $$
 \alpha(p,q) = \sum_x \min\big(p(x), q(x)\big) = 1 - \text{TV}(p, q).
 $$
 
-With JSD measured in nats, Pinsker's inequality applied to the KL sub-terms gives the safe bound $\text{TV}^2 \leq 2\,\text{JSD}$. So minimising JSD ⇒ lower TV ⇒ higher single-token acceptance **on the states being trained**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open obligation ([§5](#5-verifier-level-math-open-obligations)).
+With JSD measured in nats, Pinsker's inequality applied to the KL sub-terms gives the safe bound $\text{TV}^2 \leq 2\,\text{JSD}$. So minimising JSD ⇒ lower TV ⇒ higher single-token acceptance **on the states being trained**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open obligation ([§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation)).
 
 ---
 
@@ -126,9 +133,9 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $< 0.375L$
 
   σ(JSD) stable across all four → ρ differences are Case A (true signal, not range restriction). ρ(fwdKL,BE) ≈ ρ(JSD,BE) within 0.015 for every verifier — fwdKL and JSD are interchangeable as BE predictors. ρ ordering (traversal > BV > naive ≈ specinfer): traversal aggregates path-level acceptance products (strong JSD→BE slope); BV has a budget cap that truncates marginal gains; naive reduces to per-token min(1,P/Q), a coarser aggregation; specinfer is the strictest verifier here (mean_BE=4.867, the only one with hard prompts), and its multi-candidate residual acceptance depends on token-specific ratios rather than aggregate JSD → loosest coupling.
 
-  **Coupling (ρ) and improvement (Δ from enrich) are orthogonal axes — do not conflate them.** specinfer has the *lowest* ρ (−0.402) yet the *largest* K_eval=1 enrich gain (+0.336, [§4.2](#42-primary-eval-n1000-k_eval3-math_eval)). ρ measures how reliably JSD predicts BE rank *for a fixed checkpoint* (surrogate quality); Δ measures how much enrich's broadened distribution *moves* BE (realized headroom). A verifier can have loose JSD coupling but large headroom (specinfer) or tight coupling and moderate headroom (traversal). The [§5](#5-verifier-level-math-open-obligations) theory must account for both: per-verifier JSD→acceptance *slope* (predicts ρ) and per-verifier acceptance *headroom* (predicts Δ).
+  **Coupling (ρ) and improvement (Δ from enrich) are orthogonal axes — do not conflate them.** specinfer has the *lowest* ρ (−0.402) yet the *largest* K_eval=1 enrich gain (+0.336, [§4.2](#42-primary-eval-n1000-k_eval3-math_eval)). ρ measures how reliably JSD predicts BE rank *for a fixed checkpoint* (surrogate quality); Δ measures how much enrich's broadened distribution *moves* BE (realized headroom). A verifier can have loose JSD coupling but large headroom (specinfer) or tight coupling and moderate headroom (traversal). The [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) theory must account for both: per-verifier JSD→acceptance *slope* (predicts ρ) and per-verifier acceptance *headroom* (predicts Δ).
 
-  **ρ is a supplementary mechanism diagnostic, NOT a paper deliverable.** The four verifiers above (M=3 s123) + the traversal progression (flat −0.396 → M=1 −0.568 → M=3 −0.645) already suffice to anchor the [§5](#5-verifier-level-math-open-obligations) coupling story; completing all 9 modes is optional polish. A full diagnose grid (every checkpoint × 9 verifiers) is being recorded to W&B (`diag/*` keys) but is not required and need not be scraped from stdout. If ever assembled, keep two axes separate: (1) per-checkpoint hierarchy (fix checkpoint, sweep modes); (2) cross-checkpoint progression (fix mode, sweep flat→M=1→M=3). Mixed-checkpoint cells (e.g. NSS ρ=−0.335 on M=1 s456; GBV ρ=−0.308 on M=3 ttemp1.5) belong to their own checkpoint's row, not this table. Directionally the loose tail already matches theory (NSS = survival-weighted/OT = weakest JSD surrogate). **The paper rests on eval BE, not ρ.**
+  **ρ is a supplementary mechanism diagnostic, NOT a paper deliverable.** The four verifiers above (M=3 s123) + the traversal progression (flat −0.396 → M=1 −0.568 → M=3 −0.645) already suffice to anchor the [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) coupling story; completing all 9 modes is optional polish. A full diagnose grid (every checkpoint × 9 verifiers) is being recorded to W&B (`diag/*` keys) but is not required and need not be scraped from stdout. If ever assembled, keep two axes separate: (1) per-checkpoint hierarchy (fix checkpoint, sweep modes); (2) cross-checkpoint progression (fix mode, sweep flat→M=1→M=3). Mixed-checkpoint cells (e.g. NSS ρ=−0.335 on M=1 s456; GBV ρ=−0.308 on M=3 ttemp1.5) belong to their own checkpoint's row, not this table. Directionally the loose tail already matches theory (NSS = survival-weighted/OT = weakest JSD surrogate). **The paper rests on eval BE, not ρ.**
 
 **$\sigma$(JSD) stability (Case A vs B):** Case A (σ stable, ρ↑) = true signal; Case B (σ collapses, ρ stable) = range restriction. M=3 σ(JSD)=0.0200, mean_JSD=0.0296 across both diagnose runs — σ not collapsed ⇒ **Case A** confirmed.
 
@@ -217,7 +224,7 @@ Flat JSD has a large systematic seed spread (~0.19 per mode; s456 consistently h
 
 ### 4.4 Cross-verifier and K_eval-dependence (n=100, seed-averaged, vs flat-8K)
 
-This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over s123+s456, baseline = flat-8K (the under-trained baseline — the converged flat-40K comparison is [§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)). Raw cells in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).
+This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over s123+s456, baseline = flat-8K (the under-trained baseline — the converged flat-40K comparison is [§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)). Raw cells in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).
 
 **M=3 − flat-8K Δ, seed-averaged:**
 
@@ -261,7 +268,7 @@ This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over 
 | specinfer | Mixed → **loses at high K** | strong at K≤2 (+0.21/+0.23), **negative at K≥3** |
 | max | Inconclusive | ~+0.09 at K=1, ~0 elsewhere, **negative at K=3** |
 
-**Three K-dependence classes** (the empirical core [§5](#5-verifier-level-math-open-obligations) theory must reproduce):
+**Three K-dependence classes** (the empirical core [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) theory must reproduce):
 - **Improve with K** (gain grows toward K=4): **traversal, bv** — prefix/budget verifiers; M parallel-calibrated branches compound as tree width grows.
 - **Worsen with K** (front-loaded, fade or go negative by K≥3): **gbv, specinfer, max** — residual/competition verifiers whose cross-candidate normalisation is sub-additive in branch count.
 - **K-agnostic** (flat positive across K): **naive, spectr, nss, khisti**.
@@ -283,9 +290,9 @@ This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over 
 
 M=3 beats its own flat-8K baseline at every K value on both traversal and BV — both seeds, all cells positive.
 
-### 4.5 Compute efficiency: M=3 at 8K steps vs flat JSD at 40K steps (converged)
+### 4.5 M=3 (8K steps) vs our strongest flat baseline (40K steps)
 
-Flat JSD converges ~15K; we trained it to 40K as the ceiling. M=3 at 8K does ≈24K teacher rollouts (3 per step); flat-40K does ≈40K rollouts (1 per step) — so M=3 wins below using **~60% of the teacher-generation compute and 1/5 the optimizer steps**. This is *not* matched compute; it is M=3 winning with strictly less. flat-40K evaluated on H100; BE is hardware-independent and directly comparable to the A100 8K runs.
+Our flat JSD run stops improving by ~15K steps; we trained it to 40K and treat that as our strongest flat baseline (one optimization trajectory — *not* a proof of the flat ceiling; other schedules/objectives might do better). Step-count caveat: M=3-8K does ≈24K teacher rollouts (3/step) vs flat-40K's ≈40K (1/step), so the per-step compute differs in both directions (M=3 does more per step, fewer steps). **This is not a compute-matched comparison; the compute-matched baseline ([§7](#7-must-add-experiments-minimum-for-a-credible-paper)) is still required before any efficiency claim.** flat-40K evaluated on H100; BE is hardware-independent and comparable to the A100 8K runs.
 
 | comparison | overall mean Δ | bv/traversal Δ | traversal K=3 Δ |
 |---|---|---|---|
@@ -294,7 +301,7 @@ Flat JSD converges ~15K; we trained it to 40K as the ceiling. M=3 at 8K does ≈
 | **M=3-8K − flat-40K [s456]** | — | — | **+0.168 (+2.9%)** |
 | M=1-8K − flat-40K | −0.022 | −0.044 | −0.016 |
 
-**Cross-seed % vs flat-40K (the structural comparison):**
+**Cross-seed % vs flat-40K:**
 
 | cell | s123 | s456 |
 |---|---|---|
@@ -305,16 +312,16 @@ Flat JSD converges ~15K; we trained it to 40K as the ceiling. M=3 at 8K does ≈
 | bv K=3 | +1.9% | −1.4% |
 | bv K=4 | +2.2% | 0.0% |
 
-**M=3 enrich at 8K beats flat at 40K (its ceiling) at traversal K=3: +5.9% (s123) and +2.9% (s456).** More flat steps cannot reach this — flat-40K traversal K=3 is −0.024 vs flat-8K (more training regresses this cell). Multi-path calibration provides structural uplift that flat optimization cannot replicate.
+**M=3 at 8K scores above our flat-40K baseline at traversal K=3: +5.9% (s123), +2.9% (s456).** This was *not reached by our strongest flat baseline* — flat-40K traversal K=3 is even −0.024 below flat-8K (more flat training did not help this cell on this trajectory). This is suggestive that the M>1 mechanism adds something flat training did not recover here; it is **not** a proof that flat optimization cannot reach it (single trajectory, one dataset, one architecture, no CIs).
 
 **BV gain is convergence-speed, not a raised ceiling.** This is the meaning of "BV does not replicate vs converged flat on s456":
 - *vs flat-8K* (under-trained baseline): M=3 wins on BV at every K_eval, both seeds ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)). Real and robust.
 - *vs flat-40K* (converged baseline): the BV advantage holds on s123 (+1.9% at K=3) but **reverses on s456 (−1.4%)** — the two seeds disagree once flat is trained to convergence.
 - **Interpretation:** M=3 reaches a strong BV checkpoint *faster* than flat (8K vs ~15K convergence), but flat catches up on BV once converged. M=3 does **not** lift the BV ceiling.
-- **Contrast — traversal:** at K=3, M=3 beats *converged* flat-40K on **both** seeds (+5.9% / +2.9%). That is a genuine ceiling gain — the bankable structural claim. BV is not.
+- **Contrast — traversal:** at K=3, M=3 scores above flat-40K on **both** seeds (+5.9% / +2.9%) — the more robust of the two, but still single-dataset, two-seed, no CIs.
 - **Open:** the n=1000 BV K_eval=2 cell is unrun, and a third seed would break the s123/s456 tie.
 
-**M=1 has no structural edge.** M=1-8K loses to flat-40K (−0.022). Single-path stochastic teacher sampling is flat JSD with broader context but no structural gain — additional flat steps overcome it. The multi-path mechanism (M>1) is required.
+**M=1 has no edge over flat-40K.** M=1-8K is slightly below flat-40K (−0.022). A single stochastic trajectory behaves like flat JSD with broader context; the M>1 setting is what moves the metric here.
 
 ### 4.6 Objective–BE alignment diagnostics (ρ)
 
@@ -331,42 +338,46 @@ From `--diagnose` mode (n=100, math_eval):
 | naive | 6.089 | **−0.413** | −0.410 | 50% | 50% | 0% |
 | specinfer | 4.867 | **−0.402** | −0.395 | 22% | 75% | 3% |
 
-σ(JSD) stable → ρ differences are genuine signal (Case A, not range compression). JSD and fwdKL are interchangeable as predictors (Δρ < 0.015). ρ ordering matches verifier selectivity hierarchy. ρ is a mechanism diagnostic; the paper rests on eval BE.
+σ(JSD) stable → ρ differences are not just range compression. JSD and fwdKL are interchangeable as predictors (Δρ < 0.015). **Caveat (do not oversell):** a higher |ρ| means JSD is a better *monotonic predictor* of BE for a fixed checkpoint — it does **not** by itself mean JSD is a better training objective, and it does not establish causation. ρ is a supporting diagnostic only; the findings rest on eval BE, not on ρ.
 
-**Negative control (teacher_temp=1.5):** ρ drops from −0.645 to −0.543, mean_JSD rises 8%, σ stable — genuine signal loss, not range compression. Mechanism: student learns a noisier teacher distribution; verifier runs at temp=1.0 at inference → training-inference mismatch. teacher_temp=1.0 confirmed; no further temperature variants needed.
+**Negative control (teacher_temp=1.5):** ρ drops from −0.645 to −0.543, mean_JSD rises 8%, σ stable — consistent with genuine signal loss rather than range compression. Plausible mechanism: the student learns a noisier teacher distribution while the verifier runs at temp=1.0 at inference (training-inference mismatch). On this evidence teacher_temp=1.0 is the better setting; we did not sweep further.
 
 **train/path_diversity (M=3):** ∈[0.8,1.0] — stochastic teacher rollouts are genuinely diverse; M>1 contributes distinct contexts, not near-duplicate paths.
 
 ### 4.7 Conclusions
 
-**Proven (cross-seed):**
+All conclusions are scoped to this setup (one model pair, one dataset, two seeds, no CIs) and are stated as observations.
 
-1. **M=3 enrich beats flat JSD** across traversal (+1.3%), bv (+3.2%), naive (+2.5%), both seeds, n=1000, K_eval=3, all >4×SE. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
-2. **The traversal gain is structural, not convergence-speed.** M=3 at 8K beats *converged* flat-40K at traversal K=3 (+5.9% s123 / +2.9% s456) — unreachable by more flat training. [[§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)]
-3. **Enrich is initialization-robust.** Flat seed spread ~0.19/mode collapses to ~0.03 (M=1) / ~0.06 (M=3). Seed-averaged flat baselines are mandatory. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
-4. **Wins are broad, not diagonal.** M=3 beats flat-8K on 7–9 of 9 verifiers at every K_eval (mean Δ > 0 at all K). The strongest verifiers are bv and traversal, whose gains *grow* with K_eval. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
-5. **Objective–BE alignment strengthens monotonically with M** (ρ: flat −0.396 → M=1 −0.568 → M=3 −0.645). [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
+**Supported on this setup:**
 
-**Debunked:**
+1. **M=3 enrich scores above flat JSD** on traversal (+1.3%), bv (+3.2%), naive (+2.5%), both seeds, n=1000, K_eval=3, gaps >4×SE. *Not compute-matched* — could be partly the extra teacher generation. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
+2. **M=3 (8K) scores above our flat-40K baseline at traversal K=3** (+5.9% s123 / +2.9% s456); our flat run did not reach this with more steps. Suggestive of an M>1 effect; *not* a proof flat cannot reach it. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
+3. **Cross-seed spread is smaller under enrich** (~0.19 → ~0.03–0.06), *suggesting* initialization robustness. Tentative only — N=2 cannot estimate variance; needs ≥5 seeds. Seed-averaged flat baselines are in any case mandatory. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
+4. **Verifier response is heterogeneous (the strongest finding).** M=3 scores above flat-8K on 7–9 of 9 verifiers at every K_eval; bv/traversal gains grow with K_eval while gbv/specinfer/max fade or reverse. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+5. **|ρ|(JSD,BE) increases with M** (flat −0.396 → M=1 −0.568 → M=3 −0.645) — a monotonic-association diagnostic, not evidence about the objective itself. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
 
-6. **M=1 has no structural edge** — loses to flat-40K (−0.022). The M>1 multi-path mechanism is the operative component. [[§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)]
-7. **"Matched K_eval = M is optimal" is false for enrich.** M=3 is strongest at K_eval=1,2 (mean +0.136/+0.130), not at matched K_eval=3 (+0.082). Enrich's benefit is K-agnostic — directly opposite to the depth_weight ablation, whose gain *was* diagonal. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
-8. **Higher teacher temperature does not help** — teacher_temp=1.5 degrades alignment (ρ −0.645 → −0.543); teacher_temp=1.0 confirmed. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
+**Not supported / refuted:**
 
-**Needs more data:**
+6. **A single stochastic rollout (M=1) is not enough** — it does not beat flat-40K (−0.022). The M>1 setting is what moves the metric. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
+7. **"Matched K_eval = M is optimal" does not hold for enrich.** M=3 is strongest at K_eval=1,2 (+0.136/+0.130), not at matched K_eval=3 (+0.082) — K-agnostic, opposite to the depth_weight ablation's diagonal pattern. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+8. **Higher teacher temperature does not help** — teacher_temp=1.5 degrades alignment (ρ −0.645 → −0.543); 1.0 is the better setting on this evidence. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
 
-9. **BV: convergence-speed vs ceiling unresolved.** M=3 wins on BV vs flat-8K everywhere, but the advantage over converged flat-40K reverses on s456. Likely convergence-speed; needs n=1000 BV K_eval=2 + tie-break seed. [[§4.5](#45-compute-efficiency-m3-at-8k-steps-vs-flat-jsd-at-40k-steps-converged)]
-10. **specinfer/max anti-alignment at high K_eval.** M=3 goes negative at K≥3 (specinfer) / K=3 (max), cross-seed. Real but unexplained — gated on [§5](#5-verifier-level-math-open-obligations) per-verifier theory.
+**Open / needs more data:**
+
+9. **BV: convergence-speed vs raised baseline unresolved.** M=3 scores above flat-8K on BV everywhere, but the advantage over flat-40K reverses on s456. Needs n=1000 BV K_eval=2 + a tie-break seed. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
+10. **specinfer/max anti-alignment at high K_eval** (M=3 negative at K≥3 / K=3, both seeds) — observed but unexplained; gated on a [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) derivation that does not yet exist.
 11. **Paired bootstrap CIs** for the headline cells ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #2).
 
-**Cross-verifier K-dependence (the empirical headline for [§5](#5-verifier-level-math-open-obligations)):** three classes — *improve with K* (traversal, bv: prefix/budget), *worsen with K* (gbv, specinfer, max: residual/competition, fade or go negative by K≥3), *K-agnostic* (naive, spectr, nss, khisti). The [§5](#5-verifier-level-math-open-obligations) acceptance-functional theory must reproduce this split. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+**Cross-verifier K-dependence (the empirical headline for [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation)):** three classes — *improve with K* (traversal, bv: prefix/budget), *worsen with K* (gbv, specinfer, max: residual/competition, fade or go negative by K≥3), *K-agnostic* (naive, spectr, nss, khisti). The [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) acceptance-functional theory must reproduce this split. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
 
 
 ---
 
-## 5. Verifier-Level Math (open obligations)
+## 5. Verifier-Level Math (open obligations — currently conjecture, not derivation)
 
-**Core question — why does stochastic-teacher JSD help verifiers differently?** Each verifier's per-state acceptance probability is a *different functional* of $(P,Q)$. For naive single-token acceptance, $\alpha_{\text{naive}}(P,Q)=\sum_x\min(P(x),Q(x))=1-\text{TV}(P,Q)$, and JSD bounds TV ($\text{TV}^2\le 2\,\text{JSD}$ in nats), so lowering JSD on the trained states should raise naive acceptance on those states. For NSS (optimal-transport), BV/GBV (tree/budget), and SpecInfer, the acceptance functional is **not** TV, so the same JSD reduction maps to a *different* marginal acceptance gain — that mapping is the explanation for the differential cross-verifier benefit, and deriving it per verifier is the central theory contribution. Draft-OPD gives a local accepted/rejected KL rationale, but not this cross-verifier acceptance-functional analysis.
+> **Reviewer-flagged, blunt:** as of now this section is conjecture. Only the naive case ($\alpha=1-\text{TV}$, with JSD→TV via Pinsker) is actually derived; everything about traversal/BV/GBV/specinfer/NSS below is plausible intuition, **not** proven. **A submission must either complete these derivations or drop the theory as a claimed contribution** and present [§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k) as a purely empirical finding. Do not cite [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) as a result until it contains real proofs (ideally checked against toy finite-vocabulary enumeration).
+
+**Core question — why does stochastic-teacher JSD help verifiers differently?** Each verifier's per-state acceptance probability is a *different functional* of $(P,Q)$. For naive single-token acceptance, $\alpha_{\text{naive}}(P,Q)=\sum_x\min(P(x),Q(x))=1-\text{TV}(P,Q)$, and JSD bounds TV ($\text{TV}^2\le 2\,\text{JSD}$ in nats), so lowering JSD on the trained states should raise naive acceptance on those states. For NSS (optimal-transport), BV/GBV (tree/budget), and SpecInfer, the acceptance functional is **not** TV, so the same JSD reduction would map to a *different* marginal acceptance gain — that mapping is the conjectured explanation for the differential cross-verifier benefit, and deriving it per verifier *would be* the theory contribution if completed (it is not, yet). Draft-OPD gives a local accepted/rejected KL rationale, but not this cross-verifier acceptance-functional analysis.
 
 1. **$K_{\text{eval}}{=}1$ collapse — likely a one-line remark, not a theorem.** At $K_{\text{eval}}{=}1$, the verifier sees a single draft path. For sequential token verification up to depth $L$, naive/spectr/khisti/max plausibly reduce to the same per-token accept-w.p.-$\min(1,P/Q)$ rule along that path. The proof should state this for arbitrary $L$, not only $L=1$. If the reduction is trivial, state it as a remark for completeness — **do not present it as a contribution.** Empirically the four give identical BE for both checkpoints (5.848 / 5.859).
 2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why stochastic-teacher JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
@@ -472,14 +483,14 @@ Consequences:
 | # | Experiment | Why |
 |---|---|---|
 | 1 | 2–3 seeds for flat JSD **and** enrich | Reproducibility — non-negotiable |
-| 2 | ~~n=1000 eval with paired bootstrap CIs~~ | ~~Resolve effect size~~ **→ DONE ([§4.6](#46-objectivebe-alignment-diagnostics-ρ)): K_eval=2,3; flat+M=1+M=3, both seeds. Enrich signal confirmed. Paired bootstrap CIs still needed for paper.** |
+| 2 | n=1000 eval **with paired bootstrap CIs** | n=1000 point estimates done (K_eval=2,3; flat+M=1+M=3, both seeds; enrich gap present on this setup). **CIs still missing and required** — without them the effect size is not established. |
 | 3 | **Compute-matched** baseline (same wall-clock / teacher calls / tokens, not just steps) | Enrich does extra rollouts; step-matched is unfair to baseline |
 | 4 | DistillSpec baseline | Closest on-policy prior work |
 | 5 | **Draft-OPD-style replay ablation** (draft-gated accepted-only vs accepted+rejected) | The core novelty contrast |
 | 6 | Greedy teacher (M=1) vs stochastic teacher (M=1) vs stochastic teacher (M=3) | Isolate stochasticity from multi-trajectory averaging |
 | 7 | ≥1 more dataset (code / Spec-Bench mixed) | Generalisation beyond math |
 | 8 | ≥1 more model pair | Method, not setup-specific quirk |
-| 9 | ~~Temperature robustness — teacher_temp~~ | **Answered**: ttemp=1.5 run shows ρ=−0.543 vs default ρ=−0.645; higher teacher_temp causes training-inference mismatch. teacher_temp=1.0 confirmed. Eval temperature sweep (not training) still needed if running approximate verifiers. |
+| 9 | ~~Temperature robustness — teacher_temp~~ | **Answered**: ttemp=1.5 run shows ρ=−0.543 vs default ρ=−0.645; higher teacher_temp causes training-inference mismatch. teacher_temp=1.0 preferred on this evidence. Eval temperature sweep (not training) still needed if running approximate verifiers. |
 | 10 | Wall-clock tokens/sec + output quality/exactness | BE alone is insufficient |
 
 Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) → n=1000 on best checkpoints → compute-matched greedy/stochastic/M ablations → Draft-OPD-style replay ablation.
@@ -531,8 +542,13 @@ These are explicitly deferred. Whether they fold into this paper (as ablations) 
 
 ## 9. Scope Verdict
 
-**Promising early signal; not yet conclusive — and given Draft-OPD, the defensible contribution sits in two places.** Draft-OPD tested one acceptance scheme with no theory, so two things remain genuinely open and are where the contribution lives:
-1. **Cross-verifier behaviour + the per-verifier acceptance-functional math ([§5](#5-verifier-level-math-open-obligations))** — they punted this; it is the clearest open ground.
-2. **The exact survival-weighted gradient (Rahul, Axis B)** — no theory in their paper; the strongest unscooped asset.
+**This is not submittable today.** A reviewer-style read concludes *reject as-is* — not because the work is uninteresting, but because the central claims currently outpace the evidence and the novelty is not yet differentiated from recent acceptance-aware distillation (DistillSpec, GKD, OSD, Draft-OPD, VSD). "Multi-trajectory stochastic teacher JSD" alone is not a sufficient contribution.
 
-Current `jsd_flat_enrich` is best understood as **one simple stochastic-teacher corner of the 2-D design space ([§6.1](#61-the-design-space-is-2-d-not-a-1-d-ladder))**, not the headline. Publishable **only if** (a) framed as the cross-verifier analysis + design-space map rather than "accepted-state distillation works," (b) backed by [§5](#5-verifier-level-math-open-obligations) math, (c) supported by [§7](#7-must-add-experiments-minimum-for-a-credible-paper) matched-compute / multi-seed / multi-dataset evidence, and ideally (d) anchored on the exact gradient once implemented. As-is it is a strong internal / workshop-direction result. **The pivot decision (re-anchor headline on cross-verifier + exact gradient) is the research lead's to make** — and should not be taken until the M=3 eval lands and the empty design-space cells start to fill.
+**Where a defensible contribution could live**, if the work is completed:
+1. **Cross-verifier behaviour ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k))** — the systematic finding that different speculative verifiers respond differently to the same distribution-matching objective. This is the strongest empirical result and the most likely headline.
+2. **The state-distribution × objective-weighting design-space map ([§6.1](#61-the-design-space-is-2-d-not-a-1-d-ladder))** — useful framing that may stand on its own if written carefully.
+3. **A per-verifier acceptance-functional explanation of (1) ([§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation))** — *only if actually derived*; today it is conjecture.
+
+**What it would take to move from internal note → credible submission** (all required, per the reviewer read): compute-matched M=3-vs-flat baseline; experimental Draft-OPD comparison; ≥1 more dataset; ≥1 more model pair; ≥5 seeds; paired bootstrap CIs; real [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) derivations (or drop the theory claim); and a ~35% length cut so it reads as a paper, not a notebook.
+
+**The headline re-anchoring (away from "M stochastic rollouts", toward the cross-verifier study + design space) and the decision on what to run first are the research lead's calls.** Suggested first step: the compute-matched baseline, since it gates whether *any* algorithmic claim survives.
