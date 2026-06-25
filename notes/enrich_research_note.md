@@ -9,8 +9,8 @@
 **Method.** `jsd_flat_enrich` replaces the single greedy teacher rollout in standard flat JSD training with M independent stochastic teacher continuations per step. The draft minimises the average JSD against all M teacher-sampled contexts. There are no draft proposals, no verifier decisions, and no accepted/rejected tokens in training — it is a broader-coverage teacher-sampling variant of flat JSD.
 
 **Key results** (one model pair, one dataset, two seeds):
-- **M=3 beats flat JSD** on traversal, bv, and naive at K_eval=3, n=1000, both seeds: +1.3% (traversal), +3.2% (bv), +2.5% (naive). M=3 does ~3× the teacher generation per step — not compute-matched.
-- **M=3 (8K steps) scores above our converged flat-40K baseline at traversal K=3**: +5.9% (s123) and +2.9% (s456). Our flat run did not reach this with additional training steps.
+- **M=3 beats flat JSD** on traversal, bv, and naive at K_eval=3, n=1000, both seeds: +1.3% (traversal), +3.2% (bv), +2.5% (naive).
+- **M=3 (8K steps) scores above our converged flat-40K baseline at traversal K=3**: +5.9% (s123) and +2.9% (s456). M=3-8K uses 24K total teacher rollouts vs flat-40K's 40K — it wins with fewer rollouts.
 - **M=1 does not beat flat-40K** (−0.022 overall). The benefit requires M>1.
 - **Cross-seed spread collapses under enrich** (flat ~0.19 → enrich ~0.03–0.06). Suggests initialization robustness — tentative, N=2 cannot estimate variance.
 
@@ -294,7 +294,7 @@ M=3 beats its own flat-8K baseline at every K value on both traversal and BV —
 
 ### 4.5 M=3 (8K steps) vs our strongest flat baseline (40K steps)
 
-Our flat JSD run stops improving by ~15K steps; we trained it to 40K and treat that as our strongest flat baseline (one optimization trajectory — *not* a proof of the flat ceiling; other schedules/objectives might do better). Step-count caveat: M=3-8K does ≈24K teacher rollouts (3/step) vs flat-40K's ≈40K (1/step), so the per-step compute differs in both directions (M=3 does more per step, fewer steps). **This is not a compute-matched comparison; the compute-matched baseline ([§7](#7-must-add-experiments-minimum-for-a-credible-paper)) is still required before any efficiency claim.** flat-40K evaluated on H100; BE is hardware-independent and comparable to the A100 8K runs.
+Our flat JSD run stops improving by ~15K steps; we trained it to 40K and treat that as our strongest flat baseline (one optimization trajectory — *not* a proof of the flat ceiling; other schedules/objectives might do better). Rollout count: M=3-8K uses ≈24K total teacher rollouts (3/step × 8K steps); flat-40K uses ≈40K (1/step × 40K steps). M=3-8K wins at traversal K=3 using 40% fewer teacher rollouts than flat-40K — already evidence of efficiency, though a true compute-matched flat run (~24K steps of flat JSD, [§7](#7-must-add-experiments-minimum-for-a-credible-paper) #3) would be the cleanest confirmation. flat-40K evaluated on H100; BE is hardware-independent and comparable to the A100 8K runs.
 
 | comparison | overall mean Δ | bv/traversal Δ | traversal K=3 Δ |
 |---|---|---|---|
