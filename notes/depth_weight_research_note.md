@@ -28,23 +28,31 @@ Neither direction has a gradient path to higher BE — the mechanism is purely p
 
 ### 2.1 Flat JSD baseline
 
-$$\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x \sim D}\left[\frac{1}{|x|}\sum_{t=1}^{|x|} \text{JSD}\!\left(P_\theta(\cdot \mid x_{<t}) \,\|\, Q_\phi(\cdot \mid x_{<t})\right)\right]$$
+$$
+\mathcal{L}_{\text{JSD}} = \mathbb{E}_{x \sim D}\left[\frac{1}{|x|}\sum_{t=1}^{|x|} \text{JSD}\!\left(P_\theta(\cdot \mid x_{<t}) \,\|\, Q_\phi(\cdot \mid x_{<t})\right)\right]
+$$
 
 where $D$ is a greedy teacher rollout distribution.
 
 ### 2.2 Depth-weighted JSD
 
-$$\mathcal{L}_{\text{depth-weight}} = w(d) \cdot \mathcal{L}_{\text{JSD}}(Q_\phi, P_\theta\,;\,x), \qquad d = E[\tau_V(Q_\phi, P_\theta\,;\,x)]$$
+$$
+\mathcal{L}_{\text{depth-weight}} = w(d) \cdot \mathcal{L}_{\text{JSD}}(Q_\phi, P_\theta\,;\,x), \qquad d = E[\tau_V(Q_\phi, P_\theta\,;\,x)]
+$$
 
 $d$ is computed under `torch.no_grad()` — no gradient enters through it. Two EMA-normalised forms, both satisfying $E[w] \approx 1$ (no LR confound):
 
 **Linear (`--depth_linear`):**
-$$w_{\text{lin}}(d) = \frac{d}{\text{EMA}(d)}, \qquad \mu \leftarrow 0.9\,\mu + 0.1\,d$$
+$$
+w_{\text{lin}}(d) = \frac{d}{\text{EMA}(d)}, \qquad \mu \leftarrow 0.9\,\mu + 0.1\,d
+$$
 
 $w > 1$ for deep (easy) prompts, $w < 1$ for shallow (hard) prompts — the "good student" direction.
 
 **Exponential (`--depth_lambda` $\lambda$):**
-$$w_{\text{exp}}(d) = \exp\!\left(\lambda\,(d - \text{EMA}(d))\right)$$
+$$
+w_{\text{exp}}(d) = \exp\!\left(\lambda\,(d - \text{EMA}(d))\right)
+$$
 
 $\lambda > 0$: same direction as linear. $\lambda < 0$: hard-prompt curriculum. $\lambda = 0$: $w \equiv 1$ — mathematically identical to flat JSD (free correctness control).
 
