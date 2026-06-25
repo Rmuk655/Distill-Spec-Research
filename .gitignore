@@ -22,7 +22,6 @@ Thumbs.db
 
 # Local-only directories — kept on disk but not tracked in git
 Claude/
-Results/
 
 # Local-only planning / proposal docs — kept on disk, not tracked
 PROPOSAL.md
