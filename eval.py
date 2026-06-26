@@ -78,7 +78,8 @@ RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
                       max_new_tokens, temp, state_path: str | None = None,
                       gpu_monitor: GpuMonitor | None = None,
-                      warmup_n: int = 3, L1: int = 0, L1_adaptive: bool = False):
+                      warmup_n: int = 3, L1: int = 0, L1_adaptive: bool = False,
+                      entropy_threshold: float = 1.5):
     """Run the prompt set under one verifier mode and aggregate stats.
 
     Verifier exceptions (VerifierError from verifier_safe.py) are caught
@@ -109,12 +110,12 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
 
     # Prime CUDA kernels before the timed loop.  The first few prompts are slow
     # because flash-attention and other CUDA extensions JIT-compile on first use.
-    _decoding_loop = (
-        delayed_speculative_decoding_loop if L1 > 0 else speculative_decoding_loop
-    )
+    _use_delayed = L1 > 0 or L1_adaptive
+    _decoding_loop = delayed_speculative_decoding_loop if _use_delayed else speculative_decoding_loop
     _loop_kwargs = dict(max_new_tokens=max_new_tokens, K=K, L=L, p_temp=temp, q_temp=temp)
-    if L1 > 0:
-        _loop_kwargs.update(L1=L1, L1_adaptive=L1_adaptive)
+    if _use_delayed:
+        # L1_adaptive=True with no explicit L1: branch depth auto-set to L//2 inside the loop.
+        _loop_kwargs.update(L1=L1, L1_adaptive=L1_adaptive, entropy_threshold=entropy_threshold)
 
     if warmup_n > 0:
         print(f"  [warmup] running {warmup_n} prompt(s) to prime CUDA kernels ...")
@@ -240,17 +241,24 @@ def parse_args():
     ap.add_argument("--output",    default=None,
                     help="Override output CSV path (default: results.csv next to eval.py). "
                          "Set to a unique path when running multiple parallel processes.")
-    ap.add_argument("--L1",        type=int, default=0,
-                    help="Delayed-expansion branch depth (0 = normal root branching, default). "
-                         "When L1 > 0, the draft runs a single path for L1 steps then branches "
-                         "into K i.i.d. paths for the remaining L-L1 steps.  Uses "
-                         "delayed_speculative_decoding_loop from delayed_draft.py; "
-                         "Rahul's inference_util.py is not modified.")
-    ap.add_argument("--L1_adaptive", action="store_true",
-                    help="Adapt L1 per-iteration using lagged teacher entropy from the previous "
-                         "target pass (Option A — zero extra target forward pass cost). "
-                         "--L1 becomes L1_max; iterations where teacher entropy > 1.5 nats "
-                         "fall back to root branching (L1=0).  Only active when --L1 > 0.")
+    _l1_group = ap.add_mutually_exclusive_group()
+    _l1_group.add_argument("--L1", type=int, default=0,
+                    help="Fixed delayed-expansion branch depth (0 = normal root branching, "
+                         "default).  Draft runs a single path for L1 steps then K i.i.d. "
+                         "branches for L-L1 steps.  Mutually exclusive with --L1_adaptive. "
+                         "Theoretically motivated for traversal and specinfer; runs on all "
+                         "modes without error.")
+    _l1_group.add_argument("--L1_adaptive", action="store_true",
+                    help="Per-iteration adaptive branch depth — no --L1 value needed. "
+                         "Uses lagged teacher entropy from the previous target pass "
+                         "(zero extra target forward pass cost): when teacher entropy was "
+                         "low last iteration (teacher confident) branch at L//2; when high "
+                         "(teacher uncertain) fall back to root branching.  "
+                         "Mutually exclusive with --L1.")
+    ap.add_argument("--entropy_threshold", type=float, default=1.5,
+                    help="Teacher entropy threshold (nats) for --L1_adaptive. "
+                         "Above this the teacher is considered uncertain and L1 falls "
+                         "back to 0 (root branching).  Default 1.5 nats.")
     ap.add_argument("--warmup_n",  type=int, default=3,
                     help="Prompts to run (untimed) before the timed loop to prime CUDA kernels. "
                          "Default 3.  Set 0 to skip (faster iteration, less accurate throughput).")
@@ -385,6 +393,7 @@ def main():
             state_path=sp, gpu_monitor=mon,
             warmup_n=args.warmup_n,
             L1=args.L1, L1_adaptive=args.L1_adaptive,
+            entropy_threshold=args.entropy_threshold,
         )
         all_stats[mode] = stats
         # Skip the CSV append for a run that was already fully cached at start

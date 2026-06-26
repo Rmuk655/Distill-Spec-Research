@@ -214,6 +214,9 @@ def delayed_speculative_decoding_loop(
     L1_adaptive: bool = False,
     entropy_threshold: float = 1.5,
 ):
+    # In adaptive mode with no explicit L1, default branch depth to L//2.
+    if L1_adaptive and L1 == 0:
+        L1 = max(1, L // 2)
     """Full speculative decoding loop with delayed-expansion draft.
 
     Drop-in replacement for speculative_decoding_loop in main.py.
@@ -265,8 +268,11 @@ def delayed_speculative_decoding_loop(
     target_calls = 0
     while context_cached.shape[-1] + 1 < context_init_len + max_new_tokens:
         # Option A: adapt L1 from last iteration's teacher entropy (zero extra cost).
-        if L1_adaptive and p_model._delayed_entropy is not None:
-            iter_L1 = 0 if p_model._delayed_entropy > entropy_threshold else L1
+        # When adaptive: teacher confident (low entropy) → delay by L1; uncertain → root branch.
+        # When fixed: always use L1 (may be 0, meaning root branch = same as main.py).
+        if L1_adaptive:
+            iter_L1 = (0 if (p_model._delayed_entropy is None or
+                             p_model._delayed_entropy > entropy_threshold) else L1)
         else:
             iter_L1 = L1
 
