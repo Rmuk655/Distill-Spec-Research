@@ -315,13 +315,19 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Resolve checkpoint to absolute path so from_pretrained treats it as a
-    # local directory rather than a HuggingFace repo ID.  HF rejects relative
+    # Resolve local checkpoint paths to absolute so from_pretrained treats them
+    # as local directories rather than HuggingFace repo IDs.  HF rejects relative
     # paths with "Repo id must be in the form 'repo_name' or 'namespace/repo_name'".
-    # Only resolve if the path exists locally; leave HF model IDs (e.g.
-    # "Qwen/Qwen3-0.6B") unchanged.
-    if os.path.exists(args.checkpoint):
-        args.checkpoint = os.path.abspath(args.checkpoint)
+    # HF model IDs are exactly 'namespace/repo_name' (two components, e.g.
+    # 'Qwen/Qwen3-0.6B').  Everything else — including multi-segment relative
+    # paths like 'checkpoints/x/ckpt_best' — is a local path; make it absolute.
+    # We do NOT use os.path.exists here because ckpt_best may be a symlink that
+    # resolves correctly only when given as an absolute path.
+    if not os.path.isabs(args.checkpoint):
+        _parts = args.checkpoint.replace("\\", "/").split("/")
+        _is_hf_id = len(_parts) == 2 and not os.path.isdir(args.checkpoint)
+        if not _is_hf_id:
+            args.checkpoint = os.path.abspath(args.checkpoint)
 
     # ── GPU selection — --device cuda:N is the single source of truth ────────
     # torch.cuda.set_device() pins all subsequent CUDA ops to GPU N.
