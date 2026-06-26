@@ -59,6 +59,7 @@ from tqdm import tqdm
 import verifiers  # noqa: F401 — sys.path injection
 from util            import load_prompts_jsonl, set_seed, load_models
 from main            import speculative_decoding_loop
+from delayed_draft   import delayed_speculative_decoding_loop
 from verifier_safe   import VerifierError
 
 from data_io import get_path as dataset_path
@@ -77,7 +78,7 @@ RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
                       max_new_tokens, temp, state_path: str | None = None,
                       gpu_monitor: GpuMonitor | None = None,
-                      warmup_n: int = 3):
+                      warmup_n: int = 3, L1: int = 0, L1_adaptive: bool = False):
     """Run the prompt set under one verifier mode and aggregate stats.
 
     Verifier exceptions (VerifierError from verifier_safe.py) are caught
@@ -108,16 +109,22 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
 
     # Prime CUDA kernels before the timed loop.  The first few prompts are slow
     # because flash-attention and other CUDA extensions JIT-compile on first use.
+    _decoding_loop = (
+        delayed_speculative_decoding_loop if L1 > 0 else speculative_decoding_loop
+    )
+    _loop_kwargs = dict(max_new_tokens=max_new_tokens, K=K, L=L, p_temp=temp, q_temp=temp)
+    if L1 > 0:
+        _loop_kwargs.update(L1=L1, L1_adaptive=L1_adaptive)
+
     if warmup_n > 0:
         print(f"  [warmup] running {warmup_n} prompt(s) to prime CUDA kernels ...")
         for wp in prompts[:warmup_n]:
             p_model._spec_profile = {"runs": []}
             try:
-                speculative_decoding_loop(
+                _decoding_loop(
                     p_model=p_model, q_model=q_model, tok=tok,
                     prompt=wp, verification_algo=mode,
-                    max_new_tokens=max_new_tokens, K=K, L=L,
-                    p_temp=temp, q_temp=temp,
+                    **_loop_kwargs,
                 )
             except Exception:
                 pass
@@ -138,11 +145,10 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
             p_model._spec_prompt_idx = i  # propagated to verifier_safe via _spec_debug_ctx
 
             try:
-                speculative_decoding_loop(
+                _decoding_loop(
                     p_model=p_model, q_model=q_model, tok=tok,
                     prompt=prompt, verification_algo=mode,
-                    max_new_tokens=max_new_tokens, K=K, L=L,
-                    p_temp=temp, q_temp=temp,
+                    **_loop_kwargs,
                 )
             except VerifierError as ve:
                 skipped += 1
@@ -234,6 +240,17 @@ def parse_args():
     ap.add_argument("--output",    default=None,
                     help="Override output CSV path (default: results.csv next to eval.py). "
                          "Set to a unique path when running multiple parallel processes.")
+    ap.add_argument("--L1",        type=int, default=0,
+                    help="Delayed-expansion branch depth (0 = normal root branching, default). "
+                         "When L1 > 0, the draft runs a single path for L1 steps then branches "
+                         "into K i.i.d. paths for the remaining L-L1 steps.  Uses "
+                         "delayed_speculative_decoding_loop from delayed_draft.py; "
+                         "Rahul's inference_util.py is not modified.")
+    ap.add_argument("--L1_adaptive", action="store_true",
+                    help="Adapt L1 per-iteration using lagged teacher entropy from the previous "
+                         "target pass (Option A — zero extra target forward pass cost). "
+                         "--L1 becomes L1_max; iterations where teacher entropy > 1.5 nats "
+                         "fall back to root branching (L1=0).  Only active when --L1 > 0.")
     ap.add_argument("--warmup_n",  type=int, default=3,
                     help="Prompts to run (untimed) before the timed loop to prime CUDA kernels. "
                          "Default 3.  Set 0 to skip (faster iteration, less accurate throughput).")
@@ -367,6 +384,7 @@ def main():
             max_new_tokens=args.max_new_tokens, temp=args.temp,
             state_path=sp, gpu_monitor=mon,
             warmup_n=args.warmup_n,
+            L1=args.L1, L1_adaptive=args.L1_adaptive,
         )
         all_stats[mode] = stats
         # Skip the CSV append for a run that was already fully cached at start
