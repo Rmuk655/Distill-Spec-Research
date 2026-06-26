@@ -536,6 +536,22 @@ Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) �
 - **32B teacher** to test teacher-scale sensitivity (not required for the core 0.6B/8B claim).
 - **Longer horizon ($L{=}16$).**
 
+### 8.3 The unifying frame: adaptive teacher–student curriculum (on-policy ↔ off-policy)
+
+The variants in §8.1–8.2 are points on one continuum, best seen through a teaching analogy. A teacher choosing how to bring a student up to standard can:
+
+- **drill the student on its weak areas** — concentrate supervision where it fails (→ curriculum / verifier-failure-targeted enrich);
+- **align training to the exam the student will sit** — train against the verifier/eval distribution that will actually score it (→ verifier-aligned losses, the §8.1 accepted-state objective);
+- **shift control over time** — early on the teacher dictates the full answer (off-policy, teacher-generated states = today's enrich); then the teacher lets the student attempt and only corrects where it goes wrong (mixed: student states + teacher fixes = verifier-failure-targeted enrich); finally the student works unaided and the teacher only verifies (fully on-policy).
+
+So the research arc is an **adaptive on-policy/off-policy mix with a schedule**: how much of the training context is teacher-generated vs. student-generated, and how that ratio moves as the student improves. Current `jsd_flat_enrich` is the fully off-policy end; the §8.1 accepted-state objective is the on-policy end; the interesting work is the adaptive middle.
+
+**Open theory questions this frame raises** (research-lead input needed before committing runs):
+- **Can the student grasp it?** Is a 0.6B draft expressive enough to match the teacher on the hard states, or is some loss floor a capacity limit rather than a training-signal limit?
+- **Is the teacher supervising where the student is actually weak?** Uniform enrich spends rollouts everywhere; does targeting the student's failure positions change the outcome, or is the signal already saturated?
+- **Is the student near teacher-induced capacity?** At BE ≈ 6.4/8 with path_diversity healthy ([§3.3](#33-capacity-signals-measured-along-the-way)), is remaining headroom small because the draft is saturated? A 32B-teacher run would separate teacher-headroom from draft-capacity.
+- **Cross-distribution alignment.** Do we train on one dataset and evaluate on another (math_hard → math_eval today), and how much of the gap is distribution mismatch vs. method? This is the "align the student to the exam" question made concrete.
+
 These are explicitly deferred. Whether they fold into this paper (as ablations) or a follow-on is a research-lead scope decision.
 
 ---
