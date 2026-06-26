@@ -75,6 +75,24 @@ from diagnostics import run_objective_be_diagnostic, run_decomposition_radar
 RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
 
+def _effective_mode(mode: str, L1: int, L1_adaptive: bool) -> str:
+    """Return a unique mode label that encodes the delayed-expansion config.
+
+    Used for state-file naming and CSV mode column so that:
+      traversal          →  regular traversal (existing rows unaffected)
+      traversal_dL3      →  delayed, fixed L1=3
+      traversal_dAdapt   →  delayed, adaptive L1 from lagged teacher entropy
+
+    The verifier dispatch still uses the original mode name (traversal); only
+    the logging identity changes so runs never collide with each other's cache.
+    """
+    if L1_adaptive:
+        return f"{mode}_dAdapt"
+    if L1 > 0:
+        return f"{mode}_dL{L1}"
+    return mode
+
+
 def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
                       max_new_tokens, temp, state_path: str | None = None,
                       gpu_monitor: GpuMonitor | None = None,
@@ -334,13 +352,16 @@ def main():
         raise SystemExit(f"Unknown verifier mode(s): {unknown}. Valid: {VERIFIER_MODES}")
 
     # A mode needs the models only if some prompt is still unfinished.
+    # Use the effective mode (encodes L1) for state-file naming so delayed and
+    # non-delayed runs of the same verifier never share a cache.
     mode_state: dict[str, tuple[str, bool]] = {}
     need_models = False
     for mode in modes:
-        sp = _state_path(csv_path, mode, args.K, args.L, args.checkpoint, args.dataset)
+        eff = _effective_mode(mode, args.L1, args.L1_adaptive)
+        sp = _state_path(csv_path, eff, args.K, args.L, args.checkpoint, args.dataset)
         done = _load_state(sp)
         complete = bool(prompts) and all(i in done for i in range(len(prompts)))
-        mode_state[mode] = (sp, complete)
+        mode_state[mode] = (sp, complete, eff)
         if not complete:
             need_models = True
     # --diagnose needs the models for its extra forward passes even when every
@@ -370,10 +391,12 @@ def main():
 
     print(f"[data] {data_path} — {len(prompts)} prompts")
 
+    _l1_tag = (f"  L1=adaptive" if args.L1_adaptive else
+               f"  L1={args.L1}" if args.L1 > 0 else "")
     print()
     print("=" * 78)
     print(f"  Eval  draft={args.checkpoint}  dataset={args.dataset}  "
-          f"K={args.K} L={args.L} n={len(prompts)}")
+          f"K={args.K} L={args.L}{_l1_tag} n={len(prompts)}")
     print(f"  device={args.device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
     print("=" * 78)
 
@@ -381,7 +404,7 @@ def main():
     for mode in modes:
         set_seed(args.seed)   # identical RNG state for every mode
 
-        sp, complete = mode_state[mode]
+        sp, complete, eff = mode_state[mode]
         # Only monitor the GPU for modes that will actually run work.
         mon = (GpuMonitor(device_idx=phys_gpu_idx)
                if not complete and not args.no_gpu_monitor else None)
@@ -401,11 +424,11 @@ def main():
         # that *completes* during this invocation had complete=False, so it
         # still logs.
         if complete:
-            print(f"  [cache] mode={mode} already complete — "
+            print(f"  [cache] mode={eff} already complete — "
                   f"not re-appending to {os.path.basename(csv_path)} "
                   f"(BE={stats['block_eff']:.4f})")
         else:
-            log_result(stats, args, mode, mon, csv_path,
+            log_result(stats, args, eff, mon, csv_path,
                        specs=specs, cpu_threads_used=cpu_threads, phys_gpu_idx=phys_gpu_idx)
 
     print(f"\n[done] results appended to {csv_path}")

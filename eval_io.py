@@ -51,7 +51,7 @@ def _load_state(path: str) -> dict[int, dict]:
 
 
 CSV_COLUMNS = [
-    "timestamp", "checkpoint", "dataset", "mode", "K", "L",
+    "timestamp", "checkpoint", "dataset", "mode", "K", "L", "L1",
     # Core eval metrics
     "n_prompts", "skipped_prompts", "target_calls",
     "block_eff", "throughput_tok_s",
@@ -149,6 +149,7 @@ def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
         "timestamp":       datetime.utcnow().isoformat(timespec="seconds"),
         "checkpoint":      args.checkpoint, "dataset": args.dataset,
         "mode":            mode, "K": args.K, "L": args.L,
+        "L1":              getattr(args, "L1", 0),
         "device":          f"cuda:{phys_gpu_idx}", "seed": args.seed, "dtype": DEFAULT_DTYPE,
         "cpu_threads_used": cpu_threads_used,
         "training_wandb_url": _resolve_training_url(args.checkpoint),
