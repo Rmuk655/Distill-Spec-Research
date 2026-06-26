@@ -51,7 +51,7 @@ def _load_state(path: str) -> dict[int, dict]:
 
 
 CSV_COLUMNS = [
-    "timestamp", "checkpoint", "dataset", "mode", "K", "L", "L1",
+    "timestamp", "checkpoint", "dataset", "mode", "K", "L",
     # Core eval metrics
     "n_prompts", "skipped_prompts", "target_calls",
     "block_eff", "throughput_tok_s",
@@ -87,6 +87,8 @@ CSV_COLUMNS = [
     "attn_backend",
     # Link back to the training run that produced this checkpoint
     "training_wandb_url",
+    # Delayed-expansion config — 0 for all regular runs (backward compatible, last column)
+    "L1",
 ]
 
 
