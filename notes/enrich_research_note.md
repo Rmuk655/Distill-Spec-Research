@@ -155,7 +155,7 @@ Per-verifier ρ for M=3 (n=100, s123). JSD is computed solely from draft and tea
 
 ## 4. Results
 
-> All raw per-cell BE in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv). Append new rows to that file; do not paste raw eval dumps into this note.
+> All raw per-cell results in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) — the full `eval.py` dump (44 columns: block_eff, throughput_tok_s, timing breakdown, GPU/CPU util, machine info, seed, n_prompts, etc.), math_eval, eval seed 123, train seed encoded in the checkpoint name. Append new eval rows there; do not paste raw dumps into this note. (Converged flat-40K baseline is in the separate [40K CSV](https://github.com/Rmuk655/Distill-Spec-Research/blob/Pipeline/Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv).)
 
 ### 4.1 Training runs
 
