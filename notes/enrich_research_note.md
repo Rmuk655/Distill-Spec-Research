@@ -9,10 +9,10 @@
 **Method.** `jsd_flat_enrich` replaces the single greedy teacher rollout in standard flat JSD training with M independent stochastic teacher continuations per step. The draft minimises the average JSD against all M teacher-sampled contexts. There are no draft proposals, no verifier decisions, and no accepted/rejected tokens in training — it is a broader-coverage teacher-sampling variant of flat JSD.
 
 **Key results** (one model pair, one dataset, two seeds):
-- **M=3 beats flat JSD** on traversal, bv, and naive at K_eval=3, n=1000, both seeds: +1.3% (traversal), +3.2% (bv), +2.5% (naive).
+- **M=3 beats the seed-averaged flat JSD** on traversal/bv/naive at K_eval=2,3,4 (n=1000), gain largest at K_eval=4 (traversal +0.10, bv +0.15, naive +0.14). **But same-seed the gain is asymmetric** — it rescues the weak seed (s123, +0.19–0.25) and is flat-to-*negative* on the strong seed (s456) for traversal/naive at K≤3. Only at K_eval=4 does M=3 win on both seeds.
 - **M=3 (8K steps) scores above our converged flat-40K baseline at traversal K=3**: +5.9% (s123) and +2.9% (s456). M=3-8K uses 24K total teacher rollouts vs flat-40K's 40K — it wins with fewer rollouts.
 - **M=1 does not beat flat-40K** (−0.022 overall). The benefit requires M>1.
-- **Cross-seed spread collapses under enrich** (flat ~0.19 → enrich ~0.03–0.06). Suggests initialization robustness — tentative, N=2 cannot estimate variance.
+- **The dominant, best-supported effect is variance reduction.** Flat's large initialization spread (s456−s123 ≈ +0.17) collapses under enrich to ≈ −0.03 to −0.15 at every K_eval (n=1000). Enrich is best described as an **initialization-rescuer / variance reducer, not a ceiling-raiser** — the averaged BE gain is mostly the removal of flat's downside. Needs ≥5 seeds to quantify.
 
 **Key analysis:**
 - **Verifier responses are heterogeneous.** M=3 wins on 7–9 of 9 verifiers at every K_eval. Traversal and bv gains grow with K_eval; gbv/specinfer/max fade or go negative at high K_eval; naive/spectr/nss/khisti are K-agnostic across K_eval.
@@ -198,7 +198,7 @@ n=1000 gives SE ≈ 0.016. K_eval=3 = M for the M=3 condition. Both seeds evalua
 | M=3 | +0.076 (+1.3%) | **+0.190 (+3.2%)** | **+0.140 (+2.5%)** |
 | M=3 vs M=1 | +0.008 (noise) | **+0.072 (+1.2%)** | **+0.066 (+1.2%)** |
 
-M=3 beats flat on all three modes, both seeds. M=3 > M=1 in bv and naive (+0.07); traversal shows no M=3/M=1 difference at K_eval=3 (see [§4.3](#43-k_eval2-results-n1000-enrich-only--flat-k_eval2-not-yet-run) — traversal peaks at K_eval=2).
+M=3 beats the **seed-averaged** flat on all three modes. **Same-seed the picture is asymmetric** — M=3 beats flat on s123 by a lot but is flat-to-slightly-negative on s456 for traversal (M=3 s456 5.991 < flat s456 6.044); the full K-sweep and the seed-rescue reading are in [§4.3](#43-n1000-across-k_eval--2-3-4-math_eval-both-seeds). M=3 > M=1 in bv and naive (+0.07); traversal shows no M=3/M=1 difference at K_eval=3.
 
 **Seed variance collapse:**
 
@@ -208,21 +208,42 @@ M=3 beats flat on all three modes, both seeds. M=3 > M=1 in bv and naive (+0.07)
 | M=1 | 0.020 | −0.027 | −0.047 |
 | M=3 | 0.065 | 0.085 | 0.044 |
 
-Flat JSD has a large systematic seed spread (~0.19 per mode; s456 consistently higher than s123 across all modes). Enrich training collapses this to ~0.03–0.09 — both initializations converge to nearly the same basin. Enrich is initialization-robust. Seed-averaged flat values are the authoritative baseline; single-seed flat comparisons are unreliable.
+Flat JSD has a large systematic seed spread (~0.19 per mode; s456 consistently higher than s123 across all modes). Enrich training collapses this to ~0.03–0.09 — both initializations converge to nearly the same basin. This is confirmed at n=1000 across K_eval=2,3,4 ([§4.3](#43-n1000-across-k_eval--2-3-4-math_eval-both-seeds)). But "initialization-robust" is the right description only with the asymmetry attached: enrich **rescues the weak seed and trims the strong one** — it is primarily a variance reducer, not a ceiling-raiser (see §4.3). Seed-averaged flat values are the authoritative baseline; single-seed flat comparisons are unreliable.
 
-### 4.3 K_eval=2 results (n=1000, enrich only — flat K_eval=2 not yet run)
+### 4.3 n=1000 across K_eval = 2, 3, 4 (math_eval, both seeds)
 
-| condition | traversal | naive |
-|---|---|---|
-| M=1 s123 | 6.073 | 5.808 |
-| M=1 s456 | 6.047 | 5.847 |
-| **M=1 avg** | **6.060** | **5.828** |
-| M=3 s123 | 6.141 | 5.926 |
-| M=3 s456 | 6.005 | 5.778 |
-| **M=3 avg** | **6.073** | **5.852** |
-| M=3 vs M=1 | +0.013 | +0.024 |
+K_eval=2 and K_eval=4 are now run at n=1000 (flat + M=1 + M=3, both seeds), so §4.2's K_eval=3 point sits inside a full K-sweep. (The one missing cell is BV M=3 at K_eval=2; K_eval=1 is still not run at n=1000.) **This larger picture changes the headline reading — the gain is real against the seed-average but is largely seed-rescue, not a ceiling lift.**
 
-**Traversal peaks at K_eval=2.** M=3 traversal at K_eval=2 (avg 6.073) > K_eval=3 (avg 6.024) on both seeds. The K_eval=M alignment is not confirmed for traversal at n=1000; for traversal, M=3 is most effective at K_eval=2. BV at K_eval=2 is not yet run at n=1000.
+**M=3 − flat, seed-averaged (n=1000):**
+
+| mode | Δ K=2 | Δ K=3 | Δ K=4 |
+|---|---|---|---|
+| traversal | +0.073 | +0.076 | +0.103 |
+| bv | *(M3 K2 unrun)* | +0.190 | +0.151 |
+| naive | +0.094 | +0.140 | +0.143 |
+
+Against the **seed-averaged** flat baseline, M=3 wins at every K_eval and every mode — the headline holds across the full sweep, not only K=3, and is largest at K_eval=4 for traversal/naive.
+
+**But the win is asymmetric seed-rescue — the same-seed (paired) Δ tells a different story:**
+
+| mode | K | M3−flat **s123** | M3−flat **s456** |
+|---|---|---|---|
+| traversal | 2 | +0.222 | **−0.076** |
+| traversal | 3 | +0.205 | **−0.053** |
+| traversal | 4 | +0.189 | +0.018 |
+| naive | 2 | +0.247 | **−0.059** |
+| naive | 3 | +0.246 | +0.034 |
+| naive | 4 | +0.206 | +0.080 |
+| bv | 3 | +0.327 | +0.052 |
+| bv | 4 | +0.240 | +0.061 |
+
+On its own seed, M=3 lifts the **unlucky** initialization (s123) by +0.19–0.25, but on the **lucky** initialization (s456) it is flat-to-**negative** for traversal and naive at K≤3 (−0.076 at traversal K=2 is ≈3×SE, a real same-seed loss). The seed-averaged gain exists because flat's average is dragged down by the weak s123 run; **M=3 does not beat the better-seed flat for traversal/naive until K_eval=4.**
+
+**This is the seed-variance-collapse mechanism made concrete.** Flat has a large, systematic initialization spread (s456 − s123 ≈ +0.16 to +0.19 at *every* K); M=3 collapses it to ≈ −0.03 to −0.15 (and slightly inverts the sign). Enrich pulls both seeds into a common ~6.0–6.05 basin: it rescues the unlucky seed **up** and trims the lucky seed **down**. So the honest one-line read is that **enrich is primarily a variance reducer / initialization-rescuer, not a ceiling-raiser** — its averaged advantage is mostly the removal of flat's downside, not a lift above flat's best seed.
+
+**K_eval=4 is where the gain is most robust** — the only K at which M=3 beats flat on *both* seeds for all three modes. Absolute BE *declines* with K_eval for every condition (more branches → lower BE at n=1000), so enrich's relative advantage is largest exactly where the verifier's own BE is weakest.
+
+**Traversal absolute BE still peaks at K_eval=2** (M=3 avg 6.073 > K3 6.024 > K4 5.954) — so the best traversal *operating point* is K_eval=2, even though the enrich *gain* is largest at K=4. M=3 vs M=1 is small at K=2,3 (+0.01–0.02) and opens up at K=4 (traversal +0.04, naive +0.02, bv +0.04).
 
 ### 4.4 Cross-verifier and K_eval-dependence (n=100, seed-averaged, vs flat-8K)
 
@@ -330,7 +351,7 @@ In other words, the result is not "M=3 wins because it saw more rollouts" — fl
 - *vs flat-40K* (converged baseline): the BV advantage holds on s123 (+1.9% at K=3) but **reverses on s456 (−1.4%)** — the two seeds disagree once flat is trained to convergence.
 - **Interpretation:** M=3 reaches a strong BV checkpoint *faster* than flat (8K vs ~15K convergence), but flat catches up on BV once converged. M=3 does **not** lift the BV ceiling.
 - **Contrast — traversal:** at K=3, M=3 scores above flat-40K on **both** seeds (+5.9% / +2.9%) — the more robust of the two, but still single-dataset, two-seed, no CIs.
-- **Open:** the n=1000 BV K_eval=2 cell is unrun, and a third seed would break the s123/s456 tie.
+- **Open:** the n=1000 BV K_eval=2 **M=3** cell is still unrun (M=1 is now run); and a third seed would break the s123/s456 tie. Note the BV reversal here is vs the *converged* flat-40K — against flat-8K at n=1000, M=3 BV beats flat on both seeds at K_eval=3,4 ([§4.3](#43-n1000-across-k_eval--2-3-4-math_eval-both-seeds)).
 
 **M=1 has no edge over flat-40K.** M=1-8K is slightly below flat-40K (−0.022). A single stochastic trajectory behaves like flat JSD with broader context; the M>1 setting is what moves the metric here.
 
@@ -361,9 +382,9 @@ All conclusions are scoped to this setup (one model pair, one dataset, two seeds
 
 **Supported on this setup:**
 
-1. **M=3 enrich scores above flat JSD** on traversal (+1.3%), bv (+3.2%), naive (+2.5%), both seeds, n=1000, K_eval=3, gaps >4×SE. *Not compute-matched* — could be partly the extra teacher generation. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
+1. **M=3 enrich scores above the seed-averaged flat** on traversal/bv/naive at K_eval=2,3,4 (n=1000) — gain largest at K_eval=4. *But the win is asymmetric seed-rescue, not a uniform lift:* same-seed, M=3 lifts the weak seed (s123, +0.19–0.25) and is flat-to-negative on the strong seed (s456) for traversal/naive at K≤3. Only at K_eval=4 does M=3 beat flat on both seeds across all modes. Also *not compute-matched*. [[§4.3](#43-n1000-across-k_eval--2-3-4-math_eval-both-seeds)]
 2. **M=3 (8K) scores above our flat-40K baseline at traversal K=3** (+5.9% s123 / +2.9% s456); our flat run did not reach this with more steps. Suggestive of an M>1 effect; *not* a proof flat cannot reach it. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
-3. **Cross-seed spread is smaller under enrich** (~0.19 → ~0.03–0.06), *suggesting* initialization robustness. Tentative only — N=2 cannot estimate variance; needs ≥5 seeds. Seed-averaged flat baselines are in any case mandatory. [[§4.2](#42-primary-eval-n1000-k_eval3-math_eval)]
+3. **Variance reduction is the dominant, best-supported effect** (and likely the real contribution). Flat's large initialization spread (s456−s123 ≈ +0.16–0.19) collapses under enrich to ≈ −0.03 to −0.15 at every K_eval (n=1000) — enrich rescues the weak seed up and trims the strong seed down to a common basin. So enrich is best described as an **initialization-rescuer / variance reducer, not a ceiling-raiser**; its seed-averaged BE gain is mostly the removal of flat's downside. Still needs ≥5 seeds to estimate the variance properly. [[§4.3](#43-n1000-across-k_eval--2-3-4-math_eval-both-seeds)]
 4. **Verifier response is heterogeneous (the strongest finding).** M=3 scores above flat-8K on 7–9 of 9 verifiers at every K_eval; bv/traversal gains grow with K_eval while gbv/specinfer/max fade or reverse. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
 5. **|ρ|(JSD,BE) increases with M** (flat −0.396 → M=1 −0.568 → M=3 −0.645) — a monotonic-association diagnostic, not evidence about the objective itself. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
 
