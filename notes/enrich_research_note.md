@@ -2,7 +2,7 @@
 ## A Research Note on `jsd_flat_enrich`
 
 **Scope:** one draft (Qwen3-0.6B) / one teacher (Qwen3-8B), one training dataset (math_hard), one eval domain (math_eval), two seeds. n=1000 for traversal/bv/naive ([§4.2](#42-primary-eval-n1000-k_eval3-math_eval)–4.3); n=100 for the 9-verifier × K_eval sweep ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).
-**Closest competitor:** Draft-OPD (May 2026) — not yet compared experimentally ([§6](#6-novelty-positioning-the-biggest-risk)).
+**Closest competitor:** Draft-OPD (May 2026) — not yet compared experimentally ([§5.1](#51-novelty-positioning-the-biggest-risk)).
 
 ### Summary
 
@@ -16,16 +16,16 @@
 
 **Key analysis:**
 - **Verifier responses are heterogeneous.** M=3 wins on 7–9 of 9 verifiers at every K_eval. Traversal and bv gains grow with K_eval; gbv/specinfer/max fade or go negative at high K_eval; naive/spectr/nss/khisti are K-agnostic across K_eval.
-- **No matched-K diagonal** (contrast with depth_weight): M=3 gains are positive at all K_eval and are largest at K_eval=1,2 (+0.136, +0.130 seed-avg), not at the "matched" K_eval=3 (+0.082). Broader training coverage transfers regardless of inference tree width.
+- **No matched-K diagonal** (contrast with depth_weight): M=3 gains are positive at all K_eval and are largest at K_eval=1,2 (+0.136, +0.130 seed-avg), not at the "matched" K_eval=3 (+0.082). Because M independent teacher paths are flat-trajectory data augmentation (not tree-structure training), the gain concentrating at narrow K_eval is expected — we do not claim enrich aligns the draft to verifier tree structure.
 - **JSD–BE coupling (ρ) strengthens with M** (flat −0.396 → M=1 −0.568 → M=3 −0.645) and varies across verifiers — traversal tightest (−0.645), specinfer loosest (−0.402). ρ reflects verifier acceptance-aggregation structure. Gain (Δ) depends on headroom: specinfer's large K_eval=1 gain (+0.336) is better attributed to its low baseline BE (4.867 — it has the most hard prompts) than to coupling strength.
 
 **Next steps** (suggested order):
-1. Compute-matched M=3-vs-flat baseline (gates any efficiency claim — [§7](#7-must-add-experiments-minimum-for-a-credible-paper) #3)
-2. n=1000 paired bootstrap CIs for headline cells ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #2)
-3. ≥5 seeds per condition ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #1)
-4. ≥1 additional dataset and model pair ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #7–8)
-5. Draft-OPD comparison ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #5)
-6. [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) derivations, or present [§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k) as purely empirical
+1. Compute-matched M=3-vs-flat baseline (gates any efficiency claim — [§6](#6-must-add-experiments-minimum-for-a-credible-paper) #3)
+2. n=1000 paired bootstrap CIs for headline cells ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #2)
+3. ≥5 seeds per condition ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #1)
+4. ≥1 additional dataset and model pair ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #7–8)
+5. Draft-OPD comparison ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #5)
+6. [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) derivations, or present [§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k) as purely empirical
 
 ---
 
@@ -39,7 +39,7 @@ $$
 
 where $P_\theta$ is the teacher, $Q_\phi$ the draft, and $D$ is the **offline teacher rollout distribution** over prefixes. In the current baseline implementation, this is a greedy teacher rollout (`do_sample=False`), not a sample from the full teacher marginal. At inference time the draft instead operates inside a verifier-gated acceptance loop: its own proposals, partially accepted and teacher-corrected, determine the prefixes it conditions on. This is the well-known **offline-to-inference (exposure) mismatch**. The implemented hypothesis is weaker than full on-policy training: replacing a single greedy teacher trajectory with stochastic teacher rollouts gives the draft broader teacher-context coverage and may improve speculative acceptance.
 
-This motivation is **not new** — it is the same mismatch DistillSpec (on-policy draft-generated data), GKD, OSD, and Draft-OPD all target. The current `jsd_flat_enrich` implementation is not a realization of verifier-accepted on-policy training; it is a stochastic-teacher variant of flat JSD. Any contribution must therefore be framed as the *specific low-complexity teacher-sampling instantiation*, its empirical effect, and its relationship to stronger draft-gated/replay methods ([§6](#6-novelty-positioning-the-biggest-risk)), not the mismatch observation itself.
+This motivation is **not new** — it is the same mismatch DistillSpec (on-policy draft-generated data), GKD, OSD, and Draft-OPD all target. The current `jsd_flat_enrich` implementation is not a realization of verifier-accepted on-policy training; it is a stochastic-teacher variant of flat JSD. Any contribution must therefore be framed as the *specific low-complexity teacher-sampling instantiation*, its empirical effect, and its relationship to stronger draft-gated/replay methods ([§5.1](#51-novelty-positioning-the-biggest-risk)), not the mismatch observation itself.
 
 ---
 
@@ -78,11 +78,11 @@ There are **no draft proposals, no verifier accept/reject decisions, and no teac
 
 ### 2.3 What this is *not*: the verifier-accepted state distribution
 
-The stronger objective we originally wanted to approximate — training on draft proposals that the verifier actually accepts (the verifier-accepted state distribution) — is **not** what `jsd_flat_enrich` implements. It is a proposed future extension; the full objective, why it was not implemented, and what would make it tractable are in **[§8.1](#81-the-ideal-extension-verifier-accepted-state-distribution)**. The current method trains on teacher-sampled contexts only.
+The stronger objective we originally wanted to approximate — training on draft proposals that the verifier actually accepts (the verifier-accepted state distribution) — is **not** what `jsd_flat_enrich` implements. It is a proposed future extension; the full objective, why it was not implemented, and what would make it tractable are in **[§7.1](#71-the-ideal-extension-verifier-accepted-state-distribution)**. The current method trains on teacher-sampled contexts only.
 
 ### 2.4 Stop-gradient disclosure (important)
 
-For the current stochastic-teacher variant, the sampling distribution is teacher-only and has no $\phi$-gradient to block. Stop-gradient only becomes a substantive issue for the ideal verifier-accepted-state objective ([§8.1](#81-the-ideal-extension-verifier-accepted-state-distribution)), where draft proposals would feed back into the training distribution. In that future draft-gated variant, if we do not differentiate through sampling, the objective is a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, which composes with — rather than is approximated by — stochastic teacher rollout (see [§6.1](#61-the-design-space-is-2-d-not-a-1-d-ladder)).
+For the current stochastic-teacher variant, the sampling distribution is teacher-only and has no $\phi$-gradient to block. Stop-gradient only becomes a substantive issue for the ideal verifier-accepted-state objective ([§7.1](#71-the-ideal-extension-verifier-accepted-state-distribution)), where draft proposals would feed back into the training distribution. In that future draft-gated variant, if we do not differentiate through sampling, the objective is a **stop-gradient Monte Carlo surrogate** for closing the exposure gap — *not* the exact gradient of expected block efficiency $\nabla_\phi \mathbb{E}[\text{BE}]$. The NSS tree-gradient line of work (Rahul) is the route to the *exact* $\partial\text{BE}/\partial\theta$, which composes with — rather than is approximated by — stochastic teacher rollout (see [§5.2](#52-the-design-space-is-2-d-not-a-1-d-ladder)).
 
 ### 2.5 Accepted/rejected framing belongs to draft-gated variants
 
@@ -96,7 +96,7 @@ $$
 \alpha(p,q) = \sum_x \min\big(p(x), q(x)\big) = 1 - \text{TV}(p, q).
 $$
 
-With JSD measured in nats, Pinsker's inequality applied to the KL sub-terms gives the safe bound $\text{TV}^2 \leq 2\,\text{JSD}$. So minimising JSD ⇒ lower TV ⇒ higher single-token acceptance **on the states being trained**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open obligation ([§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation)).
+With JSD measured in nats, Pinsker's inequality applied to the KL sub-terms gives the safe bound $\text{TV}^2 \leq 2\,\text{JSD}$. So minimising JSD ⇒ lower TV ⇒ higher single-token acceptance **on the states being trained**. This chain is clean for naive acceptance; **it does not automatically transfer to BV/GBV/NSS/SpecInfer** (multi-token / tree / optimal-transport criteria). Establishing the link per verifier is an open obligation ([§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived)).
 
 ---
 
@@ -124,7 +124,7 @@ L-relative buckets: easy $\geq 0.75L$, medium $[0.375L, 0.75L)$, hard $< 0.375L$
 | M=1 enrich | −0.568 | 8.5×10⁻¹² |
 | M=3 enrich | **−0.645** | ≈0 |
 
-ρ strengthens monotonically with M. The p-values confirm statistical significance: p=8.5×10⁻¹² means the probability this correlation arose by chance from 100 prompts is one in 100 billion; p≈0 means the same probability is negligible to the point of rounding to zero.
+ρ strengthens monotonically with M, but **this progression is not by itself evidence that stochastic-teacher training aligns better with the verifier.** JSD is an expected value; the diagnostic estimates each prompt's JSD from its rollouts, and a higher-M estimate has lower variance (≈1/M by the CLT). Lower measurement noise on the JSD axis mechanically reduces regression-dilution attenuation and tightens *any* rank correlation — so part (possibly all) of the M=1→M=3 strengthening just reflects 3 samples giving a cleaner JSD estimate than 1, not a better-aligned model. We therefore do **not** lean on the flat→M=1→M=3 progression. The per-verifier ρ comparison below (all at fixed M, so this artifact is held constant across rows) and the eval BE in §4 carry the weight. (The p-values only confirm the correlations are real: p=8.5×10⁻¹² ≈ one in 100 billion; p≈0 rounds to zero.)
 
 Per-verifier ρ for M=3 (n=100, s123). JSD is computed solely from draft and teacher probability distributions — the verifier does not affect it. So all four rows share the same JSD statistics (σ(JSD)=0.0200, mean=0.0296); ρ differences across rows reflect verifier structure, not differences in the JSD distribution.
 
@@ -137,15 +137,15 @@ Per-verifier ρ for M=3 (n=100, s123). JSD is computed solely from draft and tea
 
 **ρ ordering reflects how each verifier aggregates acceptance.** Traversal has the tightest coupling (−0.645): it aggregates path-level acceptance products across the tree, so a JSD reduction along a path compounds into a strong BE lift. BV is next (−0.518): a budget cap limits marginal gain beyond a threshold. Naive is looser (−0.413): it reduces to per-token min(1,P/Q), a coarser aggregation than path products. SpecInfer is loosest (−0.402): it has the most hard prompts (3%) and uses multi-candidate residual acceptance based on token-specific ratios, not aggregate JSD. fwdKL and JSD are interchangeable predictors (Δρ < 0.015 for every verifier). σ(JSD) is stable across all four verifiers, confirming that ρ differences are genuine and not an artifact of JSD range compression for one verifier.
 
-**ρ reflects verifier acceptance-aggregation structure; gain (Δ) reflects headroom.** ρ measures how reliably JSD predicts BE rank for a fixed checkpoint — a property of the verifier's acceptance functional. Δ depends on how far that verifier's BE sits below its ceiling and how sensitive it is to the training distribution. specinfer has both the loosest coupling (ρ=−0.402) and the lowest baseline BE (4.867 — the only verifier with hard prompts); its large K_eval=1 gain (+0.336, [§4.2](#42-primary-eval-n1000-k_eval3-math_eval)) is better attributed to that headroom than to coupling strength. The [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) theory should treat per-verifier JSD→acceptance slope (predicts ρ) and per-verifier acceptance headroom (predicts Δ) as distinct quantities to derive.
+**ρ reflects verifier acceptance-aggregation structure; gain (Δ) reflects headroom.** ρ measures how reliably JSD predicts BE rank for a fixed checkpoint — a property of the verifier's acceptance functional. Δ depends on how far that verifier's BE sits below its ceiling and how sensitive it is to the training distribution. specinfer has both the loosest coupling (ρ=−0.402) and the lowest baseline BE (4.867 — the only verifier with hard prompts); its large K_eval=1 gain (+0.336, [§4.2](#42-primary-eval-n1000-k_eval3-math_eval)) is better attributed to that headroom than to coupling strength. The [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) theory should treat per-verifier JSD→acceptance slope (predicts ρ) and per-verifier acceptance headroom (predicts Δ) as distinct quantities to derive.
 
-ρ is a mechanism diagnostic; the findings rest on eval BE (§4). The traversal progression (−0.396 → −0.568 → −0.645) and the four-verifier table suffice to anchor the §5 coupling story; completing all 9 verifier modes is optional.
+ρ is a mechanism diagnostic; the findings rest on eval BE (§4). The four-verifier table (fixed M, so the estimator-variance artifact above is constant across rows) is what anchors the coupling story; the cross-M progression is not used as evidence. Completing all 9 verifier modes is optional.
 
 ### 3.3 Capacity signals (measured along the way)
 
 **Student (draft) at capacity:** val/block_eff plateau with no new best; train loss floor (~0.02); high oscillating forgetting with no net BE gain; frozen BE bucket distribution.
 
-**Teacher / data diversity signal:** BE → $L$ suggests limited headroom; path_diversity → 0 means stochastic teacher rollouts have collapsed to near-identical continuations. At 0.6B/8B on math, BE≈6.4/8 and path_diversity ∈ [0.8,1.0] for M=3, so the teacher is still producing diverse contexts. This does **not** prove the teacher is not a bottleneck; it only says stochastic teacher sampling has not collapsed. A 32B-teacher run would test teacher-scale sensitivity (future work, [§8](#8-future-directions-parking-lot--prioritise-later)).
+**Teacher / data diversity signal:** BE → $L$ suggests limited headroom; path_diversity → 0 means stochastic teacher rollouts have collapsed to near-identical continuations. At 0.6B/8B on math, BE≈6.4/8 and path_diversity ∈ [0.8,1.0] for M=3, so the teacher is still producing diverse contexts. This does **not** prove the teacher is not a bottleneck; it only says stochastic teacher sampling has not collapsed. A 32B-teacher run would test teacher-scale sensitivity (future work, [§7](#7-future-directions-parking-lot--prioritise-later)).
 
 **`train/path_diversity`** = fraction of positions where ≥2 of the $M$ rollouts disagree. ~1.0 ⇒ diverse signal, $M > 1$ contributes; <0.1 ⇒ rollout collapse, $M > 1$ ≈ $M=1$. Observed M=3: ∈[0.8,1.0], healthy.
 
@@ -254,7 +254,9 @@ This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over 
 | M=1 wins | 9/9 | 5/9 | 6/9 | 8/9 |
 | M=1 mean Δ | +0.067 | +0.045 | +0.057 | +0.092 |
 
-**No matched-K diagonal — the key contrast with depth_weight.** In the depth_weight ablation the only gain over baseline sat on the K_train = K_eval diagonal and collapsed off it. Enrich is the opposite: M=3's gain is positive at *every* K_eval and is actually **largest at K_eval=1,2** (+0.136, +0.130), not at the "matched" K_eval=3 (+0.082). The mechanism (broader teacher context) is not tied to inference tree width — enrich wins regardless of K_eval. M=1 is the weaker version of the same shape and sags mid-K (5/9 at K=2).
+**No matched-K diagonal — the key contrast with depth_weight.** In the depth_weight ablation the only gain over baseline sat on the K_train = K_eval diagonal and collapsed off it. Enrich is different: M=3's gain is positive at *every* K_eval and is largest at K_eval=1,2 (+0.136, +0.130), not at the "matched" K_eval=3 (+0.082). M=1 is the weaker version of the same shape and sags mid-K (5/9 at K=2).
+
+**Why the gain concentrates at narrow K_eval — and what we do *not* claim.** M=3 trains on M *independent* teacher continuations; it is trajectory-level data augmentation for flat training, **not** tree-structure training. The draft is never taught to allocate probability mass across a branching structure. So it is expected — not surprising — that broader single-path coverage benefits narrow inference (K_eval=1,2) more than wide trees. We therefore make **no claim** that enrich aligns the draft to the verifier's tree structure; its mechanism is state coverage, which happens to transfer across K_eval rather than being tied to it. A reviewer may read "largest at low K_eval" as structural misalignment with wide-tree inference — that reading is fair, and we accept it. Teaching the draft to allocate mass across branches is the separate job of the verifier-aligned / accepted-state directions ([§7.1](#71-the-ideal-extension-verifier-accepted-state-distribution)), not of enrich.
 
 **Per-verifier verdict (M=3 vs flat-8K, seed-avg):**
 
@@ -270,7 +272,7 @@ This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over 
 | specinfer | Mixed → **loses at high K** | strong at K≤2 (+0.21/+0.23), **negative at K≥3** |
 | max | Inconclusive | ~+0.09 at K=1, ~0 elsewhere, **negative at K=3** |
 
-**Three K-dependence classes** (the empirical core [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) theory must reproduce):
+**Three K-dependence classes** (the empirical core [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) theory must reproduce):
 - **Improve with K** (gain grows toward K=4): **traversal, bv** — prefix/budget verifiers; M parallel-calibrated branches compound as tree width grows.
 - **Worsen with K** (front-loaded, fade or go negative by K≥3): **gbv, specinfer, max** — residual/competition verifiers whose cross-candidate normalisation is sub-additive in branch count.
 - **K-agnostic** (flat positive across K): **naive, spectr, nss, khisti**.
@@ -294,7 +296,14 @@ M=3 beats its own flat-8K baseline at every K value on both traversal and BV —
 
 ### 4.5 M=3 (8K steps) vs our strongest flat baseline (40K steps)
 
-Our flat JSD run stops improving by ~15K steps; we trained it to 40K and treat that as our strongest flat baseline (one optimization trajectory — *not* a proof of the flat ceiling; other schedules/objectives might do better). Rollout count: M=3-8K uses ≈24K total teacher rollouts (3/step × 8K steps); flat-40K uses ≈40K (1/step × 40K steps). M=3-8K wins at traversal K=3 using 40% fewer teacher rollouts than flat-40K — already evidence of efficiency, though a true compute-matched flat run (~24K steps of flat JSD, [§7](#7-must-add-experiments-minimum-for-a-credible-paper) #3) would be the cleanest confirmation. flat-40K evaluated on H100; BE is hardware-independent and comparable to the A100 8K runs.
+Our flat JSD run stops improving by ~15K steps; we trained it to 40K and treat that as our strongest flat baseline (one optimization trajectory — *not* a proof of the flat ceiling; other schedules/objectives might do better). flat-40K evaluated on H100; BE is hardware-independent and comparable to the A100 8K runs.
+
+**On the compute-confound objection.** A natural worry is that M=3-8K beats flat-8K simply because it does 3× the teacher rollouts per step, so the lift is rollout *volume*, not the *stochastic* nature of the trajectories. The flat-40K comparison is designed to answer exactly this, and the rollout arithmetic favors flat:
+- M=3-8K uses ≈24K total teacher rollouts (3/step × 8K steps).
+- flat-40K uses ≈40K total teacher rollouts (1/step × 40K steps) — **67% more rollouts than M=3-8K**, and flat has already plateaued by ~15K, so the strict compute-matched point (flat-24K) sits on the same plateau as flat-40K.
+- Despite that rollout advantage, flat-40K still scores **below** M=3-8K at traversal K=3 (+5.9% s123 / +2.9% s456). Since flat-24K ≤ flat-40K (it is the plateau, reached with fewer steps), a strict compute-matched flat-24K cannot do better than flat-40K — so it cannot close this gap either.
+
+In other words, the result is not "M=3 wins because it saw more rollouts" — flat saw *more* rollouts and still lost on this cell. The strict flat-24K run ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #3) is still worth running to remove all doubt, but the plateau + the flat-40K upper bound already bracket it. (This logic applies to the traversal-K=3 cell; the BV picture is murkier — see below.)
 
 | comparison | overall mean Δ | bv/traversal Δ | traversal K=3 Δ |
 |---|---|---|---|
@@ -329,7 +338,7 @@ Our flat JSD run stops improving by ~15K steps; we trained it to 40K and treat t
 
 From `--diagnose` mode (n=100, math_eval):
 
-**ρ progression with M (traversal mode):** flat JSD −0.396 → M=1 −0.568 → M=3 **−0.645**. Monotonically strengthening.
+**ρ progression with M (traversal mode):** flat JSD −0.396 → M=1 −0.568 → M=3 **−0.645**. Monotonically strengthening — but not used as evidence: at higher M the per-prompt JSD is estimated from more rollouts (variance ≈1/M), which mechanically tightens the correlation via reduced regression-dilution, independent of model alignment ([§3.2](#32-diagnostics---diagnose)). The per-verifier table below (fixed M) is the load-bearing comparison.
 
 **Per-verifier ρ (M=3, s123), σ(JSD)=0.0200 stable across all verifiers:**
 
@@ -342,7 +351,7 @@ From `--diagnose` mode (n=100, math_eval):
 
 σ(JSD) stable → ρ differences are not just range compression. JSD and fwdKL are interchangeable as predictors (Δρ < 0.015). **Caveat (do not oversell):** a higher |ρ| means JSD is a better *monotonic predictor* of BE for a fixed checkpoint — it does **not** by itself mean JSD is a better training objective, and it does not establish causation. ρ is a supporting diagnostic only; the findings rest on eval BE, not on ρ.
 
-**Negative control (teacher_temp=1.5):** ρ drops from −0.645 to −0.543, mean_JSD rises 8%, σ stable — consistent with genuine signal loss rather than range compression. Plausible mechanism: the student learns a noisier teacher distribution while the verifier runs at temp=1.0 at inference (training-inference mismatch). On this evidence teacher_temp=1.0 is the better setting; we did not sweep further.
+**Negative control (teacher_temp=1.5) — a sanity check, not a temperature characterization.** ρ drops −0.645 → −0.543, mean_JSD rises 8% (σ stable). Caveat: at temp 1.5 the 8B teacher largely loses logical coherence on math, so this mostly shows the obvious — training on near-incoherent teacher text hurts — rather than establishing a monotonic "higher teacher temperature is worse" law. The proper control is a *mild* sweep (e.g. 0.4 / 0.7 / 1.0) that raises stochasticity while preserving logical validity, to see whether more diverse-but-valid teacher trajectories help or hurt BE; that is unrun. On current evidence teacher_temp=1.0 is the safe default.
 
 **train/path_diversity (M=3):** ∈[0.8,1.0] — stochastic teacher rollouts are genuinely diverse; M>1 contributes distinct contexts, not near-duplicate paths.
 
@@ -361,36 +370,25 @@ All conclusions are scoped to this setup (one model pair, one dataset, two seeds
 **Not supported / refuted:**
 
 6. **A single stochastic rollout (M=1) is not enough** — it does not beat flat-40K (−0.022). The M>1 setting is what moves the metric. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
-7. **"Matched K_eval = M is optimal" does not hold for enrich.** M=3 is strongest at K_eval=1,2 (+0.136/+0.130), not at matched K_eval=3 (+0.082) — K-agnostic, opposite to the depth_weight ablation's diagonal pattern. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
-8. **Higher teacher temperature does not help** — teacher_temp=1.5 degrades alignment (ρ −0.645 → −0.543); 1.0 is the better setting on this evidence. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
+7. **"Matched K_eval = M is optimal" does not hold for enrich.** M=3 is strongest at K_eval=1,2 (+0.136/+0.130), not at matched K_eval=3 (+0.082). This is consistent with the mechanism — M independent teacher paths are flat-trajectory augmentation, not tree-structure training, so the draft is never taught to allocate mass across branches and broader single-path coverage naturally helps narrow inference most. We claim coverage, not verifier-tree-structure alignment. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+8. **Extreme teacher temperature (1.5) hurts — but this is the expected failure of training on incoherent math, not a characterized temperature law.** ρ −0.645 → −0.543; at temp 1.5 the teacher loses logical coherence, so this is a sanity check, not a sweep. A mild sweep (0.4/0.7/1.0) preserving validity is unrun. teacher_temp=1.0 is the safe default. [[§4.6](#46-objectivebe-alignment-diagnostics-ρ)]
 
 **Open / needs more data:**
 
 9. **BV: convergence-speed vs raised baseline unresolved.** M=3 scores above flat-8K on BV everywhere, but the advantage over flat-40K reverses on s456. Needs n=1000 BV K_eval=2 + a tie-break seed. [[§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)]
-10. **specinfer/max anti-alignment at high K_eval** (M=3 negative at K≥3 / K=3, both seeds) — observed but unexplained; gated on a [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) derivation that does not yet exist.
-11. **Paired bootstrap CIs** for the headline cells ([§7](#7-must-add-experiments-minimum-for-a-credible-paper) #2).
+10. **specinfer/max anti-alignment at high K_eval** (M=3 negative at K≥3 / K=3, both seeds) — observed but unexplained; gated on a [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) derivation that does not yet exist.
+11. **Paired bootstrap CIs** for the headline cells ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #2).
 
-**Cross-verifier K-dependence (the empirical headline for [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation)):** three classes — *improve with K* (traversal, bv: prefix/budget), *worsen with K* (gbv, specinfer, max: residual/competition, fade or go negative by K≥3), *K-agnostic* (naive, spectr, nss, khisti). The [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) acceptance-functional theory must reproduce this split. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
+**Cross-verifier K-dependence (the empirical headline for [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived)):** three classes — *improve with K* (traversal, bv: prefix/budget), *worsen with K* (gbv, specinfer, max: residual/competition, fade or go negative by K≥3), *K-agnostic* (naive, spectr, nss, khisti). The [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) acceptance-functional theory must reproduce this split. [[§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)]
 
-
----
-
-## 5. Verifier-Level Math (open obligations — currently conjecture, not derivation)
-
-> **Note:** only the naive case ($\alpha=1-\text{TV}$, via Pinsker) is derived; the explanations for traversal/BV/GBV/specinfer/NSS below are plausible intuitions, not proven. Either complete these derivations, or present §4.4 as purely empirical. Toy finite-vocabulary experiments (enumerate exact acceptance and BE, match against simulation) would make the verifier story hard to attack.
-
-**Core question — why does stochastic-teacher JSD help verifiers differently?** Each verifier's per-state acceptance probability is a *different functional* of $(P,Q)$. For naive single-token acceptance, $\alpha_{\text{naive}}(P,Q)=\sum_x\min(P(x),Q(x))=1-\text{TV}(P,Q)$, and JSD bounds TV ($\text{TV}^2\le 2\,\text{JSD}$ in nats), so lowering JSD on the trained states should raise naive acceptance on those states. For NSS (optimal-transport), BV/GBV (tree/budget), and SpecInfer, the acceptance functional is **not** TV, so the same JSD reduction would map to a *different* marginal acceptance gain — that mapping is the conjectured explanation for the differential cross-verifier benefit, and deriving it per verifier *would be* the theory contribution if completed (it is not, yet). Draft-OPD gives a local accepted/rejected KL rationale, but not this cross-verifier acceptance-functional analysis.
-
-1. **$K_{\text{eval}}{=}1$ collapse — likely a one-line remark, not a theorem.** At $K_{\text{eval}}{=}1$, the verifier sees a single draft path. For sequential token verification up to depth $L$, naive/spectr/khisti/max plausibly reduce to the same per-token accept-w.p.-$\min(1,P/Q)$ rule along that path. The proof should state this for arbitrary $L$, not only $L=1$. If the reduction is trivial, state it as a remark for completeness — **do not present it as a contribution.** Empirically the four give identical BE for both checkpoints (5.848 / 5.859).
-2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why stochastic-teacher JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
-3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does stochastic-teacher JSD induce that khisti penalises?
-4. **Acceptance–divergence transfer ([§2.6](#26-acceptancedivergence-link))** beyond naive.
-5. **Verifier–K alignment ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).** Why do prefix/budget verifiers (traversal, BV) keep or grow their enrich Δ as $K_{\text{eval}}\to M$ and beyond, while residual verifiers (specinfer) lose it at high $K_{\text{eval}}$? Conjecture: traversal/BV acceptance reward is monotone increasing in tree width given per-branch calibration, so M parallel-calibrated branches compound; specinfer's residual normalisation across candidates is sub-additive in branch count, so added branches dilute. Derive the $K_{\text{eval}}$-dependence of expected-BE per verifier and show it predicts the observed alignment/anti-alignment.
-6. **Coupling vs headroom ([§3.2](#32-diagnostics---diagnose)).** Two separate per-verifier quantities to derive: the JSD→acceptance *slope* (predicts ρ) and the acceptance *headroom* relative to a flat-JSD-trained draft (predicts Δ). specinfer illustrates the distinction — low ρ from verifier structure (multi-candidate residual acceptance), large Δ from low baseline BE (most hard prompts, most room to improve). A complete theory derives both from the verifier's acceptance functional.
 
 ---
 
-## 6. Novelty Positioning (the biggest risk)
+## 5. Discussion and Theoretical Positioning
+
+The empirical picture (§4): M=3 stochastic-teacher JSD beats flat JSD on the prefix/budget verifiers, the benefit is heterogeneous across verifiers and K_eval, and it holds against a converged flat baseline that used *more* teacher rollouts. This section places that result — first against prior work (the biggest risk to the contribution), then with a conjectured, not-yet-derived mechanism for the cross-verifier differential.
+
+### 5.1 Novelty positioning (the biggest risk)
 
 **Emerging research direction: acceptance-aware distillation.** The common thread across recent papers is not "how closely does the student match the teacher globally?" but **"which states and tokens matter for speculative acceptance?"** Methods differ along two orthogonal axes: (A) *state selection* — which contexts to train on; (B) *token selection* — which positions within those contexts to supervise. Current `jsd_flat_enrich` occupies a simple point: stochastic teacher states, uniform token coverage, multiple trajectories.
 
@@ -423,7 +421,9 @@ Both axes compose: any state source can combine with any token-selection strateg
 | **Teacher states (offline)** | Standard flat JSD | **Current `jsd_flat_enrich`** (M=1, 3) |
 | **Student states (on-policy)** | DistillSpec / GKD | **Unexplored** |
 
-The bottom-right corner — student-generated contexts with M teacher continuations per rollout — is the natural adaptive variant: the student's own failures determine where the teacher supervises. See [§8](#8-future-directions-parking-lot--prioritise-later) (Curriculum Enrichment).
+The bottom-right corner — student-generated contexts with M teacher continuations per rollout — is the natural adaptive variant: the student's own failures determine where the teacher supervises. See [§7](#7-future-directions-parking-lot--prioritise-later) (Curriculum Enrichment).
+
+**Key limitation — enrich never forces the draft to recover from its own mistakes.** The speculative-decoding exposure problem is fundamentally about the draft conditioning on *its own* suboptimal tokens at inference. `jsd_flat_enrich` throws more diverse *teacher* tokens at the draft, but every training context is still teacher-generated — the draft is never made to recover from a state it itself produced and the verifier rejected. This is the top-left→bottom-left gap in the 2×2: we add teacher-trajectory breadth (top row) without ever moving to student-generated states (bottom row). If Draft-OPD (which replays from the draft's *observed failures*) beats our method, this is the most likely reason. It should be stated as a known limitation, not buried — and it is exactly the gap the accepted-state / verifier-failure-targeted directions ([§7.1](#71-the-ideal-extension-verifier-accepted-state-distribution)) are meant to close.
 
 **What Draft-OPD leaves genuinely open:** cross-verifier behaviour and theory for verifier-specific acceptance functionals. Their own future-work line — extending OPD to *approximate/lossy verification* — is adjacent to our verifier work, so we are not contradicting them, we are entering the gap they flagged.
 
@@ -433,7 +433,7 @@ The bottom-right corner — student-generated contexts with M teacher continuati
 
 **Mandatory comparison:** stochastic teacher rollout vs. draft-gated accepted-only vs. accepted+rejected replay, and symmetric JSD vs. asymmetric fwd/rev-KL with $\gamma^{k-1}$ decay. Otherwise reviewers correctly say we have not located the result relative to a more complete on-policy method.
 
-### 6.1 The design space is 2-D, not a 1-D ladder
+### 5.2 The design space is 2-D, not a 1-D ladder
 
 The methods in this area separate cleanly along two orthogonal axes:
 
@@ -476,9 +476,22 @@ Consequences:
 
 > **Prompt-level vs. position-level (decision required):** prompt-level on/off selection (train hard prompts, skip easy) is the weakest framing — it collides with both Draft-OPD *and* generic curriculum learning. Only the **position-level continuous weighting** carries the differentiation above. If we pursue this, commit to position-level.
 
+### 5.3 Conjectured verifier-level mechanism (not yet derived)
+
+> **Note:** only the naive case ($\alpha=1-\text{TV}$, via Pinsker) is derived; the explanations for traversal/BV/GBV/specinfer/NSS below are plausible intuitions, not proven. Either complete these derivations, or present §4.4 as purely empirical. Toy finite-vocabulary experiments (enumerate exact acceptance and BE, match against simulation) would make the verifier story hard to attack.
+
+**Core question — why does stochastic-teacher JSD help verifiers differently?** Each verifier's per-state acceptance probability is a *different functional* of $(P,Q)$. For naive single-token acceptance, $\alpha_{\text{naive}}(P,Q)=\sum_x\min(P(x),Q(x))=1-\text{TV}(P,Q)$, and JSD bounds TV ($\text{TV}^2\le 2\,\text{JSD}$ in nats), so lowering JSD on the trained states should raise naive acceptance on those states. For NSS (optimal-transport), BV/GBV (tree/budget), and SpecInfer, the acceptance functional is **not** TV, so the same JSD reduction would map to a *different* marginal acceptance gain — that mapping is the conjectured explanation for the differential cross-verifier benefit, and deriving it per verifier *would be* the theory contribution if completed (it is not, yet). Draft-OPD gives a local accepted/rejected KL rationale, but not this cross-verifier acceptance-functional analysis.
+
+1. **$K_{\text{eval}}{=}1$ collapse — likely a one-line remark, not a theorem.** At $K_{\text{eval}}{=}1$, the verifier sees a single draft path. For sequential token verification up to depth $L$, naive/spectr/khisti/max plausibly reduce to the same per-token accept-w.p.-$\min(1,P/Q)$ rule along that path. The proof should state this for arbitrary $L$, not only $L=1$. If the reduction is trivial, state it as a remark for completeness — **do not present it as a contribution.** Empirically the four give identical BE for both checkpoints (5.848 / 5.859).
+2. **Exact expected-BE for tree/OT verifiers.** For NSS/BV/GBV/traversal, either derive exact expected-BE formulas or state precisely why stochastic-teacher JSD is only a surrogate. Back this with **toy finite-vocabulary experiments** where acceptance and BE can be enumerated exactly and matched against simulation — this makes the verifier story hard to attack.
+3. **Khisti antagonism.** Khisti is the only verifier with consistent negatives ($K_{\text{eval}}{=}2,4$). Needs a mechanism: what calibration pattern does stochastic-teacher JSD induce that khisti penalises?
+4. **Acceptance–divergence transfer ([§2.6](#26-acceptancedivergence-link))** beyond naive.
+5. **Verifier–K alignment ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).** Why do prefix/budget verifiers (traversal, BV) keep or grow their enrich Δ as $K_{\text{eval}}\to M$ and beyond, while residual verifiers (specinfer) lose it at high $K_{\text{eval}}$? Conjecture: traversal/BV acceptance reward is monotone increasing in tree width given per-branch calibration, so M parallel-calibrated branches compound; specinfer's residual normalisation across candidates is sub-additive in branch count, so added branches dilute. Derive the $K_{\text{eval}}$-dependence of expected-BE per verifier and show it predicts the observed alignment/anti-alignment.
+6. **Coupling vs headroom ([§3.2](#32-diagnostics---diagnose)).** Two separate per-verifier quantities to derive: the JSD→acceptance *slope* (predicts ρ) and the acceptance *headroom* relative to a flat-JSD-trained draft (predicts Δ). specinfer illustrates the distinction — low ρ from verifier structure (multi-candidate residual acceptance), large Δ from low baseline BE (most hard prompts, most room to improve). A complete theory derives both from the verifier's acceptance functional.
+
 ---
 
-## 7. Must-Add Experiments (minimum for a credible paper)
+## 6. Must-Add Experiments (minimum for a credible paper)
 
 | # | Experiment | Why |
 |---|---|---|
@@ -490,16 +503,16 @@ Consequences:
 | 6 | Greedy teacher (M=1) vs stochastic teacher (M=1) vs stochastic teacher (M=3) | Isolate stochasticity from multi-trajectory averaging |
 | 7 | ≥1 more dataset (code / Spec-Bench mixed) | Generalisation beyond math |
 | 8 | ≥1 more model pair | Method, not setup-specific quirk |
-| 9 | ~~Temperature robustness — teacher_temp~~ | **Answered**: ttemp=1.5 run shows ρ=−0.543 vs default ρ=−0.645; higher teacher_temp causes training-inference mismatch. teacher_temp=1.0 preferred on this evidence. Eval temperature sweep (not training) still needed if running approximate verifiers. |
+| 9 | Teacher-temp **mild sweep** (0.4 / 0.7 / 1.0) | Only the extreme ttemp=1.5 is run (ρ −0.543 vs −0.645), which mainly shows incoherent-teacher text hurts — not a temperature law. A mild sweep that preserves logical validity is the real control. Eval-temperature sweep (not training) also needed for approximate verifiers. |
 | 10 | Wall-clock tokens/sec + output quality/exactness | BE alone is insufficient |
 
 Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) → n=1000 on best checkpoints → compute-matched greedy/stochastic/M ablations → Draft-OPD-style replay ablation.
 
 ---
 
-## 8. Future Directions (parking lot — prioritise later)
+## 7. Future Directions (parking lot — prioritise later)
 
-### 8.1 The ideal extension: verifier-accepted state distribution
+### 7.1 The ideal extension: verifier-accepted state distribution
 
 > **Note:** the formalism below is left for the researcher to fill in. This section states the idea and the open design questions in plain terms; the exact objective and gradient are Rahul's to specify.
 
@@ -522,29 +535,29 @@ Near-term order: finish M=3 eval → run s456 (flat + stochastic-teacher JSD) �
 | Stabilising the moving training distribution | us | Real — replay buffer / periodic regen / trust region |
 | Verifier specificity | — | Not a blocker — it's the objective |
 
-### 8.2 Other parked directions
+### 7.2 Other parked directions
 
 - **Verifier-weighted stochastic teacher JSD (Axis A × Axis B combination) — PARKED, likely premature.** The synthesis would weight each of M teacher rollouts by its E[τ_V]: $\frac{1}{M}\sum_m \frac{d_m}{\text{EMA}(d)} \cdot \text{JSD}(Q_\phi(\cdot|y^{(m)}), P_\theta(\cdot|y^{(m)}))$. **Three reasons not to do this yet:** (1) **depth_weight has shown no positive signal on its own** (scalar version underperformed flat) — combining a no-signal method with a cross-seed-weakened one violates one-variable-at-a-time. (2) **The default multiply direction is antagonistic to enrich:** survival-weighting up-weights deep/easy contexts, but enrich's whole purpose is to add *hard/diverse* contexts — depth-multiply would down-weight exactly what enrich is trying to inject. Only `depth_lambda < 0` (divide, drill-the-weak) is conceptually compatible with enrich's coverage goal, and that variant is unrun. (3) Enrich's own headline is now downgraded by the cross-seed analysis ([§4.2](#42-primary-eval-n1000-k_eval3-math_eval)). Revisit only after depth_weight alone produces a positive result AND enrich clears n=1000.
 - **NSS tree gradients (Rahul):** exact survival-weighted $\partial\text{BE}/\partial\theta$ — an **Axis-B** (objective) change, **orthogonal to enrich's Axis-A** (state-distribution) change; they compose rather than approximate each other. The exact gradient is the strongest unscooped asset (Draft-OPD has no theory). Not yet implemented; depth_weight (crude `depth × JSD` multiply, no gradient) is the only Axis-B experiment so far and is not expected to be promising.
 - **NSS-depth and broader tree gradients / tree-depth ablations** (vary $L$, vary $M$).
 - **Adaptive teacher curriculum:** soft vs hard accept; hard-prompt up-weighting by inverse BE (exclude teacher-uncertain prompts); teacher-temperature scheduling (warm→cool).
 - **Adaptive teacher using tree depth** to decide where to guide the student.
-- **Expected-depth survival weighting ([§6.1](#61-the-design-space-is-2-d-not-a-1-d-ladder)):** weight per-position JSD by predicted marginal acceptance-length gain $E[\tau_V]$. A distinct Axis-B corner between Draft-OPD's $\gamma^{k-1}$ and the exact NSS gradient; **expected to roughly match, not clearly beat, M=3 stochastic-teacher JSD** (it reweights existing positions). Pursue **position-level only**; validate with a cheap short probe gated behind M=3 confirmation.
+- **Expected-depth survival weighting ([§5.2](#52-the-design-space-is-2-d-not-a-1-d-ladder)):** weight per-position JSD by predicted marginal acceptance-length gain $E[\tau_V]$. A distinct Axis-B corner between Draft-OPD's $\gamma^{k-1}$ and the exact NSS gradient; **expected to roughly match, not clearly beat, M=3 stochastic-teacher JSD** (it reweights existing positions). Pursue **position-level only**; validate with a cheap short probe gated behind M=3 confirmation.
 - **Curriculum Enrichment / adaptive state selection (*Curriculum Enrichment Distillation*):** the strongest version of `jsd_flat_enrich` is not uniform M-path sampling but selective enrichment — sample M teacher branches where the verifier rejects (acceptance low); use standard flat JSD where acceptance is high. Teacher compute is spent only where BE is weakest. This is conceptually closer to active learning / a "Socratic teacher" than a fixed loss: *train where the student needs it.* Logically prior to any fixed-M scale-up; if it works at M=3, the adaptive version should be strictly more compute-efficient.
-- **Verifier-failure-targeted enrichment (unexplored corner of 2×2):** the student generates a draft → verifier rejects at position $\tau$ → teacher generates M alternative continuations from $\tau$. This is student-generated states × multiple teacher trajectories — the bottom-right corner of [§6](#6-novelty-positioning-the-biggest-risk)'s 2×2. Combines on-policy state quality (the student's actual failures) with trajectory diversity (M teacher fixes per failure). The natural successor to fixed enrichment once the 0.6B/8B pair is confirmed.
+- **Verifier-failure-targeted enrichment (unexplored corner of 2×2):** the student generates a draft → verifier rejects at position $\tau$ → teacher generates M alternative continuations from $\tau$. This is student-generated states × multiple teacher trajectories — the bottom-right corner of [§5.1](#51-novelty-positioning-the-biggest-risk)'s 2×2. Combines on-policy state quality (the student's actual failures) with trajectory diversity (M teacher fixes per failure). The natural successor to fixed enrichment once the 0.6B/8B pair is confirmed.
 - **Student uncertainty gating (entropy proxy):** where entropy($Q_\phi$) is high, reveal M teacher continuations; where it is low, use single-path JSD. Computationally cheaper than full per-step rejection sampling as a proxy for verifier-guided routing.
 - **32B teacher** to test teacher-scale sensitivity (not required for the core 0.6B/8B claim).
 - **Longer horizon ($L{=}16$).**
 
-### 8.3 The unifying frame: adaptive teacher–student curriculum (on-policy ↔ off-policy)
+### 7.3 The unifying frame: adaptive teacher–student curriculum (on-policy ↔ off-policy)
 
-The variants in §8.1–8.2 are points on one continuum, best seen through a teaching analogy. A teacher choosing how to bring a student up to standard can:
+The variants in §7.1–7.2 are points on one continuum, best seen through a teaching analogy. A teacher choosing how to bring a student up to standard can:
 
 - **drill the student on its weak areas** — concentrate supervision where it fails (→ curriculum / verifier-failure-targeted enrich);
-- **align training to the exam the student will sit** — train against the verifier/eval distribution that will actually score it (→ verifier-aligned losses, the §8.1 accepted-state objective);
+- **align training to the exam the student will sit** — train against the verifier/eval distribution that will actually score it (→ verifier-aligned losses, the §7.1 accepted-state objective);
 - **shift control over time** — early on the teacher dictates the full answer (off-policy, teacher-generated states = today's enrich); then the teacher lets the student attempt and only corrects where it goes wrong (mixed: student states + teacher fixes = verifier-failure-targeted enrich); finally the student works unaided and the teacher only verifies (fully on-policy).
 
-So the research arc is an **adaptive on-policy/off-policy mix with a schedule**: how much of the training context is teacher-generated vs. student-generated, and how that ratio moves as the student improves. Current `jsd_flat_enrich` is the fully off-policy end; the §8.1 accepted-state objective is the on-policy end; the interesting work is the adaptive middle.
+So the research arc is an **adaptive on-policy/off-policy mix with a schedule**: how much of the training context is teacher-generated vs. student-generated, and how that ratio moves as the student improves. Current `jsd_flat_enrich` is the fully off-policy end; the §7.1 accepted-state objective is the on-policy end; the interesting work is the adaptive middle.
 
 **Open theory questions this frame raises** (research-lead input needed before committing runs):
 - **Can the student grasp it?** Is a 0.6B draft expressive enough to match the teacher on the hard states, or is some loss floor a capacity limit rather than a training-signal limit?
@@ -556,13 +569,13 @@ These are explicitly deferred. Whether they fold into this paper (as ablations) 
 
 ---
 
-## 9. Scope and Contribution
+## 8. Scope and Contribution
 
 **Where the defensible contribution lies**, if the work is completed:
 1. **Cross-verifier behaviour ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k))** — the systematic finding that different speculative verifiers respond differently to the same distribution-matching objective. This is the strongest empirical result and the most likely headline.
-2. **The state-distribution × objective-weighting design-space map ([§6.1](#61-the-design-space-is-2-d-not-a-1-d-ladder))** — useful framing that may stand on its own if written carefully.
-3. **A per-verifier acceptance-functional explanation of (1) ([§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation))** — *only if actually derived*; today it is conjecture.
+2. **The state-distribution × objective-weighting design-space map ([§5.2](#52-the-design-space-is-2-d-not-a-1-d-ladder))** — useful framing that may stand on its own if written carefully.
+3. **A per-verifier acceptance-functional explanation of (1) ([§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived))** — *only if actually derived*; today it is conjecture.
 
-**What the work needs before submission** (detail in [§7](#7-must-add-experiments-minimum-for-a-credible-paper)): compute-matched M=3-vs-flat baseline; experimental Draft-OPD comparison; ≥1 more dataset; ≥1 more model pair; ≥5 seeds; paired bootstrap CIs; [§5](#5-verifier-level-math-open-obligations--currently-conjecture-not-derivation) derivations (or present §4.4 as purely empirical).
+**What the work needs before submission** (detail in [§6](#6-must-add-experiments-minimum-for-a-credible-paper)): compute-matched M=3-vs-flat baseline; experimental Draft-OPD comparison; ≥1 more dataset; ≥1 more model pair; ≥5 seeds; paired bootstrap CIs; [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) derivations (or present §4.4 as purely empirical).
 
 **The headline anchor (cross-verifier study + design space, not "M stochastic rollouts") and the decision on what to run first are the research lead's calls.** Suggested first step: the compute-matched baseline, since it gates whether any algorithmic claim survives.
