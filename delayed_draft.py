@@ -83,7 +83,13 @@ def delayed_iid_draft(
     q_paths = [stem + branch_paths[k][1:] for k in range(K)]
     # q_paths[k] length = (L1+1) + (L-L1) = L+1  ✓
 
-    return q_paths, q_cache, {**single_probs, **branch_probs}
+    # Remap branch_probs keys from local (branch_token-rooted) to global (context_pending-rooted).
+    # branch_probs keys look like "3406", "3406,b1", ... but traversal_verify needs
+    # "760,31925,3406", "760,31925,3406,b1", ... matching the full q_paths prefix format.
+    stem_prefix = ",".join(str(x) for x in stem[:-1])  # stem without tL1, e.g. "760,31925"
+    remapped_branch_probs = {stem_prefix + "," + k: v for k, v in branch_probs.items()}
+
+    return q_paths, q_cache, {**single_probs, **remapped_branch_probs}
 
 
 def _delayed_iter(
