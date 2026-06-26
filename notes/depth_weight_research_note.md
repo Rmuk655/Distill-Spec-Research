@@ -234,7 +234,10 @@ Across all K_eval, `naive` is below flat in 6 of 8 cells (K_train=1: −0.014, �
 | flat JSD | Token-level divergence | No | Yes (baseline) |
 | **depth_weight (this note)** | **Detached per-prompt LR scaling** | **No** | **No** |
 | `jsd_flat_enrich` M=3 | Stochastic teacher prefix distribution | No | Yes (+1.3–3.2% vs flat, confirmed n=1000) |
+| **GTO (Hu et al. 2025a, published)** | Expected-NSS-acceptance reward + PPO (frozen vs evolving trees) | Yes (RL through tree reward) | Reported positive on their setups |
 | Exact acceptance gradient (future, researcher) | $\nabla_\phi E[\tau_V]$ through verifier | Yes (exact) | Not yet implemented |
+
+**Prior-work note (novelty correction).** Group Tree Optimization (GTO, Hu et al. 2025a — cited in the DDTE paper, [arXiv:2602.16994](https://arxiv.org/abs/2602.16994)) already combines an *expected-NSS-acceptance* reward with a *PPO-style frozen-vs-evolving-tree* objective. That is, in combination, essentially this note's `depth_weight` (expected-NSS weighting) and the retired `tree_pg` (REINFORCE/PPO on a tree reward). This corner is therefore **published prior work, not a novel direction.** What is defensible here is a *negative/replication* finding: the detached-scalar depth_weight form adds no signal in the 0.6B/8B math setup (and the LR-scaling mechanism in §5 explains why a scalar cannot work even in principle). Any GTO-style result we pursue must be framed as replication/extension, not novelty.
 
 ---
 
