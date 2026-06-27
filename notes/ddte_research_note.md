@@ -246,9 +246,20 @@ Training-time delayed expansion would address (1). (2) requires a different acce
 
 ### 5.3 Why is optimal L1 checkpoint-dependent?
 
-Empirically: M3 specinfer peaks at L1=5, flat/M1 peak at L1=6 (K=4). This is consistent with **optimal L1 ≈ mean(τ) − 1** where mean(τ) ≈ BE_baseline. Stronger drafts have higher mean acceptance depth (M3 specinfer baseline BE ≈ 4.8 at K=3 → optimal L1 ≈ 4–5). Weaker drafts accept shallower on average (flat baseline BE ≈ 4.5 → optimal L1 ≈ 5–6).
+Empirically: M3 specinfer peaks at L1=5, flat/M1 peak at L1=5–6 (K=4 flat dL6=5.478 vs dL5=5.429; K=3 flat dL6=5.744 vs dL5=5.742 — effectively tied within noise). The direction is consistent with **optimal L1 ≈ mean(τ) − 1** where mean(τ) ≈ K=1 BE − 1:
 
-The mechanism: optimal L1 is the depth just before the divergence zone begins. Stronger drafts push divergence deeper. With L=8, K=4: L1=6 leaves only 2 branch steps — sufficient for a weak draft whose rejection point is at depth 5–6, but wasteful for M3 which can use the extra branch steps more productively.
+| Checkpoint | K=1 BE | mean(τ) ≈ BE−1 | Predicted L1 | Actual optimal L1 |
+|---|---|---|---|---|
+| M3 | 6.00 | 5.0 | 4–5 | **5** (clear peak) |
+| flat | 5.67 | 4.7 | 3–4 | 5–6 (indifferent, noise-level) |
+
+**Mechanism.** Divergence grows monotonically with depth (DDTE paper). The deepest positions (close to L=8) are the most divergent for all checkpoints, so K branches there are always valuable. Optimal L1 is the stem length such that branches land in the highest-divergence zone *and* the stem is short enough to pass reliably.
+
+For M3: draft is reliably accepted through positions 1–5. Branching at L1=5 gives K branches at positions 6,7,8 — exactly where M3 first starts to fail. Pushing to L1=6 removes position 6 from the branch window, which costs because that is where M3's divergence begins.
+
+For flat: the theoretical optimum is L1≈3–4 (divergence starts earlier, at depth 4–5). The tested range (L1=5–6) is already above this optimum, which is why flat is essentially indifferent between them — both miss the early divergence zone and target only the deep tail. The difference between dL5 and dL6 for flat is ≤0.05 at all K, within single-seed noise.
+
+The net observation — stronger draft → slightly lower optimal L1 — follows from stronger drafts having their divergence zone start deeper (higher mean(τ)), so they branch later to catch it. The effect size is one step (L1=5 vs 5–6).
 
 ### 5.4 Why does dTau fail for specinfer?
 
