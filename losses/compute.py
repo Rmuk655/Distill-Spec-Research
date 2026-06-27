@@ -177,11 +177,16 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
 # ---------------------------------------------------------------------------
 
 def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
-                                M, L, teacher_temp=1.0):
-    """Sample M teacher continuations of length L; loss = -mean_m Σ_t qθ(P_{1:t}|c)."""
+                                M, L, teacher_temp=1.0, ce_weight=0.0):
+    """Sample M teacher continuations of length L; loss = -mean_m Σ_t qθ(P_{1:t}|c).
+
+    When ce_weight > 0, add the doc §7 cross-entropy term on the SAME sampled
+    continuations: + ce_weight · mean_m mean_t (-log qθ(P_t|·)).  This is the
+    faithful L_total = L_prefix + λ·L_CE — no separate rollout, no aux path.
+    """
     attn_mask = torch.ones_like(prompt_ids)
     C = prompt_ids.shape[1]
-    per_m = []
+    prefix_terms, ce_terms = [], []
     for _ in range(M):
         with torch.no_grad():
             gen = teacher.generate(
@@ -197,11 +202,15 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
         logp     = F.log_softmax(s_logits, dim=-1)
         tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(P_t|·)  [len]
         S        = torch.cumsum(tok_lp, dim=0)              # log qθ(P_{1:t}|c)        [len]
-        per_m.append(torch.logsumexp(S, dim=0).exp())       # Σ_t exp(S_t) = Σ_t qθ(P_{1:t})
-    if not per_m:
+        prefix_terms.append(torch.logsumexp(S, dim=0).exp())  # Σ_t exp(S_t) = Σ_t qθ(P_{1:t})
+        ce_terms.append(-tok_lp.mean())                    # teacher-forcing CE, same tokens
+    if not prefix_terms:
         # All M continuations were empty (teacher emitted EOS) — zero loss w/ grad.
         return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
-    return -torch.stack(per_m).mean()
+    loss = -torch.stack(prefix_terms).mean()
+    if ce_weight > 0.0:
+        loss = loss + ce_weight * torch.stack(ce_terms).mean()
+    return loss
 
 
 # ---------------------------------------------------------------------------

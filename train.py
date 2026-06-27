@@ -139,8 +139,16 @@ def parse_args():
                     help=f"Tree depth / draft block length (default {DEFAULT_L}).")
     ap.add_argument("--prefix_L", type=int, default=DEFAULT_L,
                     help=f"prefix_overlap only: length of each teacher continuation "
-                         f"over which prefix overlap is summed (default {DEFAULT_L}). "
-                         f"M (number of continuations) follows --K.")
+                         f"over which prefix overlap is summed (default {DEFAULT_L}).")
+    ap.add_argument("--prefix_M", type=int, default=4,
+                    help="prefix_overlap only: M = number of teacher continuations "
+                         "per prompt for the Monte-Carlo estimator (doc gives no "
+                         "default; tunable). Distinct from --K (tree width).")
+    ap.add_argument("--prefix_ce_weight", type=float, default=0.0,
+                    help="prefix_overlap only: λ for the doc §7 cross-entropy term, "
+                         "computed on the SAME sampled continuations (0 = off; doc "
+                         "recommends a small positive value). Do NOT also pass "
+                         "--aux_loss for CE — that would double-count on a separate rollout.")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -356,8 +364,9 @@ def main():
 
         if prefix_ov:
             loss = compute_prefix_overlap_loss(draft, teacher, ids,
-                                               M=K, L=args.prefix_L,
-                                               teacher_temp=args.teacher_temp)
+                                               M=args.prefix_M, L=args.prefix_L,
+                                               teacher_temp=args.teacher_temp,
+                                               ce_weight=args.prefix_ce_weight)
         elif flat_enrich:
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
