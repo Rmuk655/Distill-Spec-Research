@@ -48,7 +48,7 @@ Our study adds two dimensions DDTE did not test:
 
 **2. Does enrich distillation further amplify the DDTE benefit?** Beyond standard JSD distillation, we apply a second training phase — *enrich* — where the draft is fine-tuned on K stochastically-sampled teacher continuations per prompt (M1 = 1 path, M3 = 3 paths). Enrich pushes the draft closer to the teacher's full distribution (not just the greedy mode), further reducing divergence and increasing the mean acceptance depth. If the DDTE gain scales with draft quality, the enrich-trained checkpoints should yield larger DDTE improvements than the flat JSD checkpoint, and M3 should yield larger gains than M1. We test this prediction directly.
 
-The **off-policy mismatch** is also new in our setting. DDTE's paper trains no model, so there is no mismatch. We train with root-branching trees and evaluate with delayed-branching trees. The draft was never trained on prefixes that include a K=1 stem from depth 1–L1 followed by K branches for only L−L1 steps, which is a distribution shift at inference time.
+The **off-policy mismatch** is also new in our setting. DDTE's paper trains no model, so there is no mismatch. We train with root-branching trees and evaluate with delayed-branching trees. The draft was never trained on prefixes that include a K=1 stem of depth L1 followed by K branches of depth L−L1, which is a distribution shift at inference time.
 
 ---
 
@@ -244,7 +244,7 @@ Traversal accepts bottom-up from leaf nodes. It doesn't care where branches orig
 ### 5.2 Why doesn't specinfer+DDTE beat traversal?
 
 Two reasons:
-1. **Off-policy mismatch.** The draft was trained with root-branching trees. At inference, the stem (depth 1–L1, K=1 path) precedes K branches that run for only L−L1 steps — neither the stem-only generation regime nor the branch-from-stem prefix was ever seen during training. The branches see a different prefix distribution than training.
+1. **Off-policy mismatch.** The draft was trained with root-branching trees. At inference, the stem (depth L1, K=1 path) precedes K branches of depth L−L1 — neither the stem-only generation regime nor the branch-from-stem prefix was ever seen during training. The branches see a different prefix distribution than training.
 2. **Traversal structural advantage.** Even with optimal L1, specinfer's OT acceptance rule has lower acceptance efficiency than traversal's bottom-up rule for the same tree. This is a verification-algorithm gap independent of tree construction.
 
 Training-time delayed expansion would address (1). (2) requires a different acceptance algorithm.
