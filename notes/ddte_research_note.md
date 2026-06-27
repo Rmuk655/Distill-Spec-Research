@@ -285,8 +285,6 @@ For traversal, the effect is mixed because traversal's bottom-up acceptance is l
 2. **Training-time delayed expansion** — removes off-policy mismatch; central question for whether specinfer can beat traversal. Discuss scope with Rahul first (~50 lines in `build_training_data.py`).
 3. **MLP selector code (from Rahul)** — required for a valid throughput comparison with the DDTE paper. Our dL5 throughput (~15 tok/s) matches our own standard specinfer baseline, but our implementation still has two overheads Rahul's does not: (a) an extra K=1 forward pass at the Phase 1/Phase 2 boundary, and (b) a slice_cache + KV re-expansion from batch=1 to batch=K between phases. His MLP selector selects branching depth in a single unified autoregressive pass with no cache expansion. Until we replace our two-phase draft with his approach, throughput numbers cannot be directly compared to the paper.
 4. **Additional dataset** — math_eval only; needed for any publication claim.
-5. **M3 dTau K=2,3,4 specinfer** — still running; needed to complete the dTau picture before dropping it fully.
-
 *Done (no longer needed):* L1=5,6 for specinfer (✓); τ-lagged dTau on flat/M1/M3 (✓, inconclusive for traversal, ruled out for specinfer); L1=2,3,4,5 for traversal (✓); M3 dTau K=2,3,4 specinfer (✓, same failure mode confirmed).
 
 ---
