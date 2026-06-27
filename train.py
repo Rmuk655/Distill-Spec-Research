@@ -67,7 +67,8 @@ from diagnostics import compute_train_diag_scalars
 from losses.compute import (draft_tree_forward_with_grad, compute_flat_loss,
                              compute_flat_enrich_loss, compute_tree_loss,
                              compute_offpolicy_tree_loss, compute_enrichment_loss,
-                             compute_prefix_overlap_loss, expected_depth_scalar)
+                             compute_prefix_overlap_loss,
+                             compute_prefix_overlap_multiroot_loss, expected_depth_scalar)
 from losses import LOSS_TO_VERIFIER
 from validation import compute_val_metrics, _update_forgetting
 from checkpointing import load_models, save_checkpoint, try_resume
@@ -141,14 +142,25 @@ def parse_args():
                     help=f"prefix_overlap only: length of each teacher continuation "
                          f"over which prefix overlap is summed (default {DEFAULT_L}).")
     ap.add_argument("--prefix_M", type=int, default=4,
-                    help="prefix_overlap only: M = number of teacher continuations "
-                         "per prompt for the Monte-Carlo estimator (doc gives no "
-                         "default; tunable). Distinct from --K (tree width).")
-    ap.add_argument("--prefix_ce_weight", type=float, default=0.0,
-                    help="prefix_overlap only: λ for the doc §7 cross-entropy term, "
-                         "computed on the SAME sampled continuations (0 = off; doc "
-                         "recommends a small positive value). Do NOT also pass "
-                         "--aux_loss for CE — that would double-count on a separate rollout.")
+                    help="prefix_overlap single-root only: M = number of teacher "
+                         "continuations per prompt for the Monte-Carlo estimator "
+                         "(doc gives no default; tunable). Distinct from --K (tree width). "
+                         "Ignored when --prefix_root_spacing > 0 (multi-root is M=1).")
+    ap.add_argument("--prefix_root_spacing", type=int, default=0,
+                    help="prefix_overlap only: 0 = single root (the prompt). >0 = "
+                         "multi-root (doc §5): one teacher rollout of length "
+                         "--prefix_rollout_len, roots every N tokens, M=1 per root.")
+    ap.add_argument("--prefix_rollout_len", type=int, default=MAX_NEW_TOKENS,
+                    help=f"prefix_overlap multi-root only: teacher rollout length to "
+                         f"slide root windows over (default {MAX_NEW_TOKENS}).")
+    ap.add_argument("--prefix_aux", choices=["ce", "jsd"], default="ce",
+                    help="prefix_overlap only: secondary term on the SAME continuations. "
+                         "'ce' = doc §7 cross-entropy (cheap, reuses token log-probs); "
+                         "'jsd' = symmetric JSD (beyond the doc; one extra teacher forward).")
+    ap.add_argument("--prefix_aux_weight", type=float, default=0.0,
+                    help="prefix_overlap only: λ for the secondary (--prefix_aux) term "
+                         "(0 = off; doc recommends a small positive value). Do NOT also "
+                         "pass --aux_loss — the secondary term is computed internally.")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -363,10 +375,17 @@ def main():
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
         if prefix_ov:
-            loss = compute_prefix_overlap_loss(draft, teacher, ids,
-                                               M=args.prefix_M, L=args.prefix_L,
-                                               teacher_temp=args.teacher_temp,
-                                               ce_weight=args.prefix_ce_weight)
+            if args.prefix_root_spacing > 0:
+                loss = compute_prefix_overlap_multiroot_loss(
+                    draft, teacher, ids, L=args.prefix_L,
+                    N=args.prefix_root_spacing, rollout_len=args.prefix_rollout_len,
+                    teacher_temp=args.teacher_temp,
+                    aux=args.prefix_aux, aux_weight=args.prefix_aux_weight)
+            else:
+                loss = compute_prefix_overlap_loss(
+                    draft, teacher, ids, M=args.prefix_M, L=args.prefix_L,
+                    teacher_temp=args.teacher_temp,
+                    aux=args.prefix_aux, aux_weight=args.prefix_aux_weight)
         elif flat_enrich:
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
