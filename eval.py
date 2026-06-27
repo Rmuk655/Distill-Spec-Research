@@ -75,17 +75,20 @@ from diagnostics import run_objective_be_diagnostic, run_decomposition_radar
 RESULTS_CSV = os.path.join(os.path.dirname(__file__), "results.csv")
 
 
-def _effective_mode(mode: str, L1: int, L1_adaptive: bool) -> str:
+def _effective_mode(mode: str, L1: int, L1_adaptive: bool, L1_tau: bool = False) -> str:
     """Return a unique mode label that encodes the delayed-expansion config.
 
     Used for state-file naming and CSV mode column so that:
       traversal          →  regular traversal (existing rows unaffected)
       traversal_dL3      →  delayed, fixed L1=3
       traversal_dAdapt   →  delayed, adaptive L1 from lagged teacher entropy
+      traversal_dTau     →  delayed, tau-lagged (prev accepted depth sets next L1)
 
     The verifier dispatch still uses the original mode name (traversal); only
     the logging identity changes so runs never collide with each other's cache.
     """
+    if L1_tau:
+        return f"{mode}_dTau"
     if L1_adaptive:
         return f"{mode}_dAdapt"
     if L1 > 0:
@@ -97,7 +100,7 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
                       max_new_tokens, temp, state_path: str | None = None,
                       gpu_monitor: GpuMonitor | None = None,
                       warmup_n: int = 3, L1: int = 0, L1_adaptive: bool = False,
-                      entropy_threshold: float = 1.5):
+                      entropy_threshold: float = 1.5, L1_tau: bool = False):
     """Run the prompt set under one verifier mode and aggregate stats.
 
     Verifier exceptions (VerifierError from verifier_safe.py) are caught
@@ -128,12 +131,12 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
 
     # Prime CUDA kernels before the timed loop.  The first few prompts are slow
     # because flash-attention and other CUDA extensions JIT-compile on first use.
-    _use_delayed = L1 > 0 or L1_adaptive
+    _use_delayed = L1 > 0 or L1_adaptive or L1_tau
     _decoding_loop = delayed_speculative_decoding_loop if _use_delayed else speculative_decoding_loop
     _loop_kwargs = dict(max_new_tokens=max_new_tokens, K=K, L=L, p_temp=temp, q_temp=temp)
     if _use_delayed:
-        # L1_adaptive=True with no explicit L1: branch depth auto-set to L//2 inside the loop.
-        _loop_kwargs.update(L1=L1, L1_adaptive=L1_adaptive, entropy_threshold=entropy_threshold)
+        _loop_kwargs.update(L1=L1, L1_adaptive=L1_adaptive,
+                            entropy_threshold=entropy_threshold, L1_tau=L1_tau)
 
     if warmup_n > 0:
         print(f"  [warmup] running {warmup_n} prompt(s) to prime CUDA kernels ...")
@@ -267,12 +270,17 @@ def parse_args():
                          "Theoretically motivated for traversal and specinfer; runs on all "
                          "modes without error.")
     _l1_group.add_argument("--L1_adaptive", action="store_true",
-                    help="Per-iteration adaptive branch depth — no --L1 value needed. "
-                         "Uses lagged teacher entropy from the previous target pass "
-                         "(zero extra target forward pass cost): when teacher entropy was "
-                         "low last iteration (teacher confident) branch at L//2; when high "
-                         "(teacher uncertain) fall back to root branching.  "
-                         "Mutually exclusive with --L1.")
+                    help="Per-iteration adaptive branch depth via lagged teacher entropy. "
+                         "When teacher entropy was low last iteration (teacher confident) "
+                         "branch at L//2; when high fall back to root branching.  "
+                         "Mutually exclusive with --L1 and --L1_tau.")
+    _l1_group.add_argument("--L1_tau", action="store_true",
+                    help="Per-iteration tau-lagged adaptive branch depth. "
+                         "Sets iter_L1 = max(1, prev_tau - 1) where prev_tau is the "
+                         "accepted depth from the previous iteration (zero extra compute). "
+                         "First iteration uses L//2.  More principled than entropy-adaptive "
+                         "because it uses directly observed acceptance depth, not a proxy. "
+                         "Mutually exclusive with --L1 and --L1_adaptive.")
     ap.add_argument("--entropy_threshold", type=float, default=1.5,
                     help="Teacher entropy threshold (nats) for --L1_adaptive. "
                          "Above this the teacher is considered uncertain and L1 falls "
@@ -371,7 +379,7 @@ def main():
     mode_state: dict[str, tuple[str, bool]] = {}
     need_models = False
     for mode in modes:
-        eff = _effective_mode(mode, args.L1, args.L1_adaptive)
+        eff = _effective_mode(mode, args.L1, args.L1_adaptive, args.L1_tau)
         sp = _state_path(csv_path, eff, args.K, args.L, args.checkpoint, args.dataset)
         done = _load_state(sp)
         complete = bool(prompts) and all(i in done for i in range(len(prompts)))
@@ -431,6 +439,7 @@ def main():
             warmup_n=args.warmup_n,
             L1=args.L1, L1_adaptive=args.L1_adaptive,
             entropy_threshold=args.entropy_threshold,
+            L1_tau=args.L1_tau,
         )
         all_stats[mode] = stats
         # Skip the CSV append for a run that was already fully cached at start
