@@ -165,6 +165,46 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
 
 
 # ---------------------------------------------------------------------------
+# Prefix-overlap loss (Rahul's "Prefix-Overlap Distillation Objective").
+# Sample M teacher continuations from the prompt; reward the student's
+# probability of every teacher prefix:
+#     J = (1/M) Σ_m Σ_{t=1}^L qθ(P^(m)_{1:t} | c),   loss = -J.
+# Exact-match acceptance (per-token factor = qθ at the teacher token) and all
+# prefix lengths weighted equally (no depth reweighting) — faithful to the spec
+# doc §6.  One teacher-forced forward pass per continuation (vs L in the doc's
+# reference sketch); Σ_t exp(S_t) = exp(logsumexp(S)) for numerical stability.
+# Pair with a CE term via --aux_loss forward_kl --aux_weight λ (doc §7).
+# ---------------------------------------------------------------------------
+
+def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
+                                M, L, teacher_temp=1.0):
+    """Sample M teacher continuations of length L; loss = -mean_m Σ_t qθ(P_{1:t}|c)."""
+    attn_mask = torch.ones_like(prompt_ids)
+    C = prompt_ids.shape[1]
+    per_m = []
+    for _ in range(M):
+        with torch.no_grad():
+            gen = teacher.generate(
+                prompt_ids, attention_mask=attn_mask,
+                max_new_tokens=L, do_sample=True, temperature=teacher_temp,
+                pad_token_id=teacher.config.eos_token_id, use_cache=True,
+            )
+        cont = gen[0, C:]                                   # teacher tokens P_1..P_len  [<=L]
+        if cont.numel() == 0:
+            continue                                        # teacher emitted EOS immediately
+        s_out    = draft(gen, return_dict=True)
+        s_logits = s_out.logits[0, C - 1:-1].float()        # predicts P_1..P_len  [len, V]
+        logp     = F.log_softmax(s_logits, dim=-1)
+        tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(P_t|·)  [len]
+        S        = torch.cumsum(tok_lp, dim=0)              # log qθ(P_{1:t}|c)        [len]
+        per_m.append(torch.logsumexp(S, dim=0).exp())       # Σ_t exp(S_t) = Σ_t qθ(P_{1:t})
+    if not per_m:
+        # All M continuations were empty (teacher emitted EOS) — zero loss w/ grad.
+        return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
+    return -torch.stack(per_m).mean()
+
+
+# ---------------------------------------------------------------------------
 # Tree-loss path: sample K student paths, target tree pass, student tree pass.
 # ---------------------------------------------------------------------------
 

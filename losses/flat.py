@@ -96,5 +96,6 @@ FLAT_LOSSES = {
     "reverse_kl":      reverse_kl,
     "jsd":             jsd,
     "jsd_flat_enrich": jsd,   # same loss fn — routing in train.py samples K stochastic teacher paths
+    "prefix_overlap":  jsd,   # placeholder — real math is in compute_prefix_overlap_loss; entry only for get_loss/argparse
     "l1":              l1,
 }
