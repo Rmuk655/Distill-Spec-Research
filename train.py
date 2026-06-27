@@ -44,7 +44,8 @@ import torch.nn.functional as F
 
 # Local modules
 from losses import (ALL_LOSSES, FLAT_LOSSES, TREE_LOSSES, get_loss, is_tree_loss,
-                    is_offpolicy_tree_loss, is_enrichment_loss, is_flat_enrich_loss)
+                    is_offpolicy_tree_loss, is_enrichment_loss, is_flat_enrich_loss,
+                    is_prefix_overlap_loss)
 from data_io import get_path as dataset_path
 from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MAX_NEW_TOKENS, DEFAULT_TEMP, DEFAULT_SEED, block_eff, BE_EASY_FRAC, BE_HARD_FRAC
 
@@ -66,7 +67,7 @@ from diagnostics import compute_train_diag_scalars
 from losses.compute import (draft_tree_forward_with_grad, compute_flat_loss,
                              compute_flat_enrich_loss, compute_tree_loss,
                              compute_offpolicy_tree_loss, compute_enrichment_loss,
-                             expected_depth_scalar)
+                             compute_prefix_overlap_loss, expected_depth_scalar)
 from losses import LOSS_TO_VERIFIER
 from validation import compute_val_metrics, _update_forgetting
 from checkpointing import load_models, save_checkpoint, try_resume
@@ -136,6 +137,10 @@ def parse_args():
                          f"Validation tree width follows --K.")
     ap.add_argument("--L", type=int, default=DEFAULT_L,
                     help=f"Tree depth / draft block length (default {DEFAULT_L}).")
+    ap.add_argument("--prefix_L", type=int, default=DEFAULT_L,
+                    help=f"prefix_overlap only: length of each teacher continuation "
+                         f"over which prefix overlap is summed (default {DEFAULT_L}). "
+                         f"M (number of continuations) follows --K.")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -313,7 +318,9 @@ def main():
     offpolicy     = is_offpolicy_tree_loss(args.loss)
     enrichment    = is_enrichment_loss(args.loss)
     flat_enrich   = is_flat_enrich_loss(args.loss)
-    _mode = ("flat enrichment" if flat_enrich else
+    prefix_ov     = is_prefix_overlap_loss(args.loss)
+    _mode = ("prefix overlap" if prefix_ov else
+             "flat enrichment" if flat_enrich else
              "enrichment tree" if enrichment else
              "off-policy tree" if offpolicy else
              "tree" if tree else "flat")
@@ -347,7 +354,11 @@ def main():
         prompt = train_prompts[step % len(train_prompts)]
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
-        if flat_enrich:
+        if prefix_ov:
+            loss = compute_prefix_overlap_loss(draft, teacher, ids,
+                                               M=K, L=args.prefix_L,
+                                               teacher_temp=args.teacher_temp)
+        elif flat_enrich:
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
                                                       teacher_temp=args.teacher_temp)

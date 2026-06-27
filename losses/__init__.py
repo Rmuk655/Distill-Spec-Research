@@ -31,6 +31,12 @@ ENRICHMENT_LOSSES = {"jsd_enrich"}
 # Routed through compute_flat_enrich_loss() in train.py.
 FLAT_ENRICH_LOSSES = {"jsd_flat_enrich"}
 
+# Prefix-overlap loss: sample M teacher continuations, reward the student's
+# probability of every teacher prefix (Σ_t qθ(P_{1:t})).  Exact-match, no depth
+# reweighting.  Routed through compute_prefix_overlap_loss() in train.py.
+# Pair with a CE term via --aux_loss forward_kl --aux_weight λ.
+PREFIX_OVERLAP_LOSSES = {"prefix_overlap"}
+
 
 def is_tree_loss(name: str) -> bool:
     """Return True if the loss is computed on a draft tree rather than flat logits."""
@@ -50,6 +56,11 @@ def is_enrichment_loss(name: str) -> bool:
 def is_flat_enrich_loss(name: str) -> bool:
     """Return True if the loss uses K stochastic teacher flat rollouts (not a tree)."""
     return name in FLAT_ENRICH_LOSSES
+
+
+def is_prefix_overlap_loss(name: str) -> bool:
+    """Return True if the loss is the prefix-overlap objective (Σ_t qθ(P_{1:t}))."""
+    return name in PREFIX_OVERLAP_LOSSES
 
 
 def get_loss(name: str):
