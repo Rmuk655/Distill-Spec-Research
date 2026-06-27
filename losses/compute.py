@@ -19,6 +19,7 @@ import torch.nn.functional as F
 
 from inference_util import iid_draft, target_tree_pass
 from verifier import TreeVerifier
+from .flat import jsd
 
 
 def draft_tree_forward_with_grad(
@@ -176,17 +177,32 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
 # Pair with a CE term via --aux_loss forward_kl --aux_weight λ (doc §7).
 # ---------------------------------------------------------------------------
 
-def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
-                                M, L, teacher_temp=1.0, ce_weight=0.0):
-    """Sample M teacher continuations of length L; loss = -mean_m Σ_t qθ(P_{1:t}|c).
+def _aux_term(aux, s_logits, tok_lp, teacher, gen, C):
+    """Secondary term over one continuation, on the SAME sampled tokens.
 
-    When ce_weight > 0, add the doc §7 cross-entropy term on the SAME sampled
-    continuations: + ce_weight · mean_m mean_t (-log qθ(P_t|·)).  This is the
-    faithful L_total = L_prefix + λ·L_CE — no separate rollout, no aux path.
+      aux="ce"  : teacher-forcing cross-entropy  mean_t (-log qθ(P_t|·))  — doc §7;
+                  reuses the gathered token log-probs (no teacher forward).
+      aux="jsd" : symmetric JSD(student, teacher) per token — beyond the doc,
+                  needs the teacher distribution (one extra teacher forward).
+    """
+    if aux == "ce":
+        return -tok_lp.mean()
+    with torch.no_grad():
+        t_logits = teacher(gen, return_dict=True).logits[0, C - 1:-1].float()
+    return jsd(s_logits, t_logits)
+
+
+def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
+                                M, L, teacher_temp=1.0,
+                                aux="ce", aux_weight=0.0):
+    """Single-root prefix overlap: M teacher continuations from the prompt.
+
+    loss = -mean_m Σ_t qθ(P_{1:t}|c)  [ + aux_weight · mean_m aux_term ].
+    The continuations are sampled from the prompt only (root = prompt).
     """
     attn_mask = torch.ones_like(prompt_ids)
     C = prompt_ids.shape[1]
-    prefix_terms, ce_terms = [], []
+    prefix_terms, aux_terms = [], []
     for _ in range(M):
         with torch.no_grad():
             gen = teacher.generate(
@@ -203,13 +219,67 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
         tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(P_t|·)  [len]
         S        = torch.cumsum(tok_lp, dim=0)              # log qθ(P_{1:t}|c)        [len]
         prefix_terms.append(torch.logsumexp(S, dim=0).exp())  # Σ_t exp(S_t) = Σ_t qθ(P_{1:t})
-        ce_terms.append(-tok_lp.mean())                    # teacher-forcing CE, same tokens
+        if aux_weight > 0.0:
+            aux_terms.append(_aux_term(aux, s_logits, tok_lp, teacher, gen, C))
     if not prefix_terms:
         # All M continuations were empty (teacher emitted EOS) — zero loss w/ grad.
         return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
     loss = -torch.stack(prefix_terms).mean()
-    if ce_weight > 0.0:
-        loss = loss + ce_weight * torch.stack(ce_terms).mean()
+    if aux_weight > 0.0:
+        loss = loss + aux_weight * torch.stack(aux_terms).mean()
+    return loss
+
+
+def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
+                                          L, N, rollout_len, teacher_temp=1.0,
+                                          aux="ce", aux_weight=0.0):
+    """Multi-root prefix overlap (doc §5), efficient M=1 estimator.
+
+    Generate ONE teacher rollout; its tail from each root y_{r+1:r+L} is a valid
+    sample from p(·|c_r) (teacher is autoregressive), so sliding a length-L window
+    every N positions gives an unbiased M=1 estimate of the §5 root-averaged
+    objective.  Cost: one teacher generate + one student forward for all roots.
+
+    loss = -mean_r Σ_t qθ(y_{r+1:r+t}|c_r)  [ + aux_weight · mean_r aux_term ].
+    """
+    attn_mask = torch.ones_like(prompt_ids)
+    C = prompt_ids.shape[1]
+    with torch.no_grad():
+        gen = teacher.generate(
+            prompt_ids, attention_mask=attn_mask,
+            max_new_tokens=rollout_len, do_sample=True, temperature=teacher_temp,
+            pad_token_id=teacher.config.eos_token_id, use_cache=True,
+        )
+    cont = gen[0, C:]                                       # rollout tokens y_1..y_T  [T]
+    T = cont.numel()
+    if T == 0:
+        return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
+    s_out    = draft(gen, return_dict=True)
+    s_logits = s_out.logits[0, C - 1:C - 1 + T].float()     # predicts y_1..y_T  [T, V]
+    logp     = F.log_softmax(s_logits, dim=-1)
+    tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(y_{i+1}|...)  [T]
+
+    # For jsd aux: teacher distributions over the whole rollout, computed once.
+    t_logits_all = None
+    if aux_weight > 0.0 and aux != "ce":
+        with torch.no_grad():
+            t_logits_all = teacher(gen, return_dict=True).logits[0, C - 1:C - 1 + T].float()
+
+    prefix_terms, aux_terms = [], []
+    for r in range(0, T - 1, N):                            # roots every N positions
+        win_lp = tok_lp[r:r + L]                            # student log-probs from root r
+        if win_lp.numel() == 0:
+            break
+        S = torch.cumsum(win_lp, dim=0)
+        prefix_terms.append(torch.logsumexp(S, dim=0).exp())
+        if aux_weight > 0.0:
+            if aux == "ce":
+                aux_terms.append(-win_lp.mean())
+            else:                                           # jsd over the same window
+                aux_terms.append(jsd(s_logits[r:r + L], t_logits_all[r:r + L]))
+    loss = -torch.stack(prefix_terms).mean()
+    if aux_weight > 0.0:
+        loss = loss + aux_weight * torch.stack(aux_terms).mean()
     return loss
 
 
