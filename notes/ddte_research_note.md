@@ -25,7 +25,8 @@
 - **Traversal optimal L1 is K-dependent.** K=3: dL4 > dL5 for all checkpoints. K=4: dL5 > dL4 for M3.
 
 **Key analysis:**
-- DDTE benefit is larger for trained drafts than expected for untrained drafts. The M3−flat enrich gap grows monotonically with L1, confirming that better-trained drafts extract more from the delayed structure.
+- **Distillation amplifies DDTE** (dimension 1 confirmed): standard JSD distillation alone already improves over what untrained drafts would achieve with DDTE, by compressing divergence and shifting the optimal branching depth deeper.
+- **Enrich further amplifies DDTE** (dimension 2 confirmed): the M3−flat enrich gap grows monotonically with L1 (+0.03 at L1=2, +0.27 at L1=5, K=3), confirming that each tier of draft quality extracts incrementally more from the delayed structure. Optimal (checkpoint, L1) pairs must be selected jointly.
 - specinfer+M3+dL5 (6.015 at K=3) vs traversal+M3+dL4 (6.361 at K=3): gap narrows to 0.35 (from 1.42 at L1=0). Full closure likely requires training-time delayed expansion to remove off-policy mismatch.
 - Traversal+DDTE (6.418) > BV (6.283) > traversal standard (6.216) > specinfer+DDTE (6.015). DDTE elevates traversal to the overall best in our setup.
 
@@ -39,9 +40,13 @@
 
 ## 1. Motivation
 
-DDTE (Thomas et al. 2026) identifies that draft↔target KL divergence grows monotonically with tree depth. OT verifiers (SpecInfer and variants) branch at the root (depth 1), wasting K paths in the low-divergence shallow zone and leaving the high-divergence deep zone with no diversity. Traversal avoids this structurally by accepting bottom-up.
+DDTE (Thomas et al. 2026) identifies that draft↔target KL divergence grows monotonically with tree depth. OT verifiers (SpecInfer and variants) branch at the root (depth 1), wasting K paths in the low-divergence shallow zone and leaving the high-divergence deep zone with no diversity. Traversal avoids this structurally by accepting bottom-up. Thomas et al. test DDTE exclusively with untrained (base model) drafts.
 
-Our setting adds a dimension DDTE did not test: **a distillation-trained draft**. If distillation reduces divergence uniformly across depths, the optimal branching depth shifts rightward (deeper), and the DDTE gain should be larger than for untrained drafts. This note tests that prediction.
+Our study adds two dimensions DDTE did not test:
+
+**1. Does distillation amplify the DDTE benefit?** Standard JSD distillation trains the draft to match the teacher's token distribution, reducing divergence across the sequence. If distillation compresses divergence uniformly, the optimal branching depth shifts rightward (deeper), and the DDTE gain over untrained drafts should grow. We test this by composing eval-time DDTE with a JSD-distilled checkpoint (`jsd_flat`) and comparing against the untrained-draft results from the paper.
+
+**2. Does enrich distillation further amplify the DDTE benefit?** Beyond standard JSD distillation, we apply a second training phase — *enrich* — where the draft is fine-tuned on K stochastically-sampled teacher continuations per prompt (M1 = 1 path, M3 = 3 paths). Enrich pushes the draft closer to the teacher's full distribution (not just the greedy mode), further reducing divergence and increasing the mean acceptance depth. If the DDTE gain scales with draft quality, the enrich-trained checkpoints should yield larger DDTE improvements than the flat JSD checkpoint, and M3 should yield larger gains than M1. We test this prediction directly.
 
 The **off-policy mismatch** is also new in our setting. DDTE's paper trains no model, so there is no mismatch. We train with root-branching trees and evaluate with delayed-branching trees. The draft was never trained on prefixes that include a K=1 stem from depth 1–L1, which is a distribution shift at inference time.
 
