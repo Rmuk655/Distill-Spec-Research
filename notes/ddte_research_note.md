@@ -48,7 +48,7 @@ Our study adds two dimensions DDTE did not test:
 
 **2. Does enrich distillation further amplify the DDTE benefit?** Beyond standard JSD distillation, we apply a second training phase — *enrich* — where the draft is fine-tuned on K stochastically-sampled teacher continuations per prompt (M1 = 1 path, M3 = 3 paths). Enrich pushes the draft closer to the teacher's full distribution (not just the greedy mode), further reducing divergence and increasing the mean acceptance depth. If the DDTE gain scales with draft quality, the enrich-trained checkpoints should yield larger DDTE improvements than the flat JSD checkpoint, and M3 should yield larger gains than M1. We test this prediction directly.
 
-The **off-policy mismatch** is also new in our setting. DDTE's paper trains no model, so there is no mismatch. We train with root-branching trees and evaluate with delayed-branching trees. The draft was never trained on prefixes that include a K=1 stem from depth 1–L1, which is a distribution shift at inference time.
+The **off-policy mismatch** is also new in our setting. DDTE's paper trains no model, so there is no mismatch. We train with root-branching trees and evaluate with delayed-branching trees. The draft was never trained on prefixes that include a K=1 stem from depth 1–L1 followed by K branches for only L−L1 steps, which is a distribution shift at inference time.
 
 ---
 
