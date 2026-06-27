@@ -170,8 +170,8 @@ Traversal absolute gains from DDTE are smaller than specinfer's but the final nu
 | 4 | **dL5** | 6.112 | 6.081 | **6.418** |
 | 4 | dTau | 6.042 | 6.066 | 6.200 |
 
-- **K=3: dL4 > dL5** for all three checkpoints. L1=5 leaves only L−L1=3 branch steps with K=3 paths = 9 branch positions, too few for traversal to find depth.
-- **K=4: dL5 > dL4** for M3, marginal for flat/M1. More branches compensate for fewer branch steps.
+- **K=3: dL4 > dL5** for all three checkpoints.
+- **K=4: dL5 > dL4** for M3, marginal for flat/M1.
 - dTau is consistently worse than the best fixed L1 for traversal (see §4.4).
 
 ### 4.3 Cross-verifier ranking: where do DDTE results land?
