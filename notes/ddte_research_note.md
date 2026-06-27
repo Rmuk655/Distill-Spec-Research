@@ -298,5 +298,5 @@ For traversal, the effect is mixed because traversal's bottom-up acceptance is l
   *Note on why dAdapt failed:* The binary fallback (entropy > 1.5 → L1=0) caused most iterations to use root branching — teacher entropy at depth 1 is almost always > 1.5 nats on math problems. This was an implementation/threshold failure, not a fundamental problem with entropy as a signal.
 
 - **Training-time delayed expansion.** Modify `build_training_data.py` to use Phase 1 (stem) + Phase 2 (K branches) when sampling teacher continuations. ~50 lines. Curriculum L1 (increase as BE improves during training) is theoretically motivated but adds complexity. Discuss scope with Rahul first.
-- **Per-checkpoint optimal L1 lookup.** Use mean(τ) ≈ BE_baseline − 1 from prior traversal runs to set L1 per deployment. Zero extra eval; avoids the need for adaptive at all.
+- **Optimal L1 per checkpoint (from data):** flat → L1=5–6 (indifferent, K=1 BE=5.67, mean(τ)≈4.7); M1 → L1=5–6 (K=1 BE=5.77, mean(τ)≈4.8); M3 → L1=5 (K=1 BE=6.00, mean(τ)≈5.0). Use as fixed deployment value; no adaptive mechanism needed.
 - **L1=5 and L1=6 for traversal.** Diminishing returns expected; not prioritised.
