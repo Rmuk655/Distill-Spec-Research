@@ -201,7 +201,7 @@ def _delayed_iter(
         if _kv_draft > _run_stats["kv_draft_peak_bytes"]:
             _run_stats["kv_draft_peak_bytes"] = _kv_draft
 
-    return p_cache, q_cache, context_cached, context_pending
+    return p_cache, q_cache, context_cached, context_pending, tau
 
 
 def delayed_speculative_decoding_loop(
@@ -219,9 +219,13 @@ def delayed_speculative_decoding_loop(
     L1: int = 0,
     L1_adaptive: bool = False,
     entropy_threshold: float = 1.5,
+    L1_tau: bool = False,
 ):
-    # In adaptive mode with no explicit L1, default branch depth to L//2.
+    # In entropy-adaptive mode with no explicit L1, default branch depth to L//2.
     if L1_adaptive and L1 == 0:
+        L1 = max(1, L // 2)
+    # tau-lagged: initial L1 defaults to L//2 until first acceptance depth is observed.
+    if L1_tau and L1 == 0:
         L1 = max(1, L // 2)
     """Full speculative decoding loop with delayed-expansion draft.
 
@@ -253,6 +257,7 @@ def delayed_speculative_decoding_loop(
     }
     p_model._spec_run_stats = _run_stats
     p_model._delayed_entropy = None  # reset entropy carry-over
+    _prev_tau: Optional[int] = None  # for tau-lagged adaptive
 
     torch.cuda.synchronize()
     _loop_start = time.perf_counter()
@@ -273,21 +278,27 @@ def delayed_speculative_decoding_loop(
 
     target_calls = 0
     while context_cached.shape[-1] + 1 < context_init_len + max_new_tokens:
-        # Option A: adapt L1 from last iteration's teacher entropy (zero extra cost).
-        # When adaptive: teacher confident (low entropy) → delay by L1; uncertain → root branch.
-        # When fixed: always use L1 (may be 0, meaning root branch = same as main.py).
-        if L1_adaptive:
+        # L1 selection for this iteration:
+        #   Fixed:        always iter_L1 = L1 (may be 0 = root branch = same as main.py)
+        #   tau-lagged:   iter_L1 = max(1, prev_tau - 1); prior accepted depth guides branch point
+        #   entropy-adapt:iter_L1 = L1 when teacher confident; 0 (root) when uncertain
+        if L1_tau:
+            # Use previous iteration's accepted depth as branch point.
+            # First iteration: use L//2 (already set in L1 above).
+            iter_L1 = max(1, min(L - 1, _prev_tau - 1)) if _prev_tau is not None else L1
+        elif L1_adaptive:
             iter_L1 = (0 if (p_model._delayed_entropy is None or
                              p_model._delayed_entropy > entropy_threshold) else L1)
         else:
             iter_L1 = L1
 
-        p_cache, q_cache, context_cached, context_pending = _delayed_iter(
+        p_cache, q_cache, context_cached, context_pending, _iter_tau = _delayed_iter(
             p_model, q_model, p_cache, q_cache,
             context_cached, context_pending,
             verification_algo,
             K=K, L=L, p_temp=p_temp, q_temp=q_temp, L1=iter_L1,
         )
+        _prev_tau = _iter_tau  # update lagged acceptance depth for next iteration
         full_seq = torch.cat([context_cached, context_pending], dim=-1)
         target_calls += 1
         if (full_seq == eos_token_id).any():
