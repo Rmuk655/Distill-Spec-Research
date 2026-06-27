@@ -244,7 +244,7 @@ Traversal accepts bottom-up from leaf nodes. It doesn't care where branches orig
 ### 5.2 Why doesn't specinfer+DDTE beat traversal?
 
 Two reasons:
-1. **Off-policy mismatch.** The draft was trained with root-branching trees. At inference, the stem (depth 1–L1) is a K=1 path the draft was never trained to produce in isolation from the branching context. The branches see a different prefix distribution than training.
+1. **Off-policy mismatch.** The draft was trained with root-branching trees. At inference, the stem (depth 1–L1, K=1 path) precedes K branches that run for only L−L1 steps — neither the stem-only generation regime nor the branch-from-stem prefix was ever seen during training. The branches see a different prefix distribution than training.
 2. **Traversal structural advantage.** Even with optimal L1, specinfer's OT acceptance rule has lower acceptance efficiency than traversal's bottom-up rule for the same tree. This is a verification-algorithm gap independent of tree construction.
 
 Training-time delayed expansion would address (1). (2) requires a different acceptance algorithm.
