@@ -18,7 +18,7 @@
 - **Scope of SOTA claims (verified against all verifiers in our data):**
   - Traversal+enrich+DDTE (6.418, M3 dL5 K=4) is the **best result across all verifiers tested**, beating BV+enrich (6.283) by 0.14.
   - Specinfer+enrich+DDTE (6.015, M3 dL5 K=3) is the best within the specinfer family, but does not beat BV+enrich (6.283). It nearly closes the specinfer↔BV gap that was wide before DDTE.
-- **Optimal L1 is checkpoint-dependent.** M3 peaks at L1=5 (K=3: 6.015, K=4: 5.866). flat and M1 peak at L1=6 (M1 K=4: 5.806). Stronger draft → lower optimal L1, consistent with optimal L1 ≈ mean(τ)−1.
+- **Optimal L1 is checkpoint-dependent.** M3 peaks at L1=5 (K=3: 6.015, K=4: 5.866). flat and M1 peak at L1=6 (M1 K=4: 5.806). Stronger draft → higher optimal L1, consistent with optimal L1 ≈ mean(τ)−1.
 - **Enrich compositional gain grows with L1.** M3−flat gap at K=4: +0.03 at L1=2, +0.27 at L1=4, +0.44 at L1=5. Stacking is strongest at each checkpoint's optimal L1.
 - **Throughput recovery at L1=5–6.** Draft compute = L1×1 + (L−L1)×K units. At dL5 K=4: 5+12=17 vs root-branching 33. dL5 throughput is ~14–17 tok/s, matching standard specinfer; dL4 is slower (7–9 tok/s) due to Phase 1 overhead dominating at small L1.
 - **τ-lagged adaptive (dTau) showed no detectable signal for specinfer** (−0.28 to −0.58 vs best fixed L1 across all checkpoints/K). Inconclusive for traversal. Not recommended.
@@ -264,7 +264,7 @@ For M3: draft is reliably accepted through positions 1–5. Branching at L1=5 gi
 
 For flat: the theoretical optimum is L1≈3–4 (divergence starts earlier, at depth 4–5). The tested range (L1=5–6) is already above this optimum, which is why flat is essentially indifferent between them — both miss the early divergence zone and target only the deep tail. The difference between dL5 and dL6 for flat is ≤0.05 at all K, within single-seed noise.
 
-The net observation — stronger draft → slightly lower optimal L1 — follows from stronger drafts having their divergence zone start deeper (higher mean(τ)), so they branch later to catch it. The effect size is one step (L1=5 vs 5–6).
+The net observation — stronger draft → slightly higher optimal L1 — follows from stronger drafts having their divergence zone start deeper (higher mean(τ)), so they branch later to catch it. The effect size is one step (L1=5 vs 5–6).
 
 ### 5.4 Why does dTau fail for specinfer?
 
