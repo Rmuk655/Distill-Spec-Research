@@ -10,7 +10,7 @@
 
 ### Summary
 
-**Method.** Two training phases: (1) JSD distillation of Qwen3-0.6B from Qwen3-8B on math; (2) *enrich* — iterative self-improvement where the draft trains on its own accepted tokens from speculative decoding runs (M1 = one enrich round at K=1, M3 = three rounds at K=3; stronger enrich → better acceptance). DDTE is then applied **eval-time only** — no additional retraining for the delayed-branching structure. The delayed draft runs a K=1 stem for L1 steps, then expands to K branches for the remaining L−L1 steps. This tests whether the improved tree structure stacks additively with distillation+enrich training gains. Implementation: `delayed_draft.py`, invoked via `--L1` in eval.py.
+**Method.** Two training phases: (1) JSD distillation of Qwen3-0.6B from Qwen3-8B on math (draft scores against single greedy teacher output); (2) *enrich* — fine-tune further using JSD loss on K **stochastically-sampled teacher continuations** per prompt. K=1 (M1) exposes the draft to one random teacher path; K=3 (M3) exposes it to three diverse paths per step, broadening coverage of the teacher's distribution beyond the greedy mode. DDTE is then applied **eval-time only** — no additional retraining for the delayed-branching structure. The delayed draft runs a K=1 stem for L1 steps, then expands to K branches for the remaining L−L1 steps. This tests whether the improved tree structure stacks additively with distillation+enrich training gains. Implementation: `delayed_draft.py`, invoked via `--L1` in eval.py.
 
 **Key results** (one seed, n=100, L=8):
 
