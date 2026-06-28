@@ -45,7 +45,7 @@ def _prompt_divergence(p_model, q_model, tok, prompt, max_new_tokens, device):
     p_logits = p_model(gen, return_dict=True).logits[0, sl - 1:-1].float()
     q_logits = q_model(gen, return_dict=True).logits[0, sl - 1:-1].float()
     if p_logits.shape[0] == 0:
-        return None, None
+        return None, None, None, None, None
     logp = F.log_softmax(p_logits, dim=-1)
     logq = F.log_softmax(q_logits, dim=-1)
     p, q = logp.exp(), logq.exp()
@@ -54,7 +54,10 @@ def _prompt_divergence(p_model, q_model, tok, prompt, max_new_tokens, device):
     logm = m.log()
     jsd  = 0.5 * ((p * (logp - logm)).sum(-1)
                   + (q * (logq - logm)).sum(-1)).mean().item()       # JSD
-    return jsd, fkl
+    rkl  = (q * (logq - logp)).sum(-1).mean().item()                 # reverse KL(q||p)
+    Hp   = -(p * logp).sum(-1).mean().item()                         # H(p) teacher entropy
+    Hq   = -(q * logq).sum(-1).mean().item()                         # H(q) student entropy
+    return jsd, fkl, rkl, Hp, Hq
 
 
 def _pearson(xs, ys):
@@ -133,8 +136,8 @@ def compute_train_diag_scalars(p_model, q_model, tok, prompts, per_prompt_be,
     for i, prompt in enumerate(prompts):
         if i not in per_prompt_be:
             continue
-        jsd, fkl = _prompt_divergence(p_model, q_model, tok, prompt,
-                                      max_new_tokens, device)
+        jsd, fkl, *_ = _prompt_divergence(p_model, q_model, tok, prompt,
+                                           max_new_tokens, device)
         if jsd is None:
             continue
         jsd_xs.append(jsd); fkl_xs.append(fkl); be_ys.append(per_prompt_be[i])
@@ -190,22 +193,24 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
           f"primary={primary_label}  BE thresholds: easy≥{_BE_EASY} hard<{_BE_HARD}")
     print("=" * 78)
 
-    rows: list[tuple] = []   # (prompt_idx, preview, jsd, fkl, be, bucket)
-    jsd_xs, fkl_xs, be_ys, valid_indices = [], [], [], []
+    rows: list[tuple] = []   # (prompt_idx, preview, jsd, fkl, be, bucket, rkl, Hp, Hq)
+    jsd_xs, fkl_xs, rkl_xs, Hp_xs, Hq_xs, be_ys, valid_indices = [], [], [], [], [], [], []
 
     for i, prompt in enumerate(tqdm(prompts, desc="diagnose", ncols=80)):
         if i not in per_prompt_be:
             continue
-        jsd, fkl = _prompt_divergence(p_model, q_model, tok, prompt,
-                                      args.max_new_tokens, device)
+        jsd, fkl, rkl, Hp, Hq = _prompt_divergence(p_model, q_model, tok, prompt,
+                                                    args.max_new_tokens, device)
         if jsd is None:
             continue
         be = per_prompt_be[i]
-        jsd_xs.append(jsd); fkl_xs.append(fkl); be_ys.append(be)
+        jsd_xs.append(jsd); fkl_xs.append(fkl); rkl_xs.append(rkl)
+        Hp_xs.append(Hp); Hq_xs.append(Hq); be_ys.append(be)
         valid_indices.append(i)
         bucket = "easy" if be >= _BE_EASY else ("hard" if be < _BE_HARD else "medium")
         preview = prompt[:60].replace("\n", " ")
-        rows.append((i, preview, round(jsd, 5), round(fkl, 5), round(be, 4), bucket))
+        rows.append((i, preview, round(jsd, 5), round(fkl, 5), round(be, 4), bucket,
+                     round(rkl, 5), round(Hp, 5), round(Hq, 5)))
 
     # Assign primary/secondary arrays based on trained_loss
     pri_xs  = fkl_xs if trained_loss == "fwdkl" else jsd_xs
@@ -230,6 +235,10 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
     std_be  = _std(be_ys)
     mean_pri = sum(pri_xs) / n if n else float("nan")
     mean_be_all = sum(be_ys) / n if n else float("nan")
+    mean_rkl  = sum(rkl_xs) / n if n else float("nan")
+    mean_Hp   = sum(Hp_xs)  / n if n else float("nan")
+    mean_Hq   = sum(Hq_xs)  / n if n else float("nan")
+    entropy_gap = mean_Hp - mean_Hq   # positive = student is more peaked than teacher
 
     # ── Bucket stats — mean of PRIMARY loss per bucket ───────────────────────
     # row layout: (prompt_idx, preview, jsd, fkl, be, bucket)
@@ -253,6 +262,8 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
     sl = secondary_label
     print(f"\n  n={n}  mean_{pl}={mean_pri:.4f}  σ({pl})={std_pri:.4f}  "
           f"mean_BE={mean_be_all:.3f}  σ(BE)={std_be:.3f}")
+    print(f"  mean_rkl={mean_rkl:.4f}  H(p)={mean_Hp:.4f}  H(q)={mean_Hq:.4f}  "
+          f"entropy_gap(H(p)-H(q))={entropy_gap:+.4f}")
     print(f"  Spearman ρ({pl},BE)={rho_pri:+.3f}  p≈{p_rho_pri:.1e}  "
           f"ρ({sl},BE)={rho_sec:+.3f}  [primary — rank-stable]")
     print(f"  Pearson  r({pl},BE)={r_pri:+.3f}  p≈{p_pri:.1e}  R²={r_pri**2:.2f}  "
@@ -296,6 +307,14 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
     print(f"\n  [H0] {h0}")
     print(f"  [verdict] {verdict}")
 
+    # Machine-readable summary line — parsed by plot_diag_scatter.py
+    _ckpt_tag = os.path.basename(os.path.dirname(args.checkpoint.rstrip("/")))
+    print(f"[DIAG_SUMMARY] ckpt={_ckpt_tag} "
+          f"fwdKL={mean_pri if trained_loss=='fwdkl' else sum(fkl_xs)/n:.5f} "
+          f"rkl={mean_rkl:.5f} Hp={mean_Hp:.5f} Hq={mean_Hq:.5f} "
+          f"entropy_gap={entropy_gap:+.5f} jsd={sum(jsd_xs)/n:.5f} "
+          f"mean_be={mean_be_all:.5f}")
+
     # ── W&B logging ─────────────────────────────────────────────────────────
     try:
         import wandb
@@ -316,9 +335,10 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
                     "trained_loss": trained_loss},
         )
 
-        # Per-prompt table (full 6 columns — filter by bucket='hard' to find struggling prompts).
+        # Per-prompt table (9 columns — filter by bucket='hard' to find struggling prompts).
         pp_table = wandb.Table(
-            columns=["prompt_idx", "prompt_preview", "jsd", "fwd_kl", "block_eff", "bucket"])
+            columns=["prompt_idx", "prompt_preview", "jsd", "fwd_kl", "block_eff", "bucket",
+                     "rev_kl", "Hp", "Hq"])
         for row in rows:
             pp_table.add_data(*row)
 
@@ -360,6 +380,11 @@ def run_objective_be_diagnostic(p_model, q_model, tok, prompts, per_prompt_be,
             f"diag/spearman_{secondary_label.lower()}": round(rho_sec, 4),
             f"diag/pearson_{secondary_label.lower()}":  round(r_sec, 4),
             f"diag/std_{secondary_label.lower()}":      round(std_sec, 5),
+            # ── reverse KL + entropy quadrant ────────────────────────────────
+            "diag/mean_rkl":             round(mean_rkl, 5),
+            "diag/mean_Hp":              round(mean_Hp, 5),
+            "diag/mean_Hq":              round(mean_Hq, 5),
+            "diag/entropy_gap":          round(entropy_gap, 5),
             # ── BE spread ────────────────────────────────────────────────────
             "diag/mean_be":              round(mean_be_all, 4),
             "diag/std_be":               round(std_be, 4),
