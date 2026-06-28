@@ -24,7 +24,7 @@ def run_slug(args) -> str:
         root = (f"multiN{args.prefix_root_spacing}"
                 if args.prefix_root_spacing > 0 else f"singleM{args.prefix_M}")
         slug = (f"{args.loss}_{args.prefix_objective}_{root}"
-                f"_L{args.prefix_L}_lr{args.lr:g}_{args.train_dataset}_s{args.seed}")
+                f"_L{args.L}_lr{args.lr:g}_{args.train_dataset}_s{args.seed}")
         if args.prefix_aux_weight > 0:
             slug += f"_{args.prefix_aux}{args.prefix_aux_weight:g}"
             if args.prefix_anneal_steps > 0:
