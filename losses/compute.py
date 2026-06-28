@@ -194,17 +194,35 @@ def _aux_term(aux, s_logits, tok_lp, teacher, gen, C):
     return jsd(s_logits, t_logits)
 
 
-def _prefix_score(S, objective):
+def _prefix_score(S, objective, tok_lp=None, K=None):
     """Map per-prefix log-probs S_t = log qθ(P_{1:t}) to the per-root reward.
 
-      objective="prob"    : Σ_t qθ(P_{1:t}) = Σ_t exp(S_t)  — the doc's exact
-                            E[LCP] objective (§4).  Gradient is survival-weighted
-                            and COLLAPSES from a cold start (∏ aᵢ → 0 at depth).
-      objective="logprob" : Σ_t log qθ(P_{1:t}) = Σ_t S_t  — log-space variant.
-                            Equals position-weighted CE Σ_i (L-i+1)·log aᵢ;
-                            gradient never collapses.  NOT the doc's objective —
-                            a trainability variant for cold-start experiments.
+      objective="prob"     : Σ_t qθ(P_{1:t}) = Σ_t exp(S_t)  — the doc's exact
+                             E[LCP] objective (§4).  Gradient is survival-weighted
+                             and COLLAPSES from a cold start (∏ aᵢ → 0 at depth).
+      objective="logprob"  : Σ_t log qθ(P_{1:t}) = Σ_t S_t  — log-space variant.
+                             Equals position-weighted CE Σ_i (L-i+1)·log aᵢ;
+                             gradient never collapses.  NOT the doc's objective —
+                             a trainability variant for cold-start experiments.
+      objective="traversal": traversal-BE surrogate (needs tok_lp and K).  With
+                             α_d = exp(S_t) (draft's joint prob of the teacher's
+                             first d tokens) and K i.i.d. branches, acceptance at
+                             depth d is A_d = 1-(1-α_d)^K and E[BE] = 1+Σ_d A_d.
+                             We realise its gradient
+                                 dE[BE]/d log q_i = Σ_{d≥i} K(1-α_d)^{K-1}α_d
+                             via a detached-weight surrogate Σ_i w_i·log q(P_i).
+                             Weight is adaptive in α AND K (per-depth term
+                             K·α(1-α)^{K-1} peaks at α≈1/K), giving a built-in
+                             curriculum.  This is an independent-branches
+                             APPROXIMATION to the traversal verifier (shared
+                             prefixes / node merging / verifier DP are ignored),
+                             NOT the exact traversal objective.
     """
+    if objective == "traversal":
+        alpha = torch.exp(S.detach())                                  # α_d
+        wd    = K * (1.0 - alpha).pow(K - 1) * alpha                   # K α (1-α)^{K-1}
+        wi    = torch.flip(torch.cumsum(torch.flip(wd, [0]), 0), [0])  # suffix sum: w_i
+        return (wi * tok_lp).sum()
     if objective == "logprob":
         return S.sum()
     return torch.logsumexp(S, dim=0).exp()
@@ -212,12 +230,13 @@ def _prefix_score(S, objective):
 
 def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
                                 M, L, teacher_temp=1.0,
-                                aux="ce", aux_weight=0.0, objective="prob"):
+                                aux="ce", aux_weight=0.0, objective="prob", K=3):
     """Single-root prefix overlap (doc §4): M teacher continuations from the prompt.
 
     loss = -mean_m score(P^(m))  [ + aux_weight · mean_m aux_term ], where
     score = Σ_t qθ(P_{1:t})  (objective="prob", doc) or
-            Σ_t log qθ(P_{1:t})  (objective="logprob", trainability variant).
+            Σ_t log qθ(P_{1:t})  (objective="logprob", trainability variant) or
+            the traversal-BE surrogate (objective="traversal"; uses K branches).
     The continuations are sampled from the prompt only (root = prompt).
     """
     attn_mask = torch.ones_like(prompt_ids)
@@ -238,7 +257,7 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
         logp     = F.log_softmax(s_logits, dim=-1)
         tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(P_t|·)  [len]
         S        = torch.cumsum(tok_lp, dim=0)              # log qθ(P_{1:t}|c)        [len]
-        prefix_terms.append(_prefix_score(S, objective))
+        prefix_terms.append(_prefix_score(S, objective, tok_lp=tok_lp, K=K))
         if aux_weight > 0.0:
             aux_terms.append(_aux_term(aux, s_logits, tok_lp, teacher, gen, C))
     if not prefix_terms:
@@ -253,7 +272,7 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
 def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
                                           L, N, rollout_len, teacher_temp=1.0,
                                           aux="ce", aux_weight=0.0,
-                                          objective="prob", random_offset=False):
+                                          objective="prob", random_offset=False, K=3):
     """Multi-root prefix overlap (doc §5), efficient M=1 estimator.
 
     Generate ONE teacher rollout; its tail from each root y_{r+1:r+L} is a valid
@@ -298,7 +317,7 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
         if win_lp.numel() == 0:
             break
         S = torch.cumsum(win_lp, dim=0)
-        prefix_terms.append(_prefix_score(S, objective))
+        prefix_terms.append(_prefix_score(S, objective, tok_lp=win_lp, K=K))
         if aux_weight > 0.0:
             if aux == "ce":
                 aux_terms.append(-win_lp.sum())            # doc §7: SUM over t (verbatim)
