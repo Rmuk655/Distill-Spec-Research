@@ -161,6 +161,10 @@ def parse_args():
                     help="prefix_overlap only: λ for the secondary (--prefix_aux) term "
                          "(0 = off; doc recommends a small positive value). Do NOT also "
                          "pass --aux_loss — the secondary term is computed internally.")
+    ap.add_argument("--prefix_anneal_steps", type=int, default=0,
+                    help="prefix_overlap only: if >0, linearly anneal --prefix_aux_weight "
+                         "from its value down to 0 over this many steps. CE carries the "
+                         "cold start; prefix term takes over as a_i grow. 0 = no anneal.")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -181,6 +185,10 @@ def parse_args():
                     help="CUDA device, e.g. cuda:1 (default: auto-select freest GPU)")
     ap.add_argument("--teacher", type=str, default=TEACHER_MODEL,
                     help=f"Teacher model name or local path (default: {TEACHER_MODEL}).")
+    ap.add_argument("--draft", type=str, default=None,
+                    help="Override the draft model path/name (default: uses DRAFT_MODEL "
+                         "from config). Use to warm-start from a pre-trained checkpoint, "
+                         "e.g. --draft checkpoints/jsd_s123/ckpt_best.")
     ap.add_argument("--load_in_4bit", action="store_true",
                     help="Load teacher in 4-bit NF4 via bitsandbytes. Needed for large "
                          "teachers (e.g. 32B) on GPUs where bf16 does not fit.")
@@ -264,7 +272,8 @@ def main():
             print(f"*** To continue from it run: {_cmd} ***\n")
 
     # Models
-    tokenizer, draft, teacher = load_models(DRAFT_MODEL, args.teacher, device=args.device,
+    draft_model_path = args.draft if args.draft else DRAFT_MODEL
+    tokenizer, draft, teacher = load_models(draft_model_path, args.teacher, device=args.device,
                                              load_in_4bit=args.load_in_4bit,
                                              lora_config={"r": LORA_R, "alpha": LORA_ALPHA, "dropout": LORA_DROPOUT} if USE_LORA else None)
 
@@ -375,17 +384,22 @@ def main():
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
         if prefix_ov:
+            if args.prefix_anneal_steps > 0:
+                frac = max(0.0, 1.0 - step / args.prefix_anneal_steps)
+                aux_w = args.prefix_aux_weight * frac
+            else:
+                aux_w = args.prefix_aux_weight
             if args.prefix_root_spacing > 0:
                 loss = compute_prefix_overlap_multiroot_loss(
                     draft, teacher, ids, L=args.prefix_L,
                     N=args.prefix_root_spacing, rollout_len=args.prefix_rollout_len,
                     teacher_temp=args.teacher_temp,
-                    aux=args.prefix_aux, aux_weight=args.prefix_aux_weight)
+                    aux=args.prefix_aux, aux_weight=aux_w)
             else:
                 loss = compute_prefix_overlap_loss(
                     draft, teacher, ids, M=args.prefix_M, L=args.prefix_L,
                     teacher_temp=args.teacher_temp,
-                    aux=args.prefix_aux, aux_weight=args.prefix_aux_weight)
+                    aux=args.prefix_aux, aux_weight=aux_w)
         elif flat_enrich:
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
