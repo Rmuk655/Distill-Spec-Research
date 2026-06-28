@@ -111,6 +111,7 @@ SAVE_EVERY      = 400                        # ckpt_latest write cadence (matche
 LOG_EVERY       = 10                         # console + W&B step-log cadence
 VAL_EMA_ALPHA   = 0.3                        # smoothed-val EMA weight for checkpoint selection (α=0.3 → ~3-4 check window)
 EARLY_STOP_PAT  = 5                          # default patience: 5 × 400 = 2000 steps without smoothed improvement
+EARLY_STOP_DELTA = 0.0                       # min improvement threshold (0 = strict; >0 ignores noise-level fluctuations)
 
 # Dataset names (resolved via data_io.get_path)
 TRAIN_DATASET   = "gsm8k_train"
@@ -164,11 +165,14 @@ def parse_args():
                     help="prefix_overlap only: if >0, linearly anneal --prefix_aux_weight "
                          "from its value down to 0 over this many steps. CE carries the "
                          "cold start; prefix term takes over as a_i grow. 0 = no anneal.")
-    ap.add_argument("--prefix_objective", choices=["prob", "logprob"], default="prob",
+    ap.add_argument("--prefix_objective", choices=["prob", "logprob", "traversal"], default="prob",
                     help="prefix_overlap only: 'prob' = doc's Σ_t qθ(P_{1:t}) (exact "
                          "E[LCP]; gradient collapses from cold start). 'logprob' = "
                          "Σ_t log qθ(P_{1:t}) = position-weighted CE (trainability "
-                         "variant, NOT the doc's objective; gradient never collapses).")
+                         "variant, NOT the doc's objective; gradient never collapses). "
+                         "'traversal' = analytical traversal-BE surrogate with weights "
+                         "Σ_{d≥i} K(1-α_d)^{K-1}α_d (adaptive in α AND --K; independent-"
+                         "branches approximation to the traversal verifier, not exact).")
     ap.add_argument("--prefix_random_offset", action="store_true",
                     help="prefix_overlap multi-root only: start roots at a random offset "
                          "o~Unif{0..N-1} each step (doc §5 uniform-over-positions) "
@@ -240,6 +244,10 @@ def parse_args():
                          f"consecutive val checks (default {EARLY_STOP_PAT}; 0 = disabled). "
                          f"Each check is VAL_EVERY={VAL_EVERY} steps, so default = "
                          f"{EARLY_STOP_PAT * VAL_EVERY} steps without improvement.")
+    ap.add_argument("--early_stop_min_delta", type=float, default=EARLY_STOP_DELTA,
+                    help="Minimum improvement in smoothed val BE to reset the patience counter "
+                         "(default 0.0 = strict; e.g. 0.005 ignores sub-0.5%% fluctuations). "
+                         "A val check counts as 'no improve' only if val_be_ema < best_smoothed_be + delta.")
     return ap.parse_args()
 
 
@@ -404,13 +412,13 @@ def main():
                     teacher_temp=args.teacher_temp,
                     aux=args.prefix_aux, aux_weight=aux_w,
                     objective=args.prefix_objective,
-                    random_offset=args.prefix_random_offset)
+                    random_offset=args.prefix_random_offset, K=args.K)
             else:
                 loss = compute_prefix_overlap_loss(
                     draft, teacher, ids, M=args.prefix_M, L=args.L,
                     teacher_temp=args.teacher_temp,
                     aux=args.prefix_aux, aux_weight=aux_w,
-                    objective=args.prefix_objective)
+                    objective=args.prefix_objective, K=args.K)
         elif flat_enrich:
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
@@ -557,7 +565,7 @@ def main():
                 best_val_block_eff = val_be
                 if wandb_run:
                     wandb_run.summary["val/best_block_eff"] = best_val_block_eff
-            if val_be_ema > best_smoothed_be:
+            if val_be_ema > best_smoothed_be + args.early_stop_min_delta:
                 best_smoothed_be = val_be_ema
                 no_improve_count = 0
                 save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_best",
@@ -572,10 +580,17 @@ def main():
                 if wandb_run:
                     wandb_run.summary["val/best_smoothed_be"] = best_smoothed_be
             else:
-                no_improve_count += 1
-                print(f"  [val] no improve {no_improve_count}/{args.early_stop_patience}  "
-                      f"(smoothed={val_be_ema:.3f}  best_smoothed={best_smoothed_be:.3f})")
-                if args.early_stop_patience > 0 and no_improve_count >= args.early_stop_patience:
+                _opt_step_now = (step + 1) // GRAD_ACCUM
+                _in_warmup = _opt_step_now < warmup_opt_steps
+                if _in_warmup:
+                    print(f"  [val] no improve (warmup, patience frozen at "
+                          f"{no_improve_count}/{args.early_stop_patience})  "
+                          f"(smoothed={val_be_ema:.3f}  best_smoothed={best_smoothed_be:.3f})")
+                else:
+                    no_improve_count += 1
+                    print(f"  [val] no improve {no_improve_count}/{args.early_stop_patience}  "
+                          f"(smoothed={val_be_ema:.3f}  best_smoothed={best_smoothed_be:.3f})")
+                if not _in_warmup and args.early_stop_patience > 0 and no_improve_count >= args.early_stop_patience:
                     print(f"  [early stop] patience exhausted at step {step+1}; saving and stopping.")
                     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                                     state={"step": step + 1,
