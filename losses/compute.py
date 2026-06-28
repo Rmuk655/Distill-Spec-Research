@@ -180,13 +180,15 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
 def _aux_term(aux, s_logits, tok_lp, teacher, gen, C):
     """Secondary term over one continuation, on the SAME sampled tokens.
 
-      aux="ce"  : teacher-forcing cross-entropy  mean_t (-log qθ(P_t|·))  — doc §7;
-                  reuses the gathered token log-probs (no teacher forward).
+      aux="ce"  : teacher-forcing cross-entropy  -Σ_t log qθ(P_t|·)  — doc §7,
+                  verbatim (a SUM over t, matching the prefix term's per-root
+                  scale; the doc never divides by L).  Reuses the gathered token
+                  log-probs (no teacher forward).
       aux="jsd" : symmetric JSD(student, teacher) per token — beyond the doc,
                   needs the teacher distribution (one extra teacher forward).
     """
     if aux == "ce":
-        return -tok_lp.mean()
+        return -tok_lp.sum()
     with torch.no_grad():
         t_logits = teacher(gen, return_dict=True).logits[0, C - 1:-1].float()
     return jsd(s_logits, t_logits)
@@ -299,7 +301,7 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
         prefix_terms.append(_prefix_score(S, objective))
         if aux_weight > 0.0:
             if aux == "ce":
-                aux_terms.append(-win_lp.mean())
+                aux_terms.append(-win_lp.sum())            # doc §7: SUM over t (verbatim)
             else:                                           # jsd over the same window
                 aux_terms.append(jsd(s_logits[r:r + L], t_logits_all[r:r + L]))
     if not prefix_terms:                                    # offset past end of rollout
