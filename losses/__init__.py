@@ -88,4 +88,8 @@ LOSS_TO_VERIFIER = {
     "bv_tree":       "bv",
     "gbv_tree":      "gbv",
     "traversal_tree":"traversal",
+    # prefix_overlap is the per-token-factorized E[LCP] objective — aligned with
+    # NSS (which factorizes token-by-token), NOT traversal (path-based). Validate
+    # and early-stop on NSS, the verifier the objective actually optimizes.
+    "prefix_overlap":"nss",
 }
