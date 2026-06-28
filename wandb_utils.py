@@ -10,13 +10,28 @@ from __future__ import annotations
 import json
 import os
 
-from losses import is_tree_loss, is_enrichment_loss, is_flat_enrich_loss
+from losses import (is_tree_loss, is_enrichment_loss, is_flat_enrich_loss,
+                    is_prefix_overlap_loss)
 
 
 def run_slug(args) -> str:
     """Loss + dataset component of the run identifier, shared by the checkpoint dir
     and the W&B run name. L is omitted for flat/flat-enrich losses where tree depth
     is not a parameter; K is always included since it may distinguish enrich width."""
+    if is_prefix_overlap_loss(args.loss):
+        # K is meaningless for prefix_overlap; encode the flags that actually
+        # distinguish runs in a sweep (objective, root mode, L, LR, aux, warm-start).
+        root = (f"multiN{args.prefix_root_spacing}"
+                if args.prefix_root_spacing > 0 else f"singleM{args.prefix_M}")
+        slug = (f"{args.loss}_{args.prefix_objective}_{root}"
+                f"_L{args.prefix_L}_lr{args.lr:g}_{args.train_dataset}_s{args.seed}")
+        if args.prefix_aux_weight > 0:
+            slug += f"_{args.prefix_aux}{args.prefix_aux_weight:g}"
+            if args.prefix_anneal_steps > 0:
+                slug += f"anneal{args.prefix_anneal_steps}"
+        if args.draft:
+            slug += "_warm"
+        return slug
     uses_L = is_tree_loss(args.loss) or is_enrichment_loss(args.loss)
     if uses_L:
         slug = f"{args.loss}_K{args.K}_L{args.L}_{args.train_dataset}_s{args.seed}"
