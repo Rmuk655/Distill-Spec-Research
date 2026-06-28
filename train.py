@@ -137,10 +137,9 @@ def parse_args():
                          f"K>1 is the enrichment (teacher teaches additional paths). "
                          f"Validation tree width follows --K.")
     ap.add_argument("--L", type=int, default=DEFAULT_L,
-                    help=f"Tree depth / draft block length (default {DEFAULT_L}).")
-    ap.add_argument("--prefix_L", type=int, default=DEFAULT_L,
-                    help=f"prefix_overlap only: length of each teacher continuation "
-                         f"over which prefix overlap is summed (default {DEFAULT_L}).")
+                    help=f"Tree depth / draft block length (default {DEFAULT_L}). "
+                         f"For prefix_overlap this is the teacher-continuation / window "
+                         f"length over which prefix overlap is summed.")
     ap.add_argument("--prefix_M", type=int, default=4,
                     help="prefix_overlap single-root only: M = number of teacher "
                          "continuations per prompt for the Monte-Carlo estimator "
@@ -400,7 +399,7 @@ def main():
                 aux_w = args.prefix_aux_weight
             if args.prefix_root_spacing > 0:
                 loss = compute_prefix_overlap_multiroot_loss(
-                    draft, teacher, ids, L=args.prefix_L,
+                    draft, teacher, ids, L=args.L,
                     N=args.prefix_root_spacing, rollout_len=args.prefix_rollout_len,
                     teacher_temp=args.teacher_temp,
                     aux=args.prefix_aux, aux_weight=aux_w,
@@ -408,7 +407,7 @@ def main():
                     random_offset=args.prefix_random_offset)
             else:
                 loss = compute_prefix_overlap_loss(
-                    draft, teacher, ids, M=args.prefix_M, L=args.prefix_L,
+                    draft, teacher, ids, M=args.prefix_M, L=args.L,
                     teacher_temp=args.teacher_temp,
                     aux=args.prefix_aux, aux_weight=aux_w,
                     objective=args.prefix_objective)
