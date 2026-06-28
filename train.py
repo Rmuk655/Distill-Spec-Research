@@ -165,6 +165,15 @@ def parse_args():
                     help="prefix_overlap only: if >0, linearly anneal --prefix_aux_weight "
                          "from its value down to 0 over this many steps. CE carries the "
                          "cold start; prefix term takes over as a_i grow. 0 = no anneal.")
+    ap.add_argument("--prefix_objective", choices=["prob", "logprob"], default="prob",
+                    help="prefix_overlap only: 'prob' = doc's Σ_t qθ(P_{1:t}) (exact "
+                         "E[LCP]; gradient collapses from cold start). 'logprob' = "
+                         "Σ_t log qθ(P_{1:t}) = position-weighted CE (trainability "
+                         "variant, NOT the doc's objective; gradient never collapses).")
+    ap.add_argument("--prefix_random_offset", action="store_true",
+                    help="prefix_overlap multi-root only: start roots at a random offset "
+                         "o~Unif{0..N-1} each step (doc §5 uniform-over-positions) "
+                         "instead of a fixed 0 (every-Nth objective).")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -394,12 +403,15 @@ def main():
                     draft, teacher, ids, L=args.prefix_L,
                     N=args.prefix_root_spacing, rollout_len=args.prefix_rollout_len,
                     teacher_temp=args.teacher_temp,
-                    aux=args.prefix_aux, aux_weight=aux_w)
+                    aux=args.prefix_aux, aux_weight=aux_w,
+                    objective=args.prefix_objective,
+                    random_offset=args.prefix_random_offset)
             else:
                 loss = compute_prefix_overlap_loss(
                     draft, teacher, ids, M=args.prefix_M, L=args.prefix_L,
                     teacher_temp=args.teacher_temp,
-                    aux=args.prefix_aux, aux_weight=aux_w)
+                    aux=args.prefix_aux, aux_weight=aux_w,
+                    objective=args.prefix_objective)
         elif flat_enrich:
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,

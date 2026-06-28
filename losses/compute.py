@@ -192,12 +192,30 @@ def _aux_term(aux, s_logits, tok_lp, teacher, gen, C):
     return jsd(s_logits, t_logits)
 
 
+def _prefix_score(S, objective):
+    """Map per-prefix log-probs S_t = log qθ(P_{1:t}) to the per-root reward.
+
+      objective="prob"    : Σ_t qθ(P_{1:t}) = Σ_t exp(S_t)  — the doc's exact
+                            E[LCP] objective (§4).  Gradient is survival-weighted
+                            and COLLAPSES from a cold start (∏ aᵢ → 0 at depth).
+      objective="logprob" : Σ_t log qθ(P_{1:t}) = Σ_t S_t  — log-space variant.
+                            Equals position-weighted CE Σ_i (L-i+1)·log aᵢ;
+                            gradient never collapses.  NOT the doc's objective —
+                            a trainability variant for cold-start experiments.
+    """
+    if objective == "logprob":
+        return S.sum()
+    return torch.logsumexp(S, dim=0).exp()
+
+
 def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
                                 M, L, teacher_temp=1.0,
-                                aux="ce", aux_weight=0.0):
-    """Single-root prefix overlap: M teacher continuations from the prompt.
+                                aux="ce", aux_weight=0.0, objective="prob"):
+    """Single-root prefix overlap (doc §4): M teacher continuations from the prompt.
 
-    loss = -mean_m Σ_t qθ(P_{1:t}|c)  [ + aux_weight · mean_m aux_term ].
+    loss = -mean_m score(P^(m))  [ + aux_weight · mean_m aux_term ], where
+    score = Σ_t qθ(P_{1:t})  (objective="prob", doc) or
+            Σ_t log qθ(P_{1:t})  (objective="logprob", trainability variant).
     The continuations are sampled from the prompt only (root = prompt).
     """
     attn_mask = torch.ones_like(prompt_ids)
@@ -218,7 +236,7 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
         logp     = F.log_softmax(s_logits, dim=-1)
         tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(P_t|·)  [len]
         S        = torch.cumsum(tok_lp, dim=0)              # log qθ(P_{1:t}|c)        [len]
-        prefix_terms.append(torch.logsumexp(S, dim=0).exp())  # Σ_t exp(S_t) = Σ_t qθ(P_{1:t})
+        prefix_terms.append(_prefix_score(S, objective))
         if aux_weight > 0.0:
             aux_terms.append(_aux_term(aux, s_logits, tok_lp, teacher, gen, C))
     if not prefix_terms:
@@ -232,15 +250,21 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
 
 def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
                                           L, N, rollout_len, teacher_temp=1.0,
-                                          aux="ce", aux_weight=0.0):
+                                          aux="ce", aux_weight=0.0,
+                                          objective="prob", random_offset=False):
     """Multi-root prefix overlap (doc §5), efficient M=1 estimator.
 
     Generate ONE teacher rollout; its tail from each root y_{r+1:r+L} is a valid
     sample from p(·|c_r) (teacher is autoregressive), so sliding a length-L window
     every N positions gives an unbiased M=1 estimate of the §5 root-averaged
     objective.  Cost: one teacher generate + one student forward for all roots.
+    NOTE: this is the tail-reuse variant — cheaper but correlated and M=1 — not
+    the doc's literal "fresh M continuations per root."
 
-    loss = -mean_r Σ_t qθ(y_{r+1:r+t}|c_r)  [ + aux_weight · mean_r aux_term ].
+    random_offset: roots start at o~Unif{0..N-1} (doc §5 uniform-over-positions)
+                   instead of a fixed 0 (every-Nth objective).
+    objective:     "prob" (doc §4/§5) or "logprob" (trainability variant).
+    loss = -mean_r score(y_{r+1:r+L})  [ + aux_weight · mean_r aux_term ].
     """
     attn_mask = torch.ones_like(prompt_ids)
     C = prompt_ids.shape[1]
@@ -265,18 +289,21 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
         with torch.no_grad():
             t_logits_all = teacher(gen, return_dict=True).logits[0, C - 1:C - 1 + T].float()
 
+    start = int(torch.randint(0, N, (1,)).item()) if random_offset else 0
     prefix_terms, aux_terms = [], []
-    for r in range(0, T - 1, N):                            # roots every N positions
+    for r in range(start, T - 1, N):                       # roots every N positions
         win_lp = tok_lp[r:r + L]                            # student log-probs from root r
         if win_lp.numel() == 0:
             break
         S = torch.cumsum(win_lp, dim=0)
-        prefix_terms.append(torch.logsumexp(S, dim=0).exp())
+        prefix_terms.append(_prefix_score(S, objective))
         if aux_weight > 0.0:
             if aux == "ce":
                 aux_terms.append(-win_lp.mean())
             else:                                           # jsd over the same window
                 aux_terms.append(jsd(s_logits[r:r + L], t_logits_all[r:r + L]))
+    if not prefix_terms:                                    # offset past end of rollout
+        return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
     loss = -torch.stack(prefix_terms).mean()
     if aux_weight > 0.0:
         loss = loss + aux_weight * torch.stack(aux_terms).mean()
