@@ -194,7 +194,7 @@ def _aux_term(aux, s_logits, tok_lp, teacher, gen, C):
     return jsd(s_logits, t_logits)
 
 
-def _prefix_score(S, objective, tok_lp=None, K=None):
+def _prefix_score(S, objective, tok_lp=None, K=None, tok_p=None):
     """Map per-prefix log-probs S_t = log qθ(P_{1:t}) to the per-root reward.
 
       objective="prob"     : Σ_t qθ(P_{1:t}) = Σ_t exp(S_t)  — the doc's exact
@@ -217,12 +217,24 @@ def _prefix_score(S, objective, tok_lp=None, K=None):
                              APPROXIMATION to the traversal verifier (shared
                              prefixes / node merging / verifier DP are ignored),
                              NOT the exact traversal objective.
+      objective="nss"      : NSS-aligned one-sided CE (needs tok_lp and tok_p).
+                             NSS acceptance per token is min(1, p_i/q_i); gradient
+                             of the log-space survival sum flows only where q_i<p_i.
+                             Same triangular weight L-i+1 as logprob, masked to the
+                             catch-up zone: -Σ_i (L-i+1)·𝟙[p_i>q_i]·log q_i.
+                             Requires tok_p=log p(P_i|·) from a teacher forward on
+                             the same sampled tokens (shared with jsd-aux if active).
     """
     if objective == "traversal":
         alpha = torch.exp(S.detach())                                  # α_d
         wd    = K * (1.0 - alpha).pow(K - 1) * alpha                   # K α (1-α)^{K-1}
         wi    = torch.flip(torch.cumsum(torch.flip(wd, [0]), 0), [0])  # suffix sum: w_i
         return (wi * tok_lp).sum()
+    if objective == "nss":
+        active = ((tok_p - tok_lp) > 0).float().detach()              # 1 where q < p [L]
+        wi = torch.arange(len(tok_lp), 0, -1,
+                          dtype=tok_lp.dtype, device=tok_lp.device)   # L, L-1, ..., 1
+        return (wi * active * tok_lp).sum()
     if objective == "logprob":
         return S.sum()
     return torch.logsumexp(S, dim=0).exp()
@@ -257,7 +269,13 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
         logp     = F.log_softmax(s_logits, dim=-1)
         tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(P_t|·)  [len]
         S        = torch.cumsum(tok_lp, dim=0)              # log qθ(P_{1:t}|c)        [len]
-        prefix_terms.append(_prefix_score(S, objective, tok_lp=tok_lp, K=K))
+        tok_tp = None
+        if objective == "nss":
+            with torch.no_grad():
+                t_logits_nss = teacher(gen, return_dict=True).logits[0, C - 1:-1].float()
+                tok_tp = F.log_softmax(t_logits_nss, dim=-1).gather(
+                    -1, cont.unsqueeze(-1)).squeeze(-1)     # log p(P_t|·)  [len]
+        prefix_terms.append(_prefix_score(S, objective, tok_lp=tok_lp, K=K, tok_p=tok_tp))
         if aux_weight > 0.0:
             aux_terms.append(_aux_term(aux, s_logits, tok_lp, teacher, gen, C))
     if not prefix_terms:
@@ -272,7 +290,8 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
 def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
                                           L, N, rollout_len, teacher_temp=1.0,
                                           aux="ce", aux_weight=0.0,
-                                          objective="prob", random_offset=False, K=3):
+                                          objective="prob", random_offset=False, K=3,
+                                          min_root=0):
     """Multi-root prefix overlap (doc §5), efficient M=1 estimator.
 
     Generate ONE teacher rollout; its tail from each root y_{r+1:r+L} is a valid
@@ -284,7 +303,10 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
 
     random_offset: roots start at o~Unif{0..N-1} (doc §5 uniform-over-positions)
                    instead of a fixed 0 (every-Nth objective).
-    objective:     "prob" (doc §4/§5) or "logprob" (trainability variant).
+    min_root:      skip all roots before this position (deep-bias: warm-start from
+                   jsd_flat then only supervise the deep half of each rollout).
+    objective:     "prob" (doc §4/§5), "logprob" (trainability variant),
+                   "traversal" (K-aware surrogate), "nss" (NSS-aligned one-sided CE).
     loss = -mean_r score(y_{r+1:r+L})  [ + aux_weight · mean_r aux_term ].
     """
     attn_mask = torch.ones_like(prompt_ids)
@@ -304,20 +326,29 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
     logp     = F.log_softmax(s_logits, dim=-1)
     tok_lp   = logp.gather(-1, cont.unsqueeze(-1)).squeeze(-1)   # log qθ(y_{i+1}|...)  [T]
 
-    # For jsd aux: teacher distributions over the whole rollout, computed once.
+    # Teacher logits over the whole rollout: computed once, shared by jsd-aux and nss.
     t_logits_all = None
-    if aux_weight > 0.0 and aux != "ce":
+    _need_teacher_logits = (aux_weight > 0.0 and aux != "ce") or objective == "nss"
+    if _need_teacher_logits:
         with torch.no_grad():
             t_logits_all = teacher(gen, return_dict=True).logits[0, C - 1:C - 1 + T].float()
 
+    # Teacher log-probs at teacher tokens — needed for NSS objective only.
+    tok_lp_teacher = None
+    if objective == "nss":
+        tok_lp_teacher = F.log_softmax(t_logits_all, dim=-1).gather(
+            -1, cont.unsqueeze(-1)).squeeze(-1)             # log p(y_t|·)  [T]
+
     start = int(torch.randint(0, N, (1,)).item()) if random_offset else 0
+    start = max(start, min_root)                            # deep-bias: skip shallow roots
     prefix_terms, aux_terms = [], []
     for r in range(start, T - 1, N):                       # roots every N positions
         win_lp = tok_lp[r:r + L]                            # student log-probs from root r
         if win_lp.numel() == 0:
             break
         S = torch.cumsum(win_lp, dim=0)
-        prefix_terms.append(_prefix_score(S, objective, tok_lp=win_lp, K=K))
+        win_tp = tok_lp_teacher[r:r + L] if tok_lp_teacher is not None else None
+        prefix_terms.append(_prefix_score(S, objective, tok_lp=win_lp, K=K, tok_p=win_tp))
         if aux_weight > 0.0:
             if aux == "ce":
                 aux_terms.append(-win_lp.sum())            # doc §7: SUM over t (verbatim)

@@ -96,6 +96,15 @@ def _effective_mode(mode: str, L1: int, L1_adaptive: bool, L1_tau: bool = False)
     return mode
 
 
+def _build_depth_histogram(all_runs: list, L: int) -> list:
+    """Count how often each accepted depth (0..L) occurs across all iterations."""
+    counts = [0] * (L + 1)
+    for r in all_runs:
+        for d in r.get("accepted_depths", []):
+            counts[min(int(d), L)] += 1
+    return counts
+
+
 def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
                       max_new_tokens, temp, state_path: str | None = None,
                       gpu_monitor: GpuMonitor | None = None,
@@ -213,6 +222,8 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
         # per-prompt block_eff — used only by --diagnose; not a CSV column.
         "per_prompt_be": {r["prompt_idx"]: block_eff(r["gen_tokens"], r["target_calls"])
                           for r in all_runs if "prompt_idx" in r and r["target_calls"]},
+        # per-depth acceptance histogram — used only by --diagnose.
+        "depth_histogram": _build_depth_histogram(all_runs, L),
         "total_time_s":      total_time,
         "time_draft_s":      time_draft,
         "time_target_s":     time_target,
@@ -490,6 +501,17 @@ def main():
             except Exception as _e:
                 trained_loss = _loss_to_divergence(args.checkpoint)
                 print(f"  [diagnose] state.json unreadable/missing loss ({type(_e).__name__}: {_e}); inferred from path: {trained_loss}")
+        depth_hist = all_stats.get(primary, {}).get("depth_histogram", [])
+        if depth_hist and sum(depth_hist) > 0:
+            total_iters = sum(depth_hist)
+            print(f"\n  [DEPTH_HISTOGRAM] mode={primary}  {total_iters} spec-decoding iterations")
+            for d, cnt in enumerate(depth_hist):
+                bar = "█" * int(30 * cnt / total_iters)
+                pct = 100.0 * cnt / total_iters
+                print(f"    d={d:2d}: {pct:5.1f}%  {bar}")
+            mean_depth = sum(d * cnt for d, cnt in enumerate(depth_hist)) / total_iters
+            print(f"    mean accepted depth = {mean_depth:.3f}  (L={args.L})")
+
         if not per_prompt_be:
             print("  [diagnose] no per-prompt BE available — skipping diagnostic.")
         else:

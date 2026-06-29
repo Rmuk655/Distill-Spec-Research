@@ -165,14 +165,24 @@ def parse_args():
                     help="prefix_overlap only: if >0, linearly anneal --prefix_aux_weight "
                          "from its value down to 0 over this many steps. CE carries the "
                          "cold start; prefix term takes over as a_i grow. 0 = no anneal.")
-    ap.add_argument("--prefix_objective", choices=["prob", "logprob", "traversal"], default="prob",
+    ap.add_argument("--prefix_objective", choices=["prob", "logprob", "traversal", "nss"],
+                    default="prob",
                     help="prefix_overlap only: 'prob' = doc's Σ_t qθ(P_{1:t}) (exact "
                          "E[LCP]; gradient collapses from cold start). 'logprob' = "
                          "Σ_t log qθ(P_{1:t}) = position-weighted CE (trainability "
                          "variant, NOT the doc's objective; gradient never collapses). "
                          "'traversal' = analytical traversal-BE surrogate with weights "
                          "Σ_{d≥i} K(1-α_d)^{K-1}α_d (adaptive in α AND --K; independent-"
-                         "branches approximation to the traversal verifier, not exact).")
+                         "branches approximation to the traversal verifier, not exact). "
+                         "'nss' = NSS-aligned one-sided CE: -Σ_i (L-i+1)·𝟙[p_i>q_i]·log q_i; "
+                         "gradient only where draft lags teacher; one extra teacher forward/step.")
+    ap.add_argument("--prefix_min_root", type=int, default=0,
+                    help="prefix_overlap multi-root only: skip roots before this rollout "
+                         "position (0 = all roots, default). Set to rollout_len//2 for "
+                         "deep-bias training: only supervise the second half of each "
+                         "teacher rollout, teaching the draft to stay on track deep in "
+                         "context. Intended for warm-start runs (jsd_flat init + deep-only "
+                         "prefix supervision). Ignored when prefix_root_spacing=0.")
     ap.add_argument("--prefix_random_offset", action="store_true",
                     help="prefix_overlap multi-root only: start roots at a random offset "
                          "o~Unif{0..N-1} each step (doc §5 uniform-over-positions) "
@@ -412,7 +422,8 @@ def main():
                     teacher_temp=args.teacher_temp,
                     aux=args.prefix_aux, aux_weight=aux_w,
                     objective=args.prefix_objective,
-                    random_offset=args.prefix_random_offset, K=args.K)
+                    random_offset=args.prefix_random_offset, K=args.K,
+                    min_root=args.prefix_min_root)
             else:
                 loss = compute_prefix_overlap_loss(
                     draft, teacher, ids, M=args.prefix_M, L=args.L,

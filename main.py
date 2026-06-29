@@ -100,7 +100,9 @@ def speculative_decoding_loop(
 
     # Main speculative loop until EOS or max generated length is reached.
     target_calls = 0
+    accepted_depths = []
     while context_cached.shape[-1] + 1 < context_init_len + max_new_tokens:
+        _prev_cached_len = context_cached.shape[-1]
         p_cache, q_cache, context_cached, context_pending = speculative_decoding_iter(
             p_model,
             q_model,
@@ -111,6 +113,7 @@ def speculative_decoding_loop(
             verification_algo,
             K=K, L=L, p_temp=p_temp, q_temp=q_temp,
         )
+        accepted_depths.append(context_cached.shape[-1] - _prev_cached_len)
         full_seq = torch.cat([context_cached, context_pending], dim=-1)
         target_calls += 1
         if (full_seq == eos_token_id).any():
@@ -121,6 +124,7 @@ def speculative_decoding_loop(
     _run_stats["target_calls"] = target_calls
     _run_stats["total_time"] = time.perf_counter() - _loop_start
     _run_stats["gen_tokens"] = max(full_seq.shape[-1] - context_init_len, 0)
+    _run_stats["accepted_depths"] = accepted_depths
     p_model._spec_profile["runs"].append(_run_stats)
             
     return full_seq
