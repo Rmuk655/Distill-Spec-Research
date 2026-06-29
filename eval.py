@@ -138,7 +138,7 @@ def evaluate_one_mode(p_model, q_model, tok, prompts, mode, K, L,
         _loop_kwargs.update(L1=L1, L1_adaptive=L1_adaptive,
                             entropy_threshold=entropy_threshold, L1_tau=L1_tau)
 
-    if warmup_n > 0:
+    if warmup_n > 0 and p_model is not None:
         print(f"  [warmup] running {warmup_n} prompt(s) to prime CUDA kernels ...")
         for wp in prompts[:warmup_n]:
             p_model._spec_profile = {"runs": []}
