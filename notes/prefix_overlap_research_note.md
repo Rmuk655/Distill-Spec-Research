@@ -51,12 +51,12 @@ Loss is `L = -PO_score + λ·CE` (`compute.py:284`): **PO is always weight 1**; 
 | CE | 1 | 8 | 1× | — |
 | `logprob` | L−i+1 (8…1) | 36 | **4.5×** | large gradient, but the 8× early-token weight lands on already-saturated tokens (q≈1 ⇒ ∂(−log q)≈0); effective update is modest and redundant with what JSD already did |
 | `prob` | Σ_{t≥i} q(P_{1:t}) | ~3, front-loaded | <1× | collapses at depth (Rahul §7): deep tokens get ~0.06 weight |
-| `traversal` | Σ_{d≥i} K(1−α_d)^{K−1}α_d | →0 as α→1 | **→0×** | **structurally vanishes at a warm start**: draft matches teacher ⇒ α_d≈1 ⇒ (1−α_d)^{K−1}≈0 ⇒ weights≈0. Explains traversal-warm = −0.153 (LR drift + noise, no signal) |
-| `nss` | (L−i+1)·𝟙[q_i<p_i] | masked | one-sided | only lifts deficient tokens, never trims; at q≈p the mask fires on few tokens with little room |
+| `traversal` | Σ_{d≥i} K(1−α_d)^{K−1}α_d | →0 as α→1 | **→0×** | **structurally vanishes at a warm start**: draft matches teacher ⇒ α_d≈1 ⇒ (1−α_d)^{K−1}≈0 ⇒ weights≈0. Plausibly explains traversal-warm = −0.153 (LR drift + noise, no signal) — untested directly |
+| `nss` | (L−i+1)·𝟙[q_i<p_i] | ~½·36 | **~2×** | one-sided (lifts q<p, never trims). Mask fires on ~half the tokens even at warm start (q≈p ⇒ coin-flip per token), so gradient stays substantial — **does NOT vanish** (confirmed cold: grad 200–368) |
 
-**Two distinct failure modes, not one:**
-1. **Redundancy (logprob):** gradient is large but points where JSD already converged — depth-reweighting is a 2nd-order correction on top of the token-matching JSD already achieved.
-2. **Structural vanishing (traversal, nss):** the very property that makes them BE-aligned (α-adaptive / catch-up-masked weights) drives the gradient to ~0 exactly at a good warm start.
+**Two distinct failure modes:**
+1. **Redundancy (logprob, nss):** gradient is large (logprob 4.5× CE; nss ~2× CE) but points where JSD already converged — both are reweighted/masked CE variants, a 2nd-order correction on top of the token-matching JSD already achieved. Confirmed empirically for both (below).
+2. **Structural vanishing (traversal only):** the multiplicative (1−α)^{K−1} factor drives the gradient to ~0 at a good warm start (α→1). Unique to traversal — nss's masking only halves the gradient, it doesn't zero it. Untested directly (needs warm-start traversal grad norms).
 
 ### LR vs anneal timing
 
@@ -65,22 +65,22 @@ Constants: `steps=8000`, `GRAD_ACCUM=8` ⇒ `total_opt_steps=1000`; warmup=100; 
 - CE anneals to 0 at opt-step 625, where cosine LR = `0.1 + 0.9·½(1+cos(π·525/900))` = **0.43× peak**.
 - The pure-PO window (opt-step 625→1000) runs entirely in the cosine tail, LR **0.43 → 0.1× peak**.
 
-For **logprob** this is moot — PO (4.5× CE) dominates throughout under full LR; the issue is redundancy, not budget. For **traversal/nss warm**, PO weight ≈0 early, so the first 625 opt-steps are effectively CE-only (≈ more JSD) at LR 1.0→0.43, and the only PO-dominant window is the low-LR tail. The objective these runs were named for barely trains with meaningful LR.
+For **logprob** this is moot — PO (4.5× CE) dominates throughout under full LR. For **nss** the gradient also stays large (~2× CE), so it trains throughout too. The anneal/LR-tail concern only bites **traversal**, whose weight vanishes at warm start.
 
-### Empirical check — logprob is confirmed structural, NOT LR-starved
+### Empirical check — logprob & nss: healthy gradient, no BE gain (redundancy, not LR)
 
-`po_mh_logprob_lr1e5` (logprob, `aux_weight=0`, no anneal, 15k steps) is exactly the pure-PO control. The 2026-06-28 log shows:
-- **grad norm 200–440** at every optimizer step (the `grad=0.00` lines are non-opt micro-steps: `GRAD_ACCUM=8`, logged every 10 ⇒ a real step shows only on multiples of 40). Gradient is large, not vanishing.
-- **LR healthy:** 7.75e-6 at step 6000/15000 ≈ 0.78× peak.
-- **BE declines anyway:** smoothed best 6.033 → 5.935 → 5.923 into early-stop, `forget=1.14`.
+Two near-pure-PO runs confirm gradient/LR are NOT the bottleneck:
 
-Full gradient + healthy LR + clear weight movement (high forgetting) but no BE gain ⇒ **failure mode #1 (redundancy) confirmed for logprob.** Does NOT test traversal/nss (opposite mechanism — vanishing gradient).
+- **logprob** (`po_mh_logprob_lr1e5`, `aux_weight=0`, no anneal, 15k): grad norm **200–440** every opt-step; LR 7.75e-6 ≈ 0.78× peak at step 6000; smoothed BE best 6.033 → 5.935 → 5.923 into early-stop, `forget=1.14`.
+- **nss cold** (`po_nss_cold_multiN4_L8_lr1e5_s123`, nss + CE-anneal 5k, 8k): grad norm **200–368** throughout, **including the post-anneal pure-nss tail** (step 5000+: grad 218–332). LR at step 5000 = **4.34e-6 = 0.43× peak** — exactly the opt-step-625 prediction above. Val BE best 6.030 early, then 5.92/5.98/5.84/5.87 (smoothed ~5.88, declining), `forget` rising 0.93→1.11.
 
-### Diagnostics still open (traversal/nss only)
+(`grad=0.00` lines are non-opt micro-steps: `GRAD_ACCUM=8`, logged every 10 ⇒ real steps show only on multiples of 40.)
 
-1. **Pure PO, full LR budget — traversal & nss:** warm-start from JSD, `--prefix_aux_weight 0`, fresh warmup→cosine. (Done for logprob above.) Tests whether the structural-vanishing prediction holds: expect ~0 gradient and no movement.
-2. **Constant λ=1, no anneal** (`--prefix_anneal_steps 0 --prefix_aux_weight 1`): isolates whether the anneal-to-zero transition (vs keeping the regularizer on) was the problem for traversal/nss.
-3. **Short anneal** (`--prefix_anneal_steps 500`): CE stabilizes only the first ~60 opt-steps; PO gets opt-steps 60→1000 at high LR.
+Both: large gradient + healthy LR + clear weight movement (rising forgetting) but **no BE gain over JSD** — both cap ~6.03 on math_val and decline. ⇒ **Failure mode #1 (redundancy) confirmed for logprob AND nss.** The bottleneck is the objective family (teacher-prefix matching, already maxed by JSD), not optimization dynamics. (nss cold ≠ nss warm, but the mask fires ~half regardless, so warm nss is redundancy too.)
+
+### Diagnostic still open (traversal only)
+
+**Traversal warm-start grad norm:** warm from JSD, run traversal, watch grad norm. Prediction: ≈0 (vs the 200–440 logprob/nss show), confirming the multiplicative (1−α)^{K−1} vanishing. If instead grad is healthy but BE stays flat, traversal collapses into the same redundancy bucket — and the whole PO family is closed out.
 
 ---
 
@@ -106,7 +106,7 @@ All roots are conditioned on the teacher's own rollout (c_r = (x, y_{1:r})). At 
 
 ## Pending
 
-1. **Pure-PO full-LR diagnostic — traversal/nss only** (see Diagnostics #1). For logprob this is already answered (`po_mh_logprob_lr1e5`: large gradient, healthy LR, BE still declines ⇒ structural). Remaining question is whether traversal/nss vanish as predicted.
+1. **Traversal warm-start grad-norm check** (see Diagnostic above) — the last open mechanism question. logprob and nss are already settled empirically (large gradient, healthy LR, BE declines ⇒ redundancy). Only traversal's predicted vanishing is untested.
 2. **Confirm nss_warmlogprob** — re-run at n=200 or seed=456; the +0.155 traversal K=3 is the only above-noise positive.
 3. **DDTE verifier eval (eval-only, cheap):** run the DDTE verifier on JSD-flat and the best PO draft. Tests whether a stronger verifier amplifies the small draft-distribution differences. Training-agnostic — won't change the draft conclusion, but is the deployment verifier in Rahul's DDTE paper and a cheap lens.
 4. **Log-space tree losses** (`traversal_log`, `naive_log`) — warm-start from JSD ckpt; highest SOTA priority, unrelated to PO.
