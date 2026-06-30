@@ -65,7 +65,9 @@ Constants: `steps=8000`, `GRAD_ACCUM=8` ⇒ `total_opt_steps=1000`; warmup=100; 
 - CE anneals to 0 at opt-step 625, where cosine LR = `0.1 + 0.9·½(1+cos(π·525/900))` = **0.43× peak**.
 - The pure-PO window (opt-step 625→1000) runs entirely in the cosine tail, LR **0.43 → 0.1× peak**.
 
-For **logprob** this is moot — PO (4.5× CE) dominates throughout under full LR. For **nss** the gradient also stays large (~2× CE), so it trains throughout too. The anneal/LR-tail concern only bites **traversal**, whose weight vanishes at warm start.
+For **logprob** this is moot — PO (4.5× CE) dominates throughout under full LR. For **nss** the gradient also stays large (~2× CE), so it trains throughout too. The anneal/LR-tail concern most affects **traversal** (attenuated ~5–8×).
+
+**15k-step config (traversal warm, in progress):** with `steps=15000, anneal_steps=5000`, CE→0 at opt-step 625 = 33% through training (vs 62.5% for 8k), LR = **0.86× peak** (vs 0.43×). Gives traversal a much longer pure-PO tail at nearly full LR — a materially better shot than the 8k config.
 
 ### Empirical check — logprob & nss: healthy gradient, no BE gain (redundancy, not LR)
 
@@ -107,7 +109,7 @@ All roots are conditioned on the teacher's own rollout (c_r = (x, y_{1:r})). At 
 
 ## Pending
 
-1. ~~**Traversal warm-start grad-norm check**~~ — **resolved.** Grad ~40–65 (attenuated ~5–8×, not zero); BE best +0.096 then declines. Redundancy confirmed for traversal too. PO family closed out.
+1. ~~**Traversal warm-start grad-norm check**~~ — **resolved.** Grad ~40–65 (attenuated ~5–8×, not zero); BE best +0.096 on 8k run then declines. **Traversal 15k warm (in progress, wandb hbtox5rk):** `steps=15000, anneal_steps=5000` — CE→0 at LR=0.86× peak (vs 0.43× for 8k). Early best raw=6.042 / smoothed=5.951 (+0.172/+0.081 vs JSD) at step 2000, no improve 1/15 at step 2400. Too early to conclude — watch through anneal boundary (~step 5000) and beyond.
 2. **Confirm nss_warmlogprob** — re-run at n=200 or seed=456; the +0.155 traversal K=3 is the only above-noise positive.
 3. **DDTE verifier eval (eval-only, cheap):** run the DDTE verifier on JSD-flat and the best PO draft. Tests whether a stronger verifier amplifies the small draft-distribution differences. Training-agnostic — won't change the draft conclusion, but is the deployment verifier in Rahul's DDTE paper and a cheap lens.
 4. **Log-space tree losses** (`traversal_log`, `naive_log`) — warm-start from JSD ckpt; highest SOTA priority, unrelated to PO.
