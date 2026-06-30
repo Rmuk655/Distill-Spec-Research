@@ -1,0 +1,57 @@
+
+#cuda:0
+  python /home/colligo/Distill-Spec-Research/train.py   --loss prefix_overlap --steps 15000 --seed 123   --teacher_temp 1.0 --L 8 --prefix_root_spacing 4   --prefix_rollout_len 128 --train_dataset math_hard   --val_dataset math_val --prefix_objective logprob   --lr 1e-5   --draft /sensei-fs-3/users/rkrishna/checkpoints/jsd_mathhard_s123/ckpt_best   --output /sensei-fs-3/users/rkrishna/checkpoints/po_mh_logprob_warm_lr1e5   --resume --early_stop_patience 0 --device cuda:0 --resume
+
+
+
+#cuda:1; root spacing 2 logprob
+ python /home/colligo/Distill-Spec-Research/train.py --loss prefix_o
+verlap --prefix_objective logprob --prefix_root_spacing 2 --L 8 --train_dataset math_hard --val_dataset math_val --lr 1e-5 --val_temp 0.2 --see
+d 123 --steps 15000 --early_stop_min_delta 0.005 --device cuda:1 --output /sensei-fs-3/users/rkrishna/checkpoints/po_mh_logprob_N2_lr1e5 --resu
+me
+
+ # cuda:2 — nss training looking good
+ python train.py   --loss prefix_overlap   --prefix_objective nss   --prefix_root_spacing 4   --prefix_rollout_len 128   --L 8   --prefix_aux ce   --prefix_aux_weight 1.0   --prefix_anneal_steps 5000   --train_dataset math_hard   --val_dataset math_val   --lr 1e-5   --val_temp 0.2   --seed 123   --steps 8000   --draft /sensei-fs-3/users/rkrishna/checkpoints/jsd_mathhard_s123/ckpt_best   --output /sensei-fs-3/users/rkrishna/checkpoints/po_nss_warmjsd_multiN4_L8_lr1e5_s123   --device cuda:2
+
+
+ # cuda:3 — nss  warm-started from logprob_anneal (not jsd_flat) TRAIN
+python train.py \
+  --loss prefix_overlap \
+  --prefix_objective nss \
+  --prefix_root_spacing 4 \
+  --prefix_rollout_len 128 \
+  --L 8 \
+  --prefix_aux ce \
+  --prefix_aux_weight 1.0 \
+  --prefix_anneal_steps 5000 \
+  --train_dataset math_hard \
+  --val_dataset math_val \
+  --lr 1e-5 \
+  --val_temp 0.2 \
+  --seed 123 \
+  --steps 8000 \
+  --draft /sensei-fs-3/users/rkrishna/checkpoints/po_mh_logprob_anneal_lr1e5/ckpt_best \
+  --output /sensei-fs-3/users/rkrishna/checkpoints/po_nss_warmlogprob_multiN4_L8_lr1e5_s123 \
+  --device cuda:3
+
+ # cuda:4 free
+
+
+
+
+#cuda5 - pure prob ; did not imprve.
+for K in 1 2 3 4; do   python eval.py --checkpoint /sensei-fs
+-3/users/rkrishna/checkpoints/po_mh_prob_ce_lr1e5/ckpt_best     --modes naive,nss,specinfer,spectr,khisti,bv,gbv,traversal --dataset math
+_eval     --K $K  --L 8  --n 100  --temp 1.0  --device cuda:5 ; done
+
+# cuda:6 — logprob plain, K∈{1,2,3,4}
+for K in 1 2 3 4; do   python eval.py --checkpoint /sensei-fs
+-3/users/rkrishna/checkpoints/po_mh_logprob_lr1e5/ckpt_best     --modes naive,nss,specinfer,spectr,khisti,bv,gbv,traversal --dataset math
+_eval     --K $K --L 8 --n 100 --temp 1.0 --device cuda:6 ; done
+
+# cuda:7 — logprob_anneal, K∈{1,2,3,4}
+for K in 1 2 3 4; do   python eval.py --checkpoint /sensei-fs-3/users/rkrishna/checkpoints/po_mh_logprob_anneal_lr1e5/ckpt_best     --modes naive,nss,specinfer,spectr,khisti,bv,gbv,traversal --dataset math_eval     --K $K --L 8 --n 100 --temp 1.0 --device cuda:7 ; done
+
+
+
+

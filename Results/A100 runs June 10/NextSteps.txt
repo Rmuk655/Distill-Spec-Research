@@ -1,0 +1,217 @@
+The paper (Thomas, Kitanovski, Goldblum, Pal — "Dynamic Delayed Tree Expansion") is not about your training pipeline, and GBV does not appear in it at all (0 occurrences). It has two contributions, both with a fixed, untrained draft model:
+
+Systematic comparison → Traversal Verification dominates every OT method (Traversal 5.31 vs SpecTr 4.61, SpecInfer 4.58, BV 4.30, NSS 4.05 avg block-eff).
+Delayed tree expansion + a neural selector → draft a single path of depth L₁ first, then branch K i.i.d. paths of depth L₂. Key empirical finding: "node-wise acceptance rate rapidly degrades with depth… while we branch early in the tree often, the acceptance rate improvements later in the tree are often beneficial." The selector estimates E[τ+1|T] to pick (K, L₁, L₂) per step, letting SpecInfer beat Traversal by ~5% throughput.
+The paper cites DistillSpec and Online SD as related work (Section 2) — "some works train draft models on objectives more aligned with SD acceptance" — but does not do it. GBV is your researcher's own separate verification method (in the source-of-truth GBV code), not from this paper.
+
+So "align the pipeline to this paper" means three different things: (a) your math/metrics must match the paper's definitions, (b) your training objective should approximate the paper's E[τ+1], and (c) to carry the hypothesis forward you should adopt the paper's findings (Traversal is the target; delayed trees; degrade-with-depth; robustness sweeps).
+
+Deviations, prioritized by impact
+🔴 P0 — Correctness bug (will crash / corrupt results)
+1. inference.py:58 loads tokenizer from args.checkpoint — the exact bug you already fixed in eval.py (commit 45c2020). save_checkpoint writes only model weights, no tokenizer files, so AutoTokenizer.from_pretrained(checkpoint) either errors or silently falls back to a broken tokenizer. Any inference.py run on a trained checkpoint breaks. Fix is identical: load from TEACHER_MODEL. This belongs in fix_bugs.
+
+🟠 P1 — Hypothesis-critical gaps
+2. traversal_tree is the weakest loss, but Traversal is the paper's best verifier. Your hypothesis is "train the draft aligned to the verifier." The paper says Traversal wins by a wide margin — so traversal_tree is the most important loss to get right. But its own docstring admits it's a "smooth lower-bound surrogate": it maximizes E[Π min(1,p/q)] = probability the entire L-path is accepted (≈ P(τ=L)), not E[τ]. At L=8 that product is tiny → near-zero gradient. Compare bv_tree, which correctly does E[τ_BV] = Σ i·h_i·Π(1−h_j). The verifier you most want to align to has the crudest training signal. This deserves a proper E[τ_traversal] surrogate.
+
+3. No delayed tree expansion — the paper's central contribution — anywhere. Both training (compute_tree_loss → iid_draft) and eval (speculative_decode_one → iid_draft) use fully root-branched trees (L₁=0). The paper's #1 finding is that this wastes branching budget where p≈q. Your E[τ] losses are computed over this suboptimal structure, so the training objective itself bakes in the inefficiency. Note: iid_draft is GBV source-of-truth, so this needs the researcher to extend drafting to (K, L₁, L₂) — flagging it as the top carry-forward item, not a unilateral edit.
+
+4. The robustness hypothesis cannot be tested with the current harness. You explicitly claim "robustness to variations in sampling." The paper sweeps temp {0.2…1.2} × nucleus {0.9, 0.99} = 8 settings. Your pipeline trains at fixed temp=1.0 and has no top-p/nucleus support at all — iid_draft does pure softmax/temp + multinomial. There is no way to reproduce the paper's robustness axis. (top-p would need to enter iid_draft = source of truth, or a thin wrapper around it.)
+
+🟡 P2 — Setup/coverage divergences (mostly by design; note for the claim)
+5. Single-dataset. You train+val on GSM8K only; data_io wires gsm8k/alpaca/math500/humaneval/mtbench. Paper uses MATH500, OlympiadBench, LiveCodeBench, LitBench, Opus(translation) — the latter four aren't available. "Robustness across data settings" needs multi-dataset eval at minimum.
+
+6. Model regime differs. Yours: Qwen3-8B/0.6B (~13:1). Paper: Qwen2.5-32B/0.5B (~64:1), Llama3-70B/8B, Gemma3-27B/270M. Smaller capability gap = easier alignment but a different operating point; affects comparability, not correctness.
+
+7. Inconsistent K defaults across files — train K=4, eval/inference DEFAULT_K=3. Eval should default to the trained K for reproducibility. Minor.
+
+What is correctly aligned (so you can trust it)
+E[τ_V] = Σ_i Π_j α_V telescoping (tree.py) ✓ matches the paper's expected-block-efficiency framework E[τ+1|T]=Σ P(reach c').
+Per-node α formulas are faithful PyTorch ports of node.py; e.g. _alpha_nss = Σ p(1−(1−q)^K) ✓ equals the paper's α(f,p,q,k)=P(output ∈ {X₁..X_K}).
+eval.py block_eff = total_gen/total_calls = E[τ+1] ✓ matches the paper exactly (τ accepted + 1 correction token per call).
+Training loss is E[τ] (no +1) — differs from eval by a constant, so the gradient is identical; correct for optimization.
+BV/Traversal weight caps min(1,p/q) ✓ match node.py; GBV uncapped ratio (4974fdd) ✓ matches compute_skew/gbv_verify.
+Train tree structure == eval tree structure (both iid_draft(K,L)) ✓ internally consistent.
+Losslessness is preserved by construction — training only changes q; verification (node.py) guarantees target-distribution sampling for any q. (Worth a regression test — see below.)
+Missing to carry the hypothesis forward
+Your hypothesis must beat 4 baselines + show robustness. Current repo gaps, by leverage:
+
+Gap	Why it matters	Where it lives
+EAGLE-3 baseline	Explicit comparison target in your hypothesis; nothing in repo	New (can start from their released ckpts/throughput numbers)
+Delayed tree expansion (P1-3)	Paper's SOTA structure; needed to be competitive	GBV drafting (researcher)
+Sampling-robustness sweep (P1-4)	Core robustness claim; temp×nucleus grid	eval harness + iid_draft
+Proper traversal_tree surrogate (P1-2)	Align to the best verifier	losses/tree.py
+Multi-dataset eval (P2-5)	Robustness-across-data claim	data_io + eval
+Lossless regression test	Paper stresses "preserves target distribution"; prove training didn't break it	tests/
+Online SD arm	"maybe" Phase-3 adaptive alignment	future
+Recommendation
+The only thing I'd treat as an immediate bug-fix (consistent with our fix_bugs workflow) is P0-1 (inference.py tokenizer). Everything else (P1/P2) is research design that needs your call on sequencing.
+
+Two questions so I act on the right things:
+
+Fix P0-1 now in fix_bugs (identical to the eval.py fix)?
+Of the P1 items, which first — (2) a real E[τ_traversal] training loss, (3) delayed-tree drafting, or (4) the sampling-robustness eval harness? My recommendation: (4) first (cheap, unlocks the robustness claim and measures everything else), then (2) (pure addition to tree.py, no source-of-truth change), then (3) (needs researcher sign-off on drafting).
+I have not changed any code — this is the report you asked for.
+
+the paper is precursor to our research  our research is SPEC: Knowledge Distillation for Tree-Based Speculative Decoding
+
+Problem Statement
+Speculative decoding accelerates LLM inference using a lightweight draft mechanism followed by target-model verification. Existing approaches improve either:
+Area
+Example
+Draft-target alignment
+DistillSpec, Online Speculative Decoding
+Tree-based verification
+Traversal Verification, SpecTr, SpecInfer
+
+However, current systems still suffer from:
+Draft-target alignment: verification is the same, and can be inefficient after training
+Draft-target alignment: not robust at all to variations in sampling, context length, etc.
+Tree-based verification: for poor draft model, offers essentially no improvement
+Tree-based verification: different verification algos perform better in different settings
+This project proposes a unified framework combining:
+DistillSpec-style alignment optimization WITH
+Tree-based verification via multi-path algorithms WITH
+(maybe) Adaptive alignment via online speculative decoding
+
+Primary Research Hypothesis
+Hypothesis
+DistillSpec-style alignment optimization + tree-based verification can improve:
+speculative block efficiency and throughput,
+robustness of above to variations in sampling and data settings,
+more effectively than:
+tree-based verification for fixed draft models,
+standard speculative decoding for distilled draft models,
+tree-based verification for KD-trained draft models,
+standard state-of-the-art EAGLE baselines.
+It is unlikely we will beat EAGLE-3 throughput in all settings, but we should at least demonstrate its robustness to the above changes in sampling and data settings.
+The union of all these goals is the effective success criteria of the project.
+
+MVP Scope 
+The initial project scope is intentionally constrained.
+Phase 1 (End of Week 3)
+Read and understand the DistillSpec and Online Speculative Decoding papers.
+Implement a baseline version of DistillSpec (not available), by tracing and simplifying the online speculative decoding github (https://github.com/LiuXiaoxuanPKU/OSD), potentially AdaSpec (https://github.com/yuezhouhu/adaspec) and following the DistillSpec paper details. 
+DistilSpec should be a *much* simpler codebase than either of these two, but understanding those will help familiarize you for later directions in the project.
+[Ram] Use OSD to build the DistillSpec baseline trainer. Do we need AdaSpec unless you want a later ablation for selective token filtering.?
+
+
+Phase 2 (End of Week 4)
+Read and understand the entire codebase here for multi-path algorithms: https://anonymous.4open.science/r/GBV-BED8/README.md.
+Once Phase 1 is complete, I will give you “expected block efficiency” functions for the multi-path algorithms we’re considering. These will essentially replace the normal loss function in the DistillSpec paper by this expected block efficiency metric.
+The details are difficult to spell out in a Google Doc, so we will meet sometime during Week 3 so I can walk you through the math and ideas directly. 
+Once you understand these, it should be a simple loss function replacement in your code with the functions I give you, and we can start the runs immediately.
+It is not possible to spell out future phases without these results. We will come back online speculative decoding, improving distillation, etc., at the start of Week 5.
+ we are at middle of week 5 and we feel we have done all that is needed for phase 2 and are starting to fill loss function, given this give me a document that outlines next steps to completion of this project
+
+Project roadmap doc
+Here is the document.
+
+SPEC: Next Steps to Project Completion
+Status as of Mid-Week 5 — Phase 2 infrastructure complete; entering experimental validation phase.
+
+Where We Are
+Phase	Status	Evidence
+Phase 1: DistillSpec trainer	✅ Done	train.py, flat losses, data loading
+Phase 2: Tree losses wired	✅ Done	11 losses in losses/tree.py, all sourced from researcher's verifier math
+Phase 2: Val metric correct	✅ Done	compute_val_metrics → block_eff via speculative_decode_one
+Phase 2: Training hyperparams	✅ Done	GRAD_CLIP=1.0, cosine LR, WARMUP fixed
+Phase 2: Codebase audit vs arXiv:2602.16994	✅ Done	Deviations documented; P0 inference.py bug found
+Phase 2: First training runs	🔄 In progress	NSS U-shaped val curve under investigation
+Immediate Unblocking Tasks (this week)
+These must be done before any results are trustworthy.
+
+T1 — Close fix_bugs PR
+The following are already committed; open the PR now so researcher can review before runs proceed:
+
+GRAD_CLIP 1.0, val metric → block_eff, cosine LR, tokenizer fix in eval.py
+Add: fix inference.py:58 — tokenizer loads from args.checkpoint instead of TEACHER_MODEL (identical bug to the one already fixed in eval.py; one-line change)
+T2 — Establish the untrained baseline (Week 5)
+Run eval.py with the base Qwen3-0.6B (no training) across all 8 verifier modes at K=4, L=8 on gsm8k_val. This gives you the floor — "tree verification for fixed draft models" from the hypothesis.
+
+for mode in naive nss specinfer spectr khisti bv gbv traversal:
+    python eval.py --draft Qwen/Qwen3-0.6B --mode $mode --K 4 --L 8
+Expected result (anchored to arXiv:2602.16994 Table 2): Traversal > BV > SpecTr ≈ SpecInfer > NSS. If you don't reproduce this ordering with an untrained model, something in eval.py's verifier path is wrong — fix before training.
+
+Phase 3: Experimental Runs (Weeks 5–6)
+3A — Training sweep: loss × verifier pairing (the core hypothesis)
+The hypothesis is that matching the training loss to the evaluation verifier gives the best block efficiency. Run the following matrix. Each cell is one training run + eval:
+
+Training loss	Eval verifier	Hypothesis prediction
+traversal_tree	traversal	Best overall (paper says traversal wins)
+nss_tree	nss	Should beat base nss BE
+gbv_tree	gbv	Should beat base gbv BE
+specinfer_tree	specinfer	Should beat base specinfer BE
+bv_tree	bv	Should beat base bv BE
+forward_kl (flat)	traversal	Baseline: DistillSpec-style; no tree alignment
+forward_kl (flat)	nss	Same distilled model, mismatched verifier
+Priority order: traversal_tree first (paper's SOTA verifier), then nss_tree (most theoretically clean), then forward_kl flat baseline (what DistillSpec does). GBV runs second-to-last (needs most compute / researcher sign-off on GBV loss correctness).
+
+Checkpointing: save ckpt_best per run (already wired to best_val_block_eff). Log to W&B: train/loss, val/block_eff, grad_norm.
+
+3B — Ablations to run in parallel or after 3A
+These answer the sub-questions:
+
+Does alignment help at all? Compare traversal_tree-trained model vs base Qwen3-0.6B under traversal verifier. This is the key headline number.
+Does loss-verifier matching matter? Compare traversal_tree+traversal vs forward_kl+traversal. If flat distillation already closes the gap, tree losses add no value.
+Mismatched verifier penalty: traversal_tree-trained model eval'd under nss verifier and vice versa. Quantifies transfer.
+Phase 4: Robustness Evaluation (Week 6)
+This is a core part of the hypothesis that currently has zero infrastructure. Required for the claim "robust to variations in sampling and data settings."
+
+4A — Sampling robustness sweep
+For each trained checkpoint, run eval.py across a grid of temperature × nucleus sampling:
+
+Temp	Top-p
+0.2, 0.6, 1.0, 1.4	0.9, 0.99
+8 settings total per model per verifier. Infrastructure needed: eval.py currently has no --top_p flag and iid_draft does pure multinomial. Adding top-p requires touching the GBV drafting code — needs researcher approval. Flag this to researcher now so it doesn't block Week 6.
+
+Plots needed: block_eff vs temperature (line) and box-whisker across all 8 settings per model. The trained model should degrade less than the base model.
+
+4B — Data distribution robustness
+Evaluate on at least two additional datasets beyond gsm8k. Candidates already in data_io: math500, alpaca, humaneval. Pick one more coding + one more reasoning:
+
+gsm8k (in-distribution)
+math500 (harder math, out-of-distribution for gsm8k-trained model)
+humaneval (code, domain shift)
+No training changes needed — pure eval.
+
+Phase 5: EAGLE Comparison (Week 6–7)
+The hypothesis explicitly requires beating EAGLE baselines on robustness (not necessarily peak throughput). Two paths:
+
+Option A (faster, recommended): Use EAGLE-3's published numbers on MATH500/gsm8k (their paper Table 3). Report your traversal_tree-trained model's block efficiency on the same datasets. No EAGLE code needed.
+
+Option B (rigorous): Clone EAGLE-3, run on Qwen3-8B/0.6B with the exact same gsm8k/math500 prompts. This requires an EAGLE-3 draft head trained for Qwen3 — either download a community checkpoint or re-train their draft head (expensive). Use Option A unless reviewer demands it.
+
+The robustness comparison is where you can win: run EAGLE on temperature=0.2 vs 1.4 and show your model degrades less. EAGLE's draft head is trained at a fixed temperature — it should be more brittle.
+
+What's Missing to Be Competitive with the Paper
+From the arXiv:2602.16994 audit, three gaps remain between your work and the paper's SOTA. Prioritized:
+
+Gap	Impact	Resolution
+traversal_tree uses a lower-bound surrogate, not E[τ]	High — your most important loss is the weakest gradient	Researcher to derive exact E[τ_traversal]; current surrogate may still work empirically — measure first before fixing
+No delayed tree expansion (paper's central contribution)	Medium — affects inference efficiency not training validity	Phase 4+ item; needs GBV iid_draft extension by researcher
+No sampling/top-p support	Medium — blocks robustness claim	Flag to researcher this week
+The right framing for the paper: arXiv:2602.16994 shows that with a fixed Qwen2.5 draft, Traversal gets 5.31 BE. Your claim is: with a trained Qwen3 draft, Traversal gets BE > 5.31, and this holds across temperatures and datasets. That's a clean, testable delta on the precursor work.
+
+Milestone Checklist
+Week 5 (now):
+  [ ] T1: fix_bugs PR merged (inference.py tokenizer + all prior fixes)
+  [ ] T2: untrained baseline eval, all 8 modes — verify ordering matches paper
+  [ ] Flag top-p / delayed-tree need to researcher
+Week 6:
+  [ ] traversal_tree training run complete, val/block_eff > untrained baseline
+  [ ] nss_tree + forward_kl (flat) training runs complete
+  [ ] 3A matrix: 5 rows done, results in W&B
+Week 6-7:
+  [ ] Sampling robustness sweep (if top-p unblocked) OR temp-only sweep
+  [ ] Math500 + humaneval eval on best checkpoint
+  [ ] EAGLE comparison (Option A minimum)
+Week 7:
+  [ ] gbv_tree run (pending researcher verification)
+  [ ] Full ablation table assembled
+  [ ] Write-up: intro, method, Table 1 (training sweep), Table 2 (robustness), Table 3 (EAGLE comparison)
+Decisions Needed from Researcher
+Traversal surrogate: is the current lower-bound gradient acceptable, or should we derive E[τ_traversal] properly before running?
+Top-p in iid_draft: can you extend drafting to support nucleus sampling, or should robustness be temp-only for now?
+GBV loss correctness: before we run gbv_tree and report numbers, researcher needs to sign off on _gbv_skew_dict + _bv_path_loss as a faithful port of the GBV objective.
+Delayed tree expansion: is this in scope for Phase 4, or an item for Phase 3 of the original plan (online SD)?
+The critical path is: T2 baseline → traversal_tree run → robustness sweep. Everything else is either parallel or downstream. The untrained baseline is the single most important thing to run this week — it validates the eval harness and anchors every number that follows.
