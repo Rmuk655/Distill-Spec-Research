@@ -88,6 +88,12 @@ LOSS_TO_VERIFIER = {
     "bv_tree":       "bv",
     "gbv_tree":      "gbv",
     "traversal_tree":"traversal",
+    "traversal_log": "traversal",
+    "nss_log":       "nss",
+    "naive_log":     "naive",
+    "specinfer_log": "specinfer",
+    "spectr_log":    "spectr",
+    "khisti_log":    "khisti",
     # prefix_overlap falls through to traversal: traversal is the best/deployment
     # verifier and the metric that decides whether the objective is useful. NSS is
     # where the objective is *theoretically* aligned, but a draft that only helps

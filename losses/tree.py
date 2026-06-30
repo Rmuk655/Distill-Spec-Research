@@ -460,6 +460,93 @@ def _telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K,
     return -(total / n_paths)
 
 
+def _log_telescoping_loss(alpha_fn, q_probs_dict, p_probs_dict, q_paths, L, K,
+                          eps=1e-9):
+    """
+    Log-space variant of _telescoping_loss — the trainability fix for the
+    telescoping product E[τ]=Σ_i Π_{j≤i} αⱼ, whose per-depth products decay as
+    O(αⁱ) and starve the gradient at depth (the failure mode of traversal_tree /
+    nss_tree from a cold start).  Instead of summing survival PRODUCTS, sum the
+    LOG of each survival product:
+
+        L_log = -Σ_i log Π_{j≤i} αⱼ = -Σ_i Σ_{j≤i} log αⱼ = -Σ_j (L-j+1)·log αⱼ.
+
+    A sum of per-node log-acceptances with a triangular depth weight (L-j+1) —
+    the tree-loss analogue of the prefix-overlap `logprob` objective.  The
+    coefficient on ∇αⱼ is (L-j+1)/αⱼ, which does NOT vanish at depth (contrast
+    the product form's Π_{j<i}αⱼ).  log αⱼ is floored at log(eps) so a near-zero
+    acceptance cannot blow up the gradient.
+
+    This maximises geometric-mean survival, not E[τ] itself — a trainability
+    surrogate for the same verifier objective, deliberately log-stable.  Val is
+    still measured with the matching verifier (LOSS_TO_VERIFIER), so checkpoint
+    selection stays aligned.
+    """
+    device  = next(iter(q_probs_dict.values())).device
+    total   = torch.zeros(1, device=device)
+    n_paths = 0
+
+    for path in q_paths:
+        path_term = torch.zeros(1, device=device)
+        used      = False
+        for i in range(1, L + 1):
+            prefix = ",".join(str(x) for x in path[:i])
+            if prefix not in q_probs_dict or prefix not in p_probs_dict:
+                break
+            q     = q_probs_dict[prefix]
+            p     = p_probs_dict[prefix].detach().to(q.dtype)
+            alpha = alpha_fn(p, q, K)
+            w     = float(L - i + 1)                         # triangular depth weight
+            path_term = path_term + w * alpha.clamp(min=eps).log()
+            used      = True
+        if used:
+            total += path_term
+            n_paths += 1
+
+    if n_paths == 0:
+        return torch.zeros(1, device=device, requires_grad=True)
+    return -(total / n_paths)
+
+
+def traversal_log(q, p, paths, L, K, **_kw):
+    """Log-stable traversal tree loss: log variant of traversal_tree (= naive α
+    at the node level, see traversal_tree).  Tests whether log-space rescues the
+    product-form telescoping loss that collapsed at depth."""
+    return _log_telescoping_loss(_alpha_naive, q, p, paths, L, K)
+
+
+def nss_log(q, p, paths, L, K, **_kw):
+    """Log-stable NSS tree loss: log variant of nss_tree.  _alpha_nss is the
+    correct NSS acceptance formula (no approximation, unlike traversal_log which
+    uses _alpha_naive as a proxy).  Smooth gradient everywhere — no min/max kink.
+    The log-space fix is the same: replace Π α_nss products with Σ (L-j+1)·log α_nss,
+    giving coefficient (L-j+1)/α_nss instead of Π_{k<j} α_k at depth j."""
+    return _log_telescoping_loss(_alpha_nss, q, p, paths, L, K)
+
+
+def naive_log(q, p, paths, L, K, **_kw):
+    """Log-stable naive tree loss: log variant of naive_tree.  Same _alpha_naive
+    body as traversal_log (naive==traversal at the node level); registered
+    separately so val block_eff is measured on the naive verifier."""
+    return _log_telescoping_loss(_alpha_naive, q, p, paths, L, K)
+
+
+def specinfer_log(q, p, paths, L, K, **_kw):
+    """Log-stable SpecInfer tree loss: log variant of specinfer_tree."""
+    return _log_telescoping_loss(_alpha_specinfer, q, p, paths, L, K)
+
+
+def spectr_log(q, p, paths, L, K, **_kw):
+    """Log-stable SpecTr tree loss: log variant of spectr_tree (ρ detached, same
+    first-order surrogate as spectr_tree)."""
+    return _log_telescoping_loss(_alpha_spectr, q, p, paths, L, K)
+
+
+def khisti_log(q, p, paths, L, K, **_kw):
+    """Log-stable Khisti tree loss: log variant of khisti_tree."""
+    return _log_telescoping_loss(_alpha_khisti, q, p, paths, L, K)
+
+
 def naive_tree     (q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive, q, p, paths, L, K)
 def naive_tree_full(q, p, paths, L, K, **_kw): return _telescoping_loss(_alpha_naive, q, p, paths, L, K, detach_survival=False)
 
@@ -490,6 +577,12 @@ TREE_LOSSES = {
     "bv_tree":         bv_tree,
     "gbv_tree":        gbv_tree,
     "traversal_tree":   traversal_tree,
+    "traversal_log":    traversal_log,
+    "nss_log":          nss_log,
+    "naive_log":        naive_log,
+    "specinfer_log":    specinfer_log,
+    "spectr_log":       spectr_log,
+    "khisti_log":       khisti_log,
     "naive_tree":       naive_tree,
     "naive_tree_full":  naive_tree_full,
     "op_naive_tree":    op_naive_tree,
