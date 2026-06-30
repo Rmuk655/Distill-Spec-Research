@@ -67,10 +67,19 @@ Constants: `steps=8000`, `GRAD_ACCUM=8` ⇒ `total_opt_steps=1000`; warmup=100; 
 
 For **logprob** this is moot — PO (4.5× CE) dominates throughout under full LR; the issue is redundancy, not budget. For **traversal/nss warm**, PO weight ≈0 early, so the first 625 opt-steps are effectively CE-only (≈ more JSD) at LR 1.0→0.43, and the only PO-dominant window is the low-LR tail. The objective these runs were named for barely trains with meaningful LR.
 
-### Diagnostics to disambiguate (cheap, one run each)
+### Empirical check — logprob is confirmed structural, NOT LR-starved
 
-1. **Pure PO, full LR budget (clean control — run first):** warm-start from JSD, `--prefix_aux_weight 0` (no CE), fresh warmup→cosine. If it still doesn't move ⇒ structural (redundancy/vanishing), not LR. If it moves ⇒ anneal/LR timing was starving it.
-2. **Constant λ=1, no anneal** (`--prefix_anneal_steps 0 --prefix_aux_weight 1`): isolates whether the anneal-to-zero transition (vs keeping the regularizer on) was the problem.
+`po_mh_logprob_lr1e5` (logprob, `aux_weight=0`, no anneal, 15k steps) is exactly the pure-PO control. The 2026-06-28 log shows:
+- **grad norm 200–440** at every optimizer step (the `grad=0.00` lines are non-opt micro-steps: `GRAD_ACCUM=8`, logged every 10 ⇒ a real step shows only on multiples of 40). Gradient is large, not vanishing.
+- **LR healthy:** 7.75e-6 at step 6000/15000 ≈ 0.78× peak.
+- **BE declines anyway:** smoothed best 6.033 → 5.935 → 5.923 into early-stop, `forget=1.14`.
+
+Full gradient + healthy LR + clear weight movement (high forgetting) but no BE gain ⇒ **failure mode #1 (redundancy) confirmed for logprob.** Does NOT test traversal/nss (opposite mechanism — vanishing gradient).
+
+### Diagnostics still open (traversal/nss only)
+
+1. **Pure PO, full LR budget — traversal & nss:** warm-start from JSD, `--prefix_aux_weight 0`, fresh warmup→cosine. (Done for logprob above.) Tests whether the structural-vanishing prediction holds: expect ~0 gradient and no movement.
+2. **Constant λ=1, no anneal** (`--prefix_anneal_steps 0 --prefix_aux_weight 1`): isolates whether the anneal-to-zero transition (vs keeping the regularizer on) was the problem for traversal/nss.
 3. **Short anneal** (`--prefix_anneal_steps 500`): CE stabilizes only the first ~60 opt-steps; PO gets opt-steps 60→1000 at high LR.
 
 ---
@@ -97,7 +106,7 @@ All roots are conditioned on the teacher's own rollout (c_r = (x, y_{1:r})). At 
 
 ## Pending
 
-1. **Pure-PO full-LR diagnostic** (see Diagnostics #1) — the single experiment that decides whether the flat results are an LR/anneal artifact or structural. Run before any other PO follow-up.
+1. **Pure-PO full-LR diagnostic — traversal/nss only** (see Diagnostics #1). For logprob this is already answered (`po_mh_logprob_lr1e5`: large gradient, healthy LR, BE still declines ⇒ structural). Remaining question is whether traversal/nss vanish as predicted.
 2. **Confirm nss_warmlogprob** — re-run at n=200 or seed=456; the +0.155 traversal K=3 is the only above-noise positive.
 3. **DDTE verifier eval (eval-only, cheap):** run the DDTE verifier on JSD-flat and the best PO draft. Tests whether a stronger verifier amplifies the small draft-distribution differences. Training-agnostic — won't change the draft conclusion, but is the deployment verifier in Rahul's DDTE paper and a cheap lens.
 4. **Log-space tree losses** (`traversal_log`, `naive_log`) — warm-start from JSD ckpt; highest SOTA priority, unrelated to PO.
