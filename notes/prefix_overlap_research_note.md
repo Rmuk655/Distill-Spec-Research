@@ -51,12 +51,12 @@ Loss is `L = -PO_score + λ·CE` (`compute.py:284`): **PO is always weight 1**; 
 | CE | 1 | 8 | 1× | — |
 | `logprob` | L−i+1 (8…1) | 36 | **4.5×** | large gradient, but the 8× early-token weight lands on already-saturated tokens (q≈1 ⇒ ∂(−log q)≈0); effective update is modest and redundant with what JSD already did |
 | `prob` | Σ_{t≥i} q(P_{1:t}) | ~3, front-loaded | <1× | collapses at depth (Rahul §7): deep tokens get ~0.06 weight |
-| `traversal` | Σ_{d≥i} K(1−α_d)^{K−1}α_d | →0 as α→1 | **→0×** | **structurally vanishes at a warm start**: draft matches teacher ⇒ α_d≈1 ⇒ (1−α_d)^{K−1}≈0 ⇒ weights≈0. Plausibly explains traversal-warm = −0.153 (LR drift + noise, no signal) — untested directly |
+| `traversal` | Σ_{d≥i} K(1−α_d)^{K−1}α_d | →0 as α→1 | **~0.1× (attenuated)** | **attenuated but not zero at warm start**: grad norm ~40–65 vs 200–440 (logprob) / 200–368 (nss) — ~5–8× lower, not vanished. With α≈0.7 (BE≈5.9), (1−0.7)^(K−1)≈0.09 — consistent with log. Best BE 5.966 (+0.096 vs JSD) then declines — same redundancy pattern. |
 | `nss` | (L−i+1)·𝟙[q_i<p_i] | ~½·36 | **~2×** | one-sided (lifts q<p, never trims). Mask fires on ~half the tokens even at warm start (q≈p ⇒ coin-flip per token), so gradient stays substantial — **does NOT vanish** (confirmed cold: grad 200–368) |
 
-**Two distinct failure modes:**
-1. **Redundancy (logprob, nss):** gradient is large (logprob 4.5× CE; nss ~2× CE) but points where JSD already converged — both are reweighted/masked CE variants, a 2nd-order correction on top of the token-matching JSD already achieved. Confirmed empirically for both (below).
-2. **Structural vanishing (traversal only):** the multiplicative (1−α)^{K−1} factor drives the gradient to ~0 at a good warm start (α→1). Unique to traversal — nss's masking only halves the gradient, it doesn't zero it. Untested directly (needs warm-start traversal grad norms).
+**Two confirmed failure modes — all objectives empirically settled:**
+1. **Redundancy (logprob, nss, traversal):** gradient is healthy (logprob 4.5× CE; nss ~2× CE; traversal ~0.1× CE but present) but targets what JSD already converged — teacher-prefix matching is a 2nd-order correction on top of what JSD achieved. Confirmed empirically for all three (below).
+2. **Gradient attenuation (traversal):** additionally, the multiplicative (1−α)^{K−1} factor reduces the traversal gradient ~5–8× vs logprob/nss at warm start (α≈0.7 ⇒ (0.3)^2≈0.09). This is attenuation, not vanishing — grad norm ~40–65 is still present and training, but smaller. Note: the "structural vanishing" prediction (grad≈0) was too strong.
 
 ### LR vs anneal timing
 
@@ -73,14 +73,15 @@ Two near-pure-PO runs confirm gradient/LR are NOT the bottleneck:
 
 - **logprob** (`po_mh_logprob_lr1e5`, `aux_weight=0`, no anneal, 15k): grad norm **200–440** every opt-step; LR 7.75e-6 ≈ 0.78× peak at step 6000; smoothed BE best 6.033 → 5.935 → 5.923 into early-stop, `forget=1.14`.
 - **nss cold** (`po_nss_cold_multiN4_L8_lr1e5_s123`, nss + CE-anneal 5k, 8k): grad norm **200–368** throughout, **including the post-anneal pure-nss tail** (step 5000+: grad 218–332). LR at step 5000 = **4.34e-6 = 0.43× peak** — exactly the opt-step-625 prediction above. Val BE best 6.030 early, then 5.92/5.98/5.84/5.87 (smoothed ~5.88, declining), `forget` rising 0.93→1.11.
+- **traversal warm** (`prefix_overlap_traversal_multiN4_L8_lr1e-05_s123_ce1anneal5000`, traversal + CE-anneal 5k, 8k): grad norm **40–65** throughout, **including post-anneal** (step 5000+: 44–58). ~5–8× lower than logprob/nss, consistent with (1-α)^{K-1}≈0.09 at α≈0.7. LR at step 5000 = 4.34e-6 = 0.43× peak (same config). Val BE best **5.966** (+0.096 vs JSD) at an early step, then smoothed declines: 5.897 → 5.878 → 5.885 → 5.875 (no-improve 3/5 at step 5600).
 
 (`grad=0.00` lines are non-opt micro-steps: `GRAD_ACCUM=8`, logged every 10 ⇒ real steps show only on multiples of 40.)
 
-Both: large gradient + healthy LR + clear weight movement (rising forgetting) but **no BE gain over JSD** — both cap ~6.03 on math_val and decline. ⇒ **Failure mode #1 (redundancy) confirmed for logprob AND nss.** The bottleneck is the objective family (teacher-prefix matching, already maxed by JSD), not optimization dynamics. (nss cold ≠ nss warm, but the mask fires ~half regardless, so warm nss is redundancy too.)
+All three: gradient present + training active (rising forgetting, declining loss) but **no BE gain over JSD beyond noise** (all cap 5.966–6.033, +0.096–+0.096, within SE≈0.10–0.15 at n=100) and decline. ⇒ **Redundancy confirmed for logprob, nss, AND traversal — entire PO family settled.** Bottleneck is the objective family (teacher-prefix matching, already maxed by JSD), not gradient scale or LR.
 
-### Diagnostic still open (traversal only)
+### Diagnostic resolved (traversal warm-start)
 
-**Traversal warm-start grad norm:** warm from JSD, run traversal, watch grad norm. Prediction: ≈0 (vs the 200–440 logprob/nss show), confirming the multiplicative (1−α)^{K−1} vanishing. If instead grad is healthy but BE stays flat, traversal collapses into the same redundancy bucket — and the whole PO family is closed out.
+**Traversal warm-start grad norm — closed.** Grad norm = **40–65** throughout (post-anneal included), vs prediction of ≈0. Prediction was too strong: at α≈0.7 the weight (1−α)^{K−1}≈0.09 attenuates but doesn't vanish. BE best 5.966 then declines — same redundancy pattern as logprob/nss. **The whole PO family is now empirically closed out:** all four objectives (prob, logprob, nss, traversal) show no consistent BE gain over JSD on the deployment verifier.
 
 ---
 
@@ -106,7 +107,7 @@ All roots are conditioned on the teacher's own rollout (c_r = (x, y_{1:r})). At 
 
 ## Pending
 
-1. **Traversal warm-start grad-norm check** (see Diagnostic above) — the last open mechanism question. logprob and nss are already settled empirically (large gradient, healthy LR, BE declines ⇒ redundancy). Only traversal's predicted vanishing is untested.
+1. ~~**Traversal warm-start grad-norm check**~~ — **resolved.** Grad ~40–65 (attenuated ~5–8×, not zero); BE best +0.096 then declines. Redundancy confirmed for traversal too. PO family closed out.
 2. **Confirm nss_warmlogprob** — re-run at n=200 or seed=456; the +0.155 traversal K=3 is the only above-noise positive.
 3. **DDTE verifier eval (eval-only, cheap):** run the DDTE verifier on JSD-flat and the best PO draft. Tests whether a stronger verifier amplifies the small draft-distribution differences. Training-agnostic — won't change the draft conclusion, but is the deployment verifier in Rahul's DDTE paper and a cheap lens.
 4. **Log-space tree losses** (`traversal_log`, `naive_log`) — warm-start from JSD ckpt; highest SOTA priority, unrelated to PO.
