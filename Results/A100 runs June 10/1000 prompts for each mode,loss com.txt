@@ -1,0 +1,336 @@
+1000 prompts for each mode,loss combination
+1) baseline with all modes for K=1,2
+
+Rahul Thomas
+23:01
+need to make sure naive=spectr=specinfer=khisti
+
+
+inference code is completely different
+export GITHUB_TOKEN="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"
+
+
+
+naive,nss,specinfer,spectr,khisti,bv,gbv,traversal
+
+
+On Ubuntu/Debian, install GitHub CLI with:
+type -p curl >/dev/null || sudo apt update && sudo apt install curl -y
+
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+| sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+
+sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+| sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+ 9449867699
+
+
+sudo apt update
+sudo apt install gh -y
+
+gh --version
+gh auth login
+gh auth status
+
+cd Distill-Spec-Research
+In a new shell
+export WANDB_API_KEY="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"
+export GITHUB_TOKEN="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"
+export HF_TOKEN="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"
+git config user.name "Rmuk655"
+git config user.email "cs24btech11036@iith.ac.in"
+git config --global user.name "Rmuk655"
+git config --global user.email "cs24btech11036@iith.ac.in"
+
+
+python -m venv venv && source venv/bin/activate 
+
+pip install -r requirements.txt
+
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode khisti --K 1 --n 1000 --device cuda:0
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode bv --K 1 --n 1000 --device cuda:1
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --K 1 --n 1000 --device cuda:2
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --K 1 --n 1000 --device cuda:3
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --K 1 --n 1000 --device cuda:0
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv --K 1 --n 1000 --device cuda:1
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 1 --n 1000 --device cuda:2
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode nss --K 1 --n 1000 --device cuda:3
+
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode nss --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --K 2 --n 1000	
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode khisti --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode bv --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 2 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode nss --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode khisti --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode bv --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode khisti --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode bv --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --K 1 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --K 1 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --K 1 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode bv --K 1 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 1 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --K 4 --n 1000
+python train.py --loss traversal_tree
+python train.py --loss naive_tree
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 3 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --K 4 --n 1000
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode nss --K 4 --n 1000
+python train.py --loss kl_tree
+python train.py --loss reverse_kl
+
+
+A100
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode naive --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode nss --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode specinfer --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode spectr --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode khisti --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode bv --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode gbv --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode traversal --K 1
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode naive --K 2
+
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode nss --K 2
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode specinfer --K 2
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode spectr --K 2
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode khisti --K 2
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode bv --K 2
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode gbv --K 2
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode traversal --K 2
+
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode naive --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode nss --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode traversal --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode specinfer --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode spectr --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode khisti --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode bv --K 3
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode gbv --K 3
+
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode naive --K 4
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode nss --K 4
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode specinfer --K 4
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode spectr --K 4
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode khisti --K 4
+
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode bv --K 4
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode gbv --K 4
+python eval.py --checkpoint checkpoints/forward_kl/ckpt_best --mode traversal --K 4
+
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode naive --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode nss --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode specinfer --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode spectr --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode khisti --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode bv --K 1
+
+H100
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode naive --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode nss --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode specinfer --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode spectr --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode khisti --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode bv --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode gbv --K 1
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode traversal --K 1
+
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode naive --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode nss --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode specinfer --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode spectr --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode khisti --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode bv --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode gbv --K 2
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode traversal --K 2
+
+
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode naive --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode bv --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode gbv --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode traversal --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode spectr --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode khisti --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode specinfer --K 3
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode nss --K 3
+
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode naive --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode bv --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode gbv --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode traversal --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode spectr --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode khisti --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode specinfer --K 4
+python eval.py --checkpoint checkpoints/kl_tree/ckpt_best --mode nss --K 4
+
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode naive --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode nss --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode specinfer --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode spectr --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode khisti --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode bv --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode gbv --K 1
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode traversal --K 1
+
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode naive --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode nss --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode specinfer --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode spectr --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode khisti --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode bv --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode gbv --K 2
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode traversal --K 2
+
+
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode naive --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode bv --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode gbv --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode traversal --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode spectr --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode khisti --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode specinfer --K 3
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode nss --K 3
+
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode naive --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode bv --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode gbv --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode traversal --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode spectr --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode khisti --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode specinfer --K 4
+python eval.py --checkpoint checkpoints/reverse_kl/ckpt_best --mode nss --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode spectr --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode gbv --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode khisti --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode traversal --K 1
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode bv --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode naive --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode nss --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode specinfer --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode gbv --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode traversal --K 2
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode naive --K 3
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode nss --K 3
+
+TO BE RUN
+
+A 100
+
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode specinfer --K 3
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode spectr --K 3
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode khisti --K 3
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode bv --K 3
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode gbv --K 3
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode traversal --K 3
+
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode naive --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode nss --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode specinfer --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode spectr --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode khisti --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode bv --K 4
+
+
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode gbv --K 4
+python eval.py --checkpoint checkpoints/naive_tree/ckpt_best --mode traversal --K 4
+
+
+
+H 100 (ALREADY RUN)
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode naive --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode nss --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode specinfer --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode spectr --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode khisti --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode bv --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode gbv --K 4
+python eval.py --checkpoint checkpoints/l1/ckpt_best --mode traversal --K 4
+
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode naive --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode nss --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode specinfer --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode spectr --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode khisti --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode bv --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode gbv --K 4
+python eval.py --checkpoint checkpoints/jsd/ckpt_best --mode traversal --K 4
+
+H100
+
+# control (λ=0 must reproduce plain flat) — sanity check first
+python train.py --loss jsd --aux_mode depth_weight --aux_loss naive_tree --depth_lambda 0.0 --device cuda:0
+# amplify deep, amplify shallow
+python train.py --loss jsd --aux_mode depth_weight --aux_loss naive_tree --depth_lambda  0.5 --device cuda:1 --resume
+python train.py --loss jsd --aux_mode depth_weight --aux_loss naive_tree --depth_lambda -0.5 --device cuda:2 --resume
+python train.py --loss jsd --aux_mode depth_weight --aux_loss naive_tree --depth_linear --device cuda:3 --resume
+
+
+
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --n 1000 --K 3	--device cuda:0
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv --n 1000 --K 3 --device cuda:1
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --n 1000 --K 3 --device cuda:2
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --n 1000 --K 3 --device cuda:3
+
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode traversal --n 1000 --K 4	--device cuda:0
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv --n 1000 --K 4 --device cuda:1
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode naive --n 1000 --K 4 --device cuda:2
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode spectr --n 1000 --K 4 --device cuda:3
+
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode bv --n 1000 --K 4	--device cuda:0
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode specinfer --n 1000 --K 4 --device cuda:1
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode nss --n 1000 --K 4 --device cuda:2
+python eval.py --checkpoint Qwen/Qwen3-0.6B --mode khisti --n 1000 --K 4 --device cuda:3
+
+
+
+
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best  --mode traversal --n 100 --K 3 --device cuda:0
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best --mode traversal --n 100 --K 2 --device cuda:1
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best --mode bv --n 100 --K 3 --device cuda:0
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best --mode bv --n 100 --K 2 --device cuda:1
+
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best  --mode traversal --n 100 --K 1 --device cuda:0
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best --mode traversal --n 100 --K 3 --device cuda:1
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best --mode bv --n 100 --K 1 --device cuda:0
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lam0.0/ckpt_best --mode bv --n 100 --K 4 --device cuda:1
+
+
+
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode traversal --n 100 --K 3 --device cuda:2
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode traversal --n 100 --K 2 --device cuda:3
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode bv --n 100 --K 3 --device cuda:2
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode bv --n 100 --K 2 --device cuda:3
+
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode traversal --n 100 --K 1 --device cuda:2
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode traversal --n 100 --K 4 --device cuda:3
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode bv --n 100 --K 1 --device cuda:2
+python eval.py --checkpoint checkpoints/jsd+dw_naive_tree_lin/ckpt_best --mode bv --n 100 --K 4 --device cuda:3
+
+
+
+
+
+
+
+
+
+

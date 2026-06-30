@@ -1,0 +1,12 @@
+timestamp,checkpoint,dataset,mode,K,L,n_prompts,block_eff,throughput_tok_s,avg_tree_nodes,total_gen_tokens,total_time_s
+2026-06-09T17:47:53,checkpoints/forward_kl/ckpt_best,gsm8k_eval,gbv,3,8,100,4.525,8.1567,19.8188,13032,1597.71
+2026-06-10T00:53:59,checkpoints/forward_kl/ckpt_best,gsm8k_eval,naive,3,8,100,4.961757,11.4422,19.1651,13104,1145.23
+2026-06-10T01:24:55,checkpoints/forward_kl/ckpt_best,gsm8k_eval,nss,3,8,100,3.345897,7.6825,20.0508,13049,1698.55
+2026-06-10T02:48:48,checkpoints/forward_kl/ckpt_best,gsm8k_eval,naive,3,8,100,4.961757,10.5227,19.1651,13104,1245.31
+2026-06-10T03:22:43,checkpoints/forward_kl/ckpt_best,gsm8k_eval,nss,3,8,100,3.345897,7.1527,20.0508,13049,1824.33
+2026-06-10T03:49:44,checkpoints/forward_kl/ckpt_best,gsm8k_eval,specinfer,3,8,100,4.207196,9.0481,20.0668,13097,1447.49
+2026-06-10T04:13:04,checkpoints/forward_kl/ckpt_best,gsm8k_eval,spectr,3,8,100,4.749275,10.4426,19.5486,13108,1255.25
+2026-06-10T04:40:58,checkpoints/forward_kl/ckpt_best,gsm8k_eval,khisti,3,8,100,4.230521,8.7159,20.2871,13085,1501.27
+2026-06-10T05:03:39,checkpoints/forward_kl/ckpt_best,gsm8k_eval,bv,3,8,100,5.092105,10.8555,18.4582,13158,1212.11
+2026-06-10T05:30:46,checkpoints/forward_kl/ckpt_best,gsm8k_eval,gbv,3,8,100,4.470708,8.2757,20.0664,13126,1586.09
+2026-06-10T05:52:56,checkpoints/forward_kl/ckpt_best,gsm8k_eval,traversal,3,8,100,5.213804,11.0535,19.2416,13144,1189.13

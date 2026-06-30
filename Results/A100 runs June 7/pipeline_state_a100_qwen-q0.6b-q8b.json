@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "steps": {
+    "train_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-05T23:55:26.204174+00:00",
+      "note": "auto-detected from done_check"
+    },
+    "eval_baseline_all": {
+      "status": "skipped",
+      "ts": "2026-06-07T01:48:08.648549+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_rev_kl_all": {
+      "status": "skipped",
+      "ts": "2026-06-05T23:55:26.210365+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "merge_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-05T23:55:58.953378+00:00",
+      "note": "elapsed=33s"
+    },
+    "eval_rev_kl_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T02:56:05.611710+00:00",
+      "note": "elapsed=10807s"
+    },
+    "eval_kl_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T05:51:29.485478+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "eval_baseline_gsm8k": {
+      "status": "skipped",
+      "ts": "2026-06-06T13:56:04.553980+00:00",
+      "note": "not part of this run (excluded loss / disabled / EAGLE / other tier)"
+    },
+    "train_kl_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-06T05:51:29.485921+00:00",
+      "note": ""
+    },
+    "eval_jsd_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T04:56:45.925960+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T05:42:36.114635+00:00",
+      "note": "elapsed=2750s"
+    },
+    "merge_jsd_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T05:43:01.960900+00:00",
+      "note": "elapsed=26s"
+    },
+    "eval_jsd_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-06T05:43:01.961868+00:00",
+      "note": ""
+    },
+    "eval_l1_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T05:55:23.212267+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_l1_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T06:53:16.388628+00:00",
+      "note": "elapsed=3473s"
+    },
+    "merge_l1_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T06:53:44.087064+00:00",
+      "note": "elapsed=28s"
+    },
+    "eval_l1_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T09:58:20.249243+00:00",
+      "note": "elapsed=11076s"
+    },
+    "eval_kl_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T13:56:04.553800+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_kl_tree_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-06T13:56:04.554187+00:00",
+      "note": ""
+    },
+    "eval_bv_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T14:01:12.178847+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_bv_tree_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-06T14:01:12.179117+00:00",
+      "note": ""
+    },
+    "eval_nss_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T14:06:26.506760+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_nss_tree_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-06T14:06:26.507021+00:00",
+      "note": ""
+    },
+    "eval_naive_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T14:09:15.988790+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_naive_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T16:36:52.844691+00:00",
+      "note": "elapsed=8857s"
+    },
+    "merge_naive_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T16:37:08.688493+00:00",
+      "note": "elapsed=16s"
+    },
+    "eval_naive_tree_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-06T16:37:08.689397+00:00",
+      "note": ""
+    },
+    "eval_jsd_tree_all": {
+      "status": "skipped",
+      "ts": "2026-06-06T16:40:33.038507+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_jsd_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T18:20:50.970407+00:00",
+      "note": "elapsed=6018s"
+    },
+    "merge_jsd_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T18:21:07.151833+00:00",
+      "note": "elapsed=16s"
+    },
+    "eval_jsd_tree_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-06T19:28:20.585020+00:00",
+      "note": "elapsed=4033s"
+    },
+    "eval_ebe_all": {
+      "status": "skipped",
+      "ts": "2026-06-07T01:45:45.560655+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_ebe_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-07T01:45:45.560927+00:00",
+      "note": ""
+    },
+    "eval_ebe_single_all": {
+      "status": "skipped",
+      "ts": "2026-06-07T01:48:08.648957+00:00",
+      "note": "not run on this tier (multi-dataset eval \u2014 T4/A100 only)"
+    },
+    "train_ebe_single_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-07T06:17:26.563482+00:00",
+      "note": "elapsed=16158s"
+    },
+    "merge_ebe_single_gsm8k": {
+      "status": "done",
+      "ts": "2026-06-07T06:17:42.194093+00:00",
+      "note": "elapsed=16s"
+    },
+    "eval_ebe_single_gsm8k": {
+      "status": "running",
+      "ts": "2026-06-07T06:17:42.194800+00:00",
+      "note": ""
+    }
+  }
+}
