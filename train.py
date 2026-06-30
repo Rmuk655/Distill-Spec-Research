@@ -110,7 +110,7 @@ VAL_PROMPTS     = 100                        # larger set → lower SE, less win
 SAVE_EVERY      = 400                        # ckpt_latest write cadence (matches VAL_EVERY)
 LOG_EVERY       = 10                         # console + W&B step-log cadence
 VAL_EMA_ALPHA   = 0.3                        # smoothed-val EMA weight for checkpoint selection (α=0.3 → ~3-4 check window)
-EARLY_STOP_PAT  = 5                          # default patience: 5 × 400 = 2000 steps without smoothed improvement
+EARLY_STOP_PAT  = 15                         # default patience: 15 × 400 = 6000 steps without smoothed improvement
 EARLY_STOP_DELTA = 0.0                       # min improvement threshold (0 = strict; >0 ignores noise-level fluctuations)
 
 # Dataset names (resolved via data_io.get_path)
