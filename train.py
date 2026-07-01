@@ -565,7 +565,7 @@ def main():
                 })
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
-        if (step + 1) % VAL_EVERY == 0:
+        if (step + 1) % args.val_every == 0:
             if (step + 1) % LOG_EVERY != 0:
                 # VAL_EVERY not a multiple of LOG_EVERY — compute val now
                 _clear_node_caches()
