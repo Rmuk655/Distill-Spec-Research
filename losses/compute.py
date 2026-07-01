@@ -67,12 +67,39 @@ def draft_tree_forward_with_grad(
 
     # 4. Tree forward WITH grad.  Qwen3 expects mask in dict form (same as
     #    verifiers/inference_util.py:target_tree_pass).
-    draft_model.train()
-    out = draft_model(
-        q_tokens, past_key_values=p_cache,
-        attention_mask={"full_attention": mask},
-        use_cache=True, return_dict=True,
-    )
+    #
+    # This dict-style full-attention mask is NOT a standard causal/padding mask
+    # — it's an arbitrary pairwise bias matrix encoding tree ancestry. HF's
+    # flash_attention_2 integration only understands causal or padding masks
+    # (see modeling_flash_attention_utils.py:_upad_input); handed this instead,
+    # it corrupts index computation and crashes with a device-side assert
+    # ("index out of bounds") deep in flash_attn's unpad_input. This is the
+    # exact incompatibility scripts/setup_a100.sh already documented for the
+    # TARGET model (hence target stays off FA2 there) — but the small DRAFT
+    # model (hidden_size < 3000) gets FA2 auto-selected by the same setup
+    # script's .pth patch, and this is the one draft-side call that also needs
+    # the custom mask. Force SDPA for just this call, restore FA2 afterward so
+    # flat-loss / validation draft calls (plain causal, no custom mask) keep
+    # the FA2 speedup.
+    def _set_attn_impl(model, impl):
+        if hasattr(model, "set_attn_implementation"):
+            model.set_attn_implementation(impl)
+        else:
+            model.config._attn_implementation = impl   # fallback for older transformers
+
+    _orig_attn_impl = getattr(draft_model.config, "_attn_implementation", None)
+    if _orig_attn_impl == "flash_attention_2":
+        _set_attn_impl(draft_model, "sdpa")
+    try:
+        draft_model.train()
+        out = draft_model(
+            q_tokens, past_key_values=p_cache,
+            attention_mask={"full_attention": mask},
+            use_cache=True, return_dict=True,
+        )
+    finally:
+        if _orig_attn_impl == "flash_attention_2":
+            _set_attn_impl(draft_model, _orig_attn_impl)
     logits = out.logits[0].float()                         # [n_nodes, V]
     probs  = F.softmax(logits / q_temp, dim=-1)            # [n_nodes, V] WITH grad
 
