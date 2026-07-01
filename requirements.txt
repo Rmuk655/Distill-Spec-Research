@@ -18,6 +18,7 @@ transformers==5.12.1
 tokenizers>=0.20
 accelerate>=0.30
 peft>=0.10              # only used when USE_LORA=True in train.py
+bitsandbytes>=0.46.1    # only used when --load_in_4bit is passed (large-teacher NF4 loading)
 datasets>=2.20          # data_io/download.py uses load_dataset for alpaca/math500/etc.
 wandb>=0.17             # set --no_wandb to disable; otherwise wandb login once
 tqdm>=4.66
