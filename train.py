@@ -243,6 +243,12 @@ def parse_args():
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
                          "the 0.8 training temp.  Cannot be 0 (softmax/temp divide).")
+    ap.add_argument("--val_every", type=int, default=VAL_EVERY,
+                    help=f"Steps between val block_eff checks (default {VAL_EVERY}). "
+                         "Override to a small value (e.g. 8) for a quick smoke test that "
+                         "actually exercises the validation code path (different memory "
+                         "profile than plain training — K-branch tree decoding) before "
+                         "committing a checkpoint to a long run.")
     ap.add_argument("--train_diagnose", action="store_true",
                     help="Run lightweight JSD-vs-BE diagnostic at every val check. "
                          "Logs diag/rho, diag/sigma_jsd, diag/mean_jsd, diag/sigma_be "
@@ -515,7 +521,7 @@ def main():
             val_be = None
             val_forget = None
             _diag = {}
-            if (step + 1) % VAL_EVERY == 0:
+            if (step + 1) % args.val_every == 0:
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 val_be_ema = val_be if val_be_ema is None else (1 - VAL_EMA_ALPHA) * val_be_ema + VAL_EMA_ALPHA * val_be
