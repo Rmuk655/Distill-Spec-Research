@@ -107,9 +107,20 @@ def load_models(
         torch_dtype = torch.bfloat16 if "cuda" in str(device) else torch.float32
 
     if load_in_4bit and "cuda" in str(device):
-        # QLoRA / bitsandbytes path: target (large) model in 4-bit NF4 to fit T4 (15 GB).
-        # device_map="auto" is required by bitsandbytes — do NOT call .to(dev) afterwards.
+        # QLoRA / bitsandbytes path: target (large) model in 4-bit NF4.
+        # device_map is required by bitsandbytes — do NOT call .to(dev) afterwards.
         #
+        # device_map="auto" lets accelerate spread the model across EVERY visible
+        # GPU on the node, ignoring the requested --device entirely. That's fine
+        # for a single lone process, but with N concurrent runs each pinned to
+        # its own GPU (e.g. 8 parallel training runs on cuda:0..cuda:7), "auto"
+        # causes cross-device tensor mismatches ("index is on cuda:1, different
+        # from cuda:0") because the quantized model's layers land wherever
+        # accelerate's node-wide balancer puts them, not on `dev`. Pin every
+        # layer to the single physical GPU explicitly instead.
+        _phys_idx = dev.index if (dev.type == "cuda" and dev.index is not None) else 0
+        _device_map = {"": _phys_idx}
+
         # If p_name is already a pre-quantized local directory (produced by
         # scripts/quantize_teacher.py --save_pretrained), its config.json already
         # carries the bnb quantization_config — transformers reconstructs the
@@ -123,9 +134,9 @@ def load_models(
                 p_name,
                 trust_remote_code=True,
                 low_cpu_mem_usage=True,
-                device_map="auto",
+                device_map=_device_map,
             ).eval()
-            print(f"  [load_models] {p_name} loaded from pre-quantized NF4 checkpoint (no re-quantize)")
+            print(f"  [load_models] {p_name} loaded from pre-quantized NF4 checkpoint on cuda:{_phys_idx} (no re-quantize)")
         else:
             try:
                 from transformers import BitsAndBytesConfig
@@ -143,9 +154,9 @@ def load_models(
                 trust_remote_code=True,
                 quantization_config=bnb_cfg,
                 low_cpu_mem_usage=True,
-                device_map="auto",
+                device_map=_device_map,
             ).eval()
-            print(f"  [load_models] {p_name} loaded in 4-bit NF4 (target, fits T4)")
+            print(f"  [load_models] {p_name} loaded in 4-bit NF4 on cuda:{_phys_idx} (target, fits T4)")
     else:
         p_model = AutoModelForCausalLM.from_pretrained(
             p_name,
