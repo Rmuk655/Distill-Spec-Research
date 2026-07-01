@@ -3,7 +3,9 @@
 #
 # One GPU per checkpoint (mirrors the training launch grid). Each GPU sequentially
 # covers: 2 datasets (math_eval, olympiad_eval) x K=1..4 x all 9 verifier modes,
-# plus a delayed-expansion traversal pass (--L1_adaptive) at each K/dataset.
+# plus DDTE-style delayed-expansion passes (--L1_adaptive, and fixed --L1 3/4/5)
+# on traversal+specinfer at each K/dataset — delayed_draft.py's own docstring
+# flags these two verifiers as the theoretically-motivated ones for L1.
 #
 # Resumable by construction: eval.py caches completed (mode,K,L,checkpoint,dataset)
 # work per-prompt and skips it on re-run without reloading models. If this script
@@ -23,6 +25,8 @@ REPO=/home/colligo/Distill-Spec-Research
 OUT=/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B
 TEACHER=Qwen/Qwen3-32B
 MODES="naive,nss,specinfer,spectr,khisti,max,bv,gbv,traversal"
+DELAYED_MODES="traversal,specinfer"   # the two verifiers L1 is theoretically motivated for
+L1_VALUES="3 4 5"
 DATASETS="math_eval olympiad_eval"
 KS="1 2 3 4"
 SEED=123
@@ -61,11 +65,19 @@ run_gpu_eval() {
                 --dataset "$dataset" --device "cuda:${gpu}" \
                 --output "$csv" >> "$out" 2>&1
 
-            echo "[eval_grid] GPU${gpu} ${name} dataset=${dataset} K=${K} delayed-traversal (--L1_adaptive)" >> "$out"
+            echo "[eval_grid] GPU${gpu} ${name} dataset=${dataset} K=${K} delayed (--L1_adaptive) ${DELAYED_MODES}" >> "$out"
             python "$REPO/eval.py" --checkpoint "$ckpt" --teacher "$TEACHER" \
-                --mode traversal --L1_adaptive --K "$K" --L 8 --n 100 --seed "$SEED" \
+                --modes "$DELAYED_MODES" --L1_adaptive --K "$K" --L 8 --n 100 --seed "$SEED" \
                 --dataset "$dataset" --device "cuda:${gpu}" \
                 --output "$csv" >> "$out" 2>&1
+
+            for L1 in $L1_VALUES; do
+                echo "[eval_grid] GPU${gpu} ${name} dataset=${dataset} K=${K} delayed (--L1 ${L1}) ${DELAYED_MODES}" >> "$out"
+                python "$REPO/eval.py" --checkpoint "$ckpt" --teacher "$TEACHER" \
+                    --modes "$DELAYED_MODES" --L1 "$L1" --K "$K" --L 8 --n 100 --seed "$SEED" \
+                    --dataset "$dataset" --device "cuda:${gpu}" \
+                    --output "$csv" >> "$out" 2>&1
+            done
         done
     done
     echo "[eval_grid] GPU${gpu} ${name} DONE" >> "$out"
