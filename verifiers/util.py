@@ -1,9 +1,24 @@
+import os
 import random
 import torch
 import json
 import torch.nn.functional as F
 from typing import List, Tuple
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
+
+
+def _dir_has_quant_config(path: str) -> bool:
+    """True if path/config.json already carries a bnb quantization_config —
+    i.e. this directory was produced by scripts/quantize_teacher.py and can be
+    loaded directly as NF4 without a re-quantization pass."""
+    cfg_path = os.path.join(path, "config.json")
+    if not os.path.isfile(cfg_path):
+        return False
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            return "quantization_config" in json.load(f)
+    except Exception:
+        return False
 
 """
 Load prompts from a JSONL file, given a path to the directory.
@@ -94,25 +109,43 @@ def load_models(
     if load_in_4bit and "cuda" in str(device):
         # QLoRA / bitsandbytes path: target (large) model in 4-bit NF4 to fit T4 (15 GB).
         # device_map="auto" is required by bitsandbytes — do NOT call .to(dev) afterwards.
-        try:
-            from transformers import BitsAndBytesConfig
-        except ImportError:
-            raise SystemExit("bitsandbytes required for --load_in_4bit. "
-                             "Run: pip install bitsandbytes accelerate")
-        bnb_cfg = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
-        p_model = AutoModelForCausalLM.from_pretrained(
-            p_name,
-            trust_remote_code=True,
-            quantization_config=bnb_cfg,
-            low_cpu_mem_usage=True,
-            device_map="auto",
-        ).eval()
-        print(f"  [load_models] {p_name} loaded in 4-bit NF4 (target, fits T4)")
+        #
+        # If p_name is already a pre-quantized local directory (produced by
+        # scripts/quantize_teacher.py --save_pretrained), its config.json already
+        # carries the bnb quantization_config — transformers reconstructs the
+        # NF4 layers straight from the packed weights on disk with NO re-quantization
+        # pass. Re-quantizing from raw bf16 on every process (e.g. 8 concurrent
+        # training runs sharing one 32B teacher) is the slow path this skips.
+        _pre_quantized = (os.path.isdir(p_name)
+                          and _dir_has_quant_config(p_name))
+        if _pre_quantized:
+            p_model = AutoModelForCausalLM.from_pretrained(
+                p_name,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                device_map="auto",
+            ).eval()
+            print(f"  [load_models] {p_name} loaded from pre-quantized NF4 checkpoint (no re-quantize)")
+        else:
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError:
+                raise SystemExit("bitsandbytes required for --load_in_4bit. "
+                                 "Run: pip install bitsandbytes accelerate")
+            bnb_cfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            p_model = AutoModelForCausalLM.from_pretrained(
+                p_name,
+                trust_remote_code=True,
+                quantization_config=bnb_cfg,
+                low_cpu_mem_usage=True,
+                device_map="auto",
+            ).eval()
+            print(f"  [load_models] {p_name} loaded in 4-bit NF4 (target, fits T4)")
     else:
         p_model = AutoModelForCausalLM.from_pretrained(
             p_name,
