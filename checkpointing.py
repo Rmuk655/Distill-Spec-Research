@@ -57,11 +57,23 @@ def try_resume(model, optimizer, scheduler, output_dir):
         latest, torch_dtype=torch.bfloat16,
     ).state_dict()
     model.load_state_dict(model_state, strict=False)
-    # Load optimizer + scheduler
+    # Load optimizer + scheduler. Optimizer state format is NOT compatible across
+    # optimizer classes (e.g. torch.optim.AdamW's fp32 exp_avg/exp_avg_sq vs
+    # bitsandbytes AdamW8bit's int8-quantized state) — resuming a checkpoint saved
+    # with a different --optim_8bit setting than the current run would otherwise
+    # crash load_state_dict and abort the whole resume. Model weights (loaded
+    # above) are unaffected by this and always resume correctly. On mismatch,
+    # warn and continue with a freshly-initialized optimizer — this only costs a
+    # few steps of Adam's moving averages re-warming, not any training progress.
     optim_blob = torch.load(os.path.join(latest, "optim.pt"), map_location="cpu")
-    optimizer.load_state_dict(optim_blob["optimizer"])
-    if scheduler and optim_blob.get("scheduler"):
-        scheduler.load_state_dict(optim_blob["scheduler"])
+    try:
+        optimizer.load_state_dict(optim_blob["optimizer"])
+        if scheduler and optim_blob.get("scheduler"):
+            scheduler.load_state_dict(optim_blob["scheduler"])
+    except Exception as e:
+        print(f"[resume] WARNING: optimizer/scheduler state incompatible with the "
+              f"current optimizer ({e}) — continuing with fresh optimizer state. "
+              f"Model weights (the actual training progress) resumed successfully.")
     print(f"[resume] restored step={step} from {latest}")
     return step, state
 
