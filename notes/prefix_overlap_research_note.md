@@ -100,7 +100,8 @@ All roots use the teacher's own prior tokens as context. At test time the draft 
 1. **Traversal 15k warm (running):** `steps=15000, anneal_steps=5000` — CE→0 at LR=0.86× peak. Early best raw=6.042 / smoothed=5.951 at step 2000, step 2400/15000. Watch through the anneal boundary (~step 5000).
 2. **Confirm nss_warmlogprob** — re-run at n=200 or seed=456; +0.155 traversal K=3 is the only above-noise positive.
 3. **DDTE verifier eval (eval-only):** run DDTE verifier on JSD-flat and best PO draft. Tests whether a stronger verifier amplifies small draft-distribution differences.
-4. **Log-space tree losses** (`traversal_log`, `naive_log`) — warm-start from JSD ckpt; highest priority, unrelated to PO.
+
+Log-space tree losses (`traversal_log`, `naive_log`) are complete — results in [`tree_losses_research_note.md`](tree_losses_research_note.md).
 
 ---
 
