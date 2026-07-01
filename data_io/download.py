@@ -18,9 +18,9 @@ Files produced:
     raw/spec_bench.jsonl      — Spec-Bench (480 prompts, 6 categories) — paper eval
     raw/math_hard.jsonl, math_val.jsonl, math_eval.jsonl        — MATH level 4+5
     raw/olympiad_hard.jsonl, olympiad_val.jsonl, olympiad_eval.jsonl
-        — OlympiadBench (harder than math_hard); only 674 rows total (small —
-        best used as an eval-only axis); NOT fetched by --train default —
-        opt in with --datasets olympiad_hard,olympiad_val,olympiad_eval
+        — OlympiadBench (harder than math_hard); 1177 rows total (open-ended +
+        theorem-proving English text-only math combined); NOT fetched by
+        --train default — opt in with --datasets olympiad_hard,olympiad_val,olympiad_eval
 
 The val / eval split of GSM8K test is deterministic (random.Random(42) shuffle)
 and the two pools never overlap, so val-best checkpoint selection does NOT bias
@@ -294,28 +294,34 @@ def fetch_math_hard_and_val(force: bool = False,
 
 
 def fetch_olympiad_and_val(force: bool = False,
-                           n_val: int = 50, n_eval: int = 200):
+                           n_val: int = 75, n_eval: int = 300):
     """
     Build olympiad_hard / olympiad_val / olympiad_eval from OlympiadBench —
     a harder-than-MATH competition benchmark, used to raise draft-teacher
     divergence beyond what MATH level-4/5 (math_hard) provides.
 
     Same 3-way split pattern as fetch_math_hard_and_val():
-        olympiad_val   — n_val  problems (default 50)  for during-training checkpoint selection
-        olympiad_eval  — n_eval problems (default 200) held out for final eval
-        olympiad_hard  — remainder (~424), for training
+        olympiad_val   — n_val  problems (default 75)  for during-training checkpoint selection
+        olympiad_eval  — n_eval problems (default 300) held out for final eval
+        olympiad_hard  — remainder (~800), for training
 
     NOT auto-fetched by --train (opt-in only, via --datasets olympiad_hard,...)
     since it's a large extra download most setups don't need.
 
-    Schema CONFIRMED (2026-07-01, on-cluster check with a real HF token —
-    not a guess): dataset id `Hothan/OlympiadBench`, config `OE_TO_maths_en_COMP`
-    (the only English text-only math config — `OE_TO_maths_en_CEE` does not
-    exist, only zh has a CEE variant), fields `question` (str) and
-    `final_answer` (list, first element used). This config has only 674 rows
-    total — small relative to math_hard's ~5332 — so `olympiad_hard` is a much
-    thinner training set; treat this benchmark primarily as an eval-only axis
-    unless you're prepared for heavy prompt repetition over a long training run.
+    Schema CONFIRMED (2026-07-01, on-cluster checks with a real HF token, plus
+    a survey of every other "olympiadbench"-named HF dataset by download count
+    — most turned out to be repackagings of this same 674-row source, not
+    independently larger data). Combines TWO English text-only configs from
+    `Hothan/OlympiadBench` (the canonical mirror, confirmed identical to
+    lscpku/OlympiadBench-official):
+        OE_TO_maths_en_COMP — 674 rows, open-ended
+        TP_TO_maths_en_COMP — 503 rows, theorem-proving
+    giving 1177 total rows instead of 674. Theorem-proving rows have
+    `final_answer=None` (proofs have no short answer) — harmless here since
+    the pipeline never grades `answer`/`solution`, only uses `question` as
+    the training/eval prompt (block efficiency, not answer correctness).
+    Both fields `question` (str) and `final_answer` (list or None) confirmed
+    exact for both configs.
     """
     hard_path = os.path.join(DATA_DIR, "olympiad_hard.jsonl")
     val_path  = os.path.join(DATA_DIR, "olympiad_val.jsonl")
@@ -356,15 +362,16 @@ def fetch_olympiad_and_val(force: bool = False,
         save_jsonl(eval_path, all_items[n_val:n_val + n_eval])
         save_jsonl(hard_path, all_items[n_val + n_eval:])
 
-    print("  fetching Hothan/OlympiadBench (config: OE_TO_maths_en_COMP) ...")
+    print("  fetching Hothan/OlympiadBench (OE_TO_maths_en_COMP + TP_TO_maths_en_COMP) ...")
     try:
         from datasets import load_dataset
         all_items = []
-        ds = load_dataset("Hothan/OlympiadBench", "OE_TO_maths_en_COMP", split="train")
-        for row in ds:
-            item = _row_to_item(row)
-            if item:
-                all_items.append(item)
+        for cfg in ("OE_TO_maths_en_COMP", "TP_TO_maths_en_COMP"):
+            ds = load_dataset("Hothan/OlympiadBench", cfg, split="train")
+            for row in ds:
+                item = _row_to_item(row)
+                if item:
+                    all_items.append(item)
         if all_items and len(all_items) > n_val + n_eval:
             _split_and_save(all_items)
             return hard_path, val_path, eval_path
