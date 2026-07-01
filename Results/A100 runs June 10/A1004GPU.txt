@@ -1,4 +1,0 @@
-for K in 1 2 3 4; do    python eval.py --checkpoint /sensei-fs-3/users/rkrishna/checkpoints/prefix_overlap_traversal_multiN4_L8_lr1e-05_math_hard_s123_ce1anneal5000/ckpt_best --modes naive,nss,specinfer,spectr,khisti,bv,gbv,traversal --dataset math_eval --K 4 --L 8 --n 100 --temp 1.0 --device cuda:1  ; done
-
- 
-Is traversal working?
