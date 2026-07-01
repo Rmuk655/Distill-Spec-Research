@@ -16,6 +16,10 @@ Files produced:
     raw/gsm8k_eval.jsonl      — next 200..200+n of GSM8K test (final eval)
     raw/alpaca.jsonl, math500.jsonl, humaneval.jsonl, mtbench.jsonl  — eval sets
     raw/spec_bench.jsonl      — Spec-Bench (480 prompts, 6 categories) — paper eval
+    raw/math_hard.jsonl, math_val.jsonl, math_eval.jsonl        — MATH level 4+5
+    raw/olympiad_hard.jsonl, olympiad_val.jsonl, olympiad_eval.jsonl
+        — OlympiadBench (harder than math_hard); NOT fetched by --train
+        default — opt in with --datasets olympiad_hard,olympiad_val,olympiad_eval
 
 The val / eval split of GSM8K test is deterministic (random.Random(42) shuffle)
 and the two pools never overlap, so val-best checkpoint selection does NOT bias
@@ -288,6 +292,100 @@ def fetch_math_hard_and_val(force: bool = False,
     return hard_path, val_path, eval_path
 
 
+def fetch_olympiad_and_val(force: bool = False,
+                           n_val: int = 100, n_eval: int = 500):
+    """
+    Build olympiad_hard / olympiad_val / olympiad_eval from OlympiadBench —
+    a harder-than-MATH competition benchmark, used to raise draft-teacher
+    divergence beyond what MATH level-4/5 (math_hard) provides.
+
+    Same 3-way split pattern as fetch_math_hard_and_val():
+        olympiad_val   — n_val  problems (default 100) for during-training checkpoint selection
+        olympiad_eval  — n_eval problems (default 500) held out for final eval
+        olympiad_hard  — remainder, for training
+
+    NOT auto-fetched by --train (opt-in only, via --datasets olympiad_hard,...)
+    since it's a large extra download most setups don't need.
+
+    NOTE — best-effort schema: OlympiadBench (Hothan/OlympiadBench on HF) is
+    split into many language/modality/subject configs; this pulls the
+    text-only, English, math configs ("OE_TO_maths_en_COMP", "OE_TO_maths_en_CEE")
+    and normalizes the prompt/answer field names on a best-effort basis
+    ("question"/"final_answer" with several fallback names tried). If the
+    exact field names have drifted on HF, this fails soft to the canned
+    fallback below — verify the first real run's prompt count/content before
+    trusting it for a paper number.
+    """
+    hard_path = os.path.join(DATA_DIR, "olympiad_hard.jsonl")
+    val_path  = os.path.join(DATA_DIR, "olympiad_val.jsonl")
+    eval_path = os.path.join(DATA_DIR, "olympiad_eval.jsonl")
+
+    if (os.path.isfile(hard_path) and os.path.isfile(val_path)
+            and os.path.isfile(eval_path) and not force):
+        print("  olympiad_hard.jsonl + olympiad_val.jsonl + olympiad_eval.jsonl already present — skipping")
+        return hard_path, val_path, eval_path
+
+    _PROMPT_FIELDS = ("question", "problem", "prompt")
+    _ANSWER_FIELDS = ("final_answer", "answer", "solution")
+
+    def _row_to_item(row):
+        prompt = None
+        for f in _PROMPT_FIELDS:
+            v = row.get(f)
+            if isinstance(v, str) and v:
+                prompt = v
+                break
+        if prompt is None:
+            return None
+        answer = ""
+        for f in _ANSWER_FIELDS:
+            v = row.get(f)
+            if isinstance(v, list) and v:
+                answer = v[0]
+                break
+            if isinstance(v, str) and v:
+                answer = v
+                break
+        return {"prompt": prompt, "answer": answer,
+                "subject": row.get("subject", ""), "source": "olympiadbench"}
+
+    def _split_and_save(all_items):
+        random.Random(42).shuffle(all_items)
+        save_jsonl(val_path,  all_items[:n_val])
+        save_jsonl(eval_path, all_items[n_val:n_val + n_eval])
+        save_jsonl(hard_path, all_items[n_val + n_eval:])
+
+    print("  fetching Hothan/OlympiadBench (English, text-only, math configs) ...")
+    try:
+        from datasets import load_dataset
+        all_items = []
+        for cfg in ("OE_TO_maths_en_COMP", "OE_TO_maths_en_CEE"):
+            try:
+                ds = load_dataset("Hothan/OlympiadBench", cfg, split="train")
+            except Exception as e:
+                print(f"  config {cfg} unavailable ({e}) — skipping")
+                continue
+            for row in ds:
+                item = _row_to_item(row)
+                if item:
+                    all_items.append(item)
+        if all_items and len(all_items) > n_val + n_eval:
+            _split_and_save(all_items)
+            return hard_path, val_path, eval_path
+        print(f"  Hothan/OlympiadBench returned only {len(all_items)} usable rows "
+              f"(need > {n_val + n_eval}) — falling back to canned placeholders")
+    except Exception as e:
+        print(f"  Hothan/OlympiadBench failed ({e}) — falling back to canned placeholders")
+
+    # Canned fallback — same degrade-soft pattern as fetch_hf(); lets the
+    # pipeline run end-to-end even if the HF schema drifted or is offline.
+    for p, n in ((val_path, n_val), (eval_path, n_eval), (hard_path, 50)):
+        save_jsonl(p, [{"prompt": f"[olympiadbench fallback] placeholder problem {i}.",
+                        "answer": "", "subject": "", "source": "canned_fallback"}
+                       for i in range(n if p != hard_path else 50)])
+    return hard_path, val_path, eval_path
+
+
 def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
               force: bool = False) -> None:
     """Top-level entry point — fetch every dataset we evaluate on."""
@@ -304,6 +402,9 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
     if "math_hard" in requested or "math_val" in requested or "math_eval" in requested:
         fetch_math_hard_and_val(force=force)
 
+    if "olympiad_hard" in requested or "olympiad_val" in requested or "olympiad_eval" in requested:
+        fetch_olympiad_and_val(force=force)
+
     if "spec_bench" in requested:
         fetch_spec_bench(force=force)
 
@@ -317,7 +418,9 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
 def get_path(name: str) -> str:
     """Resolve a dataset name to its on-disk JSONL path (must be downloaded)."""
     known = ({"gsm8k_train", "gsm8k_val", "gsm8k_eval",
-              "math_hard", "math_val", "math_eval", "spec_bench"} | set(EVAL_DATASETS))
+              "math_hard", "math_val", "math_eval",
+              "olympiad_hard", "olympiad_val", "olympiad_eval",
+              "spec_bench"} | set(EVAL_DATASETS))
     if name in known:
         return os.path.join(DATA_DIR, f"{name}.jsonl")
     raise KeyError(f"Unknown dataset '{name}'. Known: {sorted(known)}")
