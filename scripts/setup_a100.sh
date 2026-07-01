@@ -208,11 +208,11 @@ fi
 if [ "${SKIP_DATA}" != "1" ]; then
     echo "[setup] downloading datasets (gsm8k, math_hard, math_val, alpaca, math500, humaneval, mtbench) ..."
     python -m data_io.download --train
-    # OlympiadBench — harder than math_hard, for widening draft-teacher divergence
-    # (e.g. the 1.7B/32B capacity study). Best-effort HF schema — verify a few
-    # lines of raw/olympiad_eval.jsonl aren't the canned fallback before trusting it.
-    echo "[setup] downloading OlympiadBench ..."
-    python -m data_io.download --datasets olympiad_hard,olympiad_val,olympiad_eval
+    # OlympiadBench — harder than math_hard, EVAL-ONLY (no val/train split —
+    # never checkpoint-selected or trained on, only used with eval.py). Schema
+    # confirmed on-cluster with a real HF token (see data_io/download.py).
+    echo "[setup] downloading OlympiadBench (eval-only) ..."
+    python -m data_io.download --datasets olympiad_eval
 fi
 
 # 6b. model weights — cache to the default HF cache (~/.cache/huggingface, local

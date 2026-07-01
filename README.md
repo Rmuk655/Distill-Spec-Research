@@ -40,10 +40,9 @@ python -m data_io.download --train --n 1000
 #       math_hard.jsonl  — remainder ~5332 problems  (training)
 python -m data_io.download --datasets math_hard,math_val,math_eval
 
-# 3c. (optional) OlympiadBench — harder than math_hard, for widening
-#     draft-teacher divergence (e.g. the 1.7B/32B capacity study). Same
-#     val/eval/train 3-way split pattern as math_hard. NOT fetched by --train.
-python -m data_io.download --datasets olympiad_hard,olympiad_val,olympiad_eval
+# 3c. (optional) OlympiadBench — harder than math_hard, EVAL-ONLY (no val/train
+#     split — never checkpoint-selected or trained on). NOT fetched by --train.
+python -m data_io.download --datasets olympiad_eval
 
 # 4. (optional) log in to Weights & Biases for training curves
 wandb login
