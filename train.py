@@ -213,7 +213,21 @@ def parse_args():
                          "e.g. --draft checkpoints/jsd_s123/ckpt_best.")
     ap.add_argument("--load_in_4bit", action="store_true",
                     help="Load teacher in 4-bit NF4 via bitsandbytes. Needed for large "
-                         "teachers (e.g. 32B) on GPUs where bf16 does not fit.")
+                         "teachers (e.g. 32B) on GPUs where bf16 does not fit. "
+                         "WARNING: flat losses (jsd, jsd_flat_enrich) call teacher.generate() "
+                         "for max_new_tokens sequential steps — bitsandbytes NF4 pays a "
+                         "dequantization cost on every single-token forward, so this is "
+                         "~15-20x slower per step for flat losses than for tree losses "
+                         "(which only need ~L sequential steps). Prefer --optim_8bit + full "
+                         "bf16 teacher for flat losses if memory allows.")
+    ap.add_argument("--optim_8bit", action="store_true",
+                    help="Use bitsandbytes 8-bit AdamW instead of torch.optim.AdamW for the "
+                         "draft's optimizer state (roughly halves optimizer memory: int8 "
+                         "m/v instead of fp32). Orthogonal to --load_in_4bit (which "
+                         "quantizes the TEACHER) — this quantizes the DRAFT's optimizer "
+                         "state, freeing headroom that can let a flat-loss run afford the "
+                         "full bf16 teacher instead of 4-bit, avoiding the generate() "
+                         "slowdown described under --load_in_4bit.")
     ap.add_argument("--aux_loss",   type=str, default=None,
                     choices=sorted(ALL_LOSSES.keys()),
                     help="Optional auxiliary loss: total = primary + aux_weight * aux. "
@@ -319,8 +333,18 @@ def main():
 
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
-                                  weight_decay=0.0)   # DistillSpec uses no regularisation
+    if args.optim_8bit:
+        try:
+            import bitsandbytes as bnb
+        except ImportError:
+            raise SystemExit("bitsandbytes required for --optim_8bit. "
+                             "Run: pip install bitsandbytes")
+        optimizer = bnb.optim.AdamW8bit(trainable, lr=args.lr, betas=(0.9, 0.999),
+                                        weight_decay=0.0)
+        print("[optim] using bitsandbytes AdamW8bit (int8 optimizer state)")
+    else:
+        optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
+                                      weight_decay=0.0)   # DistillSpec uses no regularisation
 
     # LR schedule: linear warmup then cosine decay to LR_MIN_RATIO × peak.
     # Both sched_steps and warmup_opt_steps are anchored to the values from the
