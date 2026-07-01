@@ -7,6 +7,7 @@ _KNOWN = {
     "gsm8k_train", "gsm8k_val", "gsm8k_eval",
     "alpaca", "math500", "humaneval", "mtbench",
     "math_train", "math_hard", "math_val", "math_eval",
+    "olympiad_hard", "olympiad_val", "olympiad_eval",
     "spec_bench",
 }
 

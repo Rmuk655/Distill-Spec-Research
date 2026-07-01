@@ -6,11 +6,29 @@
 #
 # Usage:
 #   bash scripts/setup_a100.sh
-#   bash scripts/setup_a100.sh --no-data        # skip dataset download
+#   bash scripts/setup_a100.sh --no-data           # skip dataset download
+#   bash scripts/setup_a100.sh --no-models         # skip model weight download
+#   bash scripts/setup_a100.sh --no-flash-attn     # skip flash-attn install entirely
+#                                                     (SDPA fallback — correctness
+#                                                     unaffected, just slower per step)
+#   # flags combine, e.g.:
+#   bash scripts/setup_a100.sh --no-flash-attn --no-data
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
+
+SKIP_DATA=0
+SKIP_MODELS=0
+SKIP_FLASH=0
+for _arg in "$@"; do
+    case "${_arg}" in
+        --no-data)        SKIP_DATA=1 ;;
+        --no-models)       SKIP_MODELS=1 ;;
+        --no-flash-attn)  SKIP_FLASH=1 ;;
+        *) echo "[setup] WARNING: unrecognized flag '${_arg}' — ignoring" ;;
+    esac
+done
 
 echo "[setup] repo: ${REPO_DIR}"
 
@@ -44,11 +62,13 @@ echo "[setup] pip install -r requirements.txt ..."
 pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
 
-# 4. flash-attn
+# 4. flash-attn (skip entirely with --no-flash-attn)
 #    Try precompiled wheel first (works when nvcc == torch's CUDA build).
 #    If that fails (e.g. H100 with system CUDA 12.8 vs torch cu130), patch
 #    torch's overly-strict version check in the venv, build from source, restore.
-if python -c "import flash_attn" 2>/dev/null; then
+if [ "${SKIP_FLASH}" = "1" ]; then
+    echo "[setup] --no-flash-attn passed — skipping flash-attn (SDPA fallback, correctness unaffected)"
+elif python -c "import flash_attn" 2>/dev/null; then
     echo "[setup] flash-attn already installed — skipping"
 else
     echo "[setup] installing flash-attn (precompiled wheel) ..."
@@ -185,9 +205,27 @@ else
 fi
 
 # 6. datasets (skip with --no-data)
-if [ "${1:-}" != "--no-data" ]; then
+if [ "${SKIP_DATA}" != "1" ]; then
     echo "[setup] downloading datasets (gsm8k, math_hard, math_val, alpaca, math500, humaneval, mtbench) ..."
     python -m data_io.download --train
+    # OlympiadBench — harder than math_hard, for widening draft-teacher divergence
+    # (e.g. the 1.7B/32B capacity study). Best-effort HF schema — verify a few
+    # lines of raw/olympiad_eval.jsonl aren't the canned fallback before trusting it.
+    echo "[setup] downloading OlympiadBench ..."
+    python -m data_io.download --datasets olympiad_hard,olympiad_val,olympiad_eval
+fi
+
+# 6b. model weights — cache to the default HF cache (~/.cache/huggingface, local
+#     box disk; NOT /sensei-fs-3). Idempotent: hf skips files already present.
+#     Both pairs so either the 0.6B/8B default or the 1.7B/32B capacity study
+#     runs without a cold-start download. Skip with --no-models.
+if [ "${SKIP_MODELS}" != "1" ]; then
+    echo "[setup] caching Qwen3 model weights (default HF cache) ..."
+    for _m in Qwen/Qwen3-0.6B Qwen/Qwen3-8B Qwen/Qwen3-1.7B Qwen/Qwen3-32B; do
+        echo "[setup]   ${_m}"
+        huggingface-cli download "${_m}" --exclude "*.pth" "*.gguf" "original/*" || \
+            echo "[setup]   WARNING: download of ${_m} failed — retry manually"
+    done
 fi
 
 # 7. W&B login reminder
