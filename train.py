@@ -258,6 +258,14 @@ def parse_args():
                     help="Minimum improvement in smoothed val BE to reset the patience counter "
                          "(default 0.0 = strict; e.g. 0.005 ignores sub-0.5%% fluctuations). "
                          "A val check counts as 'no improve' only if val_be_ema < best_smoothed_be + delta.")
+    ap.add_argument("--min_steps", type=int, default=0,
+                    help="Floor before patience early-stop may fire — training always runs at "
+                         "least this many steps (default 0 = no floor). The divergence abort "
+                         "(--divergence_abort_frac) still applies below this floor.")
+    ap.add_argument("--divergence_abort_frac", type=float, default=0.0,
+                    help="Abort immediately (even below --min_steps) if smoothed val BE drops "
+                         "more than this fraction below the best seen (e.g. 0.20 = stop if "
+                         "val_be_ema < 0.8 × best_smoothed_be). Default 0.0 = disabled.")
     return ap.parse_args()
 
 
@@ -601,8 +609,16 @@ def main():
                     no_improve_count += 1
                     print(f"  [val] no improve {no_improve_count}/{args.early_stop_patience}  "
                           f"(smoothed={val_be_ema:.3f}  best_smoothed={best_smoothed_be:.3f})")
-                if not _in_warmup and args.early_stop_patience > 0 and no_improve_count >= args.early_stop_patience:
-                    print(f"  [early stop] patience exhausted at step {step+1}; saving and stopping.")
+                _diverged = (args.divergence_abort_frac > 0.0 and best_smoothed_be > 0.0
+                             and val_be_ema < (1.0 - args.divergence_abort_frac) * best_smoothed_be)
+                _patience_hit = (not _in_warmup and args.early_stop_patience > 0
+                                 and no_improve_count >= args.early_stop_patience
+                                 and (step + 1) >= args.min_steps)
+                if _diverged or _patience_hit:
+                    _why = (f"diverged: smoothed {val_be_ema:.3f} < "
+                            f"{(1.0 - args.divergence_abort_frac):.2f}×{best_smoothed_be:.3f}"
+                            if _diverged else "patience exhausted")
+                    print(f"  [early stop] {_why} at step {step+1}; saving and stopping.")
                     save_checkpoint(draft, optimizer, scheduler, output_dir, "ckpt_latest",
                                     state={"step": step + 1,
                                            "best_val_block_eff": best_val_block_eff,
