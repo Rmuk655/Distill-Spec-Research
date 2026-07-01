@@ -5,9 +5,11 @@ speculative-decoding draft models.  Three scripts:
 
 | Script           | What it does                                          |
 | ---------------- | ----------------------------------------------------- |
-| `train.py`       | Distil a Qwen3-0.6B draft against a Qwen3-8B teacher  |
+| `train.py`       | Distil a draft model against a teacher (default Qwen3-0.6B/Qwen3-8B; override with `--draft`/`--teacher`) |
 | `eval.py`        | Block-efficiency + throughput on a held-out prompt set |
 | `inference.py`   | Speculative decoding on a single user prompt          |
+
+See [`project_report.md`](project_report.md) for what's been tried and what beat the baseline; this file is CLI reference only.
 
 The verifier code under `verifiers/` is a verbatim copy of the reference
 implementation at <https://github.com/Rmuk655/Distill-Spec-Research/tree/main/GBV>
@@ -37,6 +39,11 @@ python -m data_io.download --train --n 1000
 #       math_eval.jsonl  — 1000 problems  (held-out final eval, same role as gsm8k_eval)
 #       math_hard.jsonl  — remainder ~5332 problems  (training)
 python -m data_io.download --datasets math_hard,math_val,math_eval
+
+# 3c. (optional) OlympiadBench — harder than math_hard, for widening
+#     draft-teacher divergence (e.g. the 1.7B/32B capacity study). Same
+#     val/eval/train 3-way split pattern as math_hard. NOT fetched by --train.
+python -m data_io.download --datasets olympiad_hard,olympiad_val,olympiad_eval
 
 # 4. (optional) log in to Weights & Biases for training curves
 wandb login
@@ -71,176 +78,168 @@ Distill-Spec-Research/
 
 ## Training
 
-The training loop is **one file** (`train.py`) with all knobs at the top of
-the file in a `HARDCODED CONSTANTS` block.  Edit those, or pass the few most
-common ones on the command line.
+The training loop is **one file** (`train.py`). Every experiment family below
+is a `--loss` choice plus a small set of family-specific flags. Full mechanism
+writeups and results for each family live in `notes/*_research_note.md`
+(pointer table in [`project_report.md`](project_report.md)); this section is
+only the CLI reference.
+
+### Model pair
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--draft` | `None` → falls back to `config.DRAFT_MODEL` (`Qwen/Qwen3-0.6B`) | Draft model id or local checkpoint path (warm start) |
+| `--teacher` | `config.TEACHER_MODEL` (`Qwen/Qwen3-8B`) | Teacher/target model id |
+| `--load_in_4bit` | off | Load the teacher in 4-bit NF4 (bitsandbytes) — needed for teachers too large for bf16 on one GPU (e.g. 32B) |
+
+Always pass both `--draft` and `--teacher` explicitly when using a non-default
+pair — omitting `--draft` silently falls back to the 0.6B default. A bigger
+teacher only helps if the bottleneck is teacher-side; if it's draft capacity, a
+bigger teacher widens the gap. Use `--diagnose` (below) to tell which regime
+you're in before scaling up.
 
 ```bash
-# Flat baselines
-python train.py --loss forward_kl
-python train.py --loss reverse_kl
+python train.py --loss jsd --draft Qwen/Qwen3-1.7B --teacher Qwen/Qwen3-32B \
+                --load_in_4bit --train_dataset math_hard --val_dataset math_val
+```
+
+### Flat baselines
+
+| `--loss` | Notes |
+|---|---|
+| `jsd` | Primary baseline — strongest flat divergence across verifiers |
+| `forward_kl` | Secondary reference |
+| `reverse_kl` | Weakest; degrades at high K |
+| `l1` | Competitive with JSD on some verifiers, not on mean |
+
+```bash
 python train.py --loss jsd
-
-# On-policy divergences (use the student's own draft tree)
-python train.py --loss kl_tree
-python train.py --loss rev_kl_tree
-python train.py --loss jsd_tree
-
-# Verifier-aligned tree losses (the paper contributions)
-python train.py --loss bv_tree         --lr 1e-5
-python train.py --loss gbv_tree        --lr 1e-5
-python train.py --loss traversal_tree
-python train.py --loss naive_tree
-python train.py --loss nss_tree
-python train.py --loss specinfer_tree
-python train.py --loss spectr_tree
-python train.py --loss khisti_tree
-
-# Resume after a kill / crash
-python train.py --loss kl_tree --resume
-
-# Math domain probe — swap train/val datasets without touching anything else
-python train.py --loss jsd        --train_dataset math_hard --val_dataset math_val --steps 2000
-python train.py --loss naive_tree --train_dataset math_hard --val_dataset math_val --steps 2000
 ```
 
-### Swapping the teacher (e.g. 32B)
+### Tree losses (on-policy draft tree)
 
-The teacher defaults to `Qwen/Qwen3-8B`.  Override it with `--teacher` (a model id
-or local path).  For a teacher too large to fit in bf16 on one GPU (e.g. 32B),
-add `--load_in_4bit` to load it in 4-bit NF4 via bitsandbytes (the frozen teacher's
-quantization loss is negligible for distillation):
+| `--loss` | α formula | Form | Val verifier |
+|---|---|---|---|
+| `naive_tree` / `naive_tree_full` | naive | product / exact-survival product | naive |
+| `traversal_tree` | naive (proxy) | product | traversal |
+| `traversal_log` | naive (proxy) | **log-space** (no depth vanishing) | traversal |
+| `naive_log` | naive | log-space | naive |
+| `nss_tree` / `nss_log` | exact NSS | product / log-space | nss |
+| `kl_tree`, `rev_kl_tree`, `jsd_tree` | generic divergence, no verifier | — | traversal |
+| `bv_tree`, `gbv_tree` | BV/GBV | product | **broken — do not use** (gradient collapses to 0) |
+| `specinfer_tree`/`_log`, `spectr_tree`/`_log`, `khisti_tree`/`_log` | resp. verifier | product / log-space | resp. |
+| `op_naive_tree` / `op_naive_tree_full` | naive | off-policy (teacher path, not draft samples) | naive |
 
 ```bash
-# 32B teacher, draft unchanged — needs `pip install bitsandbytes accelerate`
-python train.py --loss jsd --teacher Qwen/Qwen3-32B --load_in_4bit \
-                --train_dataset math_hard --val_dataset math_val --steps 4000
+python train.py --loss traversal_log --K 3 --L 8
+python train.py --loss bv_tree --lr 1e-5   # DO NOT USE for real runs — see note
 ```
 
-A bigger teacher only helps when the bottleneck is teacher-side (the 8B teacher has
-little left to teach at the contexts that matter).  If the bottleneck is the draft's
-capacity, a larger teacher makes the gap *bigger*, not smaller — use `--diagnose`
-and `val/forgetting` (below) to tell which regime you are in before scaling up.
+`--K` = draft paths per step, `--L` = tree depth. Both are read by every loss
+in this table (unlike flat losses, where they're inert).
 
-### Enrichment training (`jsd_flat_enrich`)
+### Enrichment (`jsd_flat_enrich`, `jsd_enrich`)
 
-Instead of training on the teacher's *greedy* rollout, enrichment training uses the teacher's *stochastic* speculative decoding loop as the training distribution.  The draft generates K tokens per step via the actual SD loop (teacher accepts/rejects), and the flat JSD loss is applied against the resulting sequence.  K controls how many on-policy steps are taken per training update: K=1 is one stochastic rollout token, K=3 gives three steps per update (richer signal, ~3× slower per step).
+Trains on **fresh stochastic teacher rollouts** instead of a fixed teacher-context
+sequence — the only family that beat flat JSD. `jsd_flat_enrich` is the flat
+(non-tree) form; `--K` is the number of stochastic teacher paths averaged per step
+(called M in the research note).
 
 ```bash
-# K=1 enrichment — one stochastic rollout per step (8 K steps is sufficient;
-#   enrich converges faster than 40K-step flat runs because the on-policy
-#   distribution shifts faster)
-python train.py --loss jsd_flat_enrich --K 1 --steps 8000 \
-    --train_dataset math_hard --val_dataset math_val \
-    --output checkpoints/jsd_flat_enrich_K1_mathhard_s123
-
-# K=3 enrichment — three steps per update (richer multi-step signal)
-python train.py --loss jsd_flat_enrich --K 3 --steps 4000 \
+python train.py --loss jsd_flat_enrich --K 3 --steps 8000 \
     --train_dataset math_hard --val_dataset math_val \
     --output checkpoints/jsd_flat_enrich_K3_mathhard_s123
 
-# Second seed for reproducibility
-python train.py --loss jsd_flat_enrich --K 1 --steps 8000 \
-    --train_dataset math_hard --val_dataset math_val \
-    --output checkpoints/jsd_flat_enrich_K1_mathhard_s456 --seed 456
-
 # Warmer teacher temperature (more diverse paths — monitor train/path_diversity)
-python train.py --loss jsd_flat_enrich --K 3 --steps 4000 \
-    --train_dataset math_hard --val_dataset math_val \
-    --teacher_temp 1.5 \
-    --output checkpoints/jsd_flat_enrich_K3_mathhard_s123_ttemp1.5
+python train.py --loss jsd_flat_enrich --K 3 --teacher_temp 1.5 \
+    --train_dataset math_hard --val_dataset math_val
 ```
 
-`train/path_diversity` (logged to W&B and console as `pathdiv=`) is the key enrichment-specific signal: fraction of token positions where the K teacher rollouts disagree.  Values consistently above 0.15 mean the teacher is giving diverse training signal; below 0.05 means paths are collapsing (raise `--teacher_temp` or K).
+`train/path_diversity` (console `pathdiv=`): fraction of token positions where
+the K teacher rollouts disagree. `>0.15` = diverse signal; `<0.05` = paths
+collapsing (raise `--teacher_temp` or K).
 
-### Math eval
+### Prefix-overlap (`prefix_overlap`)
 
-After training, evaluate on the 1000-problem held-out set:
+Rewards the student's log-probability of teacher-sampled prefixes — Rahul's PO
+estimator (`prob`) plus three approximations designed to fix its practical
+failure modes (see [`prefix_overlap_research_note.md`](notes/prefix_overlap_research_note.md)).
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--prefix_objective` | `prob` | `prob` (exact, collapses in practice) / `logprob` (log-space) / `traversal` (K-aware reweight) / `nss` (masked CE) |
+| `--prefix_M` | 4 | Teacher continuations per root (single-root mode) |
+| `--prefix_root_spacing` | 0 | N > 0 → multi-root every N tokens (0 = single-root) |
+| `--prefix_rollout_len` | `MAX_NEW_TOKENS` | Teacher rollout length |
+| `--prefix_random_offset` | off | Randomise root position for unbiased coverage (Rahul §5) |
+| `--prefix_aux` | `ce` | Secondary anchor term: `ce` or `jsd` |
+| `--prefix_aux_weight` | 0.0 | λ for the secondary term |
+| `--prefix_anneal_steps` | 0 | Anneal λ linearly from 1→0 over N steps (stable CE anchor early, pure PO gradient later) |
+| `--prefix_min_root` | 0 | Minimum token index before placing a root |
 
 ```bash
-python eval.py --checkpoint checkpoints/<run>/ckpt_best --dataset math_eval
+# Warm-start from a JSD checkpoint (the mechanism only makes sense post-JSD)
+python train.py --loss prefix_overlap --prefix_objective nss \
+    --prefix_root_spacing 4 --L 8 --draft checkpoints/jsd/ckpt_best \
+    --train_dataset math_hard --val_dataset math_val
 ```
 
-`math_val` (200 problems) is only for during-training checkpoint selection — never report it as a final number. `math_eval` (1000 problems) is the held-out set, analogous to `gsm8k_eval`.
+### Combining a flat backbone with a tree aux loss
 
-### Evaluation methodology — iteration vs paper
+| Mode | Flags | Mechanism |
+|---|---|---|
+| Additive | `--aux_loss <tree_loss> --aux_weight λ` | `total = primary + λ·aux` — real per-level gradient through q |
+| Depth-weight (linear) | `--aux_mode depth_weight --aux_loss <tree_loss> --depth_linear` | `w = d / EMA(d)` multiplies the flat loss; `d = E[τ_V]` of the draft tree |
+| Depth-weight (exponential) | `--aux_mode depth_weight --aux_loss <tree_loss> --depth_lambda λ` | `w = exp(λ(d − EMA(d)))`; `λ=0` is a no-op control (must reproduce plain `jsd`) |
 
-- **Day-to-day iteration:** train and eval on `math_hard` / `math_eval`. Fast feedback; in-domain.
-- **For the paper:** report on **Spec-Bench** — the field-standard speculative-decoding benchmark (480 prompts, 6 categories: multi-turn, translation, summarization, QA, math, RAG). It is *cross-domain* relative to math-only training, so it measures whether the distilled draft **transfers** beyond the training distribution — the generalization claim reviewers expect. Train on one distribution, eval on a different held-out one; never report numbers on the training distribution.
-
-```bash
-# fetch Spec-Bench (480 prompts, from the official hemingkx/Spec-Bench repo)
-python -m data_io.download --datasets spec_bench
-
-# eval a checkpoint on Spec-Bench (break down by the per-row "category" field for the paper table)
-python eval.py --checkpoint checkpoints/<run>/ckpt_best --dataset spec_bench
-```
-
-### Combining a flat backbone with an acceptance-aligned tree loss
-
-Two ways to mix a dense flat loss with a verifier-aligned tree loss.  Both reuse
-`--aux_loss` (named by verifier, e.g. `naive_tree`, `khisti_tree`).
+Both depth-weight forms normalise `E[w]≈1` — no hidden LR change. `train/depth_w`
+(applied weight) and `train/depth_d` (raw `E[τ_V]`) are logged to W&B.
 
 ```bash
-# (1) Additive — total = primary + aux_weight * aux.  Real per-level gradient
-#     through q, with the natural (depth-decaying) survival weight.
 python train.py --loss jsd --aux_loss naive_tree --aux_weight 0.1
-
-# (3) Depth-weight — multiply the flat primary loss by a detached depth weight
-#     w(d), d = E[tau_V] of the draft tree.  Curriculum reweighting only (no
-#     acceptance gradient).  All forms below are normalised to E[w]~=1.
-
-# (3a) Linear — w = d / EMA(d).  The researcher's literal "tree_depth * loss",
-#      mean-normalised so there is no hidden LR change.
-python train.py --loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_linear
-
-# (3b) Exponential — w = exp(depth_lambda*(d - EMA(d))).  Signed knob (below).
-python train.py --loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_lambda 0.5
+python train.py --loss jsd --aux_mode depth_weight --aux_loss naive_tree --depth_linear
 ```
 
-`--depth_lambda` is a single signed knob: `>0` amplifies the loss on deep-tree
-prompts, `<0` amplifies shallow, and **`--depth_lambda 0` is the control** — it
-must reproduce a plain `--loss jsd` run (use it as a correctness check).
-`--depth_linear` ignores `--depth_lambda` and uses `w = d / EMA(d)` instead.
+### Early stopping / minimum run length
 
-> Both forms divide out the running mean of `d`, so `E[w]~=1` and the effective
-> learning rate is unchanged — no need to drop `--lr` to compensate, and the
-> normalisation self-adapts as the tree deepens during training.
+| Flag | Default | Meaning |
+|---|---|---|
+| `--early_stop_patience` | 15 | Stop if smoothed val BE hasn't improved for this many val checks (0 = disabled) |
+| `--early_stop_min_delta` | 0.0 | Minimum improvement to reset the patience counter |
+| `--min_steps` | 0 | Patience early-stop cannot fire before this step, regardless of patience |
+| `--divergence_abort_frac` | 0.0 | Abort immediately (even below `--min_steps`) if smoothed val BE falls more than this fraction below the best seen (e.g. `0.20` = abort on a 20% collapse) |
 
-Each combo gets its own checkpoint dir + W&B run name + tags, so `λ=0.5`,
-`λ=-0.5`, and `lin` never overwrite each other:
+```bash
+# Always run the full 15K steps; only abort early on a genuine collapse
+python train.py --loss jsd --steps 15000 --min_steps 15000 \
+    --divergence_abort_frac 0.20 --early_stop_patience 15
+```
 
-| Flags | Checkpoint dir / W&B run |
+### Other common flags
+
+| Flag | Meaning |
 |---|---|
-| `--loss jsd --aux_loss naive_tree --aux_weight 0.1` | `jsd+naive_treex0.1` |
-| `--loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_linear` | `jsd+dw_khisti_tree_lin` |
-| `--loss jsd --aux_mode depth_weight --aux_loss khisti_tree --depth_lambda 0.5` | `jsd+dw_khisti_tree_lam0.5` |
+| `--train_dataset` / `--val_dataset` | e.g. `gsm8k_train`/`gsm8k_val` or `math_hard`/`math_val` |
+| `--val_temp` (default 0.2) | Val block-efficiency decode temperature — kept low so the curve is readable; training temp (0.8–1.0) makes val BE swing ±0.4 from sampling noise alone. Cannot be 0. |
+| `--resume` | Resume from `ckpt_latest/` + `state.json` after a kill/crash |
+| `--seed` | RNG seed |
+| `--teacher_temp` / `--draft_temp` | Sampling temperature for teacher/draft rollouts (enrichment, tree losses) |
+| `--no_wandb` | Disable W&B logging |
 
-In `depth_weight` mode, `train/depth_w` (applied weight) and `train/depth_d`
-(raw `E[tau_V]`) are logged to W&B — watch `depth_d` to see whether the draft
-tree is actually getting deeper during training.
+```bash
+python train.py --loss kl_tree --resume
+python train.py --loss jsd --train_dataset math_hard --val_dataset math_val --steps 2000
+```
 
-**Note — `--val_temp` (default 0.2):** val block-efficiency is decoded at a low,
-near-deterministic temperature so the curve is readable.  The 0.8 training temp
-made `val/block_eff` swing ±0.4 (pure sampling noise) and masked real effects.
-`--val_temp` cannot be 0 (temperature divide).
+### What happens during training (per step)
 
-What happens during training (per step):
-
-1. Pick a prompt from the train dataset (`gsm8k_train.jsonl` by default; override with `--train_dataset`).
-2. **Flat loss** path: teacher generates `MAX_NEW_TOKENS` tokens, student
-   forwards on the same sequence with grad, loss = divergence(student_logits,
-   teacher_logits) on the generated portion.
-3. **Tree loss** path: sample K student draft paths (no grad), score every
-   tree node under the teacher (no grad), then re-score under the student
-   with grad → `q_probs_dict`.  Loss = `−E[τ_V](q, p, K, L)`.
-4. Gradient accumulation over `GRAD_ACCUM` micro-steps, AdamW step, linear
-   warmup → constant LR.
-5. Every `VAL_EVERY` steps: decode block-efficiency on `gsm8k_val.jsonl`
-   (verifier matched to the loss, at `--val_temp`).  If improved, save
-   `ckpt_best/`.  W&B logs `val/block_eff`.
-6. Every `SAVE_EVERY` steps: write `ckpt_latest/` + `state.json` so
-   `--resume` works.
+1. Pick a prompt from the train dataset.
+2. **Flat / enrichment loss:** teacher generates (greedily for flat, stochastically ×K for enrichment); student forwards on the same sequence with grad; loss = divergence on the generated portion.
+3. **Tree loss:** sample K student draft paths (no grad), score every tree node under the teacher (no grad), re-score under the student with grad. Loss = `−E[τ_V](q, p, K, L)` (product or log-space).
+4. **Prefix-overlap:** teacher samples M continuations from one or more root positions; loss rewards the student's log-probability of the sampled prefixes per `--prefix_objective`.
+5. Gradient accumulation over `GRAD_ACCUM` micro-steps, AdamW step, linear warmup → cosine decay.
+6. Every `VAL_EVERY` steps: decode block-efficiency on the val set (verifier matched to the loss, at `--val_temp`). If improved, save `ckpt_best/`.
+7. Every `SAVE_EVERY` steps: write `ckpt_latest/` + `state.json` so `--resume` works.
 
 ### W&B metrics logged during training
 
@@ -286,6 +285,12 @@ python eval.py --checkpoint checkpoints/gbv_tree/ckpt_best \
 # Baseline (untrained Qwen3-0.6B)
 python eval.py --checkpoint Qwen/Qwen3-0.6B --mode gbv
 
+# Non-default model pair — --teacher must match how the checkpoint was trained
+# (defaults to config.TEACHER_MODEL / Qwen3-8B if omitted; wrong teacher here
+# silently gives a meaningless block-efficiency number)
+python eval.py --checkpoint checkpoints/qwen17b_qwen32b_run/ckpt_best \
+    --teacher Qwen/Qwen3-32B --mode traversal --dataset math_eval
+
 # Parallel 4-GPU sweep — pin each process to its own GPU
 python eval.py --checkpoint checkpoints/jsd_mathhard_s123/ckpt_best \
     --modes traversal,bv,naive,specinfer,spectr,khisti,gbv,nss,max \
@@ -308,7 +313,7 @@ Every eval cell appends one row to `results.csv`.  Key columns:
 | Core metrics | `block_eff`, `throughput_tok_s`, `avg_tree_nodes` |
 | Time breakdown | `time_draft_s`, `time_target_s`, `time_verify_s`, `time_cache_s`, `time_tokenizer_s` |
 | GPU telemetry | `gpu_sm_util_avg_pct`, `gpu_mem_util_avg_pct` (HBM-bus %), `gpu_vram_peak_mb`, `gpu_pcie_tx/rx_avg_kbs`, `gpu_nvlink_tx/rx_avg_kbs`, `cpu_util_avg_pct` |
-| Reproducibility | `device`, `seed`, `dtype`, `cpu_threads_used` |
+| Reproducibility | `device`, `seed`, `dtype`, `cpu_threads_used`, `teacher_model` |
 | Machine spec | `machine_gpu`, `machine_gpu_count`, `machine_gpu_vram_gb`, `machine_driver`, `machine_cpu_physical_cores`, `machine_ram_gb`, `machine_os` |
 
 Open it in pandas / Excel — one row per (checkpoint × mode × K × L × dataset).
