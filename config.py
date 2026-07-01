@@ -5,7 +5,7 @@ Source-of-truth files (main.py, verifiers/*.py) are not changed.
 Edit here instead of hardcoding the same value in three places.
 """
 
-# Model identifiers
+# Model identifiers (defaults; override per-run with train.py --draft / --teacher)
 DRAFT_MODEL            = "Qwen/Qwen3-0.6B"
 TEACHER_MODEL          = "Qwen/Qwen3-8B"
 

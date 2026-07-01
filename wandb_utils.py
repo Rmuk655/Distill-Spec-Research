@@ -12,6 +12,17 @@ import os
 
 from losses import (is_tree_loss, is_enrichment_loss, is_flat_enrich_loss,
                     is_prefix_overlap_loss)
+from config import DRAFT_MODEL, TEACHER_MODEL
+
+
+def model_pair_tag(args) -> str:
+    """Short 'draft__teacher' identifier from the per-run model pair, used to
+    disambiguate W&B runs/tags across student-teacher pairs (e.g. Qwen3-1.7B__Qwen3-32B).
+    Reads the actual --draft / --teacher passed to this run (falling back to the
+    config defaults) so warm-start checkpoint paths and HF ids are both handled."""
+    draft   = (args.draft or DRAFT_MODEL).rstrip("/").split("/")[-1]
+    teacher = (args.teacher or TEACHER_MODEL).rstrip("/").split("/")[-1]
+    return f"{draft}__{teacher}"
 
 
 def run_slug(args) -> str:
@@ -85,13 +96,14 @@ def setup_wandb(args, output_dir, resumed: bool, wandb_project: str):
     elif resumed and not os.path.isfile(meta_path):
         print(f"[wandb] no saved run ID at {meta_path} — starting fresh W&B run")
 
-    tags = [args.loss, args.train_dataset, f"K{args.K}", f"L{args.L}"]
+    pair = model_pair_tag(args)
+    tags = [pair, args.loss, args.train_dataset, f"K{args.K}", f"L{args.L}"]
     if args.aux_mode == "depth_weight":
         tags.append(f"depthw:{args.aux_loss or 'naive_tree'}")
         tags.append("lin" if args.depth_linear else f"lam{args.depth_lambda}")
     elif args.aux_loss:
         tags.append(f"aux:{args.aux_loss}")
-    run_name = run_slug(args)
+    run_name = f"{pair}__{run_slug(args)}"
     init_kw = dict(project=wandb_project, name=run_name,
                    tags=tags, config=vars(args))
     if saved:

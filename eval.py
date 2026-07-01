@@ -244,6 +244,10 @@ def parse_args():
     ap = argparse.ArgumentParser(description="Block-efficiency eval (A100, Qwen3).")
     ap.add_argument("--checkpoint", required=True,
                     help="Path to draft checkpoint dir (or HF model id for baseline).")
+    ap.add_argument("--teacher", type=str, default=TEACHER_MODEL,
+                    help=f"Teacher/target model id (default {TEACHER_MODEL} from config.py). "
+                         "Override to match the checkpoint's training pair, e.g. "
+                         "--teacher Qwen/Qwen3-32B for a 1.7B/32B draft.")
     ap.add_argument("--mode",      default="gbv",   choices=VERIFIER_MODES,
                     help="Verifier mode (default gbv).  Override via --modes for a sweep.")
     ap.add_argument("--modes",     default=None,
@@ -405,10 +409,10 @@ def main():
     # ── Load models (teacher first, then draft) — skipped entirely when every
     #    requested mode is already fully cached for this (K, L) ──────────────
     if need_models:
-        print(f"[load] teacher={TEACHER_MODEL}")
+        print(f"[load] teacher={args.teacher}")
         print(f"[load] draft={args.checkpoint}")
         print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
-        tok, p_model, q_model = load_models(TEACHER_MODEL, args.checkpoint,
+        tok, p_model, q_model = load_models(args.teacher, args.checkpoint,
                                             device=torch_device, dtype=DEFAULT_DTYPE)
         specs["attn_backend"] = _model_attn_backend(p_model, q_model)
         print(f"[load] attention_backend={specs['attn_backend']}")

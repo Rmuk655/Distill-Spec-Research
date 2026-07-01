@@ -17,7 +17,7 @@ import json
 import os
 from datetime import datetime
 
-from config import DEFAULT_DTYPE
+from config import DEFAULT_DTYPE, TEACHER_MODEL
 from telemetry import GpuMonitor
 
 
@@ -89,6 +89,9 @@ CSV_COLUMNS = [
     "training_wandb_url",
     # Delayed-expansion config — 0 for all regular runs (backward compatible, last column)
     "L1",
+    # Teacher/target model id used for this eval — needed once multiple draft-teacher
+    # pairs are in play (e.g. Qwen3-1.7B/Qwen3-32B) so CSV rows are self-describing.
+    "teacher_model",
 ]
 
 
@@ -155,6 +158,7 @@ def log_result(stats: dict, args, mode: str, gpu_monitor: GpuMonitor | None,
         "device":          f"cuda:{phys_gpu_idx}", "seed": args.seed, "dtype": DEFAULT_DTYPE,
         "cpu_threads_used": cpu_threads_used,
         "training_wandb_url": _resolve_training_url(args.checkpoint),
+        "teacher_model":   getattr(args, "teacher", TEACHER_MODEL),
     }
     for k, v in stats.items():
         if isinstance(v, float) and k in _FLOAT_FMT:
