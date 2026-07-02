@@ -342,6 +342,22 @@ def main():
         optimizer = bnb.optim.AdamW8bit(trainable, lr=args.lr, betas=(0.9, 0.999),
                                         weight_decay=0.0)
         print("[optim] using bitsandbytes AdamW8bit (int8 optimizer state)")
+        # Force bitsandbytes' one-time lazy state allocation (int8 m/v buffers
+        # per parameter) to happen NOW, right after model load, when GPU memory
+        # is at its cleanest — rather than at the first real optimizer.step()
+        # mid-training, where it can collide with a memory-heavy loss's
+        # transient buffers and OOM (confirmed: jsd_flat_enrich --K 3's three
+        # simultaneous generate()-call KV caches, 1.7B/32B pair, 2026-07-01).
+        # A dummy zero-gradient step is enough to trigger the allocation.
+        # --resume (if the checkpoint's optimizer matches) overwrites these
+        # warmed-up buffers with the real checkpointed state afterward, so
+        # this is a no-op for correctness either way.
+        for p in trainable:
+            p.grad = torch.zeros_like(p)
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
+        print("[optim] AdamW8bit state pre-allocated (warmup step)")
     else:
         optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
                                       weight_decay=0.0)   # DistillSpec uses no regularisation
