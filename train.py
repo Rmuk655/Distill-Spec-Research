@@ -539,6 +539,18 @@ def main():
             (loss / GRAD_ACCUM).backward()
         if (step + 1) % GRAD_ACCUM == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
+            if args.optim_8bit:
+                # bitsandbytes AdamW8bit lazily allocates its int8 state buffers on
+                # the FIRST optimizer.step() call for each parameter. With a large
+                # teacher taking most of the GPU, the caching allocator can be
+                # fragmented enough (from repeated generate()-call KV-cache
+                # alloc/free cycles, e.g. K>1 enrichment) that this one allocation
+                # OOMs even though total free memory would nominally be enough.
+                # Consolidating the allocator's free blocks right before the step
+                # that needs a fresh contiguous allocation resolves this — confirmed
+                # by production OOM at exactly this call (jsd_flat_enrich --K 3,
+                # 1.7B/32B pair, 2026-07-01).
+                torch.cuda.empty_cache()
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
