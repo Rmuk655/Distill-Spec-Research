@@ -71,9 +71,12 @@ def try_resume(model, optimizer, scheduler, output_dir):
     # attempting the load, rather than relying on an exception that doesn't
     # reliably occur at this point.
     optim_blob = torch.load(os.path.join(latest, "optim.pt"), map_location="cpu")
-    saved_optim_class = optim_blob.get("optimizer_class")   # None for pre-existing checkpoints
+    # Checkpoints saved before this field existed used plain torch.optim.AdamW
+    # (the only optimizer this codebase had before --optim_8bit) — assume that,
+    # not "unknown/compatible", so old checkpoints get the same safety check.
+    saved_optim_class = optim_blob.get("optimizer_class", "AdamW")
     current_optim_class = type(optimizer).__name__
-    if saved_optim_class is not None and saved_optim_class != current_optim_class:
+    if saved_optim_class != current_optim_class:
         print(f"[resume] WARNING: checkpoint optimizer ({saved_optim_class}) does not match "
               f"the current optimizer ({current_optim_class}) — skipping optimizer/scheduler "
               f"state, continuing with fresh optimizer state. Model weights (the actual "
