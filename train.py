@@ -342,25 +342,6 @@ def main():
         optimizer = bnb.optim.AdamW8bit(trainable, lr=args.lr, betas=(0.9, 0.999),
                                         weight_decay=0.0)
         print("[optim] using bitsandbytes AdamW8bit (int8 optimizer state)")
-        # Force bitsandbytes' one-time lazy state allocation (int8 m/v buffers
-        # per parameter) to happen NOW, right after model load, when GPU memory
-        # is at its cleanest — rather than at the first real optimizer.step()
-        # mid-training, where it can collide with a memory-heavy loss's
-        # transient buffers and OOM (confirmed: jsd_flat_enrich --K 3's three
-        # simultaneous generate()-call KV caches, 1.7B/32B pair, 2026-07-01).
-        # A dummy zero-gradient step is enough to trigger the allocation.
-        # --resume (if the checkpoint's optimizer matches) overwrites these
-        # warmed-up buffers with the real checkpointed state afterward, so
-        # this is a no-op for correctness either way.
-        for p in trainable:
-            p.grad = torch.zeros_like(p)
-        _free_b, _total_b = torch.cuda.mem_get_info()
-        print(f"[optim] pre-warmup GPU memory: {_free_b/1e9:.2f}GB free / {_total_b/1e9:.2f}GB total "
-              f"(allocated={torch.cuda.memory_allocated()/1e9:.2f}GB reserved={torch.cuda.memory_reserved()/1e9:.2f}GB)")
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-        torch.cuda.empty_cache()
-        print("[optim] AdamW8bit state pre-allocated (warmup step)")
     else:
         optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
                                       weight_decay=0.0)   # DistillSpec uses no regularisation
@@ -558,29 +539,6 @@ def main():
             (loss / GRAD_ACCUM).backward()
         if (step + 1) % GRAD_ACCUM == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
-            if args.optim_8bit and flat_enrich and K > 1:
-                # Scoped to K>1 flat-enrich specifically, NOT all --optim_8bit runs:
-                # empty_cache() destroys the caching allocator's free-block pool,
-                # forcing the next several allocations back to slow driver-level
-                # cudaMalloc until the cache rebuilds — real, repeating overhead
-                # every GRAD_ACCUM steps for the rest of training. Only K>1
-                # flat-enrich has demonstrated the memory pressure (K simultaneous
-                # generate()-call footprints) that needs this; jsd/depth_weight/
-                # prefix_overlap only do one rollout per step and have run stable
-                # for hours without it — they shouldn't pay this cost for a risk
-                # they don't have.
-                #
-                # bitsandbytes AdamW8bit lazily allocates its int8 state buffers on
-                # the FIRST optimizer.step() call for each parameter. With a large
-                # teacher taking most of the GPU, the caching allocator can be
-                # fragmented enough (from repeated generate()-call KV-cache
-                # alloc/free cycles, e.g. K>1 enrichment) that this one allocation
-                # OOMs even though total free memory would nominally be enough.
-                # Consolidating the allocator's free blocks right before the step
-                # that needs a fresh contiguous allocation resolves this — confirmed
-                # by production OOM at exactly this call (jsd_flat_enrich --K 3,
-                # 1.7B/32B pair, 2026-07-01).
-                torch.cuda.empty_cache()
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
