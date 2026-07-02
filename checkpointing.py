@@ -30,6 +30,7 @@ def save_checkpoint(model, optimizer, scheduler, output_dir, name, state, use_lo
         model.save_pretrained(target, safe_serialization=True)
     torch.save({
         "optimizer": optimizer.state_dict(),
+        "optimizer_class": type(optimizer).__name__,
         "scheduler": scheduler.state_dict() if scheduler else None,
     }, os.path.join(target, "optim.pt"))
     json.dump(state, open(os.path.join(target, "state.json"), "w"))
@@ -59,21 +60,33 @@ def try_resume(model, optimizer, scheduler, output_dir):
     model.load_state_dict(model_state, strict=False)
     # Load optimizer + scheduler. Optimizer state format is NOT compatible across
     # optimizer classes (e.g. torch.optim.AdamW's fp32 exp_avg/exp_avg_sq vs
-    # bitsandbytes AdamW8bit's int8-quantized state) — resuming a checkpoint saved
-    # with a different --optim_8bit setting than the current run would otherwise
-    # crash load_state_dict and abort the whole resume. Model weights (loaded
-    # above) are unaffected by this and always resume correctly. On mismatch,
-    # warn and continue with a freshly-initialized optimizer — this only costs a
-    # few steps of Adam's moving averages re-warming, not any training progress.
+    # bitsandbytes AdamW8bit's int8-quantized state keyed as state["state1"]).
+    # IMPORTANT: torch's generic Optimizer.load_state_dict() does NOT validate
+    # that the incoming state's internal keys match what this optimizer class
+    # expects — it silently copies whatever keys were saved into self.state[p],
+    # so loading an AdamW checkpoint into AdamW8bit raises NO error here. The
+    # crash instead happens later, deep inside the first optimizer.step() call
+    # (KeyError: 'state1'), by which point resume already looks like it
+    # succeeded. So we check the saved optimizer class explicitly BEFORE
+    # attempting the load, rather than relying on an exception that doesn't
+    # reliably occur at this point.
     optim_blob = torch.load(os.path.join(latest, "optim.pt"), map_location="cpu")
-    try:
-        optimizer.load_state_dict(optim_blob["optimizer"])
-        if scheduler and optim_blob.get("scheduler"):
-            scheduler.load_state_dict(optim_blob["scheduler"])
-    except Exception as e:
-        print(f"[resume] WARNING: optimizer/scheduler state incompatible with the "
-              f"current optimizer ({e}) — continuing with fresh optimizer state. "
-              f"Model weights (the actual training progress) resumed successfully.")
+    saved_optim_class = optim_blob.get("optimizer_class")   # None for pre-existing checkpoints
+    current_optim_class = type(optimizer).__name__
+    if saved_optim_class is not None and saved_optim_class != current_optim_class:
+        print(f"[resume] WARNING: checkpoint optimizer ({saved_optim_class}) does not match "
+              f"the current optimizer ({current_optim_class}) — skipping optimizer/scheduler "
+              f"state, continuing with fresh optimizer state. Model weights (the actual "
+              f"training progress) resumed successfully.")
+    else:
+        try:
+            optimizer.load_state_dict(optim_blob["optimizer"])
+            if scheduler and optim_blob.get("scheduler"):
+                scheduler.load_state_dict(optim_blob["scheduler"])
+        except Exception as e:
+            print(f"[resume] WARNING: optimizer/scheduler state failed to load ({e}) — "
+                  f"continuing with fresh optimizer state. Model weights (the actual "
+                  f"training progress) resumed successfully.")
     print(f"[resume] restored step={step} from {latest}")
     return step, state
 
