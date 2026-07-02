@@ -53,6 +53,12 @@ import json
 import os
 import time
 
+# CUDA env vars MUST be set before `import torch` (read at CUDA init). setdefault
+# so an explicit prefix/activate export still wins. Independent of how the venv
+# was created (setup_a100.sh vs a manual `python -m venv` flow that skips it).
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("TORCH_CUDNN_SDPA_ENABLED", "0")
+
 import torch
 from tqdm import tqdm
 

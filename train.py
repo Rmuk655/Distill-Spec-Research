@@ -39,6 +39,16 @@ import sys
 import time
 from typing import Dict, List
 
+# CUDA env vars MUST be set before `import torch` (torch reads them at CUDA init).
+# setdefault so an explicit prefix / activate export still wins. This makes the
+# settings independent of how the venv was created — setup_a100.sh injects them
+# into venv/bin/activate, but a manual `python -m venv && pip install` flow skips
+# that script and would otherwise run unprotected (the fragmentation OOMs on the
+# 1.7B/32B pair, 2026-07-01, were exactly this: a manually-set-up box with
+# PYTORCH_CUDA_ALLOC_CONF unset).
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("TORCH_CUDNN_SDPA_ENABLED", "0")
+
 import torch
 import torch.nn.functional as F
 
