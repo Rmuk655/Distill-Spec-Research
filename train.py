@@ -555,7 +555,18 @@ def main():
             (loss / GRAD_ACCUM).backward()
         if (step + 1) % GRAD_ACCUM == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
-            if args.optim_8bit:
+            if args.optim_8bit and flat_enrich and K > 1:
+                # Scoped to K>1 flat-enrich specifically, NOT all --optim_8bit runs:
+                # empty_cache() destroys the caching allocator's free-block pool,
+                # forcing the next several allocations back to slow driver-level
+                # cudaMalloc until the cache rebuilds — real, repeating overhead
+                # every GRAD_ACCUM steps for the rest of training. Only K>1
+                # flat-enrich has demonstrated the memory pressure (K simultaneous
+                # generate()-call footprints) that needs this; jsd/depth_weight/
+                # prefix_overlap only do one rollout per step and have run stable
+                # for hours without it — they shouldn't pay this cost for a risk
+                # they don't have.
+                #
                 # bitsandbytes AdamW8bit lazily allocates its int8 state buffers on
                 # the FIRST optimizer.step() call for each parameter. With a large
                 # teacher taking most of the GPU, the caching allocator can be
