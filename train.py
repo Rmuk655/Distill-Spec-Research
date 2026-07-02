@@ -469,9 +469,22 @@ def main():
                     aux=args.prefix_aux, aux_weight=aux_w,
                     objective=args.prefix_objective, K=args.K)
         elif flat_enrich:
+            # grad_accum=GRAD_ACCUM: backward each of the K rollouts immediately
+            # (memory-safe against a large teacher) rather than holding all K
+            # draft-forward graphs simultaneously for one combined backward() —
+            # see compute_flat_enrich_loss docstring. This means gradients are
+            # ALREADY applied by the time this call returns; the returned loss
+            # is detached (logging only) and must not be combined with
+            # depth_weight/aux_loss below (enforced by the assert).
+            assert args.aux_mode != "depth_weight" and aux_loss_fn is None, (
+                "jsd_flat_enrich's memory-safe per-rollout backward is incompatible "
+                "with --aux_mode depth_weight / --aux_loss: those would silently not "
+                "contribute to the gradient, since backward already happened inside "
+                "compute_flat_enrich_loss.")
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
-                                                      teacher_temp=args.teacher_temp)
+                                                      teacher_temp=args.teacher_temp,
+                                                      grad_accum=GRAD_ACCUM)
         elif enrichment:
             loss = compute_enrichment_loss(loss_fn, draft, teacher, ids,
                                            K=K, L=L,
@@ -518,7 +531,12 @@ def main():
             loss = loss + args.aux_weight * aux
 
         # Gradient accumulation: scale by 1/GRAD_ACCUM, only step every GRAD_ACCUM micro-steps.
-        (loss / GRAD_ACCUM).backward()
+        # flat_enrich already backpropagated internally, per-rollout, inside
+        # compute_flat_enrich_loss (memory-safe against a large teacher) — its
+        # returned loss is detached and calling .backward() on it again would
+        # either error (no grad_fn) or be a silent no-op.
+        if not flat_enrich:
+            (loss / GRAD_ACCUM).backward()
         if (step + 1) % GRAD_ACCUM == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
             optimizer.step()
