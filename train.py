@@ -213,6 +213,43 @@ def parse_args():
                     help="Start a new W&B run even when resuming (default: reuse run id).")
     ap.add_argument("--teacher_temp", type=float, default=TEACHER_TEMP)
     ap.add_argument("--draft_temp",   type=float, default=DRAFT_TEMP)
+    # --- State-distribution interventions for jsd_flat_enrich (all off by default) ---
+    ap.add_argument("--draft_prefix_max", type=int, default=0,
+                    help="jsd_flat_enrich only. >0 enables draft-conditioned rollout: the "
+                         "draft generates a prefix of random length in "
+                         "[draft_prefix_min, draft_prefix_max] (no grad) and the teacher's "
+                         "K rollouts continue FROM that draft-generated context instead of "
+                         "the bare prompt. Attacks exposure/covariate-shift directly. "
+                         "Default 0 = disabled (original jsd_flat_enrich behavior).")
+    ap.add_argument("--draft_prefix_min", type=int, default=0,
+                    help="Lower bound for --draft_prefix_max's random prefix length.")
+    ap.add_argument("--teacher_temp_spread", type=str, default=None,
+                    help="jsd_flat_enrich only. Comma-separated temperatures, e.g. "
+                         "'0.5,1.0,1.5', cycled across the K rollouts instead of one fixed "
+                         "--teacher_temp. Cheapest state-distribution lever (no extra forward "
+                         "passes). Default None = use scalar --teacher_temp for all K.")
+    ap.add_argument("--perturb_context_frac", type=float, default=0.0,
+                    help="jsd_flat_enrich only. Fraction (0-1) of the last "
+                         "--perturb_context_window prompt tokens to replace with random vocab "
+                         "ids before the teacher rolls out, synthesizing 'draft made an error "
+                         "upstream' states without an actual draft forward pass. Default 0.0 "
+                         "= disabled.")
+    ap.add_argument("--perturb_context_window", type=int, default=16,
+                    help="Number of trailing prompt tokens eligible for --perturb_context_frac.")
+    ap.add_argument("--curriculum", action="store_true",
+                    help="Any loss. After one full epoch (so every prompt has an initial "
+                         "score), switch from cyclic prompt order to weighted sampling biased "
+                         "toward prompts with high recent training loss (EMA, alpha=0.3), "
+                         "EXCLUDING prompts where the teacher itself is uncertain (entropy > "
+                         "--curriculum_entropy_threshold at the prompt's last token) — a hard "
+                         "prompt with an uncertain teacher likely means an ambiguous label, "
+                         "not a learnable draft gap, and boosting it adds noise not signal.")
+    ap.add_argument("--curriculum_gamma", type=float, default=1.0,
+                    help="Sampling weight = loss_ema ** gamma. Higher = more aggressively "
+                         "concentrated on the hardest prompts.")
+    ap.add_argument("--curriculum_entropy_threshold", type=float, default=2.0,
+                    help="Teacher next-token entropy (nats) above which a prompt is excluded "
+                         "from curriculum up-weighting regardless of its loss.")
     ap.add_argument("--device",       default="cuda",
                     help="CUDA device, e.g. cuda:1 (default: auto-select freest GPU)")
     ap.add_argument("--teacher", type=str, default=TEACHER_MODEL,
@@ -297,6 +334,34 @@ def parse_args():
                          "more than this fraction below the best seen (e.g. 0.20 = stop if "
                          "val_be_ema < 0.8 × best_smoothed_be). Default 0.0 = disabled.")
     return ap.parse_args()
+
+
+def _curriculum_sample_idx(prompt_loss_ema, prompt_entropy_ema, gamma, entropy_threshold, rng):
+    """Pick a training prompt index biased toward high recent loss, excluding prompts
+    where the teacher itself is uncertain (see --curriculum help text for rationale).
+    Weight = loss_ema ** gamma; entropy_ema > threshold -> weight forced to 0.
+    Unseen prompts (loss_ema is None) get the max weight seen so far, so they're
+    prioritized for their first visit rather than starved. Falls back to uniform if
+    every prompt is excluded (shouldn't happen once entropy_threshold is sane)."""
+    default_w = max((w for w in prompt_loss_ema if w is not None), default=1.0)
+    weights = []
+    for loss_w, ent_w in zip(prompt_loss_ema, prompt_entropy_ema):
+        if ent_w is not None and ent_w > entropy_threshold:
+            weights.append(0.0)
+        elif loss_w is None:
+            weights.append(default_w)
+        else:
+            weights.append(max(loss_w, 1e-6) ** gamma)
+    total = sum(weights)
+    if total <= 0:
+        return rng.randrange(len(prompt_loss_ema))
+    r = rng.random() * total
+    upto = 0.0
+    for i, w in enumerate(weights):
+        upto += w
+        if upto >= r:
+            return i
+    return len(weights) - 1
 
 
 def _serializable_args(args) -> dict:
@@ -453,8 +518,22 @@ def main():
     # val_be_ema / best_smoothed_be / no_improve_count already loaded from train_state
     t0 = time.time()
 
+    # --optim_8bit and curriculum are independent; curriculum needs one full pass
+    # through train_prompts (cyclic) before every prompt has an initial loss/entropy
+    # score, then switches to weighted sampling. See --curriculum help text.
+    curriculum_rng = random.Random(args.seed + 1)   # separate stream from data shuffle
+    prompt_loss_ema: List[float | None] = [None] * len(train_prompts)
+    prompt_entropy_ema: List[float | None] = [None] * len(train_prompts)
+
     for step in range(start_step, args.steps):
-        prompt = train_prompts[step % len(train_prompts)]
+        if args.curriculum and step >= len(train_prompts):
+            prompt_idx = _curriculum_sample_idx(prompt_loss_ema, prompt_entropy_ema,
+                                                args.curriculum_gamma,
+                                                args.curriculum_entropy_threshold,
+                                                curriculum_rng)
+        else:
+            prompt_idx = step % len(train_prompts)
+        prompt = train_prompts[prompt_idx]
         ids    = torch.tensor(tokenizer.encode(prompt), device=draft.device, dtype=torch.long).unsqueeze(0)
 
         if prefix_ov:
@@ -491,10 +570,17 @@ def main():
                 "with --aux_mode depth_weight / --aux_loss: those would silently not "
                 "contribute to the gradient, since backward already happened inside "
                 "compute_flat_enrich_loss.")
+            _teacher_temps = ([float(t) for t in args.teacher_temp_spread.split(",")]
+                              if args.teacher_temp_spread else None)
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
                                                       teacher_temp=args.teacher_temp,
-                                                      grad_accum=GRAD_ACCUM)
+                                                      grad_accum=GRAD_ACCUM,
+                                                      draft_prefix_min=args.draft_prefix_min,
+                                                      draft_prefix_max=args.draft_prefix_max,
+                                                      teacher_temps=_teacher_temps,
+                                                      perturb_frac=args.perturb_context_frac,
+                                                      perturb_window=args.perturb_context_window)
         elif enrichment:
             loss = compute_enrichment_loss(loss_fn, draft, teacher, ids,
                                            K=K, L=L,
@@ -556,6 +642,21 @@ def main():
             grad_norm = torch.tensor(0.0)
 
         losses_log.append(loss.item())
+
+        if args.curriculum:
+            # Cheap teacher-only forward (prompt tokens only, no continuation) to get
+            # this prompt's next-token entropy for the exclusion gate. Independent of
+            # whichever loss branch ran above, so curriculum works with any --loss.
+            with torch.no_grad():
+                _ent_logits = teacher(ids, return_dict=True).logits[0, -1].float()
+                _ent_probs  = F.softmax(_ent_logits, dim=-1)
+                _entropy    = -(_ent_probs * _ent_probs.clamp(min=1e-9).log()).sum().item()
+            _alpha = 0.3
+            _cur_loss = loss.item()
+            prompt_loss_ema[prompt_idx] = (_cur_loss if prompt_loss_ema[prompt_idx] is None
+                else (1 - _alpha) * prompt_loss_ema[prompt_idx] + _alpha * _cur_loss)
+            prompt_entropy_ema[prompt_idx] = (_entropy if prompt_entropy_ema[prompt_idx] is None
+                else (1 - _alpha) * prompt_entropy_ema[prompt_idx] + _alpha * _entropy)
 
         # Console log + W&B train metrics
         if (step + 1) % LOG_EVERY == 0:

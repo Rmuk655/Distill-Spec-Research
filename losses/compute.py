@@ -12,6 +12,7 @@ Reading guide:
 """
 from __future__ import annotations
 
+import random
 from typing import Dict, List
 
 import torch
@@ -155,7 +156,10 @@ def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
 
 def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
                              K, max_new_tokens=128, teacher_temp=1.0,
-                             grad_accum=None):
+                             grad_accum=None,
+                             draft_prefix_min=0, draft_prefix_max=0,
+                             teacher_temps=None,
+                             perturb_frac=0.0, perturb_window=16):
     """Sample K stochastic teacher rollouts; score student on each; average loss.
 
     Memory note: with grad_accum=None (default), this returns a single summed
@@ -173,28 +177,91 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
     depth_weight/aux_loss afterward (that combination would silently not
     contribute to the gradient, since backward has already happened here).
 
+    Three optional state-distribution interventions, all off by default
+    (exact original behavior when left at defaults). Each answers a
+    different critique of "every loss trains on the same teacher-context
+    states as JSD":
+
+    draft_prefix_min/max (int, default 0/0 = disabled):
+        Before the teacher rolls out, let the DRAFT generate a prefix of
+        random length in [draft_prefix_min, draft_prefix_max] (no grad,
+        do_sample=True), and root all K teacher continuations at
+        prompt+draft_prefix instead of at the bare prompt. Directly attacks
+        the exposure/covariate-shift gap: the draft is now trained on
+        contexts it actually produces at inference, not just teacher-perfect
+        ones. Randomized length (not fixed) covers a range of exposure
+        depths across steps rather than one fixed cut point. JSD is only
+        computed on the teacher-generated continuation, never on the
+        draft-generated prefix itself (that part is context, not a target).
+
+    teacher_temps (list[float] or None, default None = use scalar teacher_temp):
+        If given, cycle through this list across the K rollouts instead of
+        using one fixed temperature for all of them — e.g. [0.5, 1.0, 1.5]
+        covers near-greedy, moderate, and exploratory states in the same
+        training step, cheaper than any other state-distribution lever here
+        (just a generation hyperparameter, no extra forward passes).
+
+    perturb_frac/perturb_window (float/int, default 0.0/16 = disabled):
+        Before the teacher rolls out, randomly replace perturb_frac of the
+        last perturb_window prompt tokens with random vocab ids. Synthesizes
+        "draft made an error upstream, how should generation recover"
+        states without needing an actual draft forward pass — a cheaper,
+        blunter proxy for draft_prefix above. Applied once per step (shared
+        context root for all K rollouts), independent of draft_prefix
+        (can combine both, though that conflates two different perturbation
+        sources in one run — prefer running them separately for a clean
+        ablation).
+
     Returns (loss, path_diversity) where path_diversity is the fraction of token
     positions where at least one path disagrees with path 0 (0 = all paths identical,
     1 = all positions differ).  Used to diagnose whether K paths add novel contexts.
     """
-    attn_mask = torch.ones_like(prompt_ids)
+    context_ids = prompt_ids
+
+    # --- perturbed-context: corrupt a few trailing prompt tokens (once per step) ---
+    if perturb_frac > 0.0:
+        context_ids = context_ids.clone()
+        vocab_size = teacher.config.vocab_size
+        win_start = max(0, context_ids.shape[1] - perturb_window)
+        win_len = context_ids.shape[1] - win_start
+        n_perturb = max(1, int(round(win_len * perturb_frac)))
+        perturb_positions = win_start + torch.randperm(win_len, device=context_ids.device)[:n_perturb]
+        context_ids[0, perturb_positions] = torch.randint(
+            0, vocab_size, (n_perturb,), device=context_ids.device)
+
+    # --- draft-conditioned rollout: extend context with the draft's own tokens ---
+    if draft_prefix_max > 0:
+        prefix_len = random.randint(draft_prefix_min, draft_prefix_max)
+        if prefix_len > 0:
+            with torch.no_grad():
+                draft_attn_mask = torch.ones_like(context_ids)
+                context_ids = draft.generate(
+                    context_ids, attention_mask=draft_attn_mask,
+                    max_new_tokens=prefix_len, do_sample=True,
+                    pad_token_id=teacher.config.eos_token_id,
+                    use_cache=True,
+                )
+
+    root_len = context_ids.shape[1]   # JSD scored only on tokens generated AFTER this point
+    attn_mask = torch.ones_like(context_ids)
     losses = []
     gen_tokens = []   # collect generated token ids for diversity measurement
-    for _ in range(K):
+    for k in range(K):
+        cur_temp = teacher_temps[k % len(teacher_temps)] if teacher_temps else teacher_temp
         with torch.no_grad():
             gen = teacher.generate(
-                prompt_ids, attention_mask=attn_mask,
+                context_ids, attention_mask=attn_mask,
                 max_new_tokens=max_new_tokens, do_sample=True,
-                temperature=teacher_temp,
+                temperature=cur_temp,
                 pad_token_id=teacher.config.eos_token_id,
                 use_cache=True,
             )
-            gen_tokens.append(gen[0, prompt_ids.shape[1]:])   # [T_i]
+            gen_tokens.append(gen[0, root_len:])   # [T_i]
             t_out    = teacher(gen, return_dict=True)
-            t_logits = t_out.logits[0, prompt_ids.shape[1]-1:-1].float()   # [T, V]
+            t_logits = t_out.logits[0, root_len-1:-1].float()   # [T, V]
 
         s_out    = draft(gen, return_dict=True)
-        s_logits = s_out.logits[0, prompt_ids.shape[1]-1:-1].float()        # [T, V]
+        s_logits = s_out.logits[0, root_len-1:-1].float()        # [T, V]
         loss_i   = loss_fn(s_logits, t_logits)
         if grad_accum is not None:
             (loss_i / (K * grad_accum)).backward()
