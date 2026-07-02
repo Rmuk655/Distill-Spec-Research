@@ -354,6 +354,9 @@ def main():
         # this is a no-op for correctness either way.
         for p in trainable:
             p.grad = torch.zeros_like(p)
+        _free_b, _total_b = torch.cuda.mem_get_info()
+        print(f"[optim] pre-warmup GPU memory: {_free_b/1e9:.2f}GB free / {_total_b/1e9:.2f}GB total "
+              f"(allocated={torch.cuda.memory_allocated()/1e9:.2f}GB reserved={torch.cuda.memory_reserved()/1e9:.2f}GB)")
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
