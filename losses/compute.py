@@ -154,8 +154,24 @@ def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
 # ---------------------------------------------------------------------------
 
 def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
-                             K, max_new_tokens=128, teacher_temp=1.0):
+                             K, max_new_tokens=128, teacher_temp=1.0,
+                             grad_accum=None):
     """Sample K stochastic teacher rollouts; score student on each; average loss.
+
+    Memory note: with grad_accum=None (default), this returns a single summed
+    loss tensor for the CALLER to backward (the original behavior) — all K
+    draft-forward computation graphs are held simultaneously until that single
+    backward() call, i.e. peak memory scales with K. This OOM'd in practice at
+    K=3 against a 32B teacher with a thin memory margin (1.7B/32B capacity
+    study, 2026-07-01).
+
+    Pass grad_accum=GRAD_ACCUM to instead backward EACH rollout immediately
+    (scaled by 1/(K*grad_accum)) and free its graph before starting the next
+    rollout — peak memory then stays ~1x a single rollout regardless of K.
+    In this mode the returned loss is DETACHED (for logging only); the caller
+    must NOT call .backward() on it again, and must not combine it with
+    depth_weight/aux_loss afterward (that combination would silently not
+    contribute to the gradient, since backward has already happened here).
 
     Returns (loss, path_diversity) where path_diversity is the fraction of token
     positions where at least one path disagrees with path 0 (0 = all paths identical,
@@ -179,7 +195,12 @@ def compute_flat_enrich_loss(loss_fn, draft, teacher, prompt_ids,
 
         s_out    = draft(gen, return_dict=True)
         s_logits = s_out.logits[0, prompt_ids.shape[1]-1:-1].float()        # [T, V]
-        losses.append(loss_fn(s_logits, t_logits))
+        loss_i   = loss_fn(s_logits, t_logits)
+        if grad_accum is not None:
+            (loss_i / (K * grad_accum)).backward()
+            losses.append(loss_i.detach())
+        else:
+            losses.append(loss_i)
 
     # Path diversity: fraction of positions where paths disagree (only when K > 1).
     if K > 1:
