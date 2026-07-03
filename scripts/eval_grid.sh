@@ -25,34 +25,52 @@
 #     bash scripts/eval_grid.sh <gpu> <name>
 #     e.g.: bash scripts/eval_grid.sh 0 traversal_log_K3_L8_math_hard_s123
 #
+# Reusable across model pairs / boxes via env var overrides (all optional,
+# default to the 1.7B/32B capacity-study values below):
+#   OUT        — checkpoint+log root. Checkpoints expected at $OUT/checkpoints/<name>/ckpt_best
+#   TEACHER    — HF id of the eval-time teacher
+#   NAMES_CSV  — comma-separated checkpoint dir names (full-grid mode only;
+#                overrides the default 8-checkpoint NAMES array below,
+#                one GPU per entry, GPU index = array index)
+#   DATASETS, KS, MODES, DELAYED_MODES, L1_VALUES, SEED — sweep parameters
+# e.g. (0.6B/8B box, 3 checkpoints, math_eval only, no delayed-L1 sweep):
+#   OUT=/sensei-fs-3/users/rkrishna TEACHER=Qwen/Qwen3-8B DATASETS=math_eval \
+#     NAMES_CSV=jsd_flat_enrich_K3_math_hard_s123,jsd_flat_enrich_K3_temp07_math_hard_s123,jsd_flat_enrich_K4_math_hard_s123 \
+#     nohup bash scripts/eval_grid.sh > /sensei-fs-3/users/rkrishna/output/eval_grid_driver.out 2>&1 &
+#
 # Intermediate results: $OUT/logs/<name>.csv — one row per completed
 # (checkpoint, dataset, mode, K, L) tuple written by eval.py as it finishes.
 # Resumable: re-running skips already-completed rows.
 set -uo pipefail   # NOT -e: one failed eval cell must not kill the other 7 GPUs' loops
 
 REPO=/home/colligo/Distill-Spec-Research
-OUT=/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B
-TEACHER=Qwen/Qwen3-32B
-MODES="naive,nss,specinfer,spectr,khisti,max,bv,gbv,traversal"
-DELAYED_MODES="traversal,specinfer"   # the two verifiers L1 is theoretically motivated for
-L1_VALUES="3 4 5"
-DATASETS="math_eval olympiad_eval"
-KS="1 2 3 4"
-SEED=123
+OUT="${OUT:-/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B}"
+TEACHER="${TEACHER:-Qwen/Qwen3-32B}"
+MODES="${MODES:-naive,nss,specinfer,spectr,khisti,max,bv,gbv,traversal}"
+DELAYED_MODES="${DELAYED_MODES:-traversal,specinfer}"   # the two verifiers L1 is theoretically motivated for
+L1_VALUES="${L1_VALUES:-3 4 5}"
+DATASETS="${DATASETS:-math_eval olympiad_eval}"
+KS="${KS:-1 2 3 4}"
+SEED="${SEED:-123}"
 
 mkdir -p "$OUT/logs" "$OUT/output"
 
-# GPU index -> checkpoint dir name (must match the training launch grid).
-NAMES=(
-  jsd_math_hard_s123
-  enrich_K3_math_hard_s123
-  jsd_dw_lin_naive_K3_math_hard_s123
-  traversal_log_K3_L8_math_hard_s123
-  nss_log_K3_L8_math_hard_s123
-  po_logprob_multiN4_L8_math_hard_s123
-  po_nss_multiN4_L8_math_hard_s123
-  po_traversal_multiN4_L8_math_hard_s123
-)
+# GPU index -> checkpoint dir name (full-grid mode only). Override via
+# NAMES_CSV=name1,name2,... ; defaults to the 1.7B/32B training launch grid.
+if [ -n "${NAMES_CSV:-}" ]; then
+    IFS=',' read -r -a NAMES <<< "$NAMES_CSV"
+else
+    NAMES=(
+      jsd_math_hard_s123
+      enrich_K3_math_hard_s123
+      jsd_dw_lin_naive_K3_math_hard_s123
+      traversal_log_K3_L8_math_hard_s123
+      nss_log_K3_L8_math_hard_s123
+      po_logprob_multiN4_L8_math_hard_s123
+      po_nss_multiN4_L8_math_hard_s123
+      po_traversal_multiN4_L8_math_hard_s123
+    )
+fi
 
 run_gpu_eval() {
     local gpu="$1"
@@ -101,5 +119,5 @@ else
         run_gpu_eval "$gpu" "${NAMES[$gpu]}" &
     done
     wait
-    echo "[eval_grid] all 8 GPUs finished"
+    echo "[eval_grid] all ${#NAMES[@]} GPUs finished"
 fi
