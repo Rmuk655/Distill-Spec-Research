@@ -17,8 +17,17 @@
 # teacher for the reported numbers even though training used a 4-bit approximation.
 #
 # Usage:
-#   nohup bash scripts/eval_grid.sh > $OUT/output/eval_grid_driver.out 2>&1 &
-#   disown
+#   Full grid (all 8 checkpoints, one per GPU):
+#     nohup bash scripts/eval_grid.sh > $OUT/output/eval_grid_driver.out 2>&1 &
+#     disown
+#
+#   Single checkpoint on one GPU:
+#     bash scripts/eval_grid.sh <gpu> <name>
+#     e.g.: bash scripts/eval_grid.sh 0 traversal_log_K3_L8_math_hard_s123
+#
+# Intermediate results: $OUT/logs/<name>.csv — one row per completed
+# (checkpoint, dataset, mode, K, L) tuple written by eval.py as it finishes.
+# Resumable: re-running skips already-completed rows.
 set -uo pipefail   # NOT -e: one failed eval cell must not kill the other 7 GPUs' loops
 
 REPO=/home/colligo/Distill-Spec-Research
@@ -83,9 +92,14 @@ run_gpu_eval() {
     echo "[eval_grid] GPU${gpu} ${name} DONE" >> "$out"
 }
 
-for gpu in "${!NAMES[@]}"; do
-    run_gpu_eval "$gpu" "${NAMES[$gpu]}" &
-done
-
-wait
-echo "[eval_grid] all 8 GPUs finished"
+if [ $# -eq 2 ]; then
+    # Single-checkpoint mode: bash eval_grid.sh <gpu> <name>
+    run_gpu_eval "$1" "$2"
+else
+    # Full grid: one GPU per checkpoint
+    for gpu in "${!NAMES[@]}"; do
+        run_gpu_eval "$gpu" "${NAMES[$gpu]}" &
+    done
+    wait
+    echo "[eval_grid] all 8 GPUs finished"
+fi
