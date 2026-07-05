@@ -90,6 +90,32 @@ def l1(student_logits, teacher_logits, **_kw):
     return (p_s - p_t).abs().sum(dim=-1).mean()
 
 
+def lk_alpha(student_logits, teacher_logits, eps=1e-8, **_kw):
+    """
+    LK-α loss (Samarin et al., arXiv 2602.23881): negative log token-acceptance.
+
+        L = -log α,   α = Σ_v min(p_s(v), p_t(v))
+
+    α is the single-draft speculative acceptance rate (= 1 - TV(p_s, p_t)).  The
+    -log wrapper makes ∂L/∂θ = (1/α)·∂α/∂θ, so the update is amplified exactly
+    when acceptance is low.  Unlike `l1` (= 2·TV, no wrapper) this carries that
+    1/α amplification; unlike JSD the gradient only pushes q UP on the deficit
+    set {v : q(v) < p(v)} and never spends capacity where q(v) ≥ p(v).
+
+    This is the flat, per-token, full-vocabulary form of the same objective our
+    naive_log / traversal_log tree losses already carry (both are -log of a
+    Σmin acceptance with the same 1/α factor) — here it is the exact min-overlap
+    functional on a teacher rollout, matching LK's chain (single-path) setup.
+    Averaged per token.  Register `lk_alpha` (greedy rollout via compute_flat_loss)
+    or `lk_alpha_enrich` (K stochastic teacher rollouts at teacher_temp, the
+    deployment-matched replication) — same fn, different train.py routing.
+    """
+    p_s = F.softmax(student_logits, dim=-1)
+    p_t = F.softmax(teacher_logits, dim=-1).detach()
+    alpha = torch.minimum(p_s, p_t).sum(dim=-1)          # [T]  per-token acceptance
+    return -(alpha.clamp(min=eps).log()).mean()
+
+
 # Registry: name → callable.  train.py looks the loss up here by --loss flag.
 FLAT_LOSSES = {
     "forward_kl":      forward_kl,
@@ -98,4 +124,6 @@ FLAT_LOSSES = {
     "jsd_flat_enrich": jsd,   # same loss fn — routing in train.py samples K stochastic teacher paths
     "prefix_overlap":  jsd,   # placeholder — real math is in compute_prefix_overlap_loss; entry only for get_loss/argparse
     "l1":              l1,
+    "lk_alpha":        lk_alpha,   # greedy teacher rollout (compute_flat_loss)
+    "lk_alpha_enrich": lk_alpha,   # K stochastic teacher rollouts (FLAT_ENRICH_LOSSES routing)
 }

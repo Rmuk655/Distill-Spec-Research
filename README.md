@@ -60,14 +60,16 @@ Distill-Spec-Research/
 ├── eval.py              # block-efficiency eval + results.csv writer
 ├── inference.py         # single-prompt sanity check
 ├── losses/
-│   ├── flat.py          # forward_kl, reverse_kl, jsd, l1
+│   ├── flat.py          # forward_kl, reverse_kl, jsd, l1, lk_alpha
 │   └── tree.py          # 11 tree losses (3 divergences + 8 verifier-aligned)
 ├── verifiers/           # VERBATIM copy of /GBV — do not edit unless syncing upstream
 ├── data_io/
 │   ├── download.py      # fetch gsm8k / math_hard / math_val / alpaca / math500 / humaneval / mtbench / spec_bench
 │   └── raw/             # downloaded JSONL files (gitignored)
 ├── scripts/
-│   └── setup_a100.sh    # one-shot env setup wrapper
+│   ├── setup_a100.sh    # one-shot env setup wrapper
+│   └── eval_grid.sh     # full post-training eval sweep, one GPU per checkpoint (see script header)
+├── analyze_evals.py     # cross-checkpoint comparison across eval CSVs (pivots, Δ-vs-JSD heatmaps, K-trends)
 ├── checkpoints/         # train.py writes here (gitignored)
 ├── results.csv          # eval.py appends one row per (mode × K × L × dataset)
 └── requirements.txt
@@ -109,11 +111,23 @@ python train.py --loss jsd --draft Qwen/Qwen3-1.7B --teacher Qwen/Qwen3-32B \
 | `jsd` | Primary baseline — strongest flat divergence across verifiers |
 | `forward_kl` | Secondary reference |
 | `reverse_kl` | Weakest; degrades at high K |
-| `l1` | Competitive with JSD on some verifiers, not on mean |
+| `l1` | Competitive with JSD on some verifiers, not on mean; = 2·TV(p,q) |
+| `lk_alpha` | `-log Σ_v min(p,q)` — direct acceptance-rate optimization (Samarin et al., arXiv 2602.23881), on a greedy teacher rollout |
+| `lk_alpha_enrich` | Same `lk_alpha` math, routed through K stochastic teacher rollouts (enrichment-style; use `--K`) — the closer replication of the paper's from-scratch, deployment-temperature setup |
 
 ```bash
 python train.py --loss jsd
+python train.py --loss lk_alpha_enrich --K 3 --steps 8000 \
+    --train_dataset math_hard --val_dataset math_val
 ```
+
+`lk_alpha`'s `-log(·)` wrapper gives `∂L/∂θ = (1/α)·∂α/∂θ` — automatic gradient
+amplification when acceptance is low. Our `naive_log`/`traversal_log` tree
+losses already carry the identical `1/α` factor (via the `(L-i+1)/α_i`
+telescoping-log coefficient) and still tie/lose to JSD on our independent
+(non-EAGLE-conditioned) drafts, so don't assume this beats JSD here without
+running it — the decisive test is a from-scratch run (no JSD warm-start),
+not a warm-started one.
 
 ### Tree losses (on-policy draft tree)
 
@@ -302,6 +316,26 @@ wait
 # With diagnose — correlation check after the timed loop (adds ~10 min for n=100)
 python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
     --modes traversal --K 1 --n 100 --dataset math_eval --diagnose --device cuda:0
+
+# --compile: torch.compile(mode='reduce-overhead') on the draft model only,
+# to cut kernel-launch/Python dispatch overhead. Draft-only because the
+# target's per-iteration tree-attention mask shape is incompatible with
+# static CUDA graphs. Changes wall time only, never the reported numbers —
+# useful when gpu_sm_util_avg_pct is low (draft-side small-batch sequential
+# calls are launch-overhead bound, not compute bound). First 1-2 prompts
+# recompile and are slower; --warmup_n (default 3) already absorbs that.
+python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
+    --modes traversal --K 3 --n 100 --dataset math_eval --compile --device cuda:0
+```
+
+`scripts/eval_grid.sh` (the full sweep across datasets × K × verifier modes ×
+delayed-expansion variants; see the script's header for the full env-var
+reference) exposes the same flag via `COMPILE=1`:
+
+```bash
+COMPILE=1 OUT=$OUT TEACHER=$TEACHER \
+  nohup bash scripts/eval_grid.sh 0 <checkpoint_name> \
+  >> $OUT/output/<checkpoint_name>_eval.out 2>&1 &
 ```
 
 Every eval cell appends one row to `results.csv`.  Key columns:
@@ -316,6 +350,30 @@ Every eval cell appends one row to `results.csv`.  Key columns:
 | Machine spec | `machine_gpu`, `machine_gpu_count`, `machine_gpu_vram_gb`, `machine_driver`, `machine_cpu_physical_cores`, `machine_ram_gb`, `machine_os` |
 
 Open it in pandas / Excel — one row per (checkpoint × mode × K × L × dataset).
+
+### Cross-checkpoint comparison (`analyze_evals.py`)
+
+`eval_grid.sh` writes one CSV per checkpoint under `$OUT/logs/`. Once you have
+several, `analyze_evals.py` consolidates them into one tidy table and answers
+"does loss X beat JSD, and is it general or specific to one verifier/K?":
+
+```bash
+python analyze_evals.py \
+    --glob "/sensei-fs-3/users/rkrishna/**/logs/*.csv" \
+    --out  /sensei-fs-3/users/rkrishna/analysis \
+    --metric block_eff
+```
+
+Dedupes append-mode CSVs to the latest row per `(checkpoint, dataset, mode, K, L)`,
+computes `Δ = block_eff − JSD baseline` (baseline = mean over checkpoints
+matching `--baseline_regex`, default plain flat-JSD, averaged across seeds),
+and grays out `|Δ| < --noise` (default 0.15, the n=100 SE floor from the
+prefix-overlap research note) so single-seed wiggle isn't over-read. Outputs
+per `(pair, dataset)`: `pivot_*.csv` / `delta_*.csv` (checkpoint × mode_K),
+`lossverifier_*.png` (checkpoint × mode, Δ averaged over K — the loss↔verifier
+interaction), `k_trends_*.png` (block_eff vs K, one panel per verifier), plus
+ranked `best_combos.csv` and `beats_jsd.csv` across everything loaded. Plotting
+needs matplotlib; the CSV/table outputs work without it.
 
 ### Reproducibility protocol — 1 eval per GPU
 

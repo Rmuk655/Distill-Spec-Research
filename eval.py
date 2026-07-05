@@ -309,6 +309,17 @@ def parse_args():
     ap.add_argument("--warmup_n",  type=int, default=3,
                     help="Prompts to run (untimed) before the timed loop to prime CUDA kernels. "
                          "Default 3.  Set 0 to skip (faster iteration, less accurate throughput).")
+    ap.add_argument("--compile", action="store_true",
+                    help="Apply torch.compile(mode='reduce-overhead', dynamic=True) to the "
+                         "draft model only (target's per-iteration tree mask shape is "
+                         "incompatible with static CUDA graphs). iid_draft (verifiers/"
+                         "inference_util.py) runs L sequential small-batch forward calls per "
+                         "round through the draft model — kernel-launch/Python dispatch "
+                         "overhead, not compute, dominates wall time here (see load_models "
+                         "docstring: ~90%% of wall time on small/fast forward passes; matches "
+                         "the ~25-28%% gpu_sm_util_avg_pct these eval runs report). First 1-2 "
+                         "prompts recompile and are slower; subsequent ones are faster. "
+                         "Was already wired in main.py/load_models but never exposed here.")
 
     ap.add_argument("--no_gpu_monitor", action="store_true",
                     help="Disable the background GPU/CPU telemetry thread.  "
@@ -419,7 +430,8 @@ def main():
         print(f"[load] draft={args.checkpoint}")
         print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
         tok, p_model, q_model = load_models(args.teacher, args.checkpoint,
-                                            device=torch_device, dtype=DEFAULT_DTYPE)
+                                            device=torch_device, dtype=DEFAULT_DTYPE,
+                                            compile_draft=args.compile)
         specs["attn_backend"] = _model_attn_backend(p_model, q_model)
         print(f"[load] attention_backend={specs['attn_backend']}")
         # Log GPU memory after model load — both models share the same device.

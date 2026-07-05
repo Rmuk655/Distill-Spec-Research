@@ -24,12 +24,14 @@ OFFPOLICY_TREE_LOSSES = {"op_naive_tree", "op_naive_tree_full"}
 # matched single-path control; K>1 is the enrichment ("teach additional paths").
 ENRICHMENT_LOSSES = {"jsd_enrich"}
 
-# Flat enrichment losses: same per-token JSD as jsd flat but the teacher
-# samples K stochastic continuations (do_sample=True) instead of one greedy
-# rollout.  K=1 isolates greedy-vs-stochastic; K>1 adds path diversity.
-# Apples-to-apples with jsd flat: same L=128, only teacher sampling changes.
-# Routed through compute_flat_enrich_loss() in train.py.
-FLAT_ENRICH_LOSSES = {"jsd_flat_enrich"}
+# Flat enrichment losses: same per-token divergence as the flat baseline but the
+# teacher samples K stochastic continuations (do_sample=True) instead of one
+# greedy rollout.  K=1 isolates greedy-vs-stochastic; K>1 adds path diversity.
+# Apples-to-apples with the flat baseline: same L=128, only teacher sampling
+# changes.  Routed through compute_flat_enrich_loss() in train.py.
+#   jsd_flat_enrich  → per-token JSD
+#   lk_alpha_enrich  → per-token LK-α (-log Σmin); deployment-matched LK replication
+FLAT_ENRICH_LOSSES = {"jsd_flat_enrich", "lk_alpha_enrich"}
 
 # Prefix-overlap loss: sample M teacher continuations, reward the student's
 # probability of every teacher prefix (Σ_t qθ(P_{1:t})).  Exact-match, no depth
