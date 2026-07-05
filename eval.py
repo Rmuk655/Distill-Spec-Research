@@ -310,16 +310,17 @@ def parse_args():
                     help="Prompts to run (untimed) before the timed loop to prime CUDA kernels. "
                          "Default 3.  Set 0 to skip (faster iteration, less accurate throughput).")
     ap.add_argument("--compile", action="store_true",
-                    help="Apply torch.compile(mode='reduce-overhead', dynamic=True) to the "
-                         "draft model only (target's per-iteration tree mask shape is "
-                         "incompatible with static CUDA graphs). iid_draft (verifiers/"
-                         "inference_util.py) runs L sequential small-batch forward calls per "
-                         "round through the draft model — kernel-launch/Python dispatch "
-                         "overhead, not compute, dominates wall time here (see load_models "
-                         "docstring: ~90%% of wall time on small/fast forward passes; matches "
-                         "the ~25-28%% gpu_sm_util_avg_pct these eval runs report). First 1-2 "
-                         "prompts recompile and are slower; subsequent ones are faster. "
-                         "Was already wired in main.py/load_models but never exposed here.")
+                    help="BROKEN, do not use (2026-07-05) — kept only so the flag exists if "
+                         "fixed upstream later. Applies torch.compile(mode='reduce-overhead', "
+                         "dynamic=True) to the draft model only, meant to cut the kernel-launch "
+                         "overhead dominating iid_draft's sequential small-batch calls "
+                         "(~25-28%% gpu_sm_util_avg_pct uncompiled). In practice: iid_draft "
+                         "builds a fresh DynamicCache per prompt, so the cache's is_initialized "
+                         "bool re-guards/recompiles the draft forward every prompt; once "
+                         "torch._dynamo.config.recompile_limit (8) is hit, torch._inductor's "
+                         "cudagraph_trees bookkeeping desyncs and raises AssertionError in "
+                         "dealloc_current_path_weakrefs. Reproduced on 2+ independent "
+                         "checkpoints. Do not pass this flag until fixed.")
 
     ap.add_argument("--no_gpu_monitor", action="store_true",
                     help="Disable the background GPU/CPU telemetry thread.  "

@@ -33,15 +33,21 @@
 #                overrides the default 8-checkpoint NAMES array below,
 #                one GPU per entry, GPU index = array index)
 #   DATASETS, KS, MODES, DELAYED_MODES, L1_VALUES, SEED — sweep parameters
-#   COMPILE=1  — pass --compile to every eval.py call: torch.compile(mode=
-#                'reduce-overhead') on the draft model only. iid_draft's L
-#                sequential small-batch forward calls are kernel-launch/Python
-#                dispatch bound (draft time dominates wall time; SM util ~25-28%
-#                in these runs), which --compile targets directly. Off by
-#                default (0) since it changes wall time only, never eval
-#                numbers — opt in per-run to confirm the speedup on your box
-#                before relying on it. First 1-2 prompts recompile and are
-#                slower; warmup_n (default 3) already absorbs that.
+#   COMPILE=1  — BROKEN, do not use (2026-07-05). Passes --compile to every
+#                eval.py call: torch.compile(mode='reduce-overhead') on the
+#                draft model only, meant to cut the kernel-launch overhead
+#                that dominates wall time in iid_draft's sequential small-batch
+#                calls (SM util ~25-28% uncompiled). In practice it crashes:
+#                iid_draft builds a fresh DynamicCache per prompt, so the
+#                cache's `is_initialized` bool re-guards/recompiles the draft
+#                forward on every prompt; once torch._dynamo.config.
+#                recompile_limit (8) is hit, torch._inductor's cudagraph_trees
+#                bookkeeping desyncs and raises AssertionError in
+#                dealloc_current_path_weakrefs — reproduced on 2+ independent
+#                checkpoints. Defaults to off (0); leave it off until this is
+#                fixed upstream (a non-cudagraph torch.compile(dynamic=True),
+#                i.e. dropping mode='reduce-overhead', avoids this specific
+#                crash but is untested here and gives a smaller speedup).
 # e.g. (0.6B/8B box, 3 checkpoints, math_eval only, no delayed-L1 sweep):
 #   OUT=/sensei-fs-3/users/rkrishna TEACHER=Qwen/Qwen3-8B DATASETS=math_eval \
 #     NAMES_CSV=jsd_flat_enrich_K3_math_hard_s123,jsd_flat_enrich_K3_temp07_math_hard_s123,jsd_flat_enrich_K4_math_hard_s123 \
