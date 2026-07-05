@@ -317,25 +317,11 @@ wait
 python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
     --modes traversal --K 1 --n 100 --dataset math_eval --diagnose --device cuda:0
 
-# --compile: torch.compile(mode='reduce-overhead') on the draft model only,
-# to cut kernel-launch/Python dispatch overhead. Draft-only because the
-# target's per-iteration tree-attention mask shape is incompatible with
-# static CUDA graphs. Changes wall time only, never the reported numbers —
-# useful when gpu_sm_util_avg_pct is low (draft-side small-batch sequential
-# calls are launch-overhead bound, not compute bound). First 1-2 prompts
-# recompile and are slower; --warmup_n (default 3) already absorbs that.
-python eval.py --checkpoint checkpoints/jsd_flat_enrich_K1_mathhard_s123/ckpt_best \
-    --modes traversal --K 3 --n 100 --dataset math_eval --compile --device cuda:0
-```
-
-`scripts/eval_grid.sh` (the full sweep across datasets × K × verifier modes ×
-delayed-expansion variants; see the script's header for the full env-var
-reference) exposes the same flag via `COMPILE=1`:
-
-```bash
-COMPILE=1 OUT=$OUT TEACHER=$TEACHER \
-  nohup bash scripts/eval_grid.sh 0 <checkpoint_name> \
-  >> $OUT/output/<checkpoint_name>_eval.out 2>&1 &
+# --compile: BROKEN, do not use (2026-07-05) — see eval.py --help / scripts/
+# eval_grid.sh header for the failure mode (torch._inductor cudagraph_trees
+# AssertionError once recompile_limit is hit, from iid_draft building a fresh
+# DynamicCache per prompt). Reproduced on 2+ checkpoints. Flag/COMPILE=1 env
+# var are kept wired for if this gets fixed upstream, but leave both off.
 ```
 
 Every eval cell appends one row to `results.csv`.  Key columns:
