@@ -33,6 +33,15 @@
 #                overrides the default 8-checkpoint NAMES array below,
 #                one GPU per entry, GPU index = array index)
 #   DATASETS, KS, MODES, DELAYED_MODES, L1_VALUES, SEED — sweep parameters
+#   COMPILE=1  — pass --compile to every eval.py call: torch.compile(mode=
+#                'reduce-overhead') on the draft model only. iid_draft's L
+#                sequential small-batch forward calls are kernel-launch/Python
+#                dispatch bound (draft time dominates wall time; SM util ~25-28%
+#                in these runs), which --compile targets directly. Off by
+#                default (0) since it changes wall time only, never eval
+#                numbers — opt in per-run to confirm the speedup on your box
+#                before relying on it. First 1-2 prompts recompile and are
+#                slower; warmup_n (default 3) already absorbs that.
 # e.g. (0.6B/8B box, 3 checkpoints, math_eval only, no delayed-L1 sweep):
 #   OUT=/sensei-fs-3/users/rkrishna TEACHER=Qwen/Qwen3-8B DATASETS=math_eval \
 #     NAMES_CSV=jsd_flat_enrich_K3_math_hard_s123,jsd_flat_enrich_K3_temp07_math_hard_s123,jsd_flat_enrich_K4_math_hard_s123 \
@@ -52,6 +61,8 @@ L1_VALUES="${L1_VALUES:-3 4 5}"
 DATASETS="${DATASETS:-math_eval olympiad_eval}"
 KS="${KS:-1 2 3 4}"
 SEED="${SEED:-123}"
+COMPILE_FLAG=""
+[ "${COMPILE:-0}" = "1" ] && COMPILE_FLAG="--compile"
 
 mkdir -p "$OUT/logs" "$OUT/output"
 
@@ -89,20 +100,20 @@ run_gpu_eval() {
             echo "[eval_grid] GPU${gpu} ${name} dataset=${dataset} K=${K} modes-sweep" >> "$out"
             python "$REPO/eval.py" --checkpoint "$ckpt" --teacher "$TEACHER" \
                 --modes "$MODES" --K "$K" --L 8 --n 100 --seed "$SEED" \
-                --dataset "$dataset" --device "cuda:${gpu}" \
+                --dataset "$dataset" --device "cuda:${gpu}" $COMPILE_FLAG \
                 --output "$csv" >> "$out" 2>&1
 
             echo "[eval_grid] GPU${gpu} ${name} dataset=${dataset} K=${K} delayed (--L1_adaptive) ${DELAYED_MODES}" >> "$out"
             python "$REPO/eval.py" --checkpoint "$ckpt" --teacher "$TEACHER" \
                 --modes "$DELAYED_MODES" --L1_adaptive --K "$K" --L 8 --n 100 --seed "$SEED" \
-                --dataset "$dataset" --device "cuda:${gpu}" \
+                --dataset "$dataset" --device "cuda:${gpu}" $COMPILE_FLAG \
                 --output "$csv" >> "$out" 2>&1
 
             for L1 in $L1_VALUES; do
                 echo "[eval_grid] GPU${gpu} ${name} dataset=${dataset} K=${K} delayed (--L1 ${L1}) ${DELAYED_MODES}" >> "$out"
                 python "$REPO/eval.py" --checkpoint "$ckpt" --teacher "$TEACHER" \
                     --modes "$DELAYED_MODES" --L1 "$L1" --K "$K" --L 8 --n 100 --seed "$SEED" \
-                    --dataset "$dataset" --device "cuda:${gpu}" \
+                    --dataset "$dataset" --device "cuda:${gpu}" $COMPILE_FLAG \
                     --output "$csv" >> "$out" 2>&1
             done
         done
