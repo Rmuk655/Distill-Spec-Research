@@ -107,11 +107,22 @@ def _family(name: str) -> str:
     return n.rstrip("_")
 
 
-def load_all(glob_pat: str) -> pd.DataFrame:
-    """Read every matching CSV (per-file, so headers never leak into data), concat."""
-    files = sorted(glob.glob(glob_pat, recursive=True))
+def load_all(glob_pats) -> pd.DataFrame:
+    """Read every matching CSV (per-file, so headers never leak into data), concat.
+
+    glob_pats: one pattern (str) or a list of patterns — pass a list to select a SET
+    of checkpoints that no single glob can express, e.g. a plain-JSD baseline (no
+    numeric suffix) alongside an enrich family at specific K values:
+        --glob "logs/jsd_mathhard_s123.csv" "logs/jsd_flat_enrich_K[3-6]_*.csv"
+    (character classes like [3-6] work in plain glob; brace lists like {3,4,5,6} do
+    NOT — glob.glob has no OR operator, which is why multiple patterns are accepted
+    here instead of trying to force one pattern to do both jobs.)
+    """
+    if isinstance(glob_pats, str):
+        glob_pats = [glob_pats]
+    files = sorted({f for pat in glob_pats for f in glob.glob(pat, recursive=True)})
     if not files:
-        raise SystemExit(f"No CSVs matched: {glob_pat}")
+        raise SystemExit(f"No CSVs matched: {glob_pats}")
     frames = []
     for f in files:
         try:
@@ -327,9 +338,20 @@ def _slug(s: str) -> str:
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--glob", required=True,
-                    help="Glob for eval CSVs, e.g. '/sensei-fs-3/users/rkrishna/**/logs/*.csv' "
-                         "(quote it; recursive ** supported).")
+    ap.add_argument("--glob", required=True, nargs="+",
+                    help="One or more globs for eval CSVs (quote each; recursive ** supported). "
+                         "Pass multiple patterns to select a specific SET of checkpoints that no "
+                         "single glob can express — e.g. a plain-JSD baseline plus an enrich "
+                         "family at K=3..6: "
+                         "--glob \"logs/jsd_mathhard_s123.csv\" \"logs/jsd_flat_enrich_K[3-6]_*.csv\" "
+                         "(character classes like [3-6] work; brace lists like {3,4,5,6} do NOT "
+                         "— glob has no OR operator, which is why multiple --glob values exist).")
+    ap.add_argument("--checkpoint_regex", default=None,
+                    help="After loading, keep only rows whose checkpoint_name matches this "
+                         "regex — an independent filter from --glob, for when CSVs aren't neatly "
+                         "one-per-checkpoint (e.g. a shared logs/ directory with many unrelated "
+                         "checkpoints appended into fewer files). E.g. "
+                         "'^jsd_mathhard_s123$|^jsd_flat_enrich_K[3-6]_math_hard_s123$'.")
     ap.add_argument("--out", default="analysis_out", help="Output directory.")
     ap.add_argument("--metric", default="block_eff",
                     help="Metric to compare (block_eff | throughput_tok_s).")
@@ -360,12 +382,17 @@ def main():
             ["checkpoint_name", "pair", "dataset", "mode", "K", "L"]).shape[0]
         print(f"[out ] {conflicts_path} ({len(attn_conflicts)} raw rows across "
               f"{_n_cells} contaminated cells)")
+    if args.checkpoint_regex:
+        _crx = re.compile(args.checkpoint_regex)
+        df = df[df["checkpoint_name"].map(lambda n: bool(_crx.search(n)))]
+        print(f"[filter] --checkpoint_regex kept {df['checkpoint_name'].nunique()} "
+              f"checkpoint(s): {sorted(df['checkpoint_name'].unique())}")
     if args.pair:
         df = df[df["pair"] == args.pair]
     if args.dataset:
         df = df[df["dataset"] == args.dataset]
     if df.empty:
-        raise SystemExit("No rows after pair/dataset filter.")
+        raise SystemExit("No rows after checkpoint_regex/pair/dataset filter.")
     df = add_delta(df, args.baseline_regex, args.metric)
 
     df.to_csv(os.path.join(args.out, "master_long.csv"), index=False)
