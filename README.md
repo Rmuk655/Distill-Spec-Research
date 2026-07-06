@@ -11,11 +11,6 @@ speculative-decoding draft models.  Three scripts:
 
 See [`project_report.md`](project_report.md) for what's been tried and what beat the baseline; this file is CLI reference only.
 
-The verifier code under `verifiers/` is a verbatim copy of the reference
-implementation at <https://github.com/Rmuk655/Distill-Spec-Research/tree/main/GBV>
-(only the `__init__.py` is new — it lets the parent scripts import the verifier
-files without modifying them).
-
 ---
 
 ## Setup (A100, one time)
@@ -115,7 +110,7 @@ python train.py --loss jsd --draft Qwen/Qwen3-1.7B --teacher Qwen/Qwen3-32B \
 | `reverse_kl` | Weakest; degrades at high K |
 | `l1` | Competitive with JSD on some verifiers, not on mean; = 2·TV(p,q) |
 | `lk_alpha` | `-log Σ_v min(p,q)` — direct acceptance-rate optimization (Samarin et al., arXiv 2602.23881), on a greedy teacher rollout |
-| `lk_alpha_enrich` | Same `lk_alpha` math, routed through K stochastic teacher rollouts (enrichment-style; use `--K`) — the closer replication of the paper's from-scratch, deployment-temperature setup |
+| `lk_alpha_enrich` | Same `lk_alpha` math, routed through K stochastic teacher rollouts (use `--K`) — the closer replication of the paper's from-scratch, deployment-temperature setup. The K-stochastic-rollout mechanism itself is not new here: it's the same routing `jsd_flat_enrich`/`jsd_enrich` already use (our own idea, predates this paper) — `lk_alpha_enrich` just swaps in the LK-α objective on that existing enrichment path. |
 
 ```bash
 python train.py --loss jsd
@@ -123,35 +118,89 @@ python train.py --loss lk_alpha_enrich --K 3 --steps 8000 \
     --train_dataset math_hard --val_dataset math_val
 ```
 
-`lk_alpha`'s `-log(·)` wrapper gives `∂L/∂θ = (1/α)·∂α/∂θ` — automatic gradient
-amplification when acceptance is low. Our `naive_log`/`traversal_log` tree
-losses already carry the identical `1/α` factor (via the `(L-i+1)/α_i`
-telescoping-log coefficient) and still tie/lose to JSD on our independent
-(non-EAGLE-conditioned) drafts, so don't assume this beats JSD here without
-running it — the decisive test is a from-scratch run (no JSD warm-start),
-not a warm-started one.
+See [`project_report.md`](project_report.md) for whether `lk_alpha`/`lk_alpha_enrich` actually beat JSD once run — the gradient-structure argument for why they might is analysis, not a CLI fact, and lives there.
 
 ### Tree losses (on-policy draft tree)
 
 | `--loss` | α formula | Form | Val verifier |
 |---|---|---|---|
 | `naive_tree` / `naive_tree_full` | naive | product / exact-survival product | naive |
-| `traversal_tree` | naive (proxy) | product | traversal |
-| `traversal_log` | naive (proxy) | **log-space** (no depth vanishing) | traversal |
-| `naive_log` | naive | log-space | naive |
+| `traversal_tree` | naive (proxy)¹ | product | traversal |
+| `traversal_log` | naive (proxy)¹ | **log-space**² (no depth vanishing) | traversal |
+| `naive_log` | naive | log-space² | naive |
 | `nss_tree` / `nss_log` | exact NSS | product / log-space | nss |
-| `kl_tree`, `rev_kl_tree`, `jsd_tree` | generic divergence, no verifier | — | traversal |
-| `bv_tree`, `gbv_tree` | BV/GBV | product | **broken — do not use** (gradient collapses to 0) |
+| `kl_tree`, `rev_kl_tree`, `jsd_tree` | generic divergence, no verifier | flat node-average³ (not a telescoping product) | traversal |
+| `bv_tree`, `gbv_tree` | BV/GBV | product | **broken — do not use**⁴ (gradient collapses to 0) |
 | `specinfer_tree`/`_log`, `spectr_tree`/`_log`, `khisti_tree`/`_log` | resp. verifier | product / log-space | resp. |
-| `op_naive_tree` / `op_naive_tree_full` | naive | off-policy (teacher path, not draft samples) | naive |
+| `op_naive_tree` / `op_naive_tree_full` | naive⁵ | off-policy (teacher path, not draft samples) | naive |
 
 ```bash
 python train.py --loss traversal_log --K 3 --L 8
-python train.py --loss bv_tree --lr 1e-5   # DO NOT USE for real runs — see note
+python train.py --loss bv_tree --lr 1e-5   # DO NOT USE for real runs — see note 4
 ```
 
 `--K` = draft paths per step, `--L` = tree depth. Both are read by every loss
 in this table (unlike flat losses, where they're inert).
+
+¹ **Why traversal uses the naive α formula, not a traversal-specific one.** The
+first attempt (`_bv_path_loss`, a BV-style running weight `w_i = w_{i-1} ·
+clamp(p[token]/q[token])`) collapsed: `w` gates every downstream depth's
+gradient, and a single sampled token where the teacher assigns ~0 probability
+drives that one factor to ~0, zeroing the gradient for the rest of the path.
+`_alpha_naive = Σ_v min(p(v), q(v))` (full-vocabulary, not a single sampled
+token) is provably `> 0` for any two full-support distributions, so the
+zero-gradient minimum is structurally unreachable. **At K=1, traversal and
+naive are the same verifier**, so this isn't an approximation there at all;
+only at K>1 does it lose traversal-specificity while keeping training stable.
+`traversal_log` inherits the same node-level α (see `losses/tree.py::traversal_log`).
+
+² **What "log-space" fixes.** `E[τ]=Σ_i Π_{j≤i} α_j` decays as `O(α^i)` — the
+per-depth product underflows and starves the gradient at depth. The log-space
+form sums `-Σ_j (L-j+1)·log α_j` instead of the products themselves; the
+coefficient on `∇α_j` becomes `(L-j+1)/α_j`, which does not vanish with depth.
+This only works because `_alpha_naive`/`_alpha_nss`/etc. are each structurally
+bounded away from 0 — see note 4 for why the same trick does not rescue BV/GBV.
+
+³ `kl_tree`/`rev_kl_tree`/`jsd_tree` average a divergence directly over
+non-leaf tree nodes — there's no telescoping accept/reject product to be in
+"product" or "log-space" form, so `—`/"flat node-average" in that column means
+*not applicable*, not a missing measurement. They default to the `traversal`
+val verifier (the general-purpose best) since, being generic divergences, they
+don't target one verifier's acceptance formula the way the others do.
+
+⁴ **Why BV/GBV collapse, and why a `bv_log`/`gbv_log` would NOT fix it.**
+BV/GBV's per-node weight is the same single-token ratio gate described in
+note 1 (`w_i = w_{i-1} · p[token]/q[token]`), not a many-term product of
+otherwise-healthy per-node α's. The log-space trick (note 2) only helps when
+each term is bounded away from zero and the failure is the *product of many
+small-but-positive numbers underflowing* — it does nothing when a *single*
+factor can hit exactly zero, since `log(0) = -∞` collapses that one step
+regardless of aggregation. Rescuing BV/GBV needs a new per-node α formula
+that is structurally non-zero (the same fix already applied to get from
+`_bv_path_loss` to `_alpha_naive` for traversal), not a log wrapper on the
+existing one. Until that exists, treat `bv_tree`/`gbv_tree` as broken.
+
+⁵ **`op_naive_tree`/`op_naive_tree_full` vs `naive_tree`/`naive_tree_full`: the
+loss formula is byte-identical** (`_telescoping_loss(_alpha_naive, ...)`,
+same `detach_survival` split) — see `losses/tree.py`. The *only* difference is
+which paths get scored: `naive_tree` scores the draft's own sampled paths
+(on-policy); `op_naive_tree` scores the teacher's own greedy rollout path
+(off-policy), via `train.py`'s `compute_offpolicy_tree_loss()` routing, not a
+different math. Why it matters: on-policy naive_tree can collapse on hard
+prompts because draft-sampled tokens can have low acceptance (small `α`),
+vanishing the survival product early; scoring the teacher's own path instead
+guarantees each node's `p[token]` is high (it's the teacher's own choice), so
+survival stays non-negligible and the gradient stays healthy.
+
+**On comparing val curves across different tree losses:** each verifier-aligned
+loss is checkpoint-selected on the *same verifier it's aligned to*
+(`LOSS_TO_VERIFIER` in `losses/__init__.py`) — `nss_tree`'s `val/block_eff` is
+NSS-verifier BE, `specinfer_tree`'s is SpecInfer-verifier BE, etc. **These
+training-time val curves are not directly comparable to each other** — they're
+different metrics by design, not different runs of the same measurement. To
+compare losses head-to-head, use `eval.py`'s full multi-verifier sweep (or
+`scripts/analyze_evals.py`) post-hoc, which evaluates every checkpoint under
+every verifier on the same footing — not the training-time val curves.
 
 ### Enrichment (`jsd_flat_enrich`, `jsd_enrich`)
 
@@ -347,8 +396,8 @@ the DDTE delayed-expansion passes (`--L1_adaptive` and fixed `--L1` 3/4/5 on
 traversal+specinfer). `scripts/eval_grid.sh` runs that grid and writes one CSV per
 checkpoint to `$OUT/logs/<name>.csv` — which is exactly what `analyze_evals.py` consumes.
 
-Set `OUT` (checkpoint+log root, **required** — no personal default is baked in) and
-`TEACHER`; `REPO` is derived from the script's own location. Two modes:
+Set `OUT` (checkpoint+log root, **required**) and `TEACHER`; `REPO` is derived
+from the script's own location. Two modes:
 
 ```bash
 export OUT=<your output root>          # checkpoints at $OUT/checkpoints/<name>/ckpt_best
