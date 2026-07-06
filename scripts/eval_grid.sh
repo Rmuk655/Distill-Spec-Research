@@ -25,10 +25,9 @@
 #     bash scripts/eval_grid.sh <gpu> <name>
 #     e.g.: bash scripts/eval_grid.sh 0 traversal_log_K3_L8_math_hard_s123
 #
-# Reusable across model pairs / boxes via env var overrides (all optional,
-# default to the 1.7B/32B capacity-study values below):
-#   OUT        — checkpoint+log root. Checkpoints expected at $OUT/checkpoints/<name>/ckpt_best
-#   TEACHER    — HF id of the eval-time teacher
+# Reusable across model pairs / boxes via env var overrides:
+#   OUT        — checkpoint+log root (REQUIRED). Checkpoints expected at $OUT/checkpoints/<name>/ckpt_best
+#   TEACHER    — HF id of the eval-time teacher (default below)
 #   NAMES_CSV  — comma-separated checkpoint dir names (full-grid mode only;
 #                overrides the default 8-checkpoint NAMES array below,
 #                one GPU per entry, GPU index = array index)
@@ -64,17 +63,24 @@
 #                comparisons only), or FORCE_ATTN=auto to restore the old
 #                per-machine auto-select behavior.
 # e.g. (0.6B/8B box, 3 checkpoints, math_eval only, no delayed-L1 sweep):
-#   OUT=/sensei-fs-3/users/rkrishna TEACHER=Qwen/Qwen3-8B DATASETS=math_eval \
+#   OUT="$OUT" TEACHER=Qwen/Qwen3-8B DATASETS=math_eval \
 #     NAMES_CSV=jsd_flat_enrich_K3_math_hard_s123,jsd_flat_enrich_K3_temp07_math_hard_s123,jsd_flat_enrich_K4_math_hard_s123 \
-#     nohup bash scripts/eval_grid.sh > /sensei-fs-3/users/rkrishna/output/eval_grid_driver.out 2>&1 &
+#     nohup bash scripts/eval_grid.sh > "$OUT/output/eval_grid_driver.out" 2>&1 &
+#
+# Env vars this script needs (set once, e.g. in your shell profile):
+#   OUT   — checkpoint+log root (REQUIRED; no default so nothing box-specific is baked in).
+#           Checkpoints expected at $OUT/checkpoints/<name>/ckpt_best.
+#   REPO  — repo root; defaults to this script's parent dir, so normally unset.
 #
 # Intermediate results: $OUT/logs/<name>.csv — one row per completed
 # (checkpoint, dataset, mode, K, L) tuple written by eval.py as it finishes.
 # Resumable: re-running skips already-completed rows.
 set -uo pipefail   # NOT -e: one failed eval cell must not kill the other 7 GPUs' loops
 
-REPO=/home/colligo/Distill-Spec-Research
-OUT="${OUT:-/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B}"
+# REPO defaults to the parent of this script's directory (scripts/..), so the
+# script is portable to any checkout without editing a hardcoded path.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+OUT="${OUT:?set OUT to your checkpoint+log root, e.g. export OUT=/your/output/root}"
 TEACHER="${TEACHER:-Qwen/Qwen3-32B}"
 MODES="${MODES:-naive,nss,specinfer,spectr,khisti,max,bv,gbv,traversal}"
 DELAYED_MODES="${DELAYED_MODES:-traversal,specinfer}"   # the two verifiers L1 is theoretically motivated for

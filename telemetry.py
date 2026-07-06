@@ -347,9 +347,10 @@ def _auto_cpu_threads() -> int:
     With N_gpus eval processes sharing C physical CPU cores, each process should
     use at most C // N_gpus threads so they don't thrash each other's CPU caches.
     For this workload (GPU-bound eval), the practical impact is small but it
-    prevents the 4 × 96 = 384-thread scenario on a 4-GPU / 96-core server.
+    prevents the oversubscription scenario (e.g. 4 procs × 96 threads on a
+    96-core box) when several evals run at once.
 
-    Example (our server): 96 cores, 4 GPUs → 24 threads per eval process.
+    Example: 96 cores, 4 GPUs → 24 threads per eval process.
     """
     n_gpus = max(1, torch.cuda.device_count() if torch.cuda.is_available() else 1)
     try:

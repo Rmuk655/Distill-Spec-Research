@@ -276,8 +276,8 @@ def parse_args():
     ap.add_argument("--cpu_threads", type=int, default=None,
                     help="Override the auto-computed PyTorch CPU thread count.  "
                          "Auto default: physical_cores // num_gpus (e.g. 96 cores / 4 GPUs = 24).  "
-                         "When 4 evals run simultaneously (1 per GPU), each needs its own CPU "
-                         "budget so the 4 processes don't compete for the same 96 cores.  "
+                         "When several evals run simultaneously (1 per GPU), each needs its own CPU "
+                         "budget so the processes don't compete for the same cores.  "
                          "Within a single eval, prompts are always sequential; these threads "
                          "are for PyTorch intra-op parallelism (BLAS etc.), not prompt batching.")
     ap.add_argument("--output",    default=None,

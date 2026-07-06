@@ -10,9 +10,9 @@ per-process re-quantization from raw bf16 weights.
 Run this ONCE before launching a batch of parallel runs that share a large
 quantized teacher (e.g. 8 concurrent 1.7B/32B training runs).
 
-Usage:
+Usage (set OUT to your output root first, e.g. export OUT=/your/output/root):
     python scripts/quantize_teacher.py --model Qwen/Qwen3-32B \
-        --output /sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/checkpoints/Qwen3-32B-nf4
+        --output "$OUT/Qwen32B-Qwen1.7B/checkpoints/Qwen3-32B-nf4"
 """
 import argparse
 import os

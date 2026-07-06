@@ -44,5 +44,5 @@ Every family above trains on **teacher-context tokens** except enrichment. The u
 
 - **Per-checkpoint eval rows:** `results.csv` (0.6B/8B pair, root of repo) and `Results/*.csv` (named per experiment batch — see filenames for which sweep).
 - **Training curves:** wandb project `distillspec-pipeline`; every run tagged with loss, dataset, K, L, and (as of the 1.7B/32B study) the model pair.
-- **Raw logs / stdout:** for the 1.7B/32B study, `/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/{checkpoints,logs,output}`.
+- **Raw logs / stdout:** for the 1.7B/32B study, under `$OUT/Qwen32B-Qwen1.7B/{checkpoints,logs,output}` (with `OUT` your output root).
 - **CLI reference:** [`README.md`](README.md) — every flag used above, grouped by experiment family.
