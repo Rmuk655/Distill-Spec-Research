@@ -432,6 +432,21 @@ diverged / crashed / single-seed runs), and a self-contained sortable `report.ht
 (open in a browser — no server needed; sparklines included if matplotlib is present).
 Runs comfortably on a laptop; needs `wandb` + `pandas` (`pyarrow`/`matplotlib` optional).
 
+**Fuse training with eval into one per-variant sheet** (`--join_evals`). Point it at an
+`analyze_evals.py` `master_long.csv` and it joins eval outcomes to training runs on the
+**W&B run id** — an exact join via the eval CSV's `training_wandb_url` column, not fuzzy
+name matching — and emits `variant_summary_grouped.csv`: one row per loss variant with
+training convergence (best val, steps-to-best, overfit drop, seed spread) **and** eval
+outcome vs JSD (best deployment-verifier BE + Δ) **and** a rule-based verdict
+(`beats JSD (broad/narrow)` / `ties JSD` / `no signal` / `overfits in training`). This is
+the "how did each loss variant do in training, at eval, did it beat JSD" summary in one table.
+
+```bash
+python scripts/analyze_wandb.py --entity <e> --projects distillspec-pipeline \
+    --join_evals "${OUT}/analysis/**/master_long.csv" \
+    --deploy_mode traversal --deploy_dataset math_eval --out wandb_analysis
+```
+
 ### Reproducibility protocol — 1 eval per GPU
 
 On a multi-GPU box, to get comparable numbers across runs (example uses 4 GPUs):
