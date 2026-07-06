@@ -70,7 +70,8 @@ Distill-Spec-Research/
 │   ├── setup_a100.sh          # one-shot env setup wrapper
 │   ├── eval_grid.sh           # full post-training eval sweep, one GPU per checkpoint (see script header)
 │   ├── analyze_evals.py       # cross-checkpoint comparison across eval CSVs (pivots, Δ-vs-JSD heatmaps, K-trends)
-│   └── analysis_buckets.json  # named comparison battery for analyze_evals.py --config
+│   ├── analysis_buckets.json  # named comparison battery for analyze_evals.py --config
+│   └── analyze_wandb.py       # W&B training-run convergence analysis (job_type=train) → ranked CSV + HTML report
 ├── checkpoints/         # train.py writes here (gitignored)
 ├── results.csv          # eval.py appends one row per (mode × K × L × dataset)
 └── requirements.txt
@@ -399,6 +400,37 @@ per `(pair, dataset)`: `pivot_*.csv` / `delta_*.csv` (checkpoint × mode_K),
 interaction), `k_trends_*.png` (block_eff vs K, one panel per verifier), plus
 ranked `best_combos.csv` and `beats_baseline.csv` across everything loaded.
 Plotting needs matplotlib; the CSV/table outputs work without it.
+
+### Training-run analysis (`analyze_wandb.py`)
+
+`analyze_evals.py` reads the final eval CSVs; `scripts/analyze_wandb.py` reads the
+**training** runs straight from the W&B Public API (`job_type=train`) and turns their
+metric histories into convergence insights — "which loss family / K / L / teacher_temp
+trains best, how fast, how stably, how seed-robustly" without clicking through dozens of
+runs. Auth is via `WANDB_API_KEY` (same as the `wandb` CLI; no key in code).
+
+```bash
+export WANDB_API_KEY=...
+# first run: pull live from W&B and cache
+python scripts/analyze_wandb.py --entity <your-wandb-entity> \
+    --projects distillspec-pipeline --out wandb_analysis --refresh
+# later runs: read the cache (fast, offline) — drop --refresh
+python scripts/analyze_wandb.py --entity <e> --projects distillspec-pipeline --out wandb_analysis
+```
+
+It **caches** pulled runs + histories under `<out>/cache/` (parquet, CSV fallback), so
+re-runs are instant and work offline; `--refresh` re-pulls live. Per run it derives
+convergence features on `--primary_metric` (default `val/block_eff`): best + best-step,
+final, drop-from-best (overfit signature), steps-to-90%-of-gain (convergence speed),
+plateau step, normalized AUC, last-window mean/std (stability), early slope, monotonic
+fraction, plus loss min/final, grad-nonzero fraction, forgetting trend, and within-run
+loss↔metric Spearman coupling (the H0 diagnostic). Outputs: `runs_summary.csv` (one row
+per run, ranked), `seed_groups.csv` (config-minus-seed groups with mean/std/spread of
+best — the seed-robustness lens), `hyperparam_effects.csv` (marginal mean-best per
+hyperparameter value — a crude from-logs ablation), `flags.csv` (overfit / stuck /
+diverged / crashed / single-seed runs), and a self-contained sortable `report.html`
+(open in a browser — no server needed; sparklines included if matplotlib is present).
+Runs comfortably on a laptop; needs `wandb` + `pandas` (`pyarrow`/`matplotlib` optional).
 
 ### Reproducibility protocol — 1 eval per GPU
 
