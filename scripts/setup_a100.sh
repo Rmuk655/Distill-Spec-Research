@@ -216,7 +216,7 @@ if [ "${SKIP_DATA}" != "1" ]; then
 fi
 
 # 6b. model weights — cache to the default HF cache (~/.cache/huggingface, local
-#     box disk; NOT /sensei-fs-3). Idempotent: hf skips files already present.
+#     box disk; NOT a shared network filesystem). Idempotent: hf skips files already present.
 #     Both pairs so either the 0.6B/8B default or the 1.7B/32B capacity study
 #     runs without a cold-start download. Skip with --no-models.
 if [ "${SKIP_MODELS}" != "1" ]; then

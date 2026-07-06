@@ -67,9 +67,10 @@ Distill-Spec-Research/
 │   ├── download.py      # fetch gsm8k / math_hard / math_val / alpaca / math500 / humaneval / mtbench / spec_bench
 │   └── raw/             # downloaded JSONL files (gitignored)
 ├── scripts/
-│   ├── setup_a100.sh    # one-shot env setup wrapper
-│   └── eval_grid.sh     # full post-training eval sweep, one GPU per checkpoint (see script header)
-├── analyze_evals.py     # cross-checkpoint comparison across eval CSVs (pivots, Δ-vs-JSD heatmaps, K-trends)
+│   ├── setup_a100.sh          # one-shot env setup wrapper
+│   ├── eval_grid.sh           # full post-training eval sweep, one GPU per checkpoint (see script header)
+│   ├── analyze_evals.py       # cross-checkpoint comparison across eval CSVs (pivots, Δ-vs-JSD heatmaps, K-trends)
+│   └── analysis_buckets.json  # named comparison battery for analyze_evals.py --config
 ├── checkpoints/         # train.py writes here (gitignored)
 ├── results.csv          # eval.py appends one row per (mode × K × L × dataset)
 └── requirements.txt
@@ -340,21 +341,23 @@ Open it in pandas / Excel — one row per (checkpoint × mode × K × L × datas
 ### Cross-checkpoint comparison (`analyze_evals.py`)
 
 `eval_grid.sh` writes one CSV per checkpoint under `$OUT/logs/`. Once you have
-several, `analyze_evals.py` consolidates them into one tidy table and answers
-"does loss X beat JSD, and is it general or specific to one verifier/K?":
+several, `scripts/analyze_evals.py` consolidates them into one tidy table and
+answers "does loss X beat JSD, and is it general or specific to one verifier/K?".
+Glob patterns are expanded with `$VARS`/`~`, so set your output root once
+(`export OUT=<your output root>`) and reference `${OUT}` in patterns:
 
 ```bash
-python analyze_evals.py \
-    --glob "/sensei-fs-3/users/rkrishna/**/logs/*.csv" \
-    --out  /sensei-fs-3/users/rkrishna/analysis \
+python scripts/analyze_evals.py \
+    --glob "${OUT}/**/logs/*.csv" \
+    --out  "${OUT}/analysis" \
     --metric block_eff
 
 # Compare a specific SET of checkpoints — e.g. plain JSD vs an enrich family at K=3..6.
 # --glob takes multiple patterns (glob alone has no OR operator; character classes
 # like [3-6] work, brace lists like {3,4,5,6} do not):
-python analyze_evals.py \
-    --glob "$OUT/logs/jsd_mathhard_s123.csv" "$OUT/logs/jsd_flat_enrich_K[3-6]_*.csv" \
-    --out  /tmp/enrich_vs_jsd \
+python scripts/analyze_evals.py \
+    --glob "${OUT}/logs/jsd_mathhard_s123.csv" "${OUT}/logs/jsd_flat_enrich_K[3-6]_*.csv" \
+    --out  "${OUT}/analysis/enrich_vs_jsd" \
     --baseline_regex "^jsd_mathhard_s123$"
 ```
 
@@ -365,14 +368,15 @@ python analyze_evals.py \
 **Run the whole comparison battery at once with `--config`.** Rather than paste
 a separate invocation per question, define named buckets (each with its own globs
 and baseline) in a JSON/YAML file and run them all into `<--out>/<name>/`. The
-repo ships [`analysis_buckets.json`](analysis_buckets.json) covering the standing
-questions (tree-log vs JSD, enrich vs JSD, PO-cold vs JSD, PO-warm vs JSD, and the
-within-family "which PO objective" comparisons) across both the 0.6B/8B and
-1.7B/32B log roots — edit the globs as new checkpoints land, then:
+repo ships [`scripts/analysis_buckets.json`](scripts/analysis_buckets.json)
+covering the standing questions (tree-log vs JSD, enrich vs JSD, PO-cold vs JSD,
+PO-warm vs JSD, and the within-family "which PO objective" comparisons) across
+both the 0.6B/8B and 1.7B/32B log roots — its paths use `${OUT}`, so just export
+`OUT` first; edit the globs as new checkpoints land, then:
 
 ```bash
-python analyze_evals.py --config analysis_buckets.json \
-    --out /sensei-fs-3/users/rkrishna/analysis
+python scripts/analyze_evals.py --config scripts/analysis_buckets.json \
+    --out "${OUT}/analysis"
 ```
 
 Each bucket prints its own beats-baseline count and the run ends with a roll-up.
@@ -398,7 +402,7 @@ Plotting needs matplotlib; the CSV/table outputs work without it.
 
 ### Reproducibility protocol — 1 eval per GPU
 
-Our server has **4 GPUs and 96 CPU cores**.  To get comparable numbers across runs:
+On a multi-GPU box, to get comparable numbers across runs (example uses 4 GPUs):
 
 ```bash
 # Run each eval pinned to its own GPU — --device cuda:N is the only flag needed.
@@ -418,7 +422,7 @@ wait
 | Prompts in file order, no shuffle | `load_prompts_jsonl()[:n]` is deterministic; never shuffle before eval |
 | `--dtype bf16` (default) | Mixed precision changes numerics and throughput |
 | Teacher loaded first, draft second | Already enforced in `load_models()` |
-| `--cpu_threads` auto-detected | Default is `physical_cores // num_gpus` (96 / 4 = 24 on our server) — prevents CPU cache thrashing across 4 parallel evals |
+| `--cpu_threads` auto-detected | Default is `physical_cores // num_gpus` (e.g. 96 cores / 4 GPUs = 24) — prevents CPU cache thrashing across parallel evals |
 | `--force_attn` defaults to `sdpa` (changed 2026-07-06) | Transformers used to auto-select the draft model's attention backend based on whether flash-attn happens to be installed on that particular box — two machines could silently disagree (`sdpa` vs `flash_attention_2`). Decoding is stochastic and speculative-decoding acceptance is a threshold test, so bf16 rounding differences between kernels can flip a sampled token or an accept/reject decision, cascading through the rest of that prompt's generation. Observed deltas up to ~0.2 block_eff between otherwise-identical `sdpa` vs `sdpa+flash_attention_2` runs — comparable to the n=100 seed-noise floor, not a bug, but don't mix backends within one comparison. `eval.py`/`eval_grid.sh` (`FORCE_ATTN` env var) now pin the draft to `sdpa` by default everywhere so this can't recur silently. Pass `--force_attn flash_attention_2` to opt into the faster draft path deliberately (matched-backend comparisons only), or `--force_attn auto` to restore the old per-machine behavior. The target always stays on whatever its tree-attention mask requires, regardless of this flag. The CSV's `attn_backend` column always records what actually ran, including for checkpoints evaluated before this default changed. |
 
 **Interpreting GPU telemetry:**

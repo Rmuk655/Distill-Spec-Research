@@ -21,21 +21,25 @@ Design choices baked in:
   * Δ smaller than --noise (default 0.15, the n=100 SE floor) is treated as "no
     signal": grayed out in heatmaps and excluded from the beats-JSD list.
 
-Usage (run on the box where the CSVs live):
-    python analyze_evals.py \
-        --glob "/sensei-fs-3/users/rkrishna/**/logs/*.csv" \
-        --out  /sensei-fs-3/users/rkrishna/analysis \
+Glob patterns are expanded with $VARS and ~ before matching, so paths stay
+machine-agnostic — set your output root once (e.g. `export OUT=/your/output/root`)
+and reference `${OUT}` in patterns / the --config file instead of hardcoding it.
+
+Usage (run on the box where the CSVs live; assumes `export OUT=<your root>`):
+    python scripts/analyze_evals.py \
+        --glob "${OUT}/**/logs/*.csv" \
+        --out  "${OUT}/analysis" \
         --metric block_eff
 
     # only the 1.7B/32B pair, tighter noise floor:
-    python analyze_evals.py --glob "...**/logs/*.csv" --pair "1.7B/32B" --noise 0.10
+    python scripts/analyze_evals.py --glob "${OUT}/**/logs/*.csv" --pair "1.7B/32B" --noise 0.10
 
 Outputs (under --out):
     master_long.csv                      deduped tidy table + derived cols + delta
     pivot_<pair>_<dataset>.csv           block_eff, rows=checkpoint, cols=mode_K
-    delta_<pair>_<dataset>.csv           same but Δ vs JSD baseline
+    delta_<pair>_<dataset>.csv           same but Δ vs baseline
     best_combos.csv                      ranked (checkpoint,mode,K) per pair/dataset
-    beats_jsd.csv                        only rows with Δ > noise (with which modes/Ks)
+    beats_baseline.csv                   only rows with Δ > noise (with which modes/Ks)
     delta_heat_<pair>_<dataset>.png      checkpoint × mode×K Δ heatmap
     lossverifier_<pair>_<dataset>.png    checkpoint × mode Δ heatmap (mean over K)
     k_trends_<pair>_<dataset>.png        block_eff vs K, one panel per verifier
@@ -121,9 +125,15 @@ def load_all(glob_pats) -> pd.DataFrame:
     """
     if isinstance(glob_pats, str):
         glob_pats = [glob_pats]
-    files = sorted({f for pat in glob_pats for f in glob.glob(pat, recursive=True)})
+    # Expand $VARS / ~ so patterns can be written machine-agnostically (e.g.
+    # "${OUT}/logs/*.csv") and resolved from the environment at run time.
+    files = sorted({f for pat in glob_pats
+                    for f in glob.glob(os.path.expanduser(os.path.expandvars(pat)),
+                                       recursive=True)})
     if not files:
-        raise SystemExit(f"No CSVs matched: {glob_pats}")
+        # ValueError (not SystemExit) so a --config battery can skip an
+        # empty/pending bucket and continue with the rest.
+        raise ValueError(f"No CSVs matched: {glob_pats}")
     frames = []
     for f in files:
         try:
@@ -347,7 +357,12 @@ def run_analysis(glob_pats, out, metric="block_eff",
     Returns the beats-baseline DataFrame (may be empty)."""
     tag_pfx = f"[{label}] " if label else ""
     os.makedirs(out, exist_ok=True)
-    df, attn_conflicts = normalize(load_all(glob_pats), prefer_attn=prefer_attn)
+    try:
+        raw = load_all(glob_pats)
+    except ValueError as e:
+        print(f"{tag_pfx}[warn] {e} — skipping (files not present yet?).")
+        return pd.DataFrame()
+    df, attn_conflicts = normalize(raw, prefer_attn=prefer_attn)
     if attn_conflicts is not None:
         cpath = os.path.join(out, "attn_backend_conflicts.csv")
         attn_conflicts.to_csv(cpath, index=False)
