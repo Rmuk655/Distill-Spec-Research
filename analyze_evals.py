@@ -132,8 +132,36 @@ def load_all(glob_pat: str) -> pd.DataFrame:
     return df
 
 
-def normalize(df: pd.DataFrame) -> pd.DataFrame:
-    """Coerce types, derive identity columns, drop failed rows, dedupe to latest."""
+def _prefers_attn(attn_backend, prefer_attn: str) -> int:
+    """1 if this row's logged attn_backend matches the preferred DRAFT backend, else 0.
+
+    attn_backend format (telemetry._model_attn_backend): distinct impls across
+    target+draft joined with '+', e.g. 'sdpa' (both sdpa) or 'sdpa+flash_attention_2
+    (flash_attn-x)' (target sdpa, draft FA2 — target is ALWAYS sdpa, its tree-attention
+    mask is incompatible with FA2, see eval-attn-backend-cross-machine-divergence memory).
+    So presence/absence of 'flash_attention_2' in the string tells you the draft's backend.
+    """
+    has_fa2 = "flash_attention_2" in str(attn_backend)
+    return int(has_fa2 if prefer_attn == "flash_attention_2" else not has_fa2)
+
+
+def normalize(df: pd.DataFrame, prefer_attn: str = "sdpa"):
+    """Coerce types, derive identity columns, drop failed rows, dedupe to latest.
+
+    Cross-machine eval sweeps can silently mix attn_backend for the same
+    (checkpoint,dataset,mode,K,L) cell (Transformers auto-selects the draft's backend
+    per-machine based on local flash-attn availability) — this changes block_eff by
+    up to ~0.2 (bf16 rounding flips a sampled token / accept-reject decision in
+    stochastic decoding), comparable to the n=100 seed-noise floor. Rather than
+    silently keeping "whichever ran last" for a contaminated cell, dedup here breaks
+    ties toward `prefer_attn` (default "sdpa", matching eval.py's default since
+    2026-07-06) and flags every contaminated cell.
+
+    Returns (deduped_df, conflicts_df). conflicts_df is None if attn_backend isn't in
+    the data or no cell had more than one distinct backend; otherwise it holds the RAW
+    (pre-dedup) rows for every contaminated cell, side by side, for audit — write it to
+    a CSV rather than trusting the dedupe silently.
+    """
     for c in ("block_eff", "throughput_tok_s", "K", "L", "n_prompts",
               "target_calls", "avg_tree_nodes", "L1"):
         if c in df.columns:
@@ -149,18 +177,39 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["pair"] = "unknown"
     df["mode_K"] = df["mode"].astype(str) + "_K" + df["K"].astype("Int64").astype(str)
-
-    # Append-mode CSVs → keep the LATEST row per identity tuple.
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     key = ["checkpoint_name", "pair", "dataset", "mode", "K", "L"]
-    df = (df.sort_values("timestamp")
+
+    conflicts = None
+    if "attn_backend" in df.columns:
+        n_backends = df.groupby(key)["attn_backend"].nunique(dropna=True)
+        mixed_keys = n_backends[n_backends > 1].index
+        if len(mixed_keys):
+            conflicts = (df.set_index(key).loc[mixed_keys]
+                          .reset_index().sort_values(key + ["timestamp"]))
+            print(f"[warn] {len(mixed_keys)} (checkpoint,dataset,mode,K,L) cells have "
+                  f"MIXED attn_backend across duplicate rows (cross-machine contamination) "
+                  f"— keeping the '{prefer_attn}'-preferring row per cell (or latest if "
+                  f"neither matches). Full conflicting rows written to "
+                  f"attn_backend_conflicts.csv for audit — spot-check before trusting "
+                  f"deltas on those specific cells.")
+        df["_prefers_attn"] = df["attn_backend"].map(lambda s: _prefers_attn(s, prefer_attn))
+    else:
+        df["_prefers_attn"] = 0
+
+    # Append-mode CSVs → keep the latest row per identity tuple, but break ties toward
+    # the preferred backend first (stable sort: within each key's rows, non-preferred
+    # sort before preferred, earlier timestamp before later — keep="last" then picks
+    # the preferred backend's latest row whenever one exists for that key).
+    df = (df.sort_values(["_prefers_attn", "timestamp"])
             .drop_duplicates(subset=key, keep="last")
+            .drop(columns=["_prefers_attn"])
             .reset_index(drop=True))
     print(f"[norm] {len(df)} rows after dedupe  |  "
           f"{df['checkpoint_name'].nunique()} checkpoints  |  "
           f"pairs={sorted(df['pair'].unique())}  |  "
           f"datasets={sorted(df['dataset'].unique())}")
-    return df
+    return df, conflicts
 
 
 # --------------------------------------------------------------------------- #
@@ -293,10 +342,24 @@ def main():
                     help="Δ below this magnitude is treated as no-signal (n=100 SE floor).")
     ap.add_argument("--pair", default=None, help="Restrict to one pair, e.g. '1.7B/32B'.")
     ap.add_argument("--dataset", default=None, help="Restrict to one dataset, e.g. math_eval.")
+    ap.add_argument("--prefer_attn", default="sdpa", choices=["sdpa", "flash_attention_2"],
+                    help="When a (checkpoint,dataset,mode,K,L) cell has rows from multiple "
+                         "machines with different draft attn_backend (cross-machine "
+                         "contamination), keep the row matching this backend instead of "
+                         "silently keeping whichever ran last. Default 'sdpa' matches eval.py's "
+                         "default since 2026-07-06. Every contaminated cell is still flagged "
+                         "and written to attn_backend_conflicts.csv regardless of this choice.")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    df = normalize(load_all(args.glob))
+    df, attn_conflicts = normalize(load_all(args.glob), prefer_attn=args.prefer_attn)
+    if attn_conflicts is not None:
+        conflicts_path = os.path.join(args.out, "attn_backend_conflicts.csv")
+        attn_conflicts.to_csv(conflicts_path, index=False)
+        _n_cells = attn_conflicts.drop_duplicates(
+            ["checkpoint_name", "pair", "dataset", "mode", "K", "L"]).shape[0]
+        print(f"[out ] {conflicts_path} ({len(attn_conflicts)} raw rows across "
+              f"{_n_cells} contaminated cells)")
     if args.pair:
         df = df[df["pair"] == args.pair]
     if args.dataset:
