@@ -339,6 +339,47 @@ Every eval cell appends one row to `results.csv`.  Key columns:
 
 Open it in pandas / Excel — one row per (checkpoint × mode × K × L × dataset).
 
+### Full eval sweep (`scripts/eval_grid.sh`)
+
+Running `eval.py` by hand is fine for one checkpoint, but the reported numbers come from
+a **full sweep** per checkpoint: every verifier mode × K=1..4 × both eval datasets, plus
+the DDTE delayed-expansion passes (`--L1_adaptive` and fixed `--L1` 3/4/5 on
+traversal+specinfer). `scripts/eval_grid.sh` runs that grid and writes one CSV per
+checkpoint to `$OUT/logs/<name>.csv` — which is exactly what `analyze_evals.py` consumes.
+
+Set `OUT` (checkpoint+log root, **required** — no personal default is baked in) and
+`TEACHER`; `REPO` is derived from the script's own location. Two modes:
+
+```bash
+export OUT=<your output root>          # checkpoints at $OUT/checkpoints/<name>/ckpt_best
+
+# Single checkpoint on one GPU:  bash eval_grid.sh <gpu> <checkpoint_name>
+CUDA_VISIBLE_DEVICES=0 OUT=$OUT TEACHER=Qwen/Qwen3-8B \
+  nohup bash scripts/eval_grid.sh 0 jsd_mathhard_s123 \
+  >> "$OUT/output/jsd_mathhard_s123_eval.out" 2>&1 &
+
+# Full grid, one GPU per checkpoint (checkpoint list via NAMES_CSV, GPU = list index):
+OUT=$OUT TEACHER=Qwen/Qwen3-8B \
+  NAMES_CSV=jsd_mathhard_s123,jsd_flat_enrich_K3_math_hard_s123,traversal_log_K3_L8_math_hard_s123 \
+  nohup bash scripts/eval_grid.sh > "$OUT/output/eval_grid_driver.out" 2>&1 &
+```
+
+**Resumable by construction:** `eval.py` caches completed `(mode,K,L,checkpoint,dataset)`
+work per-prompt (`$OUT/logs/logs/*.state.jsonl`), so re-running the same command skips
+finished cells and continues incomplete ones — safe to kill and restart. Tunable via env
+vars (all optional except `OUT`): `MODES`, `KS`, `DATASETS`, `DELAYED_MODES`, `L1_VALUES`,
+`SEED`, `FORCE_ATTN` (default `sdpa`), `COMPILE` (**broken — leave off**); see the script
+header for the full list. Progress and any errors go to `$OUT/output/<name>_eval.out`
+(the script redirects its own logging there — the outer shell redirect only catches
+`nohup`'s banner).
+
+> **Two footguns this script has bitten on before:** (1) a stray space in the redirect
+> filename splits it into an extra positional arg, silently kicking off the *default*
+> 8-checkpoint grid instead of your single checkpoint — keep the `>> …_eval.out` target
+> one unbroken token. (2) `OUT`/`TEACHER` set as plain shell variables on their own line
+> are **not** exported to the `bash` subprocess — inline them on the command (as above) or
+> `export` them first, or the script falls back to defaults and looks in the wrong root.
+
 ### Cross-checkpoint comparison (`analyze_evals.py`)
 
 `eval_grid.sh` writes one CSV per checkpoint under `$OUT/logs/`. Once you have
