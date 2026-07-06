@@ -362,6 +362,25 @@ python analyze_evals.py \
 `checkpoint_name`) for when CSVs aren't neatly one-per-checkpoint — e.g. a shared
 `logs/` directory with unrelated checkpoints appended into fewer files.
 
+**Run the whole comparison battery at once with `--config`.** Rather than paste
+a separate invocation per question, define named buckets (each with its own globs
+and baseline) in a JSON/YAML file and run them all into `<--out>/<name>/`. The
+repo ships [`analysis_buckets.json`](analysis_buckets.json) covering the standing
+questions (tree-log vs JSD, enrich vs JSD, PO-cold vs JSD, PO-warm vs JSD, and the
+within-family "which PO objective" comparisons) across both the 0.6B/8B and
+1.7B/32B log roots — edit the globs as new checkpoints land, then:
+
+```bash
+python analyze_evals.py --config analysis_buckets.json \
+    --out /sensei-fs-3/users/rkrishna/analysis
+```
+
+Each bucket prints its own beats-baseline count and the run ends with a roll-up.
+The **primary** buckets keep JSD as the baseline (it's what you're trying to
+beat); a few **secondary** buckets set `baseline_regex` to a within-family
+reference (e.g. `po_logprob`) to ask "which variant is best" — deliberately, not
+via all-pairs, which would just inflate false positives at the noise floor.
+
 Dedupes append-mode CSVs to the latest row per `(checkpoint, dataset, mode, K, L)`,
 computes `Δ = block_eff − JSD baseline` (baseline = mean over checkpoints
 matching `--baseline_regex`, default plain flat-JSD, averaged across seeds),
@@ -374,8 +393,8 @@ conflicting rows land in `attn_backend_conflicts.csv` for audit. Outputs
 per `(pair, dataset)`: `pivot_*.csv` / `delta_*.csv` (checkpoint × mode_K),
 `lossverifier_*.png` (checkpoint × mode, Δ averaged over K — the loss↔verifier
 interaction), `k_trends_*.png` (block_eff vs K, one panel per verifier), plus
-ranked `best_combos.csv` and `beats_jsd.csv` across everything loaded. Plotting
-needs matplotlib; the CSV/table outputs work without it.
+ranked `best_combos.csv` and `beats_baseline.csv` across everything loaded.
+Plotting needs matplotlib; the CSV/table outputs work without it.
 
 ### Reproducibility protocol — 1 eval per GPU
 
