@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -335,117 +336,185 @@ def _slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", str(s)).strip("-")
 
 
+def run_analysis(glob_pats, out, metric="block_eff",
+                 baseline_regex=r"^jsd_math_?hard_s\d+$", noise=0.15,
+                 pair=None, dataset=None, prefer_attn="sdpa",
+                 checkpoint_regex=None, label=""):
+    """One comparison: load a bucket of CSVs, compute Δ vs baseline, write tables+plots.
+
+    Everything the single-run CLI does, factored out so --config can call it once
+    per named bucket into its own subfolder. `label` is only for console prefixing.
+    Returns the beats-baseline DataFrame (may be empty)."""
+    tag_pfx = f"[{label}] " if label else ""
+    os.makedirs(out, exist_ok=True)
+    df, attn_conflicts = normalize(load_all(glob_pats), prefer_attn=prefer_attn)
+    if attn_conflicts is not None:
+        cpath = os.path.join(out, "attn_backend_conflicts.csv")
+        attn_conflicts.to_csv(cpath, index=False)
+        _n = attn_conflicts.drop_duplicates(
+            ["checkpoint_name", "pair", "dataset", "mode", "K", "L"]).shape[0]
+        print(f"{tag_pfx}[out ] {cpath} ({len(attn_conflicts)} raw rows across {_n} contaminated cells)")
+    if checkpoint_regex:
+        _crx = re.compile(checkpoint_regex)
+        df = df[df["checkpoint_name"].map(lambda n: bool(_crx.search(n)))]
+        print(f"{tag_pfx}[filter] --checkpoint_regex kept {df['checkpoint_name'].nunique()} "
+              f"checkpoint(s): {sorted(df['checkpoint_name'].unique())}")
+    if pair:
+        df = df[df["pair"] == pair]
+    if dataset:
+        df = df[df["dataset"] == dataset]
+    if df.empty:
+        print(f"{tag_pfx}[warn] no rows after checkpoint_regex/pair/dataset filter — skipping bucket.")
+        return pd.DataFrame()
+    df = add_delta(df, baseline_regex, metric)
+
+    df.to_csv(os.path.join(out, "master_long.csv"), index=False)
+    print(f"{tag_pfx}[out ] master_long.csv ({len(df)} rows)")
+
+    beats = (df[df["delta_vs_base"] > noise]
+             .sort_values("delta_vs_base", ascending=False)
+             [["pair", "dataset", "checkpoint_name", "mode", "K",
+               metric, "baseline", "delta_vs_base"]])
+    beats.to_csv(os.path.join(out, "beats_baseline.csv"), index=False)
+    print(f"{tag_pfx}[out ] beats_baseline.csv ({len(beats)} cells beat baseline by >{noise})")
+
+    best = (df.sort_values(metric, ascending=False)
+              .groupby(["pair", "dataset"], group_keys=False)
+              .head(15)
+              [["pair", "dataset", "checkpoint_name", "mode", "K", metric, "delta_vs_base"]])
+    best.to_csv(os.path.join(out, "best_combos.csv"), index=False)
+
+    for (pr, ds), sub in df.groupby(["pair", "dataset"]):
+        tag = f"{_slug(pr)}_{_slug(ds)}"
+        piv = sub.pivot_table(index="checkpoint_name", columns="mode_K",
+                              values=metric, aggfunc="mean")
+        piv = piv.reindex(sorted(piv.columns, key=lambda c: (c.rsplit("_K", 1)[0],
+                                  int(c.rsplit("_K", 1)[1]))), axis=1)
+        piv.to_csv(os.path.join(out, f"pivot_{tag}.csv"))
+
+        dpiv = sub.pivot_table(index="checkpoint_name", columns="mode_K",
+                               values="delta_vs_base", aggfunc="mean").reindex(piv.columns, axis=1)
+        dpiv.to_csv(os.path.join(out, f"delta_{tag}.csv"))
+        _annotated_heatmap(dpiv, f"Δ{metric} vs baseline — {pr} / {ds}",
+                           os.path.join(out, f"delta_heat_{tag}.png"), noise)
+
+        lv = sub.pivot_table(index="checkpoint_name", columns="mode",
+                             values="delta_vs_base", aggfunc="mean")
+        _annotated_heatmap(lv, f"Δ{metric} vs baseline (mean over K) — {pr} / {ds}",
+                           os.path.join(out, f"lossverifier_{tag}.png"), noise)
+        k_trend_facets(sub, metric, f"{metric} vs K — {pr} / {ds}",
+                       os.path.join(out, f"k_trends_{tag}.png"))
+
+    print(f"{tag_pfx}[done] {out}/")
+    return beats
+
+
+def _run_config(config_path: str, out_root: str):
+    """Run every named bucket in a JSON/YAML config into out_root/<name>/.
+
+    Config schema (JSON shown; .yaml/.yml also accepted if PyYAML is installed):
+        {
+          "defaults": { "metric": "block_eff", "noise": 0.15,
+                        "baseline_regex": "^jsd_math_?hard_s\\\\d+$" },
+          "buckets": [
+            { "name": "enrich_vs_jsd",
+              "glob": ["/…/logs/jsd_mathhard_s123.csv",
+                       "/…/logs/jsd_flat_enrich_*.csv"] },
+            { "name": "po_warm_which_objective",
+              "glob": ["/…/logs/po_*warm*.csv"],
+              "baseline_regex": "logprob.*warm" }
+          ]
+        }
+    Per-bucket keys override defaults: glob (required), baseline_regex, metric,
+    noise, pair, dataset, prefer_attn, checkpoint_regex. `name` → subfolder."""
+    # utf-8-sig: transparently strips a UTF-8 BOM if the config was saved by an
+    # editor/PowerShell that adds one; identical to utf-8 when no BOM is present.
+    if config_path.endswith((".yaml", ".yml")):
+        try:
+            import yaml
+            cfg = yaml.safe_load(open(config_path, encoding="utf-8-sig"))
+        except ImportError:
+            raise SystemExit("PyYAML not installed — convert the config to .json or `pip install pyyaml`.")
+    else:
+        cfg = json.load(open(config_path, encoding="utf-8-sig"))
+
+    defaults = cfg.get("defaults", {})
+    buckets = cfg.get("buckets", [])
+    if not buckets:
+        raise SystemExit(f"No 'buckets' in {config_path}.")
+
+    summary = []
+    for b in buckets:
+        name = b.get("name") or _slug(str(b.get("glob")))
+        params = {**defaults, **b}
+        if "glob" not in params:
+            print(f"[{name}] [warn] no 'glob' — skipping.")
+            continue
+        print(f"\n{'='*70}\n=== bucket: {name}\n{'='*70}")
+        beats = run_analysis(
+            glob_pats=params["glob"],
+            out=os.path.join(out_root, name),
+            metric=params.get("metric", "block_eff"),
+            baseline_regex=params.get("baseline_regex", r"^jsd_math_?hard_s\d+$"),
+            noise=params.get("noise", 0.15),
+            pair=params.get("pair"),
+            dataset=params.get("dataset"),
+            prefer_attn=params.get("prefer_attn", "sdpa"),
+            checkpoint_regex=params.get("checkpoint_regex"),
+            label=name,
+        )
+        summary.append((name, len(beats)))
+
+    print(f"\n{'='*70}\n[config] {len(summary)} buckets done → {out_root}/")
+    for name, nbeats in summary:
+        print(f"    {name:40s}  {nbeats} cell(s) beat baseline")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--glob", required=True, nargs="+",
+    ap.add_argument("--config", default=None,
+                    help="JSON/YAML file defining named comparison buckets (each with its own "
+                         "globs + baseline), run into --out/<name>/. Lets you define the whole "
+                         "'enrich vs jsd / tree-log vs jsd / PO cold vs jsd / PO warm vs jsd / "
+                         "which-PO-objective' battery once and re-run it as new checkpoints land. "
+                         "See _run_config docstring for the schema. When set, --glob is ignored.")
+    ap.add_argument("--glob", nargs="+",
                     help="One or more globs for eval CSVs (quote each; recursive ** supported). "
                          "Pass multiple patterns to select a specific SET of checkpoints that no "
                          "single glob can express — e.g. a plain-JSD baseline plus an enrich "
-                         "family at K=3..6: "
-                         "--glob \"logs/jsd_mathhard_s123.csv\" \"logs/jsd_flat_enrich_K[3-6]_*.csv\" "
+                         "family: --glob \"logs/jsd_mathhard_s123.csv\" \"logs/jsd_flat_enrich_*.csv\" "
                          "(character classes like [3-6] work; brace lists like {3,4,5,6} do NOT "
-                         "— glob has no OR operator, which is why multiple --glob values exist).")
+                         "— glob has no OR operator). Required unless --config is given.")
     ap.add_argument("--checkpoint_regex", default=None,
                     help="After loading, keep only rows whose checkpoint_name matches this "
                          "regex — an independent filter from --glob, for when CSVs aren't neatly "
-                         "one-per-checkpoint (e.g. a shared logs/ directory with many unrelated "
-                         "checkpoints appended into fewer files). E.g. "
-                         "'^jsd_mathhard_s123$|^jsd_flat_enrich_K[3-6]_math_hard_s123$'.")
-    ap.add_argument("--out", default="analysis_out", help="Output directory.")
+                         "one-per-checkpoint. E.g. '^jsd_mathhard_s123$|^po_(nss|logprob)_.*'.")
+    ap.add_argument("--out", default="analysis_out", help="Output directory (root for --config).")
     ap.add_argument("--metric", default="block_eff",
                     help="Metric to compare (block_eff | throughput_tok_s).")
     ap.add_argument("--baseline_regex", default=r"^jsd_math_?hard_s\d+$",
-                    help="Regex over checkpoint_name selecting the JSD baseline(s) "
-                         "to average. Default matches plain flat-JSD (jsd_mathhard_s123 / "
-                         "jsd_math_hard_s456). Use e.g. '^jsd_flat_enrich_K3_' to compare "
-                         "against enrich instead.")
+                    help="Regex over checkpoint_name selecting the baseline(s) to average. Default "
+                         "matches plain flat-JSD (jsd_mathhard_s123 / jsd_math_hard_s456) on both "
+                         "model-pair boxes. Use e.g. 'logprob.*warm' for a within-family baseline.")
     ap.add_argument("--noise", type=float, default=0.15,
                     help="Δ below this magnitude is treated as no-signal (n=100 SE floor).")
     ap.add_argument("--pair", default=None, help="Restrict to one pair, e.g. '1.7B/32B'.")
     ap.add_argument("--dataset", default=None, help="Restrict to one dataset, e.g. math_eval.")
     ap.add_argument("--prefer_attn", default="sdpa", choices=["sdpa", "flash_attention_2"],
-                    help="When a (checkpoint,dataset,mode,K,L) cell has rows from multiple "
-                         "machines with different draft attn_backend (cross-machine "
-                         "contamination), keep the row matching this backend instead of "
-                         "silently keeping whichever ran last. Default 'sdpa' matches eval.py's "
-                         "default since 2026-07-06. Every contaminated cell is still flagged "
-                         "and written to attn_backend_conflicts.csv regardless of this choice.")
+                    help="Tie-break for cross-machine attn_backend contamination per cell. "
+                         "Default 'sdpa' matches eval.py's default since 2026-07-06.")
     args = ap.parse_args()
 
-    os.makedirs(args.out, exist_ok=True)
-    df, attn_conflicts = normalize(load_all(args.glob), prefer_attn=args.prefer_attn)
-    if attn_conflicts is not None:
-        conflicts_path = os.path.join(args.out, "attn_backend_conflicts.csv")
-        attn_conflicts.to_csv(conflicts_path, index=False)
-        _n_cells = attn_conflicts.drop_duplicates(
-            ["checkpoint_name", "pair", "dataset", "mode", "K", "L"]).shape[0]
-        print(f"[out ] {conflicts_path} ({len(attn_conflicts)} raw rows across "
-              f"{_n_cells} contaminated cells)")
-    if args.checkpoint_regex:
-        _crx = re.compile(args.checkpoint_regex)
-        df = df[df["checkpoint_name"].map(lambda n: bool(_crx.search(n)))]
-        print(f"[filter] --checkpoint_regex kept {df['checkpoint_name'].nunique()} "
-              f"checkpoint(s): {sorted(df['checkpoint_name'].unique())}")
-    if args.pair:
-        df = df[df["pair"] == args.pair]
-    if args.dataset:
-        df = df[df["dataset"] == args.dataset]
-    if df.empty:
-        raise SystemExit("No rows after checkpoint_regex/pair/dataset filter.")
-    df = add_delta(df, args.baseline_regex, args.metric)
-
-    df.to_csv(os.path.join(args.out, "master_long.csv"), index=False)
-    print(f"[out ] master_long.csv ({len(df)} rows)")
-
-    # beats-JSD list (signal only) — the headline "does it help" answer.
-    beats = (df[df["delta_vs_base"] > args.noise]
-             .sort_values("delta_vs_base", ascending=False)
-             [["pair", "dataset", "checkpoint_name", "mode", "K",
-               args.metric, "baseline", "delta_vs_base"]])
-    beats.to_csv(os.path.join(args.out, "beats_jsd.csv"), index=False)
-    print(f"[out ] beats_jsd.csv ({len(beats)} cells beat baseline by >{args.noise})")
-
-    # best (checkpoint,mode,K) per pair/dataset, ranked by metric.
-    best = (df.sort_values(args.metric, ascending=False)
-              .groupby(["pair", "dataset"], group_keys=False)
-              .head(15)
-              [["pair", "dataset", "checkpoint_name", "mode", "K",
-                args.metric, "delta_vs_base"]])
-    best.to_csv(os.path.join(args.out, "best_combos.csv"), index=False)
-    print(f"[out ] best_combos.csv")
-
-    # Per (pair, dataset): pivots + heatmaps + K-trends.
-    for (pair, ds), sub in df.groupby(["pair", "dataset"]):
-        tag = f"{_slug(pair)}_{_slug(ds)}"
-
-        piv = sub.pivot_table(index="checkpoint_name", columns="mode_K",
-                              values=args.metric, aggfunc="mean")
-        piv = piv.reindex(sorted(piv.columns, key=lambda c: (c.rsplit("_K", 1)[0],
-                                  int(c.rsplit("_K", 1)[1]))), axis=1)
-        piv.to_csv(os.path.join(args.out, f"pivot_{tag}.csv"))
-
-        dpiv = sub.pivot_table(index="checkpoint_name", columns="mode_K",
-                               values="delta_vs_base", aggfunc="mean")
-        dpiv = dpiv.reindex(piv.columns, axis=1)
-        dpiv.to_csv(os.path.join(args.out, f"delta_{tag}.csv"))
-
-        _annotated_heatmap(dpiv, f"Δ{args.metric} vs JSD — {pair} / {ds}",
-                           os.path.join(args.out, f"delta_heat_{tag}.png"), args.noise)
-
-        # loss × verifier interaction: Δ averaged over K.
-        lv = sub.pivot_table(index="checkpoint_name", columns="mode",
-                             values="delta_vs_base", aggfunc="mean")
-        _annotated_heatmap(lv, f"Δ{args.metric} vs JSD (mean over K) — {pair} / {ds}",
-                           os.path.join(args.out, f"lossverifier_{tag}.png"), args.noise)
-
-        k_trend_facets(sub, args.metric, f"{args.metric} vs K — {pair} / {ds}",
-                       os.path.join(args.out, f"k_trends_{tag}.png"))
-
-    print(f"\n[done] all outputs in {args.out}/")
-    if not beats.empty:
-        print("\nTop cells beating baseline:")
-        print(beats.head(12).to_string(index=False))
+    if args.config:
+        _run_config(args.config, args.out)
+    elif args.glob:
+        run_analysis(glob_pats=args.glob, out=args.out, metric=args.metric,
+                     baseline_regex=args.baseline_regex, noise=args.noise,
+                     pair=args.pair, dataset=args.dataset, prefer_attn=args.prefer_attn,
+                     checkpoint_regex=args.checkpoint_regex)
+    else:
+        ap.error("one of --config or --glob is required")
 
 
 if __name__ == "__main__":
