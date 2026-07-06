@@ -48,18 +48,21 @@
 #                fixed upstream (a non-cudagraph torch.compile(dynamic=True),
 #                i.e. dropping mode='reduce-overhead', avoids this specific
 #                crash but is untested here and gives a smaller speedup).
-#   FORCE_ATTN — "sdpa" or "flash_attention_2": pin the DRAFT model's attention
-#                implementation instead of letting Transformers auto-select
-#                based on whether flash-attn happens to be installed on this
-#                machine. Matters when running the same checkpoint's sweep
-#                across multiple machines with inconsistent flash-attn
-#                installs — different backends give different bf16 rounding,
-#                which can flip a sampled token or accept/reject decision in
-#                stochastic decoding (observed deltas up to ~0.2 block_eff
-#                between sdpa vs sdpa+flash_attention_2 runs, comparable to
-#                the n=100 seed-noise floor). Unset by default (prior
-#                auto-select behavior). Set the SAME value on every machine
-#                sharing one checkpoint's CSV to keep the sweep comparable.
+#   FORCE_ATTN — "sdpa" (default, changed 2026-07-06) / "flash_attention_2" /
+#                "auto": pins the DRAFT model's attention implementation
+#                instead of letting Transformers auto-select based on whether
+#                flash-attn happens to be installed on this machine. Matters
+#                when running the same checkpoint's sweep across multiple
+#                machines with inconsistent flash-attn installs — different
+#                backends give different bf16 rounding, which can flip a
+#                sampled token or accept/reject decision in stochastic
+#                decoding (observed deltas up to ~0.2 block_eff between sdpa
+#                vs sdpa+flash_attention_2 runs, comparable to the n=100
+#                seed-noise floor). Defaults to "sdpa" everywhere now so this
+#                can't recur silently; set FORCE_ATTN=flash_attention_2 to
+#                opt into the faster draft path deliberately (matched-backend
+#                comparisons only), or FORCE_ATTN=auto to restore the old
+#                per-machine auto-select behavior.
 # e.g. (0.6B/8B box, 3 checkpoints, math_eval only, no delayed-L1 sweep):
 #   OUT=/sensei-fs-3/users/rkrishna TEACHER=Qwen/Qwen3-8B DATASETS=math_eval \
 #     NAMES_CSV=jsd_flat_enrich_K3_math_hard_s123,jsd_flat_enrich_K3_temp07_math_hard_s123,jsd_flat_enrich_K4_math_hard_s123 \
@@ -81,8 +84,9 @@ KS="${KS:-1 2 3 4}"
 SEED="${SEED:-123}"
 COMPILE_FLAG=""
 [ "${COMPILE:-0}" = "1" ] && COMPILE_FLAG="--compile"
+FORCE_ATTN="${FORCE_ATTN:-sdpa}"
 FORCE_ATTN_FLAG=""
-[ -n "${FORCE_ATTN:-}" ] && FORCE_ATTN_FLAG="--force_attn ${FORCE_ATTN}"
+[ "$FORCE_ATTN" != "auto" ] && FORCE_ATTN_FLAG="--force_attn ${FORCE_ATTN}"
 
 mkdir -p "$OUT/logs" "$OUT/output"
 
