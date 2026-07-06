@@ -46,6 +46,7 @@ matplotlib (sparklines in the HTML; skipped if absent).
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import os
@@ -286,6 +287,111 @@ def hyperparam_effects(df: pd.DataFrame, primary: str, params: list[str]) -> pd.
 
 
 # --------------------------------------------------------------------------- #
+# Join with eval results (the train × eval fused per-variant summary for Rahul)
+# --------------------------------------------------------------------------- #
+
+def _run_id_from_url(url) -> str:
+    """Extract the W&B run id from a training_wandb_url like '.../runs/hjlsg2cr'."""
+    m = re.search(r"runs/([^/?#\s]+)", str(url))
+    return m.group(1) if m else ""
+
+
+def join_evals(df: pd.DataFrame, primary: str, eval_glob, deploy_mode: str,
+               deploy_dataset: str, noise: float):
+    """Join per-run TRAIN features to EVAL outcomes on the W&B run id.
+
+    eval_glob points at analyze_evals output(s) — ideally master_long.csv (has
+    delta_vs_base); a raw eval CSV also works but then delta is absent. The link is
+    the eval CSV's `training_wandb_url` column vs each run's `url` — an EXACT id join,
+    not fuzzy name matching. Returns (per_run_df, per_variant_df); per_variant_df is
+    the seed-averaged one-row-per-loss-variant sheet.
+    """
+    files = sorted({f for pat in ([eval_glob] if isinstance(eval_glob, str) else eval_glob)
+                    for f in glob.glob(os.path.expanduser(os.path.expandvars(pat)))})
+    if not files:
+        print(f"[join] no eval CSVs matched {eval_glob} — skipping eval join.")
+        return None, None
+    ev = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    if "training_wandb_url" not in ev.columns:
+        print("[join] eval CSVs lack a training_wandb_url column — cannot join on run id.")
+        return None, None
+    for c in ("block_eff", "delta_vs_base", "K"):
+        if c in ev.columns:
+            ev[c] = pd.to_numeric(ev[c], errors="coerce")
+    if "dataset" in ev.columns and deploy_dataset:
+        ev = ev[ev["dataset"] == deploy_dataset]
+    ev["eval_run_id"] = ev["training_wandb_url"].map(_run_id_from_url)
+    ev = ev[ev["eval_run_id"] != ""]
+    has_delta = "delta_vs_base" in ev.columns
+
+    # per-run eval aggregates
+    dep = ev[ev["mode"] == deploy_mode] if "mode" in ev.columns else ev
+    per = []
+    for rid, g in ev.groupby("eval_run_id"):
+        gd = dep[dep["eval_run_id"] == rid]
+        rec = {"run_id": rid,
+               f"eval_{deploy_mode}_best_be": gd["block_eff"].max() if len(gd) else float("nan"),
+               "eval_n_cells": int(len(g))}
+        if has_delta:
+            rec[f"eval_{deploy_mode}_best_delta"] = gd["delta_vs_base"].max() if len(gd) else float("nan")
+            rec["eval_cells_beat"] = int((g["delta_vs_base"] > noise).sum())
+        per.append(rec)
+    per_df = pd.DataFrame(per)
+
+    merged = df.merge(per_df, on="run_id", how="left")
+    n_matched = merged[f"eval_{deploy_mode}_best_be"].notna().sum()
+    print(f"[join] matched {n_matched}/{len(df)} training runs to eval rows "
+          f"({len(files)} eval file(s), deploy_mode={deploy_mode}).")
+
+    # rule-based verdict per run
+    def verdict(r):
+        parts = []
+        d = r.get(f"eval_{deploy_mode}_best_delta")
+        if has_delta and pd.notna(d):
+            frac = (r.get("eval_cells_beat", 0) / r["eval_n_cells"]) if r.get("eval_n_cells") else 0
+            if d > noise and frac > 0.3:
+                parts.append("beats JSD (broad)")
+            elif d > noise:
+                parts.append("beats JSD (narrow)")
+            elif d > 0:
+                parts.append("ties JSD (slight+)")
+            else:
+                parts.append("no signal vs JSD")
+        elif pd.notna(r.get(f"eval_{deploy_mode}_best_be")):
+            parts.append("eval present (no baseline delta)")
+        else:
+            parts.append("eval pending")
+        if pd.notna(r.get(f"{primary}_drop_from_best")) and r[f"{primary}_drop_from_best"] > noise:
+            parts.append("overfits in training")
+        return "; ".join(parts)
+    merged["verdict"] = merged.apply(verdict, axis=1)
+
+    # per-variant (seed-averaged) sheet — the artifact for the research lead
+    bestcol = f"{primary}_best"
+    aggmap = {"n_seeds": ("seed", "count"),
+              "train_best_val_mean": (bestcol, "mean"),
+              "train_best_val_std": (bestcol, "std"),
+              "train_steps_to_best_mean": (f"{primary}_best_step", "mean"),
+              "train_overfit_drop_mean": (f"{primary}_drop_from_best", "mean")}
+    if f"eval_{deploy_mode}_best_be" in merged.columns:
+        aggmap["eval_best_be_mean"] = (f"eval_{deploy_mode}_best_be", "mean")
+    if has_delta:
+        aggmap["eval_best_delta_mean"] = (f"eval_{deploy_mode}_best_delta", "mean")
+    variant = (merged.groupby("group_label").agg(**aggmap).reset_index())
+    variant["train_seed_spread"] = (merged.groupby("group_label")[bestcol]
+                                    .agg(lambda s: s.max() - s.min()).values)
+    # majority verdict per variant
+    variant = variant.merge(
+        merged.groupby("group_label")["verdict"]
+              .agg(lambda s: s.value_counts().index[0]).rename("verdict").reset_index(),
+        on="group_label", how="left")
+    sort_key = "eval_best_delta_mean" if has_delta else \
+               ("eval_best_be_mean" if "eval_best_be_mean" in variant else "train_best_val_mean")
+    variant = variant.sort_values(sort_key, ascending=False)
+    return merged, variant
+
+
+# --------------------------------------------------------------------------- #
 # W&B pull + cache (the only network-touching part)
 # --------------------------------------------------------------------------- #
 
@@ -433,7 +539,8 @@ function sortTable(id,col){
 """
 
 
-def write_report(out, primary, runs_df, groups_df, effects_df, flags_df, histories, top_n=25):
+def write_report(out, primary, runs_df, groups_df, effects_df, flags_df, histories,
+                 variant_df=None, top_n=25):
     bestcol = f"{primary}_best"
     ranked = runs_df.sort_values(bestcol, ascending=False) if bestcol in runs_df else runs_df
     show_cols = [c for c in ["name", "project", "seed", "loss", "K", "L", "teacher_temp",
@@ -466,6 +573,10 @@ def write_report(out, primary, runs_df, groups_df, effects_df, flags_df, histori
 <title>W&B training analysis</title>{_HTML_JS}</head><body>
 <h1>W&B training-run analysis — {primary}</h1>
 {overview}
+{("<h2>Variant summary (train × eval, seed-averaged) — the one for the research lead</h2>"
+  "<p class='note'>One row per loss variant: training convergence + eval outcome vs JSD + "
+  "rule-based verdict. Sorted best-first.</p>" + _html_table(variant_df, 'variant'))
+  if variant_df is not None and not variant_df.empty else ""}
 <h2>Top runs by {primary}_best</h2>{_html_table(top,'top')}
 <h2>Seed robustness (config groups, minus seed)</h2>
 <p class='note'>High <code>seed_spread</code> = result depends on the seed; low spread with high
@@ -523,6 +634,15 @@ def main():
                     help="Effect-size floor for flags (n=100 SE ~0.1-0.15).")
     ap.add_argument("--filters", default=None,
                     help="Extra MongoDB-style run filter as JSON, merged with job_type.")
+    ap.add_argument("--join_evals", nargs="+", default=None,
+                    help="Path(s)/glob(s) to analyze_evals output (ideally master_long.csv). "
+                         "Joins eval outcomes to training runs on the W&B run id (via the eval "
+                         "CSV's training_wandb_url column) and emits variant_summary.csv + "
+                         "variant_summary_grouped.csv (per-loss-variant train×eval sheet + verdict).")
+    ap.add_argument("--deploy_mode", default="traversal",
+                    help="Verifier treated as the deployment metric for the eval join (default traversal).")
+    ap.add_argument("--deploy_dataset", default="math_eval",
+                    help="Eval dataset used for the join (default math_eval; '' = all).")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -565,7 +685,18 @@ def main():
     flags_df.to_csv(os.path.join(args.out, "flags.csv"), index=False)
     print(f"[out ] flags.csv ({len(flags_df)} flagged)")
 
-    write_report(args.out, primary, df, grp, eff, flags_df, histories)
+    variant_df = None
+    if args.join_evals:
+        merged, variant_df = join_evals(df, primary, args.join_evals, args.deploy_mode,
+                                        args.deploy_dataset, args.noise)
+        if merged is not None:
+            merged.sort_values(bestcol, ascending=False).to_csv(
+                os.path.join(args.out, "variant_summary.csv"), index=False)
+            variant_df.to_csv(os.path.join(args.out, "variant_summary_grouped.csv"), index=False)
+            print(f"[out ] variant_summary.csv (per run) + variant_summary_grouped.csv "
+                  f"({len(variant_df)} variants)")
+
+    write_report(args.out, primary, df, grp, eff, flags_df, histories, variant_df=variant_df)
 
     print(f"\n[done] {args.out}/  — open report.html in a browser.")
     if bestcol in ranked.columns and not ranked.empty:
