@@ -348,13 +348,29 @@ python analyze_evals.py \
     --glob "/sensei-fs-3/users/rkrishna/**/logs/*.csv" \
     --out  /sensei-fs-3/users/rkrishna/analysis \
     --metric block_eff
+
+# Compare a specific SET of checkpoints — e.g. plain JSD vs an enrich family at K=3..6.
+# --glob takes multiple patterns (glob alone has no OR operator; character classes
+# like [3-6] work, brace lists like {3,4,5,6} do not):
+python analyze_evals.py \
+    --glob "$OUT/logs/jsd_mathhard_s123.csv" "$OUT/logs/jsd_flat_enrich_K[3-6]_*.csv" \
+    --out  /tmp/enrich_vs_jsd \
+    --baseline_regex "^jsd_mathhard_s123$"
 ```
+
+`--checkpoint_regex` is an independent filter (applied AFTER loading, on
+`checkpoint_name`) for when CSVs aren't neatly one-per-checkpoint — e.g. a shared
+`logs/` directory with unrelated checkpoints appended into fewer files.
 
 Dedupes append-mode CSVs to the latest row per `(checkpoint, dataset, mode, K, L)`,
 computes `Δ = block_eff − JSD baseline` (baseline = mean over checkpoints
 matching `--baseline_regex`, default plain flat-JSD, averaged across seeds),
 and grays out `|Δ| < --noise` (default 0.15, the n=100 SE floor from the
-prefix-overlap research note) so single-seed wiggle isn't over-read. Outputs
+prefix-overlap research note) so single-seed wiggle isn't over-read. Any
+`(checkpoint,dataset,mode,K,L)` cell with rows from multiple machines using
+different draft `attn_backend` is flagged and resolved toward `--prefer_attn`
+(default `sdpa`) rather than silently keeping whichever ran last — full
+conflicting rows land in `attn_backend_conflicts.csv` for audit. Outputs
 per `(pair, dataset)`: `pivot_*.csv` / `delta_*.csv` (checkpoint × mode_K),
 `lossverifier_*.png` (checkpoint × mode, Δ averaged over K — the loss↔verifier
 interaction), `k_trends_*.png` (block_eff vs K, one panel per verifier), plus
