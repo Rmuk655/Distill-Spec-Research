@@ -79,6 +79,7 @@ def load_models(
     dtype: str = "bf16",
     compile_draft: bool = False,
     load_in_4bit: bool = False,
+    force_attn: str | None = None,
 ):
     """Load target (p) and draft (q) models.
 
@@ -86,6 +87,20 @@ def load_models(
     (requires: pip install bitsandbytes accelerate).  Use this on free T4
     GPUs (15 GB) where the 8B target in bfloat16 (~16 GB) does not fit.
     The draft model is always loaded in the requested dtype.
+
+    force_attn ("sdpa" | "flash_attention_2" | None, default None): pin the
+    DRAFT model's attention implementation explicitly, overriding whichever
+    backend Transformers auto-selects (which otherwise depends on whether
+    flash-attn happens to be installed on this particular machine — different
+    machines silently picking different backends is a real source of
+    eval-to-eval divergence: decoding is stochastic and speculative-decoding
+    acceptance is a threshold test, so bf16 rounding differences between
+    kernels can flip a sampled token or an accept/reject decision, cascading
+    through the rest of that prompt's generation. Only the DRAFT is
+    controllable here — the TARGET always stays on whatever the custom
+    tree-attention mask requires (its per-iteration mask shape is
+    incompatible with flash_attention_2 regardless of this flag; forcing it
+    would silently break tree verification, not just change speed).
     """
     if device == "cuda" and torch.cuda.is_available() and torch.cuda.device_count() > 1:
         device = _best_free_cuda_device()
@@ -177,6 +192,15 @@ def load_models(
         use_safetensors=True
     ).to(dev)
     q_model.eval()
+
+    if force_attn is not None:
+        if force_attn not in ("sdpa", "flash_attention_2"):
+            raise ValueError(f"force_attn must be 'sdpa' or 'flash_attention_2', got {force_attn!r}")
+        if hasattr(q_model, "set_attn_implementation"):
+            q_model.set_attn_implementation(force_attn)
+        else:
+            q_model.config._attn_implementation = force_attn   # fallback for older transformers
+        print(f"[INFO] Draft model attention implementation pinned to '{force_attn}' (--force_attn).")
 
     torch.set_grad_enabled(False)
 

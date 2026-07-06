@@ -384,6 +384,7 @@ wait
 | `--dtype bf16` (default) | Mixed precision changes numerics and throughput |
 | Teacher loaded first, draft second | Already enforced in `load_models()` |
 | `--cpu_threads` auto-detected | Default is `physical_cores // num_gpus` (96 / 4 = 24 on our server) — prevents CPU cache thrashing across 4 parallel evals |
+| `--force_attn` when comparing **across machines** | Transformers auto-selects the draft model's attention backend based on whether flash-attn happens to be installed on that particular box — two machines can silently disagree (`sdpa` vs `flash_attention_2`). Decoding is stochastic and speculative-decoding acceptance is a threshold test, so bf16 rounding differences between kernels can flip a sampled token or an accept/reject decision, cascading through the rest of that prompt's generation. Observed deltas up to ~0.2 block_eff between otherwise-identical `sdpa` vs `sdpa+flash_attention_2` runs — comparable to the n=100 seed-noise floor, not a bug, but don't mix backends within one comparison. The CSV's `attn_backend` column always records what actually ran; check it before trusting a cross-machine delta. Pass `--force_attn sdpa` (or `flash_attention_2`) to pin the draft explicitly — the target always stays on whatever its tree-attention mask requires, regardless of this flag. |
 
 **Interpreting GPU telemetry:**
 

@@ -321,6 +321,20 @@ def parse_args():
                          "cudagraph_trees bookkeeping desyncs and raises AssertionError in "
                          "dealloc_current_path_weakrefs. Reproduced on 2+ independent "
                          "checkpoints. Do not pass this flag until fixed.")
+    ap.add_argument("--force_attn", default=None, choices=["sdpa", "flash_attention_2"],
+                    help="Pin the DRAFT model's attention implementation explicitly instead of "
+                         "letting Transformers auto-select based on whether flash-attn happens "
+                         "to be installed on this machine. Different machines silently picking "
+                         "different backends is a real source of cross-machine divergence: "
+                         "decoding is stochastic and speculative-decoding acceptance is a "
+                         "threshold test, so bf16 rounding differences between sdpa/FA2 kernels "
+                         "can flip a sampled token or an accept/reject decision, cascading "
+                         "through the rest of that prompt's generation (observed deltas up to "
+                         "~0.2 block_eff across otherwise-identical sdpa vs sdpa+flash_attention_2 "
+                         "runs, comparable to the n=100 seed-noise floor — not a bug, but avoid "
+                         "mixing backends within one comparison). Only affects the draft — the "
+                         "target always stays on whatever its tree-attention mask requires "
+                         "regardless of this flag. Default: unset (auto-select, prior behavior).")
 
     ap.add_argument("--no_gpu_monitor", action="store_true",
                     help="Disable the background GPU/CPU telemetry thread.  "
@@ -432,7 +446,8 @@ def main():
         print(f"[load] device={torch_device}  dtype={DEFAULT_DTYPE}  seed={args.seed}")
         tok, p_model, q_model = load_models(args.teacher, args.checkpoint,
                                             device=torch_device, dtype=DEFAULT_DTYPE,
-                                            compile_draft=args.compile)
+                                            compile_draft=args.compile,
+                                            force_attn=args.force_attn)
         specs["attn_backend"] = _model_attn_backend(p_model, q_model)
         print(f"[load] attention_backend={specs['attn_backend']}")
         # Log GPU memory after model load — both models share the same device.
