@@ -1,5 +1,5 @@
 {
-  "_comment": "Comparison battery for analyze_evals.py --config. Each bucket = one focused question, run into <--out>/<name>/. Primary question is always 'does this family beat plain flat-JSD' (baseline default matches jsd_mathhard_s123 / jsd_math_hard_s123 on both boxes). Secondary within-family buckets override baseline_regex. Filenames below are from the 2026-07-05 logs/ listings on both model-pair roots; add new checkpoints to the relevant bucket's glob as they land. Run: python analyze_evals.py --config analysis_buckets.json --out /sensei-fs-3/users/rkrishna/analysis",
+  "_comment": "Comparison battery for analyze_evals.py --config. Each bucket = one focused question, run into <--out>/<name>/. Primary question is always 'does this family beat plain flat-JSD' (baseline default matches jsd_mathhard_s123 / jsd_math_hard_s123 on both boxes). Secondary within-family buckets override baseline_regex. Filenames below are from the 2026-07-05 logs/ listings on both model-pair roots; add new checkpoints to the relevant bucket's glob as they land. A bucket whose files don't exist yet is skipped with a warning (safe to pre-wire). PENDING EVAL as of 2026-07-06: jsd_dw_lin_naive_K3_math_hard_s123 (1.7/32), enrich_draftcond_K3_mathhard_s123 (1.7/32), lk_alpha_mathhard_s123 (0.6/8) — wired below, will populate once their eval CSVs are written. Run: python analyze_evals.py --config analysis_buckets.json --out /sensei-fs-3/users/rkrishna/analysis",
   "defaults": {
     "metric": "block_eff",
     "noise": 0.15,
@@ -19,7 +19,15 @@
       "name": "1p7_32__enrich_vs_jsd",
       "glob": [
         "/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/logs/jsd_math_hard_s123.csv",
-        "/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/logs/enrich_K3_math_hard_s123.csv"
+        "/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/logs/enrich_K3_math_hard_s123.csv",
+        "/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/logs/enrich_draftcond_K3_mathhard_s123.csv"
+      ]
+    },
+    {
+      "name": "1p7_32__depthweight_vs_jsd",
+      "glob": [
+        "/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/logs/jsd_math_hard_s123.csv",
+        "/sensei-fs-3/users/rkrishna/Qwen32B-Qwen1.7B/logs/jsd_dw_lin_naive_K3_math_hard_s123.csv"
       ]
     },
     {
@@ -45,6 +53,13 @@
       "glob": [
         "/sensei-fs-3/users/rkrishna/logs/jsd_mathhard_s123.csv",
         "/sensei-fs-3/users/rkrishna/logs/jsd_flat_enrich_*.csv"
+      ]
+    },
+    {
+      "name": "0p6_8__lk_alpha_vs_jsd",
+      "glob": [
+        "/sensei-fs-3/users/rkrishna/logs/jsd_mathhard_s123.csv",
+        "/sensei-fs-3/users/rkrishna/logs/lk_alpha_mathhard_s123.csv"
       ]
     },
     {
