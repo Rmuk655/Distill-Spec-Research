@@ -119,6 +119,17 @@ def _group_label(name: str) -> str:
     return re.sub(r"_s\d+", "", str(name)).rstrip("_")
 
 
+def _pair_from_name(name: str) -> str:
+    """Draft/teacher pair parsed from the leading 'Draft__Teacher__...' run-name tokens.
+
+    Raw val/block_eff is not comparable across pairs (different draft/teacher capacity
+    changes the achievable range), so anything that ranks or aggregates across runs must
+    group by pair first — mirrors analyze_evals.py's per-pair delta normalization.
+    """
+    m = re.match(r"([A-Za-z0-9.\-]+)__([A-Za-z0-9.\-]+)__", str(name))
+    return f"{m.group(1)}/{m.group(2)}" if m else "unknown"
+
+
 def _slug(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", str(s)).strip("-")
 
@@ -451,6 +462,7 @@ def pull_runs(entity, projects, job_type, cache_dir, samples, refresh, extra_fil
                    "url": run.url}
             row["seed"] = _seed_of(run.name, cfg)
             row["group_label"] = _group_label(run.name)
+            row["pair"] = _pair_from_name(run.name)
             for k in CANON_CONFIG:
                 if k in cfg:
                     row[k] = cfg[k]
@@ -700,9 +712,14 @@ def main():
 
     print(f"\n[done] {args.out}/  — open report.html in a browser.")
     if bestcol in ranked.columns and not ranked.empty:
-        print(f"\nTop 5 by {bestcol}:")
         cols = [c for c in ["name", "seed", bestcol, f"{primary}_drop_from_best", "flags"] if c in ranked]
-        print(ranked[cols].head(5).to_string(index=False))
+        if "pair" in ranked.columns and ranked["pair"].nunique() > 1:
+            for pair, sub in ranked.groupby("pair"):
+                print(f"\nTop 5 by {bestcol} — pair={pair}:")
+                print(sub[cols].head(5).to_string(index=False))
+        else:
+            print(f"\nTop 5 by {bestcol}:")
+            print(ranked[cols].head(5).to_string(index=False))
 
 
 if __name__ == "__main__":

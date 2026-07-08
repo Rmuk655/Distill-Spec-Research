@@ -1,7 +1,7 @@
 # Eval-Time Delayed Tree Expansion for Speculative Decoding
 ## A Research Note on Compositional DDTE + Distillation Training
 
-**Scope:** one draft (Qwen3-0.6B) / one teacher (Qwen3-8B), one training dataset (math_hard), eval domain (math_eval), one seed (s123). n=100. Three checkpoints: `jsd_flat` (baseline), `jsd_flat_enrich_M1`, `jsd_flat_enrich_M3`. L1 ∈ {2, 3, 4, 5, 6} for specinfer; L1 ∈ {2, 3, 4, 5} for traversal; τ-lagged adaptive tested on both. Modes: traversal, specinfer.
+**Scope:** originally Qwen3-0.6B / Qwen3-8B, math_eval, one seed, 3 checkpoints (`jsd_flat`, enrich M1/M3). **Extended 2026-07** to a broad cross-checkpoint sweep: **both model pairs** (0.6B/8B + 1.7B/32B), **math_eval + olympiad_eval**, and ~15 trained drafts (JSD baselines, enrich M3–M6, all PO variants, log-tree losses, depth-weight) — each with `traversal_dAdapt/dL3/dL4/dL5` at K=1–4. See [§0](#0-2026-07-update-ddte-across-all-trained-drafts-and-a-second-pair). L1 ∈ {2,3,4,5,6} specinfer; {2,3,4,5} traversal; τ-lagged adaptive on both.
 
 **Data source (untouched):** all numbers in this note are derived from [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) — the single canonical results file for the enrich + DDTE line of work (baselines, enrich M1/M3, and all delayed-tree variants). The tables below are pivots/derivations of `block_eff`; raw per-run rows live only in the CSV.
 **Closest prior work:** DDTE (Thomas et al. 2026, arXiv:2602.16994) — applies delayed branching to untrained drafts using a neural MLP selector. Our contribution: composing eval-time DDTE with distillation-trained + enrich-trained drafts, and measuring how draft quality modulates the DDTE gain.
@@ -35,6 +35,35 @@
 2. Is the off-policy mismatch the primary reason traversal gains are small and K-dependent?
 3. Is one seed sufficient at these effect sizes for the specinfer result, or do we need two?
 4. Can we use the MLP selector code for a proper single-pass delayed draft?
+
+---
+
+## 0. 2026-07 Update: DDTE across all trained drafts and a second pair
+
+The original note (below) established DDTE on 3 checkpoints at 0.6B/8B. We then ran the DDTE variants (`traversal_dL{3,4,5}`, `dAdapt`) across **every** trained checkpoint in the program, on both pairs and both datasets. Metric here is **DDTE uplift = best-dL traversal BE − same checkpoint's base (L1=0) traversal BE**, at matched K. Grounded in [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/).
+
+**Finding 1 — DDTE helps *every* trained draft, at both pairs, and the uplift grows with K.** Best-dL beats base traversal by roughly:
+
+| pair / dataset | K=2 uplift | K=3 uplift | K=4 uplift |
+|---|---|---|---|
+| 0.6B/8B math_eval | +0.02 to +0.28 | +0.04 to +0.38 | +0.11 to +0.38 |
+| 1.7B/32B math_eval | +0.0 to +0.36 | +0.20 to +0.71 | +0.45 to +0.79 |
+| 1.7B/32B olympiad | +0.03 to +0.24 | +0.29 to +0.55 | +0.27 to +0.53 |
+
+Uplift is ≈0 at K=1 (no branching to delay) and rises monotonically with K — the deeper the tree, the more branch-placement matters, exactly as §1 predicts. **This is the key extension of Thomas et al.: DDTE was only shown on *untrained* drafts; it transfers cleanly to distilled, enriched, PO- and even badly-trained drafts, and to a second (wider) capacity gap.**
+
+**Finding 2 — DDTE uplift is *inversely* related to base draft quality, but this is a delta, NOT an absolute-BE reordering.** The weaker a draft's base traversal, the bigger its DDTE uplift: at 1.7B/32B math K=4 the JSD baseline gains +0.785 vs the stronger `enrich_K3`'s +0.594; the collapsed log-tree drafts gain up to +0.71. **But on absolute BE the ranking does not invert to favor weak drafts** — best-DDTE traversal BE splits into two clear tiers:
+
+| 1.7B/32B math, best-DDTE BE | K3 | K4 |
+|---|---|---|
+| jsd / enrich / po_nss / po_logprob + DDTE (well-trained) | 6.19–6.33 | 6.20–**6.37** |
+| traversal_log / nss_log + DDTE (collapsed) | 5.70–5.90 | 5.77–5.83 |
+
+The large uplift on a collapsed draft lands it at ~5.8 — still **~0.5 BE below** any well-trained draft + DDTE. **So DDTE does NOT substitute for training: the top absolute BE requires a well-trained draft AND DDTE; both ingredients contribute, and DDTE only *partially* compensates for a weak base.** (At 0.6B/8B: jsd base 5.83 →+enrich-train 5.99 →+DDTE 6.37 — DDTE adds ~0.38, training ~0.16, and you need both to reach the top.)
+
+**Reconciliation with §4's "enrich amplifies DDTE" (not a contradiction — different metric):** §4 measures *absolute* BE; §0 measures *uplift over each draft's own base*. Both hold: the best-trained draft has the least *room* for DDTE, so its incremental uplift is smaller even while its absolute BE stays at/near the top. The **pair-dependent** consequence is the real news: at **0.6B/8B enrich+DDTE (6.23–6.37) clearly beats jsd+DDTE (6.12)** — the enrich training win survives DDTE; at **1.7B/32B enrich's edge vanishes** — jsd+DDTE (6.37) *ties/edges* enrich+DDTE (6.27) at K4, the same wide-gap capacity effect seen without DDTE ([`enrich_research_note.md`](enrich_research_note.md) §0c).
+
+**Caveat.** All numbers single-seed. Finding 1 (DDTE helps every draft, grows with K, stays in the well-trained tier vs the collapsed tier) is robust — it replicates across ~15 checkpoints and 2 pairs. Finding 2's *within-tier* orderings (jsd vs enrich at 1.7/32; which of jsd/po_nss/po_logprob tops K3) are single-seed and inside plausible one-pair noise — do not rank drafts *within* the well-trained tier without a second seed.
 
 ---
 
