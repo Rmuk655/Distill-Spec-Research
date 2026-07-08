@@ -55,6 +55,28 @@ New data since the sections below were written. All Δ = traversal BE − flat-J
 
 **Bottom line update:** enrich remains the one positive lever, now with OOD generalization confirmed at 0.6B/8B and an interior M-optimum (~M=4, temperature-confounded). Its failure to replicate at 1.7B/32B is the top open risk to any "enrich beats JSD" claim in the paper — it must be stated as pair-specific until a second seed + matched-M run at the big pair exists.
 
+### 0(e). Two-seed consistency (0.6B/8B) — which (verifier, K) beats JSD on BOTH seeds
+
+From [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) (two training seeds s123/s456, eval-seed 123). `enrich_M3` Δ vs *same-seed* JSD; cells winning on both seeds, ranked by worst-case (min-seed) gain:
+
+| verifier / K | s123 Δ | s456 Δ | worst-case |
+|---|---|---|---|
+| naive K=3 | +0.263 | +0.314 | **+0.263** |
+| bv K=1 | +0.264 | +0.195 | +0.195 |
+| bv K=3 | +0.431 | +0.185 | +0.185 |
+| specinfer K=2 | +0.351 | +0.111 | +0.111 |
+| bv K=2 | +0.232 | +0.101 | +0.101 |
+
+- **`bv` is the single most cross-seed-robust verifier — `enrich_M3` beats JSD on both seeds at *every* K (1–4).** No other verifier does. `naive K=3` has the highest worst-case gain.
+- **The deployment verifier `traversal` is only *marginally* robust:** both-seed win at K1 (+0.10), but K2 *fails* on s456 (−0.05) and K3/K4 win by only +0.01/+0.02 on s456. The cross-seed signal is carried by bv/naive, not traversal.
+- **DDTE gives enrich no cross-seed edge over JSD:** no `dL` cell wins on both seeds — DDTE lifts JSD too (consistent with the substitute finding in [`ddte_research_note.md`](ddte_research_note.md) §0).
+
+**Conjectured mechanism (code-grounded, `verifiers/verifier.py:234`).** bv walks a single path gating each step by `w_i = min(1, w_{i-1}·p/q)` — clamped ≤1, so it is punished specifically when **q > p** (draft over-concentrates). Greedy-JSD lets q sharpen on the teacher's mode; **enrich de-sharpens q toward the teacher's full distribution**, relieving exactly this failure mode. bv's acceptance depends on the *marginal* q–p match (which enrich stabilizes), whereas traversal depends on *tree branch diversity* (higher seed variance) — explaining why bv's enrich-gain is more seed-consistent. Corroboration: `gbv` (same gate + a K-branch skew) is *not* seed-consistent and equals bv only at K=1. **Status: conjecture, not derived.**
+
+### 0(f). Does the bv pattern carry to 1.7B/32B? Partially — no as a clean pattern.
+
+`enrich_K3` (1.7/32, single seed) bv Δ vs JSD: math_eval −0.147 / +0.431 / +0.178 / +0.075 (K1–4); olympiad −0.003 / +0.036 / +0.009. bv is positive at K2–4 on math but **negative at K1, flat on OOD**, and **bv is no longer the standout** — at K3 `max` (+0.305), `specinfer` (+0.278), `traversal` (+0.273) all exceed bv (+0.178). The *specific* "bv is the consistent winner" result is **0.6B/8B-specific**; which verifier lights up is pair-dependent at single seed. Cannot tell if the mechanism is capacity-dependent or the 0.6/8 bv-consistency is a two-seed coincidence without a second seed at 1.7/32.
+
 ---
 
 ## 1. Motivation
