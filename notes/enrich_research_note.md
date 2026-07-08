@@ -1,8 +1,9 @@
 # Stochastic Teacher Rollout JSD for Speculative Draft Training
 ## A Research Note on `jsd_flat_enrich`
 
-**Scope:** one draft (Qwen3-0.6B) / one teacher (Qwen3-8B), one training dataset (math_hard), one eval domain (math_eval), two seeds. n=1000 for traversal/bv/naive ([§4.2](#42-primary-eval-n1000-k_eval3-math_eval)–4.3); n=100 for the 9-verifier × K_eval sweep ([§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k)).
+**Scope:** Qwen3-0.6B / Qwen3-8B, train math_hard, eval **math_eval + olympiad_eval** (OOD added 2026-07), M-sweep M∈{1,3,4,5,6}, two seeds at M=3. Cross-pair replication attempted at **Qwen3-1.7B / Qwen3-32B** (`enrich_K3`, single seed). n=1000 for traversal/bv/naive ([§4.2](#42-primary-eval-n1000-k_eval3-math_eval)–4.3); n=100 elsewhere.
 **Closest competitor:** Draft-OPD (May 2026) — not yet compared experimentally ([§5.1](#51-novelty-positioning-the-biggest-risk)).
+**Raw CSVs (2026-07 sweep):** [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) — `jsd_flat_enrich_K{3_temp07,4,5,6}_*` (0.6B/8B), `enrich_K3_*` (1.7B/32B), `enrich_draftcond_K3_*`.
 
 ### Summary
 
@@ -26,6 +27,33 @@
 4. ≥1 additional dataset and model pair ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #7–8)
 5. Draft-OPD comparison ([§6](#6-must-add-experiments-minimum-for-a-credible-paper) #5)
 6. [§5.3](#53-conjectured-verifier-level-mechanism-not-yet-derived) derivations, or present [§4.4](#44-cross-verifier-and-k_eval-dependence-n100-seed-averaged-vs-flat-8k) as purely empirical
+
+---
+
+## 0. 2026-07 Update: M-sweep, OOD, and cross-pair replication
+
+New data since the sections below were written. All Δ = traversal BE − flat-JSD baseline at matched K_eval; means over K_eval=2–4. Numbers computed from [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/).
+
+**(a) M-sweep at 0.6B/8B — mean traversal Δ (K_eval 2–4):**
+
+| M (train rollouts) | math_eval | olympiad_eval (OOD) |
+|---|---|---|
+| M=3 (`_temp07`) | +0.130 | +0.019 |
+| **M=4** | **+0.185** | **+0.116** |
+| M=5 | +0.141 | +0.060 |
+| M=6 | +0.071 | +0.050 |
+
+**M=4 is the sweet spot on both in-distribution and OOD; the gain does not increase past M=4 and *decays* by M=6** — more teacher rollouts stop helping and eventually hurt (consistent with variance-reduction saturating, then the fixed step budget spreading too thin across rollouts). This extends the earlier "M=3 beats flat, M=1 doesn't" ([Summary](#summary)) into a full curve with an interior optimum.
+
+⚠️ **Confound:** the M=3 checkpoint is `temp07`-tagged (teacher rollout temperature 0.7); M=4/5/6 filenames are not, so teacher-sampling temperature may differ across the sweep. The M=4 optimum is therefore *not* a clean single-variable result — it could be an M effect, a temperature effect, or both. A temperature-matched M-sweep is required before claiming M=4 specifically (add to [§6](#6-must-add-experiments-minimum-for-a-credible-paper)).
+
+**(b) OOD holds (the important positive).** Enrich's win is not a math_eval artifact: at M=4 it transfers to olympiad_eval (+0.116 mean, and +0.286 at K_eval=3 specifically). This is the single most reassuring new result — the one positive family generalizes out of distribution.
+
+**(c) Cross-pair replication FAILS at 1.7B/32B (single seed).** `enrich_K3` traversal Δ vs `jsd_math_hard_s123`: **−0.054 / −0.133 / +0.273 / +0.085** across K_eval=1–4 (math_eval) — sign-flips, net unconvincing; on olympiad_eval +0.162 / +0.111 / −0.062. This does **not** reproduce the clean 0.6B/8B win. Caveat: only one enrich variant (M=3, no temp07/M-sweep) was run at the big pair, single seed, and the 1.7B/32B noise floor is uncharacterized — so this is "did not replicate," not "refuted." A matched M=4 + second seed at 1.7B/32B is the decisive follow-up.
+
+**(d) `enrich_draftcond_K3` (draft-conditioned rollouts) — inconclusive, sweep incomplete.** Only traversal K_eval=1 exists (Δ −0.111 vs 0.6B/8B baseline); K_eval=2 partially run, K3/K4 missing. This is the one variant that injects the *draft's own* distribution into the rollout (the axis PO never touched, see [`prefix_overlap_research_note.md`](prefix_overlap_research_note.md)) — worth finishing the sweep before judging, since it's mechanistically the most interesting enrich variant.
+
+**Bottom line update:** enrich remains the one positive lever, now with OOD generalization confirmed at 0.6B/8B and an interior M-optimum (~M=4, temperature-confounded). Its failure to replicate at 1.7B/32B is the top open risk to any "enrich beats JSD" claim in the paper — it must be stated as pair-specific until a second seed + matched-M run at the big pair exists.
 
 ---
 

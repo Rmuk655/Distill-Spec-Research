@@ -264,6 +264,29 @@ def add_delta(df: pd.DataFrame, baseline_regex: str, metric: str) -> pd.DataFram
 # Plots
 # --------------------------------------------------------------------------- #
 
+def consistent_wins(df: pd.DataFrame, noise: float, min_win_frac: float = 0.75) -> pd.DataFrame:
+    """Checkpoint x verifier combos where the win holds across MOST of that
+    verifier's K values, not just one noisy cell.
+
+    beats_baseline.csv filters individual (checkpoint,mode,K) cells with zero
+    correction for the fact that one checkpoint x verifier pair spans up to 4
+    such cells (K=1..4) — a single lucky cell out of dozens tested is expected
+    by chance even under pure noise (see eval-attn-backend-cross-machine-
+    divergence memory: single-cell noise alone spans up to ~0.22, bigger than
+    the default 0.15 threshold). Requiring the sign to hold across most K
+    values for the SAME (checkpoint, verifier) pair is a much stronger signal
+    that the effect is real rather than a threshold-crossing fluke.
+    """
+    g = df.groupby(["pair", "dataset", "checkpoint_name", "mode"])
+    agg = g.agg(n_k=("K", "nunique"),
+                n_k_win=("delta_vs_base", lambda s: int((s > noise).sum())),
+                mean_delta=("delta_vs_base", "mean"),
+                min_delta=("delta_vs_base", "min")).reset_index()
+    agg["win_frac"] = agg["n_k_win"] / agg["n_k"]
+    out = agg[(agg["win_frac"] >= min_win_frac) & (agg["mean_delta"] > noise)]
+    return out.sort_values("mean_delta", ascending=False)
+
+
 def _annotated_heatmap(mat: pd.DataFrame, title: str, path: str,
                        noise: float, vlim: float | None = None):
     """Diverging heatmap of Δ (rows × cols) with per-cell numbers; |Δ|<noise gray."""
@@ -392,6 +415,11 @@ def run_analysis(glob_pats, out, metric="block_eff",
                metric, "baseline", "delta_vs_base"]])
     beats.to_csv(os.path.join(out, "beats_baseline.csv"), index=False)
     print(f"{tag_pfx}[out ] beats_baseline.csv ({len(beats)} cells beat baseline by >{noise})")
+
+    wins = consistent_wins(df, noise)
+    wins.to_csv(os.path.join(out, "consistent_wins.csv"), index=False)
+    print(f"{tag_pfx}[out ] consistent_wins.csv ({len(wins)} checkpoint x verifier pairs "
+          f"win on >=75% of their K values — the real 'does X do better under verifier Y' answer)")
 
     best = (df.sort_values(metric, ascending=False)
               .groupby(["pair", "dataset"], group_keys=False)

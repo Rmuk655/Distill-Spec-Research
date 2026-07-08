@@ -1,8 +1,8 @@
 # Tree-Structured Draft Distillation Losses
 ## Research Note
 
-**Status:** Inconclusive overall — no tree loss consistently beats flat JSD on the traversal (deployment) verifier at K=3. The combined JSD + depth\_weight + naive\_tree run at K=3 shows +0.293 traversal K=3 BE, but that result is driven primarily by depth\_weight (see [`depth_weight_research_note.md`](depth_weight_research_note.md)) and was not reproduced. Pure tree loss variants (traversal\_log, naive\_log, tree\_pg, cold naive\_tree) all showed no detectable improvement.
-**Draft–Teacher:** Qwen3-0.6B / Qwen3-8B | **Train:** math\_hard | **Eval:** math\_eval (100 prompts, A100, temp=0.2) | **JSD bar:** traversal K=3 = 5.870
+**Status:** Closed — negative, and at the larger capacity gap the log-space variants are actively **harmful**. At 0.6B/8B no tree loss beats flat JSD on traversal K=3 (warm log-space variants sit at the noise floor; the +0.293 combined JSD+depth\_weight+naive\_tree result is depth\_weight-driven, see [`depth_weight_research_note.md`](depth_weight_research_note.md), unreproduced). At **1.7B/32B, cold-start `traversal_log` and `nss_log` collapse** — traversal Δ −0.4 to −0.6 at every K, the largest regressions in the whole program. The log-space fix cures gradient *vanishing* but introduces gradient *misallocation* to unreachable deep nodes.
+**Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm) **and** Qwen3-1.7B / Qwen3-32B (cold) | **Train:** math\_hard | **Eval:** math\_eval + olympiad\_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B)
 
 ---
 
@@ -59,6 +59,21 @@ Two structural variants exist for how to train this:
 Noise floor: SE ≈ 0.10–0.15 at n=100. Deltas below 0.15 are inconclusive.
 
 **Raw results:** [`Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv`](../Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv) · [`Results/MathHardDSJSDNaiveTreeResults.csv`](../Results/MathHardDSJSDNaiveTreeResults.csv) · [`Results/NaiveTreeOffPolicyResults.csv`](../Results/NaiveTreeOffPolicyResults.csv)
+
+---
+
+## 1.7B/32B Cold-Start: Log-Space Losses Collapse (math\_eval + olympiad\_eval, L=8, n=100)
+
+Cold-start (no JSD warm), single seed. Δ = traversal BE − `jsd_math_hard_s123` at matched K. Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`traversal_log_K3_*`, `nss_log_K3_*`).
+
+| Loss | trav Δ K1 | K2 | K3 | K4 | olympiad K1/K2/K3 |
+|---|---|---|---|---|---|
+| `traversal_log` | −0.626 | −0.601 | −0.437 | −0.392 | −0.48 / −0.29 / −0.49 |
+| `nss_log` | −0.628 | −0.632 | −0.587 | −0.223 | −0.33 / −0.34 / −0.38 |
+
+These are the two worst training outcomes recorded (short of the abandoned `tree_pg`). Note the direct parallel to **PO's `traversal` objective** (see [`prefix_overlap_research_note.md`](prefix_overlap_research_note.md)), which is also the worst PO variant and for the same reason.
+
+**Unified lesson — log-space / K-aware weighting is anti-curricular at cold start.** The triangular weight $(L-j+1)/\alpha_j$ (and PO-traversal's $K(1-\alpha)^{K-1}\alpha$) both *up-weight deep, low-α nodes* — precisely the tree positions a not-yet-trained draft cannot reach. Curing product-form vanishing (§Gradient Analysis) traded one failure for the opposite one: instead of starving the deep gradient, log-space *floods* it, pouring capacity into matching tree tails the draft will never traverse at inference. Warm-start on 0.6B/8B hid this (the draft began near α≈0.7 everywhere, so "deep" nodes were already reachable); cold-start at the wider 1.7B/32B gap exposes it. **Takeaway: a depth-reweighting scheme's benefit is entirely contingent on the draft already having non-trivial α at depth — it is not a from-scratch training signal, and `bv_log`/`gbv_log`-style extensions would inherit the same defect (plus the zero-gradient gate).**
 
 ---
 

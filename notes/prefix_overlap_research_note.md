@@ -1,8 +1,8 @@
 # Prefix-Overlap Distillation
 ## Research Note
 
-**Status:** Inconclusive — no PO objective consistently beats JSD flat on the traversal (deployment) verifier. One candidate (NSS warm+logprob, +0.155 traversal K=3) is at the noise floor and needs a confirmation run.
-**Draft–Teacher:** Qwen3-0.6B / Qwen3-8B | **Train:** math_hard | **Eval:** math_eval (100 prompts, A100, temp=0.2) | **JSD bar:** traversal K=3 = 5.870
+**Status:** Closed — negative. No PO objective beats JSD flat on the traversal (deployment) verifier at **either** model pair. The one 0.6B/8B borderline (NSS warm+logprob, +0.155 traversal K=3) sat on the noise floor and did not survive the 1.7B/32B replication; cold-start PO at 1.7B/32B is clearly *worse* than JSD, and the `traversal` objective — the one that directly targets the deployment verifier — is the single worst variant of all.
+**Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm-start) **and** Qwen3-1.7B / Qwen3-32B (cold-start) | **Train:** math_hard | **Eval:** math_eval + olympiad_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B). Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`po_*`).
 
 **Math foundation:** Rahul's *Prefix-Overlap Distillation Objective* (internal PDF). Setup, LCP formula, unbiased estimator via teacher samples, multi-root scheme, CE mixing rationale — all in §1–8 there; not repeated here.
 
@@ -39,6 +39,22 @@ Rahul's PDF (§4) defines the base estimator: sample M teacher continuations P^(
 | **`nss` warm (logprob init)** | `compute.py:226` | NSS; warm chain JSD→logprob_warm→nss | **6.025** | **+0.155** | **Borderline** | No (khisti K=4 +0.167, weak verifier) |
 
 JSD flat baseline: traversal K=3 = 5.870. JSD K=3 is anomalously low vs K=2 (6.141) and K=4 (5.943) — the +0.155 delta is partly riding this draw. Noise floor: SE ≈ 0.10–0.15 at n=100.
+
+---
+
+## 1.7B/32B Cold-Start Replication (math_eval + olympiad_eval, L=8, n=100)
+
+Cold-start (no JSD warm), single seed, `--prefix_root_spacing 4`. Δ = traversal BE − `jsd_math_hard_s123` at matched K. This is the decisive test the 0.6B/8B borderline needed — and it fails.
+
+| Objective | Code | trav Δ K1 | K2 | K3 | K4 | Verdict |
+|---|---|---|---|---|---|---|
+| `traversal` cold (`po_traversal_multiN4`) | `compute.py:221` | −0.450 | −0.379 | −0.268 | −0.193 | **Worst variant.** The objective that directly targets the traversal verifier is the *most* harmful — consistently, at every K, far past noise. |
+| `nss` cold (`po_nss_multiN4`) | `compute.py:226` | −0.147 | −0.248 | +0.116 | +0.166 | Sign-flips; net negative at low K. |
+| `logprob` cold (`po_logprob_multiN4`) | `compute.py:232` | −0.053 | −0.229 | +0.068 | +0.099 | Sign-flips; net negative at low K. |
+
+On **olympiad_eval** `po_nss`/`po_logprob` are mildly *positive* across K (≈+0.05 to +0.17) while `po_traversal` stays strongly negative (−0.20 to −0.35) — but the positives are sub-noise and reverse on math_eval, so no consistent win. Full per-verifier grids in the CSVs.
+
+**Why `po_traversal` is the worst, not the best:** the K-aware weight `w_t ∝ K(1−α)^{K−1}α` up-weights *deep, low-α* prefix positions — exactly the tokens a cold draft can't yet match. Cold-start, this pours gradient into unreachable tree tails (same failure mode as the log-tree losses; see [`tree_losses_research_note.md`](tree_losses_research_note.md)). Warm-start on 0.6B/8B masked this because the draft was already near the JSD optimum; cold-start exposes it. **Lesson: an objective analytically aligned with the deployment verifier is not automatically a good *training* signal** — it can be actively anti-curricular.
 
 ---
 
@@ -95,13 +111,13 @@ All roots use the teacher's own prior tokens as context. At test time the draft 
 
 ---
 
-## Pending
+## Resolved (was Pending)
 
-1. **Traversal 15k warm (running):** `steps=15000, anneal_steps=5000` — CE→0 at LR=0.86× peak. Early best raw=6.042 / smoothed=5.951 at step 2000, step 2400/15000. Watch through the anneal boundary (~step 5000).
-2. **Confirm nss_warmlogprob** — re-run at n=200 or seed=456; +0.155 traversal K=3 is the only above-noise positive.
-3. **DDTE verifier eval (eval-only):** run DDTE verifier on JSD-flat and best PO draft. Tests whether a stronger verifier amplifies small draft-distribution differences.
+1. **1.7B/32B cold-start replication — DONE, negative.** See the cold-start table above. The nss_warmlogprob borderline did not generalize; PO is closed as a negative family.
+2. **DDTE verifier eval — DONE.** DDTE (`traversal_dL{3,4,5}`) was run across every PO draft and the JSD baseline; it lifts BE by +0.15–0.5 at K3/K4 *uniformly* (PO and JSD alike), so it does **not** differentially favor PO drafts — a stronger verifier does not rescue PO. Full analysis in [`ddte_research_note.md`](ddte_research_note.md).
+3. **Relation to enrichment.** PO reweights training on a *fixed teacher-context* prefix; enrichment instead trains on *fresh stochastic teacher rollouts* and is the one family that beats JSD (0.6B/8B). The unrun on-policy PO variant (Limitation 1) and the `enrich_draftcond` experiment (draft-conditioned rollouts, [`enrich_research_note.md`](enrich_research_note.md)) are the two ways to inject the draft's *own* distribution into the prefix signal — the axis PO never touched. If any PO idea is revived, it should be the on-policy/draft-conditioned one, not more teacher-context objectives.
 
-Log-space tree losses (`traversal_log`, `naive_log`) are complete — results in [`tree_losses_research_note.md`](tree_losses_research_note.md).
+Log-space tree losses (`traversal_log`, `nss_log`) are complete and share PO-traversal's failure mode — results in [`tree_losses_research_note.md`](tree_losses_research_note.md).
 
 ---
 
