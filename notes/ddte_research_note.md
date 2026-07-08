@@ -3,7 +3,7 @@
 
 **Scope:** originally Qwen3-0.6B / Qwen3-8B, math_eval, one seed, 3 checkpoints (`jsd_flat`, enrich M1/M3). **Extended 2026-07** to a broad cross-checkpoint sweep: **both model pairs** (0.6B/8B + 1.7B/32B), **math_eval + olympiad_eval**, and ~15 trained drafts (JSD baselines, enrich M3–M6, all PO variants, log-tree losses, depth-weight) — each with `traversal_dAdapt/dL3/dL4/dL5` at K=1–4. See [§0](#0-2026-07-update-ddte-across-all-trained-drafts-and-a-second-pair). L1 ∈ {2,3,4,5,6} specinfer; {2,3,4,5} traversal; τ-lagged adaptive on both.
 
-**Data source (untouched):** all numbers in this note are derived from [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) — the single canonical results file for the enrich + DDTE line of work (baselines, enrich M1/M3, and all delayed-tree variants). The tables below are pivots/derivations of `block_eff`; raw per-run rows live only in the CSV.
+**Data source:** all numbers in **§1–§7** (0.6B/8B, math_eval, single seed) are derived from [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) — the canonical results file for the enrich + DDTE line of work (baselines, enrich M1/M3, and all delayed-tree variants). The **§0 (2026-07)** cross-checkpoint / both-pair / olympiad sweep is derived from [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (one CSV per checkpoint). Tables are pivots/derivations of `block_eff`; raw per-run rows live only in the CSVs. Note: `jsd_enrich_ddte_results.csv` also contains s456 and a ttemp1.5 variant — the §1–§7 tables are s123-only, so filter to seed s123 (n=100) when re-deriving.
 **Closest prior work:** DDTE (Thomas et al. 2026, arXiv:2602.16994) — applies delayed branching to untrained drafts using a neural MLP selector. Our contribution: composing eval-time DDTE with distillation-trained + enrich-trained drafts, and measuring how draft quality modulates the DDTE gain.
 
 ---
@@ -26,7 +26,7 @@
 
 **Key analysis:**
 - **Distillation amplifies DDTE** (dimension 1 confirmed): standard JSD distillation alone already improves over what untrained drafts would achieve with DDTE, by compressing divergence and shifting the optimal branching depth deeper.
-- **Enrich further amplifies DDTE** (dimension 2 confirmed): the M3−flat enrich gap grows monotonically with L1 (+0.03 at L1=2, +0.27 at L1=5, K=3), confirming that each tier of draft quality extracts incrementally more from the delayed structure. Optimal (checkpoint, L1) pairs must be selected jointly.
+- **Enrich further amplifies DDTE** (dimension 2 confirmed): the M3−flat enrich gap grows monotonically with L1 (+0.15 at L1=2, +0.27 at L1=5, K=3), confirming that each tier of draft quality extracts incrementally more from the delayed structure. Optimal (checkpoint, L1) pairs must be selected jointly.
 - specinfer+M3+dL5 (6.015 at K=3) vs traversal+M3+dL4 (6.361 at K=3): gap narrows to 0.35 (from 1.42 at L1=0). Full closure likely requires training-time delayed expansion to remove off-policy mismatch.
 - Traversal+DDTE (6.418) > BV (6.283) > traversal standard (6.216) > specinfer+DDTE (6.015). DDTE elevates traversal to the overall best in our setup.
 
@@ -50,7 +50,7 @@ The original note (below) established DDTE on 3 checkpoints at 0.6B/8B. We then 
 
 | pair / dataset | K=2 uplift | K=3 uplift | K=4 uplift |
 |---|---|---|---|
-| 0.6B/8B math_eval | +0.02 to +0.28 | +0.04 to +0.38 | +0.11 to +0.38 |
+| 0.6B/8B math_eval | −0.03 to +0.28 | +0.04 to +0.38 | +0.11 to +0.38 |
 | 1.7B/32B math_eval | +0.0 to +0.36 | +0.20 to +0.71 | +0.45 to +0.79 |
 | 1.7B/32B olympiad | +0.03 to +0.24 | +0.29 to +0.55 | +0.27 to +0.53 |
 
@@ -233,7 +233,7 @@ Best specinfer+DDTE: M3, K=3, dL5 = **6.015**
 Best traversal+DDTE: M3, K=4, dL5 = **6.418** (global high-water mark)
 Apples-to-apples K=3: traversal M3 dL4 = 6.361
 
-Gap at K=3: 6.015 vs 6.361 = **0.35 BE remaining** (was 1.42 at L1=0, was 0.50 at dL4). DDTE closes ~75% of the original specinfer↔traversal gap. Full closure likely requires training-time delayed expansion.
+Gap at K=3: 6.015 vs 6.361 = **0.35 BE remaining** (was 1.42 at L1=0, 0.64 at matched dL4). DDTE closes ~75% of the original specinfer↔traversal gap. Full closure likely requires training-time delayed expansion.
 
 ### 4.5 τ-lagged adaptive (dTau): showed no detectable signal
 

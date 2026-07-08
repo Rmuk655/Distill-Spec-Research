@@ -1,7 +1,7 @@
 # Tree-Structured Draft Distillation Losses
 ## Research Note
 
-**Status:** Closed — negative, and at the larger capacity gap the log-space variants are actively **harmful**. At 0.6B/8B no tree loss beats flat JSD on traversal K=3 (warm log-space variants sit at the noise floor; the +0.293 combined JSD+depth\_weight+naive\_tree result is depth\_weight-driven, see [`depth_weight_research_note.md`](depth_weight_research_note.md), unreproduced). At **1.7B/32B, cold-start `traversal_log` and `nss_log` collapse** — traversal Δ −0.4 to −0.6 at every K, the largest regressions in the whole program. The log-space fix cures gradient *vanishing* but introduces gradient *misallocation* to unreachable deep nodes.
+**Status:** Closed — negative, and at the larger capacity gap the log-space variants are actively **harmful**. At 0.6B/8B no tree loss beats flat JSD on traversal K=3 (warm log-space variants sit at the noise floor; the combined JSD+depth\_weight+naive\_tree run does **not** beat JSD at matched K — the previously cited +0.293 was a K\_eval=1 BE mislabeled as K=3; the true K\_eval=3 Δ is +0.03, within noise, see [`depth_weight_research_note.md`](depth_weight_research_note.md)). At **1.7B/32B, cold-start `traversal_log` and `nss_log` collapse** — traversal Δ −0.4 to −0.6 at K1–K3 (K4 −0.22 to −0.39), the largest regressions in the whole program. The log-space fix cures gradient *vanishing* but introduces gradient *misallocation* to unreachable deep nodes.
 **Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm) **and** Qwen3-1.7B / Qwen3-32B (cold) | **Train:** math\_hard | **Eval:** math\_eval + olympiad\_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B)
 
 ---
@@ -48,13 +48,14 @@ Two structural variants exist for how to train this:
 | `op_naive_tree_full` (GSM8K, K=3, L=8)† | `op_naive_tree_full_gsm8k_train/ckpt_best` | 5.027‡ | −0.296‡ | No |
 | `tree_pg` REINFORCE (K=3, L=8) | abandoned — monotonic decline | 4.0–4.8 (training) | ~−1.5 | No — abandoned |
 | JSD + depth\_weight\_lin + naive\_tree K=1 (40k)§ | `jsd_dw_lin_naive_mathhard_s123_K1/ckpt_best` | 6.036 | +0.166 | Borderline |
-| JSD + depth\_weight\_lin + naive\_tree K=3 (40k)§ | `jsd_dw_lin_naive_mathhard_s123_K3/ckpt_best` | 6.163 | +0.293 | Yes (single seed) |
-| `traversal_log` warm (JSD init, K=3, L=8, 8k) | `traversal_log_K3_L8_lr1e5_s123/ckpt_best` | 6.017 (smoothed) | +0.147 | No — noise floor |
-| `naive_log` warm (JSD init, K=3, L=8, 8k) | `naive_log_K3_L8_lr1e5_s123/ckpt_best` | 5.974 (smoothed) | +0.104 | No — below noise floor |
+| JSD + depth\_weight\_lin + naive\_tree K=3 (40k)§ | `jsd_dw_lin_naive_mathhard_s123_K3/ckpt_best` | 5.903 | +0.033 | No — within noise (the 6.163/+0.293 previously here was the K\_eval=1 BE mislabeled as K=3) |
+| `traversal_log` warm (JSD init, K=3, L=8, 8k)¶ | `traversal_log_K3_L8_lr1e5_s123/ckpt_best` | 6.017 (wandb curve) | +0.147 | No — noise floor |
+| `naive_log` warm (JSD init, K=3, L=8, 8k)¶ | `naive_log_K3_L8_lr1e5_s123/ckpt_best` | 5.974 (wandb curve) | +0.104 | No — below noise floor |
 
 †GSM8K-trained, evaluated on gsm8k\_eval; JSD bar on gsm8k\_eval traversal K=3 ≈ 5.323.  
 ‡Δ computed vs gsm8k\_eval JSD baseline (5.323), not math\_eval baseline.  
-§Combined loss: JSD + depth\_weight\_lin + naive\_tree together. The +0.293 at K=3 is driven primarily by depth\_weight; see [`depth_weight_research_note.md`](depth_weight_research_note.md) for attribution and methodology. Single seed, n=100 — not confirmed.
+§Combined loss: JSD + depth\_weight\_lin + naive\_tree together, evaluated at K\_eval=3. At matched K=3 the Δ is +0.03 (within noise) — the run does **not** beat JSD; the earlier +0.293 came from reading the K\_eval=1 BE (6.163) against the K=3 baseline (5.870). See [`depth_weight_research_note.md`](depth_weight_research_note.md) for the depth\_weight attribution. Single seed, n=100.
+¶No eval CSV for the two warm 0.6B/8B log-space checkpoints (`traversal_log_K3_L8_lr1e5_s123`, `naive_log_K3_L8_lr1e5_s123`) exists in `Results/`; their BE values are read off wandb training curves ("wandb curve") and are **not reproducible from the committed data**.
 
 Noise floor: SE ≈ 0.10–0.15 at n=100. Deltas below 0.15 are inconclusive.
 
