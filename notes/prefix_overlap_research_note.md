@@ -1,7 +1,7 @@
 # Prefix-Overlap Distillation
 ## Research Note
 
-**Status:** Closed — negative. No PO objective beats JSD flat on the traversal (deployment) verifier at **either** model pair. The one 0.6B/8B borderline (NSS warm+logprob, +0.155 traversal K=3) sat on the noise floor and did not survive the 1.7B/32B replication; cold-start PO at 1.7B/32B is clearly *worse* than JSD, and the `traversal` objective — the one that directly targets the deployment verifier — is the single worst variant of all.
+**Status:** Closed — negative. No PO objective beats JSD flat on the traversal (deployment) verifier at **either** model pair. The one 0.6B/8B "borderline" (NSS warm+logprob) turned out to have **no traversal K=3 eval in Results** — traversal was only run at K=1 (5.963) and K=2 (5.945), both *losing* to the JSD baseline — so there is no verified PO traversal win at either pair; cold-start PO at 1.7B/32B is clearly *worse* than JSD, and the `traversal` objective — the one that directly targets the deployment verifier — is the single worst variant of all.
 **Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm-start) **and** Qwen3-1.7B / Qwen3-32B (cold-start) | **Train:** math_hard | **Eval:** math_eval + olympiad_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B). Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`po_*`).
 
 **Math foundation:** Rahul's *Prefix-Overlap Distillation Objective* (internal PDF). Setup, LCP formula, unbiased estimator via teacher samples, multi-root scheme, CE mixing rationale — all in §1–8 there; not repeated here.
@@ -36,9 +36,11 @@ Rahul's PDF (§4) defines the base estimator: sample M teacher continuations P^(
 | `traversal` warm (JSD init) | `compute.py:221` | traversal; warm from JSD ckpt | 5.717 | −0.153 | No | No |
 | `traversal` warm v2 (JSD init) | `compute.py:221` | traversal warm, multiroot N=4 | 5.897 | +0.027 | No | No |
 | `nss` warm (JSD init) | `compute.py:226` | NSS; warm from JSD ckpt | 5.933 | +0.063 | No | No |
-| **`nss` warm (logprob init)** | `compute.py:226` | NSS; warm chain JSD→logprob_warm→nss | **6.025** | **+0.155** | **Borderline** | No (khisti K=4 +0.167, weak verifier) |
+| `nss` warm (logprob init) | `compute.py:226` | NSS; warm chain JSD→logprob_warm→nss | n/a¶ | n/a¶ | Unverified¶ | — |
 
-JSD flat baseline: traversal K=3 = 5.870. JSD K=3 is anomalously low vs K=2 (6.141) and K=4 (5.943) — the +0.155 delta is partly riding this draw. Noise floor: SE ≈ 0.10–0.15 at n=100.
+JSD flat baseline (40K converged, 0.6B/8B): traversal K=1/2/3/4 = 6.280 / 6.141 / 5.870 / 5.943. Noise floor: SE ≈ 0.10–0.15 at n=100.
+
+¶The 6.025 / +0.155 "borderline" traversal-K=3 win previously reported for `nss warm (logprob init)` is **not in Results**: `po_nss_warmlogprob_multiN4_L8_lr1e5_s123.csv` has no traversal K=3 row (traversal was only evaluated at K=1 = 5.963 and K=2 = 5.945, both below the JSD baseline) and no K=4 row (so the former "khisti K=4 +0.167" is also unbacked). This checkpoint has no verified traversal win.
 
 ---
 

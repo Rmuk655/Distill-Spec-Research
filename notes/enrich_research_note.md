@@ -65,7 +65,7 @@ Draft-conditioning does **not** beat JSD on the deployment verifier (traversal �
 
 ### 0(e). Two-seed consistency (0.6B/8B) — which (verifier, K) beats JSD on BOTH seeds
 
-From [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) (two training seeds s123/s456, eval-seed 123). `enrich_M3` Δ vs *same-seed* JSD; cells winning on both seeds, ranked by worst-case (min-seed) gain:
+From [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) (two training seeds s123/s456, eval-seed 123). `enrich_M3` Δ vs *same-seed* JSD; cells winning on both seeds, ranked by worst-case (min-seed) gain. *(Caveat: the s456 `naive K=3` (+0.314) and `bv K=3` (+0.185) deltas compare the enrich checkpoint's n=1000 eval against the n=100 baseline — the only s456 rows available at K=3 — so those two cells mix prompt-set sizes and carry extra uncertainty; s123 throughout and the other s456 cells are matched n=100. The s456 traversal K2/K3 figures in the bullet below are likewise n=1000-vs-n=100.)*
 
 | verifier / K | s123 Δ | s456 Δ | worst-case |
 |---|---|---|---|
@@ -213,7 +213,9 @@ Per-verifier ρ for M=3 (n=100, s123). JSD is computed solely from draft and tea
 
 ## 4. Results
 
-> All raw per-cell results in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv) — the full `eval.py` dump (44 columns: block_eff, throughput_tok_s, timing breakdown, GPU/CPU util, machine info, seed, n_prompts, etc.), math_eval, eval seed 123, train seed encoded in the checkpoint name. Append new eval rows there; do not paste raw dumps into this note. (Converged flat-40K baseline is in the separate [40K CSV](https://github.com/Rmuk655/Distill-Spec-Research/blob/Pipeline/Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv).)
+> All raw per-cell results in [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) — the full `eval.py` dump (block_eff, throughput_tok_s, timing breakdown, GPU/CPU util, machine info, seed, n_prompts, etc.), math_eval, eval seed 123, train seed encoded in the checkpoint name. Append new eval rows there; do not paste raw dumps into this note. (Converged flat-40K baseline is in the separate [40K CSV](https://github.com/Rmuk655/Distill-Spec-Research/blob/Pipeline/Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv).)
+>
+> **⚠ Data-provenance caveat (verified 2026-07):** in the committed `jsd_enrich_ddte_results.csv`, the **n=1000** rows exist only for the *s456* checkpoints (bv/naive/traversal at a subset of K); there are **no n=1000 s123 rows**, and flat/M1 have n=1000 only at K=4. So the n=1000 tables in **§4.2/§4.3** are not fully reproducible from committed data — treat any n=1000 s123 cell or n=1000 flat/M1 K=2/3 cell as *not in Results* pending a re-export. Likewise, the **ρ / mean_BE / forward-KL / path-diversity diagnostics in §3.2 and §4.6** are `--diagnose` outputs that are **not present in any committed Results CSV** (no such columns exist there); they are reported from run logs, not reproducible from `Results/`. The single-seed **§0**, the n=100 **§4.1/§4.4 (s123)** point values, and the §4.5 trav-K3 +5.9% (s123) figure are all CSV-backed and verified.
 
 ### 4.1 Training runs
 
@@ -305,7 +307,7 @@ The gain is larger on s123 (+0.19–0.25 across all K) and smaller on s456 — w
 
 ### 4.4 Cross-verifier and K_eval-dependence (n=100, seed-averaged, vs flat-8K)
 
-This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over s123+s456, baseline = flat-8K (the under-trained baseline — the converged flat-40K comparison is [§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)). Raw cells in [`Results/jsd_enrich_results.csv`](../Results/jsd_enrich_results.csv).
+This is the mechanism sweep: all 9 verifiers × K_eval=1..4, seed-averaged over s123+s456, baseline = flat-8K (the under-trained baseline — the converged flat-40K comparison is [§4.5](#45-m3-8k-steps-vs-our-strongest-flat-baseline-40k-steps)). Raw cells in [`Results/jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv).
 
 **M=3 − flat-8K Δ, seed-averaged:**
 
