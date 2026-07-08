@@ -42,6 +42,10 @@
 
 The original note (below) established DDTE on 3 checkpoints at 0.6B/8B. We then ran the DDTE variants (`traversal_dL{3,4,5}`, `dAdapt`) across **every** trained checkpoint in the program, on both pairs and both datasets. Metric here is **DDTE uplift = best-dL traversal BE − same checkpoint's base (L1=0) traversal BE**, at matched K. Grounded in [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/).
 
+![DDTE lift per checkpoint: base traversal vs best delayed-branching, per pair (K=4, math_eval, 2026-07 sweep, single seed)](ddte_block_efficiency_3d.png)
+
+*Figure: base traversal (L1=0, grey) vs best-DDTE (best `dL`, blue) per checkpoint, K=4, math_eval. Left = 0.6B/8B, right = 1.7B/32B; annotations are the uplift. Every draft gains from DDTE, but the **two tiers** are visible on the right: well-trained drafts (jsd/enrich/po_nss/po_logprob) + DDTE cluster at 6.2–6.4, while collapsed drafts (nss_log/traversal_log/po_traversal) + DDTE stay ~0.5 BE below — DDTE does not lift a bad draft into the trained tier. Single seed (s123).*
+
 **Finding 1 — DDTE helps *every* trained draft, at both pairs, and the uplift grows with K.** Best-dL beats base traversal by roughly:
 
 | pair / dataset | K=2 uplift | K=3 uplift | K=4 uplift |
@@ -134,9 +138,9 @@ All BE values below are derived from [`Results/jsd_enrich_ddte_results.csv`](../
 
 ### 4.0 Block efficiency landscape: K × L1 × checkpoint
 
-![Block efficiency: K x L1 x checkpoint, specinfer and traversal](ddte_block_efficiency_3d.png)
+*(The original 3D K×L1×checkpoint figure was repurposed for the [§0](#0-2026-07-update-ddte-across-all-trained-drafts-and-a-second-pair) cross-checkpoint view; the per-L1 specinfer/traversal landscape it depicted is fully in tables §4.1–4.2 below.)*
 
-Reading the chart: for **specinfer** (left), bar height climbs steeply with L1 — standard root branching (`std`) is the trough, dL5/dL6 the ridge, and M3 (red) sits on top at dL5. For **traversal** (right), the surface is nearly flat across L1 — the verifier is structurally insensitive to branch-delay depth, and the only standout is M3 dL5 at K=4 (the global peak, 6.418). The two panels visually encode the central finding: DDTE reshapes the specinfer landscape but barely moves traversal's.
+The landscape, in words: for **specinfer**, BE climbs steeply with L1 — standard root branching is the trough, dL5/dL6 the ridge, M3 on top at dL5. For **traversal**, BE is nearly flat across L1 — the verifier is structurally insensitive to branch-delay depth, the standout being M3 dL5 at K=4 (0.6B/8B peak, 6.418). Central finding: DDTE reshapes the specinfer landscape but barely moves traversal's.
 
 ### 4.1 Specinfer: L1 progression by checkpoint
 
