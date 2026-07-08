@@ -51,7 +51,15 @@ New data since the sections below were written. All Δ = traversal BE − flat-J
 
 **(c) Cross-pair replication FAILS at 1.7B/32B (single seed).** `enrich_K3` traversal Δ vs `jsd_math_hard_s123`: **−0.054 / −0.133 / +0.273 / +0.085** across K_eval=1–4 (math_eval) — sign-flips, net unconvincing; on olympiad_eval +0.162 / +0.111 / −0.062. This does **not** reproduce the clean 0.6B/8B win. Caveat: only one enrich variant (M=3, no temp07/M-sweep) was run at the big pair, single seed, and the 1.7B/32B noise floor is uncharacterized — so this is "did not replicate," not "refuted." A matched M=4 + second seed at 1.7B/32B is the decisive follow-up.
 
-**(d) `enrich_draftcond_K3` (draft-conditioned rollouts) — inconclusive, sweep incomplete.** Only traversal K_eval=1 exists (Δ −0.111 vs 0.6B/8B baseline); K_eval=2 partially run, K3/K4 missing. This is the one variant that injects the *draft's own* distribution into the rollout (the axis PO never touched, see [`prefix_overlap_research_note.md`](prefix_overlap_research_note.md)) — worth finishing the sweep before judging, since it's mechanistically the most interesting enrich variant.
+**(d) `enrich_draftcond_K3` (draft-conditioned rollouts) — full K1–4 sweep now in; NEGATIVE, and it disconfirms the on-policy hypothesis.** This is the one variant that injects the *draft's own* distribution into the rollout (the on-policy analog; the axis PO never touched, see [`prefix_overlap_research_note.md`](prefix_overlap_research_note.md)). Full math_eval sweep (all verifiers × K=1–4, single seed) vs the 0.6B/8B JSD baseline and vs standard flat-enrich (K4):
+
+| verifier | Δ vs JSD (K1/K2/K3/K4) | Δ vs flat-enrich (K1/K2/K3/K4) |
+|---|---|---|
+| traversal (deployment) | −0.11 / +0.07 / +0.03 / +0.06 | −0.12 / −0.19 / −0.13 / −0.08 |
+| bv | −0.02 / −0.17 / −0.04 / −0.04 | −0.16 / −0.38 / −0.19 / −0.24 |
+| naive | −0.26 / −0.25 / +0.19 / −0.04 | −0.30 / −0.32 / −0.09 / −0.20 |
+
+Draft-conditioning does **not** beat JSD on the deployment verifier (traversal Δ inside the ~0.15 noise floor, negative at K1), and is clearly **worse than teacher-rollout enrich at every verifier×K** (the −0.16 to −0.38 bv/naive gaps are above noise). Mechanism (grounded in the bv analysis, §0e): enrich helps by exposing the draft to the *teacher's* full stochastic support, de-sharpening q toward p; sampling from the *draft's own* distribution instead reinforces q's already-narrow modes — moving the draft away from the teacher's tails, the opposite of what helped. **So "on-policy / student-sampled trajectories beat off-policy" (the premise of OPD/DOPD-style work) does not hold for acceptance-matching here** — for the same reason reverse-KL mode-seeking hurts BE. Raw CSV: [`enrich_draftcond_K3_mathhard_s123.csv`](../Results/per_checkpoint_sweeps_2026-07/enrich_draftcond_K3_mathhard_s123.csv).
 
 **Bottom line update:** enrich remains the one positive lever, now with OOD generalization confirmed at 0.6B/8B and an interior M-optimum (~M=4, temperature-confounded). Its failure to replicate at 1.7B/32B is the top open risk to any "enrich beats JSD" claim in the paper — it must be stated as pair-specific until a second seed + matched-M run at the big pair exists.
 
