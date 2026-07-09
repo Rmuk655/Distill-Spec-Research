@@ -17,7 +17,7 @@
 | flat enrich M=5 | `--K 5` | more rollouts | Yes — +0.141 / +0.060 | ties M=4, slight fade |
 | flat enrich M=6 | `--K 6` | even more rollouts | Weak — +0.071 / +0.050 | **degrades** (more rollouts stop helping) |
 | enrich M=3 @ **1.7B/32B** | `enrich_K3` | cross-pair replication | **No (clean)** — trav Δ −0.05/−0.13/**+0.27**/+0.09 (K1–4); oly +0.16/+0.11/−0.06 | sign-flips; single seed |
-| **draftcond M=3** (on-policy) | `enrich_draftcond_K3` | draft-sampled rollouts | **No** — trav Δ −0.11/+0.07/+0.03/+0.06 (within noise) | **worse than teacher-enrich** (bv −0.16 to −0.38) |
+| **draftcond M=3** (on-policy) | `enrich_draftcond_K3` | draft-sampled rollouts | **No** — trav Δ math −0.11/+0.07/+0.03/+0.06; oly −0.18/+0.02/**+0.11**/**−0.25** (all within noise) | **worse than teacher-enrich, both datasets** (bv/trav −0.15 to −0.37) |
 | teacher_temp=1.5 | `..._ttemp1.5` | negative control | — (teacher incoherent) | ρ −0.645→−0.543; sanity check only |
 | M=1 vs flat-40K | `jsd_flat_enrich_M1` | single stochastic rollout | No — −0.022 | one rollout ≈ flat; M>1 is what moves it |
 
@@ -33,7 +33,7 @@
 
 3. **Cross-pair replication fails at 1.7B/32B (single seed).** `enrich_K3` traversal Δ sign-flips across K (−0.05/−0.13/+0.27/+0.09); does not reproduce the clean 0.6/8 win. Only one M (=3), one seed, uncharacterised noise → "did not replicate," not "refuted." Matched-M=4 + second seed is the decisive follow-up. Ties to the **capacity-vs-depth** tradeoff (wider gap wins shallow-K, loses deep-K/OOD).
 
-4. **On-policy / draft-conditioned enrich is NEGATIVE — disconfirms the OPD premise.** `enrich_draftcond` (rollouts sampled from the *draft*) does not beat JSD on traversal (within noise) and is clearly worse than teacher-rollout enrich at every verifier×K (bv/naive −0.16 to −0.38). Mechanism (§bv, below): enrich helps by exposing the draft to the *teacher's* full support (de-sharpening q→p); sampling from the *draft's own* narrow distribution reinforces its modes — the wrong direction, same reason reverse-KL mode-seeking hurts BE. So "student-sampled beats off-policy" (OPD/DOPD) does **not** hold for acceptance-matching here.
+4. **On-policy / draft-conditioned enrich is NEGATIVE — disconfirms the OPD premise, now confirmed OOD too.** `enrich_draftcond` (rollouts sampled from the *draft*) does not beat JSD on traversal (within noise, math or olympiad) and is clearly worse than teacher-rollout enrich at every verifier×K on **both datasets** (bv/traversal Δ vs flat-enrich −0.15 to −0.37 on olympiad, matching the −0.16 to −0.38 on math). Mechanism (§bv, below): enrich helps by exposing the draft to the *teacher's* full support (de-sharpening q→p); sampling from the *draft's own* narrow distribution reinforces its modes — the wrong direction, same reason reverse-KL mode-seeking hurts BE. So "student-sampled beats off-policy" (OPD/DOPD) does **not** hold for acceptance-matching here, in- or out-of-distribution. (One notable side effect: `specinfer` — draftcond's weakest base verifier — gets a huge DDTE uplift, +0.94 BE at K4 dL5, the largest DDTE uplift observed anywhere in the program; consistent with [`ddte_research_note.md`](ddte_research_note.md)'s "uplift is inverse to base draft quality.")
 
 5. **Two-seed consistency (0.6B/8B): `bv` is the most cross-seed-robust verifier.** From `jsd_enrich_ddte_results.csv` (train seeds s123/s456, eval seed 123); M3 Δ vs same-seed JSD, both-seed winners ranked by worst case:
 
