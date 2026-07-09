@@ -10,13 +10,16 @@
 
 ## 0. Headline: DDTE across all trained drafts, both pairs (2026-07)
 
-**Finding 1 — DDTE helps every trained draft; uplift grows with K, ≈0 at K=1.**
+**Finding 1 — DDTE helps nearly every trained draft; uplift grows with K, ≈0 at K=1.** Three (checkpoint, K) cells at 0.6/8 are marginally negative — `po_traversal_warmjsd` at K=2 (math −0.03, olympiad −0.01) and `po_nss_warmlogprob` at math K=3 (−0.13, where the base traversal is already elevated by that PO checkpoint's own K=3 anomaly, see [`prefix_overlap_research_note.md`](prefix_overlap_research_note.md)) — all three are the checkpoints already flagged as PO-family negatives elsewhere; every other cell across both pairs and datasets is positive.
 
 | pair / dataset | K=2 uplift | K=3 uplift | K=4 uplift |
 |---|---|---|---|
-| 0.6B/8B math | −0.03 to +0.28 | +0.04 to +0.38 | +0.11 to +0.38 |
+| 0.6B/8B math | −0.03 to +0.28 | **−0.13 to +0.38** | +0.11 to +0.38 |
+| 0.6B/8B olympiad | −0.01 to +0.29 | +0.05 to +0.43 | +0.12 to +0.40 |
 | 1.7B/32B math | +0.0 to +0.36 | +0.20 to +0.71 | +0.45 to +0.79 |
 | 1.7B/32B olympiad | +0.03 to +0.24 | +0.29 to +0.55 | +0.27 to +0.53 |
+
+(0.6/8 math K3 lower bound revised down from +0.04: `po_nss_warmlogprob`'s now-complete traversal K3 row has an unusually high base [+0.156 above JSD, see [`prefix_overlap_research_note.md`](prefix_overlap_research_note.md)], so DDTE's dL variants don't clear it — the one checkpoint in the program where DDTE uplift is negative at K3.)
 
 Uplift ≈0 at K=1 (no branching to delay) and rises monotonically with K — deeper trees make branch placement matter more. This is the key extension of Thomas et al.: DDTE transfers cleanly to distilled, enriched, PO- and even collapsed drafts, and to a second (wider) capacity gap.
 

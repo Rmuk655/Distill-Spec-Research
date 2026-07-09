@@ -1,7 +1,7 @@
 # Prefix-Overlap Distillation
 ## Research Note
 
-**Status:** Closed — negative. No PO objective beats JSD flat on the traversal (deployment) verifier at **either** model pair. The one 0.6B/8B "borderline" (NSS warm+logprob) turned out to have **no traversal K=3 eval in Results** — traversal was only run at K=1 (5.963) and K=2 (5.945), both *losing* to the JSD baseline — so there is no verified PO traversal win at either pair; cold-start PO at 1.7B/32B is clearly *worse* than JSD, and the `traversal` objective — the one that directly targets the deployment verifier — is the single worst variant of all.
+**Status:** Closed — negative. No PO objective *consistently* beats JSD flat on the traversal (deployment) verifier at **either** model pair. The 0.6B/8B "borderline" (NSS warm+logprob) is now fully evaluated: traversal K=3 = 6.025 (**+0.156**, just past the noise floor) but K=1/K=2/K=4 are all negative (−0.318/−0.196/−0.082) — a single-K win surrounded by losses, not a consistent effect. Cold-start PO at 1.7B/32B is clearly *worse* than JSD, and the `traversal` objective — the one that directly targets the deployment verifier — is the single worst variant of all.
 **Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm-start) **and** Qwen3-1.7B / Qwen3-32B (cold-start) | **Train:** math_hard | **Eval:** math_eval + olympiad_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B). Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`po_*`).
 
 **Math foundation:** Rahul's *Prefix-Overlap Distillation Objective* (internal PDF). Setup, LCP formula, unbiased estimator via teacher samples, multi-root scheme, CE mixing rationale — all in §1–8 there; not repeated here.
@@ -36,11 +36,11 @@ Rahul's PDF (§4) defines the base estimator: sample M teacher continuations P^(
 | `traversal` warm (JSD init) | `compute.py:221` | traversal; warm from JSD ckpt | 5.717 | −0.153 | No | No |
 | `traversal` warm v2 (JSD init) | `compute.py:221` | traversal warm, multiroot N=4 | 5.897 | +0.027 | No | No |
 | `nss` warm (JSD init) | `compute.py:226` | NSS; warm from JSD ckpt | 5.933 | +0.063 | No | No |
-| `nss` warm (logprob init) | `compute.py:226` | NSS; warm chain JSD→logprob_warm→nss | n/a¶ | n/a¶ | Unverified¶ | — |
+| `nss` warm (logprob init) | `compute.py:226` | NSS; warm chain JSD→logprob_warm→nss | **6.025** | **+0.156** | **Only at K=3¶** | No |
 
 JSD flat baseline (40K converged, 0.6B/8B): traversal K=1/2/3/4 = 6.280 / 6.141 / 5.870 / 5.943. Noise floor: SE ≈ 0.10–0.15 at n=100.
 
-¶The 6.025 / +0.155 "borderline" traversal-K=3 win previously reported for `nss warm (logprob init)` is **not in Results**: `po_nss_warmlogprob_multiN4_L8_lr1e5_s123.csv` has no traversal K=3 row (traversal was only evaluated at K=1 = 5.963 and K=2 = 5.945, both below the JSD baseline) and no K=4 row (so the former "khisti K=4 +0.167" is also unbacked). This checkpoint has no verified traversal win.
+¶`po_nss_warmlogprob_multiN4_L8_lr1e5_s123.csv` now has the full K1–4 + olympiad_eval sweep. Traversal Δ vs the 40K baseline is **K1 −0.318, K2 −0.196, K3 +0.156, K4 −0.082** — the K=3 "borderline" win is real data (not a missing-row artifact as previously noted here) but sits alone amid three losses, so it does not read as a consistent effect. Vs the per-checkpoint baseline (5.957) traversal is flatter and mixed (K1 −0.061, K2 +0.072, K3 +0.068, K4 +0.032) — no clear beat either way. On olympiad_eval, traversal is K1 −0.031, K2 −0.097, K3 +0.018, K4 +0.024 vs the per-checkpoint baseline — likewise no consistent win. No other verifier in this checkpoint shows a cleaner pattern (e.g. `specinfer_dL4` K3 +0.251 vs per-checkpoint baseline is the single largest cell, but isolated, same shape as traversal).
 
 ---
 
@@ -106,7 +106,7 @@ M teacher continuations per root is fixed at 4 independent of K. Matching M=K wo
 Rahul §5 requires a random offset for unbiased coverage of all positions. Fixed N=4 spacing (roots always at 4, 8, 12, …) biases away from early positions. Unrun: add random offset.
 
 **4. Single seed, n=100:**
-SE ≈ 0.10–0.15. Deltas below 0.15 are inconclusive. The nss_warmlogprob +0.155 is at this floor.
+SE ≈ 0.10–0.15. Deltas below 0.15 are inconclusive. The nss_warmlogprob K=3 traversal Δ (+0.156) is at this floor and unaccompanied by a win at any other K in the same checkpoint.
 
 **5. Teacher rollout context for roots:**
 All roots use the teacher's own prior tokens as context. At test time the draft generates its own prior tokens — a covariate shift that none of the objectives correct for.
