@@ -30,7 +30,7 @@ Uplift ≈0 at K=1 (no branching to delay) and rises monotonically with K — de
 | jsd / enrich / po_nss / po_logprob + DDTE (well-trained) | 6.19–6.33 | 6.20–**6.37** |
 | traversal_log / nss_log + DDTE (collapsed) | 5.70–5.90 | 5.77–5.83 |
 
-A collapsed draft + DDTE lands ~0.5 BE **below** any well-trained draft + DDTE → **DDTE does not replace training; the top BE needs both.** (0.6/8: jsd base 5.83 → +enrich-train 5.99 → +DDTE 6.37 [enrich_K6]; enrich+DDTE 6.23–6.37 beats jsd+DDTE 6.12. At 1.7/32 the enrich edge vanishes: jsd+DDTE 6.37 ties enrich+DDTE 6.27 — same capacity-vs-depth effect as without DDTE.)
+A collapsed draft + DDTE lands ~0.5 BE **below** any well-trained draft + DDTE → **DDTE does not replace training; the top BE needs both.** (0.6/8: jsd base 5.83 → +enrich-train 5.99 → +DDTE 6.37 [enrich_K6]; enrich+DDTE 6.23–6.37 beats jsd+DDTE 6.12. At 1.7/32 the enrich edge vanishes: jsd+DDTE 6.37 ties enrich+DDTE 6.27 — same capacity-vs-depth effect as without DDTE.) **Backend note:** the DDTE *uplift* (Finding 1) is computed within each checkpoint's own file (best-dL − same-file base traversal), so it is **backend-clean by construction**. This two-tier *absolute* BE table is cross-checkpoint (well-trained tier mixes sdpa `enrich_K3`/`jsd` and FA2 `po_*`), but the ~0.5 BE tier gap exceeds the ±0.37 backend range, so the two-tier separation holds; do not read the *within-tier* orderings (jsd vs enrich vs po) as backend-clean.
 
 ![DDTE lift per checkpoint: base traversal vs best delayed-branching, per pair (K=4, math_eval, single seed)](ddte_block_efficiency_3d.png)
 
