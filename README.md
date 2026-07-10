@@ -118,7 +118,7 @@ python train.py --loss lk_alpha_enrich --K 3 --steps 8000 \
     --train_dataset math_hard --val_dataset math_val
 ```
 
-See [`project_report.md`](project_report.md) for whether `lk_alpha`/`lk_alpha_enrich` actually beat JSD once run — the gradient-structure argument for why they might is analysis, not a CLI fact, and lives there.
+**Result (2026-07): `lk_alpha` (greedy, from scratch, 0.6B/8B) does NOT beat JSD** — ties/loses on every deployment verifier and loses on traversal K3 (−0.27); the mechanistic prediction held. Full analysis in [`notes/lk_alpha_research_note.md`](notes/lk_alpha_research_note.md); `lk_alpha_enrich` (K-stochastic-rollout variant) is still unrun.
 
 ### Tree losses (on-policy draft tree)
 
