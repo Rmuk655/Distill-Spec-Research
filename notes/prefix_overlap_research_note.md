@@ -46,7 +46,7 @@ JSD flat baseline (40K converged, 0.6B/8B): traversal K=1/2/3/4 = 6.280 / 6.141 
 
 ## 1.7B/32B Cold-Start Replication (math_eval + olympiad_eval, L=8, n=100)
 
-Cold-start (no JSD warm), single seed, `--prefix_root_spacing 4`. Δ = traversal BE − `jsd_math_hard_s123` at matched K. This is the decisive test the 0.6B/8B borderline needed — and it fails.
+Cold-start (no JSD warm), single seed, `--prefix_root_spacing 4`. Δ = traversal BE − `jsd_math_hard_s123` at matched K. This is the decisive test the 0.6B/8B borderline needed — and it fails. **Backend (verified 2026-07):** the `po_*_multiN4` files and the 1.7/32 baseline are both **FA2 at K1–K3** (matched, backend-clean); only K4 is cross-backend (`po_*` FA2 vs baseline sdpa) — the `po_traversal` regression at K1–K3 (−0.45/−0.38/−0.27) is therefore not a backend artifact.
 
 | Objective | Code | trav Δ K1 | K2 | K3 | K4 | Verdict |
 |---|---|---|---|---|---|---|

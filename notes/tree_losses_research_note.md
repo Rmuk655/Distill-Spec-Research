@@ -65,7 +65,7 @@ Noise floor: SE ≈ 0.10–0.15 at n=100. Deltas below 0.15 are inconclusive.
 
 ## 1.7B/32B Cold-Start: Log-Space Losses Collapse (math\_eval + olympiad\_eval, L=8, n=100)
 
-Cold-start (no JSD warm), single seed. Δ = traversal BE − `jsd_math_hard_s123` at matched K. Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`traversal_log_K3_*`, `nss_log_K3_*`).
+Cold-start (no JSD warm), single seed. Δ = traversal BE − `jsd_math_hard_s123` at matched K. Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`*_Qwen32B-Qwen1.7B.csv`). **Backend (verified 2026-07):** both log-tree files and the baseline are **FA2 at K1–K3** (matched — the K1–K3 deltas below are backend-clean); only K4 is cross-backend (log-tree FA2 vs baseline sdpa), and the collapse is so large (≫ the ±0.37 backend range) that the conclusion is unaffected regardless.
 
 | Loss | trav Δ K1 | K2 | K3 | K4 | olympiad K1/K2/K3 |
 |---|---|---|---|---|---|
