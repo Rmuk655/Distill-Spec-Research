@@ -46,6 +46,7 @@ PASSK_DATASETS="${PASSK_DATASETS:-math_eval,gsm8k_eval,olympiad_eval}"
 PASSK_SAMPLES="${PASSK_SAMPLES:-64}"
 PASSK_TEMP="${PASSK_TEMP:-0.8}"
 PASSK_N_PROMPTS="${PASSK_N_PROMPTS:-100}"
+PASSK_MAX_NEW_TOKENS="${PASSK_MAX_NEW_TOKENS:-512}"   # must reach the answer; 128 (block-eff) truncates
 
 # ---- staged sweep: which axis + locked (winner) values for the others --------
 STAGE="${STAGE:?set STAGE=lr|warmup|lr_min|wd}"
@@ -107,6 +108,7 @@ run_job() {   # $1 = gpu id, $2 = "m|lr|pct|lrmin|wd"
     --lr ${lr} --warmup_steps ${wu} --lr_min_ratio ${lrmin} --weight_decay ${wd} \
     --passk_datasets ${PASSK_DATASETS} --passk_samples ${PASSK_SAMPLES} \
     --passk_temp ${PASSK_TEMP} --passk_n_prompts ${PASSK_N_PROMPTS} \
+    --passk_max_new_tokens ${PASSK_MAX_NEW_TOKENS} \
     --output ${out} ${resume}"
 
   echo "[gpu${gpu}] RUN: ${name}"

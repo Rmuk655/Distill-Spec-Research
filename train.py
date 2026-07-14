@@ -350,6 +350,11 @@ def parse_args():
                     help="Sampling temperature for pass@k. Default 0.8 (standard). NOTE: pass@k "
                          "needs sample DIVERSITY — at val_temp=0.2 the k samples are near-identical "
                          "so pass@64 collapses to pass@1 and the curve is uninformative. Keep ~0.8.")
+    ap.add_argument("--passk_max_new_tokens", type=int, default=512,
+                    help="Generation length for pass@k. MUST be long enough to reach the answer "
+                         "(the block-eff val's MAX_NEW_TOKENS=128 truncates most MATH solutions "
+                         "before \\boxed{} => pass@k reads ~0). 512 is a safe default; raise for "
+                         "very long solutions (cost scales linearly).")
     ap.add_argument("--early_stop_patience", type=int, default=EARLY_STOP_PAT,
                     help=f"Stop training if smoothed val BE has not improved for this many "
                          f"consecutive val checks (default {EARLY_STOP_PAT}; 0 = disabled). "
@@ -797,7 +802,7 @@ def main():
                         _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= args.passk_samples]
                         _pk = _train_passk(draft, tokenizer, _pr, _go,
                                            n=args.passk_samples, temp=args.passk_temp,
-                                           k_values=_pk_ks, max_new_tokens=MAX_NEW_TOKENS)
+                                           k_values=_pk_ks, max_new_tokens=args.passk_max_new_tokens)
                         _passk.update({f"passk_{_ds}/k{k}": v for k, v in _pk.items()})
                         if _pk:
                             print(f"  [passk:{_ds}] " + "  ".join(
