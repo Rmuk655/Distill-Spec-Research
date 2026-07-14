@@ -341,11 +341,25 @@ def parse_args():
                          "E.g. 'math_eval,gsm8k_eval,olympiad_eval'. Training-stability "
                          "diagnostic (pass@64 flat across training => coverage not collapsing).")
     ap.add_argument("--passk_samples", type=int, default=64,
-                    help="Samples generated per prompt to estimate pass@k (must be >= max k; "
-                         "64 supports pass@64). Cost per val = passk_samples x passk_n_prompts x "
-                         "(#datasets) draft generations — reduce this or passk_n_prompts if too slow.")
+                    help="Samples/prompt for the ROUTINE pass@k tier (every val check). Must be "
+                         ">= max k you want from this tier (e.g. 16 => pass@1/2/4/8/16 only). "
+                         "If --passk_full_every=0 (default) this is the ONLY tier -- unchanged "
+                         "single-tier behaviour. Cost per val = passk_samples x passk_n_prompts x "
+                         "(#datasets) draft generations.")
     ap.add_argument("--passk_n_prompts", type=int, default=100,
-                    help="Fixed #prompts per dataset for pass@k (first N, deterministic).")
+                    help="Fixed #prompts per dataset for the ROUTINE tier (first N, deterministic).")
+    ap.add_argument("--passk_full_every", type=int, default=0,
+                    help="If >0, every this-many STEPS also run a bigger 'full' pass@k tier "
+                         "(passk_full_samples/passk_full_n_prompts) instead of the routine tier at "
+                         "that val check -- e.g. routine=16 every val_every=400, full=64 every "
+                         "1600. Only fires on steps that are ALSO a val_every multiple; if not an "
+                         "exact multiple of val_every the two cadences sync at their LCM (a warning "
+                         "is printed at startup). 0 (default) = disabled, single-tier only.")
+    ap.add_argument("--passk_full_samples", type=int, default=64,
+                    help="Samples/prompt for the FULL tier (only used when --passk_full_every fires).")
+    ap.add_argument("--passk_full_n_prompts", type=int, default=None,
+                    help="#prompts for the FULL tier. Default: same as --passk_n_prompts (samples is "
+                         "the only thing that changes tier-to-tier unless you set this explicitly).")
     ap.add_argument("--passk_temp", type=float, default=0.8,
                     help="Sampling temperature for pass@k. Default 0.8 (standard). NOTE: pass@k "
                          "needs sample DIVERSITY — at val_temp=0.2 the k samples are near-identical "
@@ -567,8 +581,12 @@ def main():
     # pass@k eval sets: prompts + parallel gold answers, first N of each listed dataset.
     # load_prompts_jsonl() drops the gold, so re-read each file to pick up
     # `answer`/`solution` in file order (deterministic first-N => same set every check).
-    passk_sets = {}   # {dataset_name: (prompts[:N], golds[:N])}
+    # Loaded once at the larger of the two tiers' N so both tiers slice from the SAME
+    # prefix (routine tier's prompts are always a prefix of the full tier's).
+    passk_full_n_prompts = args.passk_full_n_prompts if args.passk_full_n_prompts is not None else args.passk_n_prompts
+    passk_sets = {}   # {dataset_name: (prompts[:maxN], golds[:maxN])}
     _passk_ds = [d.strip() for d in args.passk_datasets.split(",") if d.strip()]
+    _maxN = max(args.passk_n_prompts, passk_full_n_prompts)
     for _ds in _passk_ds:
         _pr, _go = [], []
         with open(dataset_path(_ds), encoding="utf-8") as _vf:
@@ -582,11 +600,19 @@ def main():
                 _pr.append(_obj["prompt"])
                 _graw = _obj.get("answer") or _obj.get("solution") or ""
                 _go.append(extract_gold(_graw) if _graw else None)
-        N = args.passk_n_prompts
-        passk_sets[_ds] = (_pr[:N], _go[:N])
-        _n_gold = sum(1 for g in _go[:N] if g is not None)
-        print(f"[passk] {_ds}: {_n_gold}/{min(N, len(_pr))} prompts gradeable "
-              f"(samples={args.passk_samples} temp={args.passk_temp})")
+        passk_sets[_ds] = (_pr[:_maxN], _go[:_maxN])
+        _n_gold = sum(1 for g in _go[:args.passk_n_prompts] if g is not None)
+        print(f"[passk] {_ds}: {_n_gold}/{min(args.passk_n_prompts, len(_pr))} prompts gradeable "
+              f"(routine: samples={args.passk_samples} n_prompts={args.passk_n_prompts} temp={args.passk_temp})")
+    if _passk_ds and args.passk_full_every > 0:
+        print(f"[passk] full tier: samples={args.passk_full_samples} n_prompts={passk_full_n_prompts} "
+              f"every {args.passk_full_every} steps")
+        if args.passk_full_every % args.val_every != 0:
+            import math as _math
+            _lcm = args.passk_full_every * args.val_every // _math.gcd(args.passk_full_every, args.val_every)
+            print(f"[passk] WARNING: --passk_full_every={args.passk_full_every} is not a multiple of "
+                  f"--val_every={args.val_every} — full tier will actually fire every {_lcm} steps "
+                  f"(their LCM), not {args.passk_full_every}.")
 
     # Dispatch
     loss_fn       = get_loss(args.loss)
@@ -796,16 +822,23 @@ def main():
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 # pass@k on each configured dataset, SAME cadence as this val check.
                 # Wrapped so a pass@k failure can never kill training. Logged as
-                # passk_<dataset>/k<K> so W&B plots one curve per dataset per K.
-                for _ds, (_pr, _go) in passk_sets.items():
+                # passk_<dataset>/k<K> so W&B plots one curve per dataset per K, regardless
+                # of which tier produced a given point (same quantity, cheaper vs pricier n).
+                _is_full_passk = args.passk_full_every > 0 and (step + 1) % args.passk_full_every == 0
+                if _is_full_passk:
+                    _pk_n, _pk_nprompts, _pk_tier = args.passk_full_samples, passk_full_n_prompts, "full"
+                else:
+                    _pk_n, _pk_nprompts, _pk_tier = args.passk_samples, args.passk_n_prompts, "routine"
+                for _ds, (_pr_all, _go_all) in passk_sets.items():
+                    _pr, _go = _pr_all[:_pk_nprompts], _go_all[:_pk_nprompts]
                     try:
-                        _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= args.passk_samples]
+                        _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= _pk_n]
                         _pk = _train_passk(draft, tokenizer, _pr, _go,
-                                           n=args.passk_samples, temp=args.passk_temp,
+                                           n=_pk_n, temp=args.passk_temp,
                                            k_values=_pk_ks, max_new_tokens=args.passk_max_new_tokens)
                         _passk.update({f"passk_{_ds}/k{k}": v for k, v in _pk.items()})
                         if _pk:
-                            print(f"  [passk:{_ds}] " + "  ".join(
+                            print(f"  [passk:{_ds}] ({_pk_tier}, n={_pk_n}) " + "  ".join(
                                 f"k{k}={v:.3f}" for k, v in _pk.items()))
                     except Exception as _e:
                         print(f"  [passk:{_ds}] skipped (error: {_e})")

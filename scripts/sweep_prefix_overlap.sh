@@ -46,11 +46,19 @@ IFS=',' read -r -a METHODS <<< "${METHODS_STR}"
 # in-training pass@k: math_val ONLY (the dev set — same 100 prompts block-eff uses,
 # so no test-peeking). The multi-dataset pass@k (math_eval/gsm8k_eval/olympiad_eval)
 # is a SEPARATE post-training run via scripts/passk_eval.py, not during the sweep.
+#
+# TWO-TIER cadence (measured 2026-07-14: plain block-eff val ~15min, val+full
+# pass@k(n=64,100prompts) ~55min under 2-jobs/GPU -> pass@k marginal ~40min):
+#   routine tier: n=16 (pass@1/2/4/8/16), every val_every(400) steps -- cheap
+#   full tier:    n=64 (adds pass@32/64), every PASSK_FULL_EVERY(1600) steps
 PASSK_DATASETS="${PASSK_DATASETS:-math_val}"
-PASSK_SAMPLES="${PASSK_SAMPLES:-64}"
+PASSK_SAMPLES="${PASSK_SAMPLES:-16}"                       # routine tier n
 PASSK_TEMP="${PASSK_TEMP:-0.8}"
-PASSK_N_PROMPTS="${PASSK_N_PROMPTS:-100}"
-PASSK_MAX_NEW_TOKENS="${PASSK_MAX_NEW_TOKENS:-512}"   # must reach the answer; 128 (block-eff) truncates
+PASSK_N_PROMPTS="${PASSK_N_PROMPTS:-100}"                  # routine tier n_prompts
+PASSK_MAX_NEW_TOKENS="${PASSK_MAX_NEW_TOKENS:-512}"        # must reach the answer; 128 (block-eff) truncates
+PASSK_FULL_SAMPLES="${PASSK_FULL_SAMPLES:-64}"             # full tier n
+PASSK_FULL_EVERY="${PASSK_FULL_EVERY:-1600}"               # steps; must be a multiple of val_every(400)
+PASSK_FULL_N_PROMPTS="${PASSK_FULL_N_PROMPTS:-100}"        # full tier n_prompts (same as routine by default)
 
 # ---- staged sweep: which axis + locked (winner) values for the others --------
 STAGE="${STAGE:?set STAGE=lr|warmup|lr_min|wd}"
@@ -121,6 +129,8 @@ run_job() {   # $1 = gpu id, $2 = "m|lr|pct|lrmin|wd"
     --passk_datasets ${PASSK_DATASETS} --passk_samples ${PASSK_SAMPLES} \
     --passk_temp ${PASSK_TEMP} --passk_n_prompts ${PASSK_N_PROMPTS} \
     --passk_max_new_tokens ${PASSK_MAX_NEW_TOKENS} \
+    --passk_full_samples ${PASSK_FULL_SAMPLES} --passk_full_every ${PASSK_FULL_EVERY} \
+    --passk_full_n_prompts ${PASSK_FULL_N_PROMPTS} \
     --output ${out} ${resume}"
 
   echo "[gpu${gpu}] RUN: ${name}"
