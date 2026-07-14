@@ -65,8 +65,16 @@ WDS=(0.001 0.01 0.1)
 # ---- sharding ----------------------------------------------------------------
 NUM_MACHINES="${NUM_MACHINES:-1}"
 MACHINE_IDX="${MACHINE_IDX:-0}"
+JOBS_PER_GPU="${JOBS_PER_GPU:-1}"   # >1 = pack multiple concurrent train.py per physical GPU.
+                                    # UNMEASURED trade: val/verifier tree-construction is CPU-bound
+                                    # (real idle-GPU-time to fill), but two jobs' matmuls also
+                                    # contend for the same SMs, and VRAM headroom (~25-30GB/job est.,
+                                    # unverified) could OOM. Pilot on ONE gpu (JOBS_PER_GPU=2 on a
+                                    # single-GPU GPUS=... list) and watch nvidia-smi before trusting
+                                    # it across the whole sweep.
 IFS=',' read -r -a GPU_ARR <<< "${GPUS:-0}"
 NGPU=${#GPU_ARR[@]}
+TOTAL_SLOTS=$(( NGPU * JOBS_PER_GPU ))   # virtual worker slots; JOBS_PER_GPU of them share each physical GPU
 DRY_RUN="${DRY_RUN:-0}"
 
 # ---- build the job list for THIS stage only ----------------------------------
@@ -82,7 +90,7 @@ for m in "${METHODS[@]}"; do
   esac
 done
 echo "[sweep] STAGE=${STAGE}  methods=${METHODS_STR}  jobs=${#JOBS[@]}  (locked: lr=${LOCK_LR} wu=${LOCK_WARMUP}% lrmin=${LOCK_LRMIN} wd=${LOCK_WD})"
-echo "[sweep] machines=${NUM_MACHINES} idx=${MACHINE_IDX} gpus=${GPUS:-0}  ckpt_root=${CKPT_ROOT}"
+echo "[sweep] machines=${NUM_MACHINES} idx=${MACHINE_IDX} gpus=${GPUS:-0}  jobs_per_gpu=${JOBS_PER_GPU}  slots=${TOTAL_SLOTS}  ckpt_root=${CKPT_ROOT}"
 mkdir -p "${CKPT_ROOT}/logs"
 
 # ---- one job -----------------------------------------------------------------
@@ -120,17 +128,23 @@ run_job() {   # $1 = gpu id, $2 = "m|lr|pct|lrmin|wd"
   fi
 }
 
-# ---- per-GPU worker queue (machine shard, then GPU shard) --------------------
+# ---- virtual-slot worker queue (machine shard, then slot shard) -------------
+# TOTAL_SLOTS = NGPU * JOBS_PER_GPU independent sequential queues. Slot `s`
+# always runs on physical GPU GPU_ARR[s / JOBS_PER_GPU] — with JOBS_PER_GPU=1
+# (default) this is identical to the old one-worker-per-GPU behaviour; with
+# JOBS_PER_GPU=2, slots {0,1} both pin to GPU_ARR[0] and run CONCURRENTLY on
+# it (two separate train.py processes sharing that GPU), slots {2,3} to
+# GPU_ARR[1], etc.
 gpu_worker() {
-  local gi="$1" gpu="${GPU_ARR[$1]}" j
+  local slot="$1" gpu="${GPU_ARR[$(( slot / JOBS_PER_GPU ))]}" j
   for (( j=0; j<${#JOBS[@]}; j++ )); do
     (( j % NUM_MACHINES == MACHINE_IDX )) || continue
     local local_idx=$(( (j - MACHINE_IDX) / NUM_MACHINES ))
-    (( local_idx % NGPU == gi )) || continue
+    (( local_idx % TOTAL_SLOTS == slot )) || continue
     run_job "${gpu}" "${JOBS[$j]}"
   done
-  echo "[gpu${gpu}] worker done."
+  echo "[gpu${gpu} slot${slot}] worker done."
 }
-for (( gi=0; gi<NGPU; gi++ )); do gpu_worker "$gi" & done
+for (( slot=0; slot<TOTAL_SLOTS; slot++ )); do gpu_worker "$slot" & done
 wait
 echo "[sweep] STAGE=${STAGE} on machine ${MACHINE_IDX} finished."
