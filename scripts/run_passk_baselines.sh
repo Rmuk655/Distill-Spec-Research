@@ -36,7 +36,7 @@ DATASETS=(math_eval gsm8k_eval olympiad_eval)  # held-out eval sets (not math_ha
 # Same defaults as the in-training pass@k hook, for a fair before/after compare.
 N="${N:-64}"
 N_PROMPTS="${N_PROMPTS:-100}"
-TEMP="${TEMP:-0.8}"
+PASSK_TEMP="${PASSK_TEMP:-0.8}"   # NOT named TEMP -- collides with the pre-set OS $TEMP/$TMP on some shells
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.9}"   # lower this first if you OOM on a smaller GPU
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 
@@ -50,7 +50,7 @@ for m in "${MODELS[@]}"; do
     JOBS+=("${m}|${d}")
   done
 done
-echo "[passk-baselines] jobs=${#JOBS[@]}  gpus=${GPUS:-0}  n=${N} n_prompts=${N_PROMPTS} temp=${TEMP}"
+echo "[passk-baselines] jobs=${#JOBS[@]}  gpus=${GPUS:-0}  n=${N} n_prompts=${N_PROMPTS} temp=${PASSK_TEMP}"
 echo "[passk-baselines] out=${OUT_CSV}"
 
 run_job() {
@@ -64,7 +64,7 @@ run_job() {
 
   local cmd="${PY} ${REPO}/scripts/passk_eval.py \
     --model ${model} --dataset ${REPO}/data_io/raw/${ds}.jsonl \
-    --n ${N} --n_prompts ${N_PROMPTS} --temp ${TEMP} \
+    --n ${N} --n_prompts ${N_PROMPTS} --temp ${PASSK_TEMP} \
     --gpu_memory_utilization ${GPU_MEM_UTIL} --max_model_len ${MAX_MODEL_LEN} \
     --out ${OUT_CSV}"
 
