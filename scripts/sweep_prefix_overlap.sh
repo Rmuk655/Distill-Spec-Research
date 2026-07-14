@@ -40,9 +40,10 @@ VAL_DS="${VAL_DS:-math_val}"
 METHODS_STR="${METHODS:-jsd,prob}"     # comma list; prob => prefix_overlap --prefix_objective prob
 IFS=',' read -r -a METHODS <<< "${METHODS_STR}"
 
-# in-training pass@k (math_hard is the TRAIN set — use math_eval, held-out).
-# For the broad LR stage this is costly; set PASSK_DATASETS=math_eval or "" to trim.
-PASSK_DATASETS="${PASSK_DATASETS:-math_eval,gsm8k_eval,olympiad_eval}"
+# in-training pass@k: math_val ONLY (the dev set — same 100 prompts block-eff uses,
+# so no test-peeking). The multi-dataset pass@k (math_eval/gsm8k_eval/olympiad_eval)
+# is a SEPARATE post-training run via scripts/passk_eval.py, not during the sweep.
+PASSK_DATASETS="${PASSK_DATASETS:-math_val}"
 PASSK_SAMPLES="${PASSK_SAMPLES:-64}"
 PASSK_TEMP="${PASSK_TEMP:-0.8}"
 PASSK_N_PROMPTS="${PASSK_N_PROMPTS:-100}"
