@@ -357,7 +357,8 @@ def _prefix_score(S, objective, tok_lp=None, K=None, tok_p=None):
 
 def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
                                 M, L, teacher_temp=1.0,
-                                aux="ce", aux_weight=0.0, objective="prob", K=3):
+                                aux="ce", aux_weight=0.0, objective="prob", K=3,
+                                teacher_topk=0):
     """Single-root prefix overlap (doc §4): M teacher continuations from the prompt.
 
     loss = -mean_m score(P^(m))  [ + aux_weight · mean_m aux_term ], where
@@ -375,6 +376,7 @@ def compute_prefix_overlap_loss(draft, teacher, prompt_ids,
                 prompt_ids, attention_mask=attn_mask,
                 max_new_tokens=L, do_sample=True, temperature=teacher_temp,
                 pad_token_id=teacher.config.eos_token_id, use_cache=True,
+                **({"top_k": teacher_topk} if teacher_topk > 0 else {}),
             )
         cont = gen[0, C:]                                   # teacher tokens P_1..P_len  [<=L]
         if cont.numel() == 0:
@@ -406,7 +408,7 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
                                           L, N, rollout_len, teacher_temp=1.0,
                                           aux="ce", aux_weight=0.0,
                                           objective="prob", random_offset=False, K=3,
-                                          min_root=0):
+                                          min_root=0, teacher_topk=0):
     """Multi-root prefix overlap (doc §5), efficient M=1 estimator.
 
     Generate ONE teacher rollout; its tail from each root y_{r+1:r+L} is a valid
@@ -431,6 +433,7 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
             prompt_ids, attention_mask=attn_mask,
             max_new_tokens=rollout_len, do_sample=True, temperature=teacher_temp,
             pad_token_id=teacher.config.eos_token_id, use_cache=True,
+            **({"top_k": teacher_topk} if teacher_topk > 0 else {}),
         )
     cont = gen[0, C:]                                       # rollout tokens y_1..y_T  [T]
     T = cont.numel()
