@@ -343,20 +343,20 @@ def parse_args():
     ap.add_argument("--passk_samples", type=int, default=64,
                     help="Samples/prompt for the ROUTINE pass@k tier (every val check). Must be "
                          ">= max k you want from this tier (e.g. 16 => pass@1/2/4/8/16 only). "
-                         "If --passk_full_every=0 (default) this is the ONLY tier -- unchanged "
-                         "single-tier behaviour. Cost per val = passk_samples x passk_n_prompts x "
-                         "(#datasets) draft generations.")
+                         "If --passk_full_every_n_vals=0 (default) this is the ONLY tier -- "
+                         "unchanged single-tier behaviour. Cost per val = passk_samples x "
+                         "passk_n_prompts x (#datasets) draft generations.")
     ap.add_argument("--passk_n_prompts", type=int, default=100,
                     help="Fixed #prompts per dataset for the ROUTINE tier (first N, deterministic).")
-    ap.add_argument("--passk_full_every", type=int, default=0,
-                    help="If >0, every this-many STEPS also run a bigger 'full' pass@k tier "
-                         "(passk_full_samples/passk_full_n_prompts) instead of the routine tier at "
-                         "that val check -- e.g. routine=16 every val_every=400, full=64 every "
-                         "1600. Only fires on steps that are ALSO a val_every multiple; if not an "
-                         "exact multiple of val_every the two cadences sync at their LCM (a warning "
-                         "is printed at startup). 0 (default) = disabled, single-tier only.")
+    ap.add_argument("--passk_full_every_n_vals", type=int, default=0,
+                    help="If >0, every this-many VAL CHECKS (not steps) also run a bigger 'full' "
+                         "pass@k tier (passk_full_samples/passk_full_n_prompts) instead of the "
+                         "routine tier -- e.g. 4 => full tier every 4th val check, whatever "
+                         "--val_every is set to (so this stays correct if val_every ever changes; "
+                         "it's always an exact multiple by construction, no alignment to get wrong). "
+                         "0 (default) = disabled, single-tier only.")
     ap.add_argument("--passk_full_samples", type=int, default=64,
-                    help="Samples/prompt for the FULL tier (only used when --passk_full_every fires).")
+                    help="Samples/prompt for the FULL tier (only used when --passk_full_every_n_vals fires).")
     ap.add_argument("--passk_full_n_prompts", type=int, default=None,
                     help="#prompts for the FULL tier. Default: same as --passk_n_prompts (samples is "
                          "the only thing that changes tier-to-tier unless you set this explicitly).")
@@ -604,15 +604,10 @@ def main():
         _n_gold = sum(1 for g in _go[:args.passk_n_prompts] if g is not None)
         print(f"[passk] {_ds}: {_n_gold}/{min(args.passk_n_prompts, len(_pr))} prompts gradeable "
               f"(routine: samples={args.passk_samples} n_prompts={args.passk_n_prompts} temp={args.passk_temp})")
-    if _passk_ds and args.passk_full_every > 0:
+    if _passk_ds and args.passk_full_every_n_vals > 0:
+        _full_every_steps = args.val_every * args.passk_full_every_n_vals   # always exact by construction
         print(f"[passk] full tier: samples={args.passk_full_samples} n_prompts={passk_full_n_prompts} "
-              f"every {args.passk_full_every} steps")
-        if args.passk_full_every % args.val_every != 0:
-            import math as _math
-            _lcm = args.passk_full_every * args.val_every // _math.gcd(args.passk_full_every, args.val_every)
-            print(f"[passk] WARNING: --passk_full_every={args.passk_full_every} is not a multiple of "
-                  f"--val_every={args.val_every} — full tier will actually fire every {_lcm} steps "
-                  f"(their LCM), not {args.passk_full_every}.")
+              f"every {args.passk_full_every_n_vals} val checks (= every {_full_every_steps} steps)")
 
     # Dispatch
     loss_fn       = get_loss(args.loss)
@@ -824,7 +819,11 @@ def main():
                 # Wrapped so a pass@k failure can never kill training. Logged as
                 # passk_<dataset>/k<K> so W&B plots one curve per dataset per K, regardless
                 # of which tier produced a given point (same quantity, cheaper vs pricier n).
-                _is_full_passk = args.passk_full_every > 0 and (step + 1) % args.passk_full_every == 0
+                # (step+1) is already a val_every multiple here (we're inside the val-check
+                # block), so checking it's ALSO a multiple of val_every*n_vals is exactly
+                # "is this the n_vals-th val check" -- always exact, nothing to misalign.
+                _is_full_passk = (args.passk_full_every_n_vals > 0
+                                   and (step + 1) % (args.val_every * args.passk_full_every_n_vals) == 0)
                 if _is_full_passk:
                     _pk_n, _pk_nprompts, _pk_tier = args.passk_full_samples, passk_full_n_prompts, "full"
                 else:
