@@ -1,55 +1,64 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Prefix-overlap / JSD hyperparameter sweep (Qwen3-0.6B draft / Qwen3-8B teacher)
-# Rahul's spec (2026-07): sweep LR x warmup% x cosine-floor x weight-decay for
-# methods {jsd, prefix_overlap prob}, 5k steps, 0.6B/8B, with in-training pass@k.
+# STAGED (coordinate-descent) hyperparameter sweep — Qwen3-0.6B / Qwen3-8B.
+# Instead of the full 180-run cross-product, sweep ONE axis at a time, lock in
+# the winner, then sweep the next axis around it. ~20 runs total vs 180.
 #
-# Multi-machine + multi-GPU: run the SAME command on each machine with a
-# different MACHINE_IDX; jobs are sharded across machines (round-robin by global
-# job index) and, within a machine, round-robined across local GPUS (one
-# sequential worker queue per GPU). Resumable: a run whose ckpt_best exists is
-# skipped; one with ckpt_latest is --resume'd.
+# Axes (Rahul 2026-07): LR, warmup%, cosine-floor (lr_min), weight-decay,
+# for methods {jsd, prefix_overlap prob}, 5k steps, 0.6B/8B, in-training pass@k.
 #
-# USAGE
-#   # machine 0 of 3, using local GPUs 0-3:
-#   OUT does not apply here — CKPT_ROOT is fixed below; just set the shard:
-#   NUM_MACHINES=3 MACHINE_IDX=0 GPUS=0,1,2,3 bash scripts/sweep_prefix_overlap.sh
-#   NUM_MACHINES=3 MACHINE_IDX=1 GPUS=0,1,2,3 bash scripts/sweep_prefix_overlap.sh   # on machine 1
-#   NUM_MACHINES=3 MACHINE_IDX=2 GPUS=0,1     bash scripts/sweep_prefix_overlap.sh   # on machine 2
+# WORKFLOW
+#   1) STAGE=lr      GPUS=0,1,2,3 bash scripts/sweep_prefix_overlap.sh     # 5 LRs x2 methods
+#      -> eval (block_eff + pass@k), pick the best LR, e.g. 3e-4
+#   2) STAGE=warmup  LOCK_LR=3e-4 GPUS=... bash scripts/sweep_prefix_overlap.sh
+#      -> pick best warmup%, e.g. 10
+#   3) STAGE=lr_min  LOCK_LR=3e-4 LOCK_WARMUP=10 GPUS=... bash ...
+#      -> pick best lr_min, e.g. 0.1
+#   4) STAGE=wd      LOCK_LR=3e-4 LOCK_WARMUP=10 LOCK_LRMIN=0.1 GPUS=... bash ...
 #
-#   DRY_RUN=1 ... bash scripts/sweep_prefix_overlap.sh     # print the plan, run nothing
+#   Overlapping points (e.g. the baseline config that recurs across stages) are
+#   auto-skipped (ckpt_best exists), so no run is repeated across stages.
+#
+#   DRY_RUN=1 STAGE=lr ... bash ...   # print the plan, run nothing
+#   Multi-machine: same command per machine with NUM_MACHINES + a distinct MACHINE_IDX.
 # =============================================================================
 set -uo pipefail
 
-# ---- fixed paths / models (edit here) ----------------------------------------
+# ---- fixed paths / models ----------------------------------------------------
 CKPT_ROOT="/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
 DRAFT="Qwen/Qwen3-0.6B"
 TEACHER="Qwen/Qwen3-8B"
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root (this script is in scripts/)
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PY:-python}"
 
 # ---- run config --------------------------------------------------------------
 STEPS="${STEPS:-5000}"
-GRAD_ACCUM="${GRAD_ACCUM:-8}"          # must match train.py's GRAD_ACCUM (for warmup% math)
+GRAD_ACCUM="${GRAD_ACCUM:-8}"          # must match train.py GRAD_ACCUM (for warmup% math)
 SEED="${SEED:-123}"
 TRAIN_DS="${TRAIN_DS:-math_hard}"
 VAL_DS="${VAL_DS:-math_val}"
+METHODS_STR="${METHODS:-jsd,prob}"     # comma list; prob => prefix_overlap --prefix_objective prob
+IFS=',' read -r -a METHODS <<< "${METHODS_STR}"
 
-# in-training pass@k. NOTE: math_hard is the TRAIN set — pass@k there measures
-# memorisation, so we use math_eval (held-out). Cost is high (samples x prompts x
-# #datasets per val); for a 180-run sweep consider PASSK_DATASETS=math_eval only,
-# or "" to disable during the broad sweep and run full pass@k on finalists.
+# in-training pass@k (math_hard is the TRAIN set — use math_eval, held-out).
+# For the broad LR stage this is costly; set PASSK_DATASETS=math_eval or "" to trim.
 PASSK_DATASETS="${PASSK_DATASETS:-math_eval,gsm8k_eval,olympiad_eval}"
 PASSK_SAMPLES="${PASSK_SAMPLES:-64}"
-PASSK_TEMP="${PASSK_TEMP:-0.8}"        # 0.8 (not val_temp 0.2) — pass@k needs diversity
+PASSK_TEMP="${PASSK_TEMP:-0.8}"
 PASSK_N_PROMPTS="${PASSK_N_PROMPTS:-100}"
 
-# ---- sweep grid (edit / comment to stage; e.g. LR-first then expand) ---------
+# ---- staged sweep: which axis + locked (winner) values for the others --------
+STAGE="${STAGE:?set STAGE=lr|warmup|lr_min|wd}"
+LOCK_LR="${LOCK_LR:-1e-4}"              # baseline until stage 'lr' picks a winner
+LOCK_WARMUP="${LOCK_WARMUP:-10}"       # percent
+LOCK_LRMIN="${LOCK_LRMIN:-0.1}"
+LOCK_WD="${LOCK_WD:-0.01}"
+
+# axis value lists
 LRS=(1e-5 1e-4 3e-4 3e-3 1e-2)
 WARMUP_PCTS=(5 10 20)
 LR_MINS=(0.1 0.01)
 WDS=(0.001 0.01 0.1)
-METHODS=(jsd prob)                      # prob => prefix_overlap --prefix_objective prob
 
 # ---- sharding ----------------------------------------------------------------
 NUM_MACHINES="${NUM_MACHINES:-1}"
@@ -58,45 +67,38 @@ IFS=',' read -r -a GPU_ARR <<< "${GPUS:-0}"
 NGPU=${#GPU_ARR[@]}
 DRY_RUN="${DRY_RUN:-0}"
 
-# ---- build the full job list -------------------------------------------------
-WU_TOTAL=$(( STEPS / GRAD_ACCUM ))       # total optimizer steps (warmup% is of this)
+# ---- build the job list for THIS stage only ----------------------------------
+WU_TOTAL=$(( STEPS / GRAD_ACCUM ))
 JOBS=()
 for m in "${METHODS[@]}"; do
-  for lr in "${LRS[@]}"; do
-    for pct in "${WARMUP_PCTS[@]}"; do
-      for lrmin in "${LR_MINS[@]}"; do
-        for wd in "${WDS[@]}"; do
-          JOBS+=("${m}|${lr}|${pct}|${lrmin}|${wd}")
-        done
-      done
-    done
-  done
+  case "$STAGE" in
+    lr)      for v in "${LRS[@]}";         do JOBS+=("${m}|${v}|${LOCK_WARMUP}|${LOCK_LRMIN}|${LOCK_WD}"); done ;;
+    warmup)  for v in "${WARMUP_PCTS[@]}"; do JOBS+=("${m}|${LOCK_LR}|${v}|${LOCK_LRMIN}|${LOCK_WD}");   done ;;
+    lr_min)  for v in "${LR_MINS[@]}";     do JOBS+=("${m}|${LOCK_LR}|${LOCK_WARMUP}|${v}|${LOCK_WD}");   done ;;
+    wd)      for v in "${WDS[@]}";         do JOBS+=("${m}|${LOCK_LR}|${LOCK_WARMUP}|${LOCK_LRMIN}|${v}"); done ;;
+    *) echo "bad STAGE='$STAGE' (want lr|warmup|lr_min|wd)"; exit 1 ;;
+  esac
 done
-echo "[sweep] total jobs = ${#JOBS[@]}  (machines=${NUM_MACHINES} idx=${MACHINE_IDX} gpus=${GPUS:-0})"
-echo "[sweep] ckpt root  = ${CKPT_ROOT}"
+echo "[sweep] STAGE=${STAGE}  methods=${METHODS_STR}  jobs=${#JOBS[@]}  (locked: lr=${LOCK_LR} wu=${LOCK_WARMUP}% lrmin=${LOCK_LRMIN} wd=${LOCK_WD})"
+echo "[sweep] machines=${NUM_MACHINES} idx=${MACHINE_IDX} gpus=${GPUS:-0}  ckpt_root=${CKPT_ROOT}"
 mkdir -p "${CKPT_ROOT}/logs"
 
 # ---- one job -----------------------------------------------------------------
-run_job() {   # $1 = gpu id, $2 = job spec "m|lr|pct|lrmin|wd"
+run_job() {   # $1 = gpu id, $2 = "m|lr|pct|lrmin|wd"
   local gpu="$1" spec="$2"
   IFS='|' read -r m lr pct lrmin wd <<< "$spec"
   local wu=$(( WU_TOTAL * pct / 100 )); (( wu < 1 )) && wu=1
   local loss_args name
   if [[ "$m" == "prob" ]]; then
-    loss_args="--loss prefix_overlap --prefix_objective prob"
-    name="po_prob_lr${lr}_wu${pct}_lrmin${lrmin}_wd${wd}"
+    loss_args="--loss prefix_overlap --prefix_objective prob"; name="po_prob"
   else
-    loss_args="--loss jsd"
-    name="jsd_lr${lr}_wu${pct}_lrmin${lrmin}_wd${wd}"
+    loss_args="--loss jsd"; name="jsd"
   fi
-  local out="${CKPT_ROOT}/${name}"
-  local log="${CKPT_ROOT}/logs/${name}.out"
+  name="${name}_lr${lr}_wu${pct}_lrmin${lrmin}_wd${wd}"
+  local out="${CKPT_ROOT}/${name}" log="${CKPT_ROOT}/logs/${name}.out"
 
-  if [[ -e "${out}/ckpt_best" ]]; then
-    echo "[gpu${gpu}] SKIP (done): ${name}"; return
-  fi
-  local resume=""
-  [[ -e "${out}/ckpt_latest" ]] && resume="--resume" && echo "[gpu${gpu}] RESUME: ${name}"
+  if [[ -e "${out}/ckpt_best" ]]; then echo "[gpu${gpu}] SKIP done: ${name}"; return; fi
+  local resume=""; [[ -e "${out}/ckpt_latest" ]] && resume="--resume" && echo "[gpu${gpu}] RESUME: ${name}"
 
   local cmd="${PY} ${REPO}/train.py ${loss_args} \
     --draft ${DRAFT} --teacher ${TEACHER} \
@@ -115,12 +117,10 @@ run_job() {   # $1 = gpu id, $2 = job spec "m|lr|pct|lrmin|wd"
   fi
 }
 
-# ---- per-GPU worker: sequentially runs its slice of this machine's jobs -------
-gpu_worker() {   # $1 = local gpu-array index
-  local gi="$1" gpu="${GPU_ARR[$1]}"
-  local j
+# ---- per-GPU worker queue (machine shard, then GPU shard) --------------------
+gpu_worker() {
+  local gi="$1" gpu="${GPU_ARR[$1]}" j
   for (( j=0; j<${#JOBS[@]}; j++ )); do
-    # machine shard, then GPU shard within the machine
     (( j % NUM_MACHINES == MACHINE_IDX )) || continue
     local local_idx=$(( (j - MACHINE_IDX) / NUM_MACHINES ))
     (( local_idx % NGPU == gi )) || continue
@@ -128,9 +128,6 @@ gpu_worker() {   # $1 = local gpu-array index
   done
   echo "[gpu${gpu}] worker done."
 }
-
-for (( gi=0; gi<NGPU; gi++ )); do
-  gpu_worker "$gi" &
-done
+for (( gi=0; gi<NGPU; gi++ )); do gpu_worker "$gi" & done
 wait
-echo "[sweep] machine ${MACHINE_IDX} finished all its jobs."
+echo "[sweep] STAGE=${STAGE} on machine ${MACHINE_IDX} finished."
