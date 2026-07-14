@@ -29,7 +29,10 @@ CKPT_ROOT="/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overla
 DRAFT="Qwen/Qwen3-0.6B"
 TEACHER="Qwen/Qwen3-8B"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="${PY:-python}"
+PY="${PY:-python -u}"   # -u = unbuffered stdout, so `tail -f` on the redirected log shows
+                        # progress live instead of waiting for Python's block-buffer to fill
+                        # (stdout defaults to full buffering, not line buffering, when it's
+                        # redirected to a file rather than a TTY)
 
 # ---- run config --------------------------------------------------------------
 STEPS="${STEPS:-5000}"
