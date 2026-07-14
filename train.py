@@ -62,6 +62,7 @@ from config  import DRAFT_MODEL, TEACHER_MODEL, DEFAULT_K, DEFAULT_L, DEFAULT_MA
 # verifiers/__init__.py adds the verifiers folder to sys.path so this works.
 import verifiers  # noqa: F401  — side effect: sys.path injection
 from util           import set_seed, load_prompts_jsonl
+from passk_utils     import pass_at_k, extract_answer, extract_gold, is_correct
 from main           import speculative_decoding_loop
 from node           import Node  # class-level caches cleared each step to avoid id() reuse bugs
 
@@ -151,6 +152,15 @@ def parse_args():
                     help=f"Tree depth / draft block length (default {DEFAULT_L}). "
                          f"For prefix_overlap this is the teacher-continuation / window "
                          f"length over which prefix overlap is summed.")
+    ap.add_argument("--prefix_teacher_topk", type=int, default=0,
+                    help="prefix_overlap only: restrict the TEACHER's sampling to its top-k "
+                         "tokens per step (top_k passed to teacher.generate). 0 = disabled "
+                         "(current behaviour). Interpretation (b) of Rahul's 'top-k': narrows "
+                         "the sampled continuation to high-prob teacher tokens the draft can "
+                         "actually match, mitigating the prob-objective's tail-token gradient "
+                         "collapse — WITHOUT changing the objective math. Distinct from K (tree "
+                         "branches) and M (--prefix_M rollouts). Note: narrowing sampling reduces "
+                         "context diversity, so it partially trades against the --prefix_M lever.")
     ap.add_argument("--prefix_M", type=int, default=4,
                     help="prefix_overlap single-root only: M = number of teacher "
                          "continuations per prompt for the Monte-Carlo estimator "
@@ -300,6 +310,14 @@ def parse_args():
                     help="LR warmup in optimizer steps (scheduler.step() calls). "
                          "Default: auto = 10%% of total_opt_steps (steps // GRAD_ACCUM). "
                          "Saved in state.json and restored on resume so the curve is continuous.")
+    ap.add_argument("--lr_min_ratio", type=float, default=None,
+                    help=f"Cosine-decay floor: LR ends at this fraction of peak. "
+                         f"Default: module constant LR_MIN_RATIO ({LR_MIN_RATIO}). "
+                         f"Rahul's 'final lr' sweep: try {{0.1, 0.01}}.")
+    ap.add_argument("--weight_decay", type=float, default=0.0,
+                    help="AdamW L2 weight-decay coefficient (regularisation). "
+                         "Default 0.0 = DistillSpec's no-regularisation setting. "
+                         "Sweep needs a NONZERO base (e.g. 0.01) for 1x/10x/0.1x to mean anything.")
     ap.add_argument("--val_temp", type=float, default=0.2,
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
@@ -316,6 +334,22 @@ def parse_args():
                          "to the training W&B run as a time series. "
                          "Overhead: ~1 teacher greedy generate + 2 forward passes per val "
                          "prompt — roughly same wall-clock as one val pass (≈2x val time).")
+    ap.add_argument("--passk_datasets", type=str, default="",
+                    help="Comma-list of eval datasets to run pass@k on, at the SAME cadence "
+                         "as the block-eff val check (--val_every), logging passk_<ds>/k<K> to "
+                         "W&B for K in {1,2,4,8,16,32,64}. Empty = off. "
+                         "E.g. 'math_eval,gsm8k_eval,olympiad_eval'. Training-stability "
+                         "diagnostic (pass@64 flat across training => coverage not collapsing).")
+    ap.add_argument("--passk_samples", type=int, default=64,
+                    help="Samples generated per prompt to estimate pass@k (must be >= max k; "
+                         "64 supports pass@64). Cost per val = passk_samples x passk_n_prompts x "
+                         "(#datasets) draft generations — reduce this or passk_n_prompts if too slow.")
+    ap.add_argument("--passk_n_prompts", type=int, default=100,
+                    help="Fixed #prompts per dataset for pass@k (first N, deterministic).")
+    ap.add_argument("--passk_temp", type=float, default=0.8,
+                    help="Sampling temperature for pass@k. Default 0.8 (standard). NOTE: pass@k "
+                         "needs sample DIVERSITY — at val_temp=0.2 the k samples are near-identical "
+                         "so pass@64 collapses to pass@1 and the curve is uninformative. Keep ~0.8.")
     ap.add_argument("--early_stop_patience", type=int, default=EARLY_STOP_PAT,
                     help=f"Stop training if smoothed val BE has not improved for this many "
                          f"consecutive val checks (default {EARLY_STOP_PAT}; 0 = disabled). "
@@ -370,6 +404,45 @@ def _serializable_args(args) -> dict:
     return {k: v for k, v in vars(args).items() if k not in skip}
 
 
+@torch.no_grad()
+def _train_passk(draft, tokenizer, prompts, golds, n, temp, k_values, max_new_tokens):
+    """In-training pass@k on a FIXED prompt set (draft model, HF generate).
+
+    Generates n samples/prompt, grades against gold (passk_utils), returns
+    {k: pass@k rate} averaged over gradeable prompts. Pure diagnostic —
+    uses the already-loaded draft; NOT the spec-decoding path. Caller wraps this
+    in try/except so a failure never kills training. Returns {} if nothing gradeable.
+    NOTE: cost is n x len(prompts) generations — gate behind a coarse cadence.
+    """
+    was_training = draft.training
+    draft.eval()
+    per_prompt_c = []
+    device = draft.device
+    for prompt, gold in zip(prompts, golds):
+        if gold is None:
+            continue
+        enc = tokenizer(prompt, return_tensors="pt").to(device)
+        gen = draft.generate(
+            **enc, max_new_tokens=max_new_tokens, do_sample=True, temperature=temp,
+            num_return_sequences=n, pad_token_id=tokenizer.eos_token_id, use_cache=True,
+        )
+        plen = enc["input_ids"].shape[1]
+        texts = tokenizer.batch_decode(gen[:, plen:], skip_special_tokens=True)
+        c = sum(1 for t in texts if is_correct(extract_answer(t), gold))
+        per_prompt_c.append(c)
+    if was_training:
+        draft.train()
+    if not per_prompt_c:
+        return {}
+    out = {}
+    for k in k_values:
+        if k > n:
+            continue
+        vals = [pass_at_k(n, c, k) for c in per_prompt_c]
+        out[k] = sum(vals) / len(vals)   # {k: pass@k}
+    return out
+
+
 def main():
     import datetime
     print(f"\n{'='*72}\n[session] {datetime.datetime.now().isoformat(timespec='seconds')}  pid={os.getpid()}\n{'='*72}")
@@ -415,11 +488,17 @@ def main():
             raise SystemExit("bitsandbytes required for --optim_8bit. "
                              "Run: pip install bitsandbytes")
         optimizer = bnb.optim.AdamW8bit(trainable, lr=args.lr, betas=(0.9, 0.999),
-                                        weight_decay=0.0)
+                                        weight_decay=args.weight_decay)
         print("[optim] using bitsandbytes AdamW8bit (int8 optimizer state)")
     else:
         optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
-                                      weight_decay=0.0)   # DistillSpec uses no regularisation
+                                      weight_decay=args.weight_decay)   # 0.0 = DistillSpec no-reg default
+    # Cosine-decay floor: CLI --lr_min_ratio overrides the module constant.
+    lr_min_ratio = args.lr_min_ratio if args.lr_min_ratio is not None else LR_MIN_RATIO
+    if args.weight_decay != 0.0:
+        print(f"[optim] weight_decay={args.weight_decay}")
+    if args.lr_min_ratio is not None:
+        print(f"[lr] cosine floor overridden: lr_min_ratio={lr_min_ratio} (default {LR_MIN_RATIO})")
 
     # LR schedule: linear warmup then cosine decay to LR_MIN_RATIO × peak.
     # Both sched_steps and warmup_opt_steps are anchored to the values from the
@@ -437,7 +516,7 @@ def main():
             if sched_steps != args.steps:
                 print(f"[lr] schedule horizon anchored to original {sched_steps} steps "
                       f"(--steps={args.steps}); steps beyond {sched_steps} run at "
-                      f"LR_MIN_RATIO={LR_MIN_RATIO}*peak (no LR jump on resume)")
+                      f"LR_MIN_RATIO={lr_min_ratio}*peak (no LR jump on resume)")
     total_opt_steps = sched_steps // GRAD_ACCUM
     # Warmup: explicit --warmup_steps overrides auto; on resume, the saved value
     # takes precedence over both so the curve stays continuous across restarts.
@@ -453,11 +532,11 @@ def main():
     def lr_lambda(step):
         if step < warmup_opt_steps:
             return step / max(1, warmup_opt_steps)
-        # Cosine decay from 1.0 → LR_MIN_RATIO over remaining opt-steps
+        # Cosine decay from 1.0 → lr_min_ratio over remaining opt-steps
         progress = (step - warmup_opt_steps) / max(1, total_opt_steps - warmup_opt_steps)
         progress = min(progress, 1.0)
         cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return LR_MIN_RATIO + (1.0 - LR_MIN_RATIO) * cosine
+        return lr_min_ratio + (1.0 - lr_min_ratio) * cosine
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     # Resume?
@@ -479,6 +558,30 @@ def main():
     val_prompts   = load_prompts_jsonl(dataset_path(args.val_dataset))
     random.Random(args.seed).shuffle(train_prompts)
     print(f"[data] {len(train_prompts)} train / {len(val_prompts)} val prompts")
+
+    # pass@k eval sets: prompts + parallel gold answers, first N of each listed dataset.
+    # load_prompts_jsonl() drops the gold, so re-read each file to pick up
+    # `answer`/`solution` in file order (deterministic first-N => same set every check).
+    passk_sets = {}   # {dataset_name: (prompts[:N], golds[:N])}
+    _passk_ds = [d.strip() for d in args.passk_datasets.split(",") if d.strip()]
+    for _ds in _passk_ds:
+        _pr, _go = [], []
+        with open(dataset_path(_ds), encoding="utf-8") as _vf:
+            for _line in _vf:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                _obj = json.loads(_line)
+                if "prompt" not in _obj:
+                    continue
+                _pr.append(_obj["prompt"])
+                _graw = _obj.get("answer") or _obj.get("solution") or ""
+                _go.append(extract_gold(_graw) if _graw else None)
+        N = args.passk_n_prompts
+        passk_sets[_ds] = (_pr[:N], _go[:N])
+        _n_gold = sum(1 for g in _go[:N] if g is not None)
+        print(f"[passk] {_ds}: {_n_gold}/{min(N, len(_pr))} prompts gradeable "
+              f"(samples={args.passk_samples} temp={args.passk_temp})")
 
     # Dispatch
     loss_fn       = get_loss(args.loss)
@@ -509,6 +612,8 @@ def main():
     draft.train()
     optimizer.zero_grad(set_to_none=True)
     losses_log: List[float] = []
+    grad_clip_events = 0              # optimizer steps where grad_norm > GRAD_CLIP (clip was active)
+    grad_opt_steps   = 0              # total optimizer steps (denominator for the clip fraction)
     depth_ema: float | None = None   # running mean of E[tau_V] for --aux_mode depth_weight
     depth_w = 1.0
     depth_d = 0.0                     # last raw E[tau_V] (logged so the sweep is observable)
@@ -550,13 +655,15 @@ def main():
                     aux=args.prefix_aux, aux_weight=aux_w,
                     objective=args.prefix_objective,
                     random_offset=args.prefix_random_offset, K=args.K,
-                    min_root=args.prefix_min_root)
+                    min_root=args.prefix_min_root,
+                    teacher_topk=args.prefix_teacher_topk)
             else:
                 loss = compute_prefix_overlap_loss(
                     draft, teacher, ids, M=args.prefix_M, L=args.L,
                     teacher_temp=args.teacher_temp,
                     aux=args.prefix_aux, aux_weight=aux_w,
-                    objective=args.prefix_objective, K=args.K)
+                    objective=args.prefix_objective, K=args.K,
+                    teacher_topk=args.prefix_teacher_topk)
         elif flat_enrich:
             # grad_accum=GRAD_ACCUM: backward each of the K rollouts immediately
             # (memory-safe against a large teacher) rather than holding all K
@@ -635,11 +742,15 @@ def main():
             (loss / GRAD_ACCUM).backward()
         if (step + 1) % GRAD_ACCUM == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
+            grad_opt_steps += 1
+            if grad_norm.item() > GRAD_CLIP:
+                grad_clip_events += 1
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
         else:
             grad_norm = torch.tensor(0.0)
+        grad_clip_frac = grad_clip_events / max(1, grad_opt_steps)
 
         losses_log.append(loss.item())
 
@@ -664,7 +775,7 @@ def main():
             elapsed = time.time() - t0
             print(f"step={step+1:5d}/{args.steps}  loss={avg:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}  "
-                  f"grad={grad_norm.item():.2f}  "
+                  f"grad={grad_norm.item():.2f}  clip%={100*grad_clip_frac:.0f}  "
                   f"{f'pathdiv={path_div:.3f}  ' if (flat_enrich and K > 1) else ''}"
                   f"elapsed={elapsed/60:.1f}m")
 
@@ -674,9 +785,25 @@ def main():
             val_be = None
             val_forget = None
             _diag = {}
+            _passk = {}
             if (step + 1) % args.val_every == 0:
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
+                # pass@k on each configured dataset, SAME cadence as this val check.
+                # Wrapped so a pass@k failure can never kill training. Logged as
+                # passk_<dataset>/k<K> so W&B plots one curve per dataset per K.
+                for _ds, (_pr, _go) in passk_sets.items():
+                    try:
+                        _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= args.passk_samples]
+                        _pk = _train_passk(draft, tokenizer, _pr, _go,
+                                           n=args.passk_samples, temp=args.passk_temp,
+                                           k_values=_pk_ks, max_new_tokens=MAX_NEW_TOKENS)
+                        _passk.update({f"passk_{_ds}/k{k}": v for k, v in _pk.items()})
+                        if _pk:
+                            print(f"  [passk:{_ds}] " + "  ".join(
+                                f"k{k}={v:.3f}" for k, v in _pk.items()))
+                    except Exception as _e:
+                        print(f"  [passk:{_ds}] skipped (error: {_e})")
                 val_be_ema = val_be if val_be_ema is None else (1 - VAL_EMA_ALPHA) * val_be_ema + VAL_EMA_ALPHA * val_be
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
                 _n_easy   = sum(1 for b in _val_pp.values() if b >= _VAL_BE_EASY)
@@ -705,6 +832,7 @@ def main():
                     "train/loss":      avg,
                     "train/lr":        scheduler.get_last_lr()[0],
                     "train/grad_norm": grad_norm.item(),
+                    "train/grad_clip_frac": grad_clip_frac,
                     **({"train/path_diversity": path_div}
                        if (flat_enrich and K > 1) else {}),
                     **({"train/depth_w": depth_w, "train/depth_d": depth_d}
@@ -715,6 +843,7 @@ def main():
                     **({"val/n_easy": _n_easy, "val/n_medium": _n_medium,
                         "val/n_hard": _n_hard} if val_be is not None else {}),
                     **_diag,
+                    **_passk,
                 })
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
