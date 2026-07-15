@@ -4,23 +4,39 @@
 # on the 3 held-out eval sets (math_eval, gsm8k_eval, olympiad_eval) --
 # Rahul's "pass@k after training, for every hyperparam choice" ask.
 #
-# "FINISHED" means ckpt_latest/state.json's saved step == --expected_steps
-# (default 5000) -- runs that were killed early, are still in progress, or
-# early-stopped before reaching the full schedule are SKIPPED, not evaluated.
-# We don't want pass@k on a run that never got a fair shot at converging, and
-# we already know from block_eff/loss alone which runs catastrophically
-# collapsed -- this script doesn't re-litigate that, it only fills the actual
-# gap: held-out-set pass@k for runs Rahul asked to see it on.
+# "FINISHED" means ckpt_latest/state.json's saved step == that SAME run's own
+# recorded --steps target (see the train_args.steps note below) -- runs that
+# were killed early, are still in progress, or early-stopped before reaching
+# their full schedule are SKIPPED, not evaluated. We don't want pass@k on a
+# run that never got a fair shot at converging, and we already know from
+# block_eff/loss alone which runs catastrophically collapsed -- this script
+# doesn't re-litigate that, it only fills the actual gap: held-out-set pass@k
+# for runs Rahul asked to see it on.
 #
 # Evaluates ckpt_best (the val-selected checkpoint) for each finished run, NOT
 # ckpt_latest (ckpt_latest's step count is only used as the completion gate).
 #
 # USAGE (from venv-vllm, see scripts/setup_vllm_env.sh):
+#   # mode 1: every run under a single sweep root (auto-glob CKPT_ROOT/*/)
 #   CKPT_ROOT=/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
 #     GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
 #   DRY_RUN=1 CKPT_ROOT=... GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh   # preview only
 #   # set DRAFT_MODEL if the sweep isn't the default 0.6B/8B pair, e.g.:
 #   DRAFT_MODEL=Qwen/Qwen3-1.7B CKPT_ROOT=... GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
+#
+#   # mode 2: an explicit list of run dir names, scattered directly under
+#   # CKPT_ROOT (e.g. older one-off experiments, not one common sweep root) --
+#   # RUN_NAMES overrides the CKPT_ROOT/*/ auto-glob entirely.
+#   CKPT_ROOT=/sensei-fs-3/users/rkrishna/checkpoints \
+#     RUN_NAMES=po_mh_prob_ce_lr1e5,po_mh_prob_lr1e5,po_mh_prob_lr5e6,po_mh_prob_warm_anneal_lr1e5,po_mh_logprob_N2_lr1e5,jsd_mathhard_s123,jsd_flat_enrich_K3_mathhard_s123,jsd_flat_enrich_K4_math_hard_s123 \
+#     GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
+#
+# "FINISHED" is checked per-run against that run's OWN recorded --steps (read
+# from ckpt_latest/state.json's train_args.steps), NOT a single hardcoded
+# number -- historical one-off runs don't all share the same --steps target
+# (e.g. po_mh_prob_warm_anneal_lr1e5 used --steps 15000, not 5000). Falls back
+# to --expected_steps only for very old checkpoints saved before train_args
+# was recorded in state.json.
 #
 # Resumable: skips (model, dataset) pairs already in the output CSV (matched
 # on the ckpt dir path), so re-running after later sweep stages finish only
@@ -30,8 +46,9 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PY:-python -u}"
-CKPT_ROOT="${CKPT_ROOT:?set CKPT_ROOT to the sweep's checkpoint root dir}"
-EXPECTED_STEPS="${EXPECTED_STEPS:-5000}"
+CKPT_ROOT="${CKPT_ROOT:?set CKPT_ROOT to the sweep checkpoint root dir (or the shared parent dir in RUN_NAMES mode)}"
+EXPECTED_STEPS="${EXPECTED_STEPS:-5000}"    # fallback only -- see train_args.steps note above
+RUN_NAMES_STR="${RUN_NAMES:-}"              # if set, overrides the CKPT_ROOT/*/ auto-glob
 DATASETS_STR="${DATASETS:-math_eval,gsm8k_eval,olympiad_eval}"
 IFS=',' read -r -a DATASETS <<< "${DATASETS_STR}"
 
@@ -55,10 +72,20 @@ IFS=',' read -r -a GPU_ARR <<< "${GPUS:-0}"
 NGPU=${#GPU_ARR[@]}
 DRY_RUN="${DRY_RUN:-0}"
 
-# ---- discover finished runs -------------------------------------------------
+# ---- candidate run list: explicit RUN_NAMES, or auto-glob CKPT_ROOT/*/ -----
+if [[ -n "${RUN_NAMES_STR}" ]]; then
+    IFS=',' read -r -a CANDIDATES <<< "${RUN_NAMES_STR}"
+else
+    CANDIDATES=()
+    for _run_dir in "${CKPT_ROOT}"/*/; do
+        CANDIDATES+=("$(basename "${_run_dir}")")
+    done
+fi
+
+# ---- filter to FINISHED runs (each checked against its OWN --steps) --------
 FINISHED=()
-for _run_dir in "${CKPT_ROOT}"/*/; do
-    _run_name="$(basename "${_run_dir}")"
+for _run_name in "${CANDIDATES[@]}"; do
+    _run_dir="${CKPT_ROOT}/${_run_name}/"
     _state="${_run_dir}ckpt_latest/state.json"
     _best="${_run_dir}ckpt_best"
     if [[ ! -f "${_state}" ]]; then
@@ -69,14 +96,18 @@ for _run_dir in "${CKPT_ROOT}"/*/; do
         echo "[passk-sweep] SKIP ${_run_name}: no ckpt_best (never improved past init)"
         continue
     fi
-    _step=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('step', 0))" "${_state}" 2>/dev/null || echo 0)
-    if [[ "${_step}" != "${EXPECTED_STEPS}" ]]; then
-        echo "[passk-sweep] SKIP ${_run_name}: step=${_step} != ${EXPECTED_STEPS} (killed early / still running / early-stopped)"
+    read -r _step _target <<< "$(python -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+print(s.get("step", 0), s.get("train_args", {}).get("steps", sys.argv[2]))
+' "${_state}" "${EXPECTED_STEPS}" 2>/dev/null || echo "0 ${EXPECTED_STEPS}")"
+    if [[ "${_step}" != "${_target}" ]]; then
+        echo "[passk-sweep] SKIP ${_run_name}: step=${_step} != this run's own target ${_target} (killed early / still running / early-stopped)"
         continue
     fi
     FINISHED+=("${_run_name}")
 done
-echo "[passk-sweep] ${#FINISHED[@]} finished run(s) out of $(ls -d "${CKPT_ROOT}"/*/ 2>/dev/null | wc -l) total under ${CKPT_ROOT}"
+echo "[passk-sweep] ${#FINISHED[@]} finished run(s) out of ${#CANDIDATES[@]} candidate(s)"
 
 # ---- build (run, dataset) job list, skipping ones already in OUT_CSV -------
 # passk_eval.py's CSV columns are model,dataset,n,temp,n_graded,n_skipped,k,pass_at_k
