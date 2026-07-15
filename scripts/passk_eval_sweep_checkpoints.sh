@@ -83,20 +83,27 @@ else
 fi
 
 # ---- filter to FINISHED runs (each checked against its OWN --steps) --------
+# STAT_TIMEOUT guards against a stale NFS handle on CKPT_ROOT (shared network
+# filesystem) hanging the ENTIRE discovery loop indefinitely on one bad path,
+# with zero visible progress and nothing to tell you which run caused it.
+# `stat`/`python` are real external processes `timeout` can actually kill --
+# bash's own `[[ -f ]]`/`[[ -d ]]` builtins run in-process and can't be
+# pre-empted this way, hence using `stat` here instead of `[[ ]]` directly.
+STAT_TIMEOUT="${STAT_TIMEOUT:-10}"
 FINISHED=()
 for _run_name in "${CANDIDATES[@]}"; do
     _run_dir="${CKPT_ROOT}/${_run_name}/"
     _state="${_run_dir}ckpt_latest/state.json"
     _best="${_run_dir}ckpt_best"
-    if [[ ! -f "${_state}" ]]; then
-        echo "[passk-sweep] SKIP ${_run_name}: no ckpt_latest/state.json (never checkpointed)"
+    if ! timeout "${STAT_TIMEOUT}" stat "${_state}" >/dev/null 2>&1; then
+        echo "[passk-sweep] SKIP ${_run_name}: no ckpt_latest/state.json, or ${_run_dir} timed out after ${STAT_TIMEOUT}s (stale NFS handle?)"
         continue
     fi
-    if [[ ! -d "${_best}" ]]; then
-        echo "[passk-sweep] SKIP ${_run_name}: no ckpt_best (never improved past init)"
+    if ! timeout "${STAT_TIMEOUT}" stat "${_best}" >/dev/null 2>&1; then
+        echo "[passk-sweep] SKIP ${_run_name}: no ckpt_best (never improved past init), or timed out after ${STAT_TIMEOUT}s"
         continue
     fi
-    read -r _step _target <<< "$(python -c '
+    read -r _step _target <<< "$(timeout "${STAT_TIMEOUT}" python -c '
 import json, sys
 s = json.load(open(sys.argv[1]))
 print(s.get("step", 0), s.get("train_args", {}).get("steps", sys.argv[2]))
