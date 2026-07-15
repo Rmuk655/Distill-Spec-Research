@@ -119,6 +119,15 @@ def compute_passk_for_dataset(llm, dataset_path: str, n: int, temp: float, top_p
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="HF id or local checkpoint dir")
+    ap.add_argument("--tokenizer", default=None,
+                    help="Override tokenizer source. Default: same as --model. NEEDED for "
+                         "checkpoints saved by checkpointing.py's save_checkpoint(), which only "
+                         "writes model.safetensors/config.json/optim.pt/state.json -- no "
+                         "tokenizer.json/tokenizer_config.json. Loading such a dir as --model "
+                         "with no --tokenizer makes vLLM fall back to a degenerate tokenizer that "
+                         "encodes every prompt to 0 tokens, raising 'decoder prompt cannot be "
+                         "empty' regardless of dataset content. Pass e.g. --tokenizer Qwen/Qwen3-0.6B "
+                         "(the tokenizer never changes across training, only the weights do).")
     ap.add_argument("--dataset", required=True, help="path to a {prompt, answer} jsonl")
     ap.add_argument("--n", type=int, default=64, help="samples per prompt (>= max k)")
     ap.add_argument("--temp", type=float, default=0.8)
@@ -142,7 +151,7 @@ def main():
     except ImportError:
         sys.exit("vLLM not installed. On the cluster: pip install vllm")
 
-    llm = LLM(model=args.model, seed=args.seed,
+    llm = LLM(model=args.model, tokenizer=args.tokenizer or args.model, seed=args.seed,
               gpu_memory_utilization=args.gpu_memory_utilization,
               tensor_parallel_size=args.tensor_parallel_size,
               max_model_len=args.max_model_len)
