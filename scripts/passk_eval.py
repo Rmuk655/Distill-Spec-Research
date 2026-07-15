@@ -60,11 +60,22 @@ def load_prompts(path: str, n_prompts: int):
                 rows.append(json.loads(line))
     rows = rows[:n_prompts]
     out = []
+    n_empty_prompt = 0
     for r in rows:
         prompt = r.get("prompt") or r.get("question") or r.get("problem")
+        if not prompt:
+            # vLLM raises "decoder prompt cannot be empty" on None/"" -- skip
+            # here instead, since a row missing all three fields (or with all
+            # of them blank) has nothing gradeable to generate from anyway.
+            n_empty_prompt += 1
+            continue
         gold_raw = r.get("answer") or r.get("solution") or ""
         gold = extract_gold(gold_raw) if gold_raw else None   # gold may be a full solution or bare answer
         out.append({"prompt": prompt, "gold": gold})
+    if n_empty_prompt:
+        print(f"[passk] WARNING: {n_empty_prompt}/{len(rows)} rows in {os.path.basename(path)} "
+              f"had no usable prompt/question/problem field -- skipped. "
+              f"Effective n_prompts = {len(out)}.")
     return out
 
 
