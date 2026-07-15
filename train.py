@@ -35,6 +35,8 @@ import json
 import math
 import os
 import random
+import shutil
+import subprocess
 import sys
 import time
 from typing import Dict, List
@@ -335,11 +337,18 @@ def parse_args():
                          "Overhead: ~1 teacher greedy generate + 2 forward passes per val "
                          "prompt — roughly same wall-clock as one val pass (≈2x val time).")
     ap.add_argument("--passk_datasets", type=str, default="",
-                    help="Comma-list of eval datasets to run pass@k on, at the SAME cadence "
-                         "as the block-eff val check (--val_every), logging passk_<ds>/k<K> to "
-                         "W&B for K in {1,2,4,8,16,32,64}. Empty = off. "
+                    help="Comma-list of eval datasets to run pass@k on, logging passk_<ds>/k<K> to "
+                         "W&B for K in {1,2,4,8,16,32,64}. Empty = off. Cadence is --passk_every_n_vals "
+                         "(NOT the same as the block-eff val check, which always runs every --val_every). "
                          "E.g. 'math_eval,gsm8k_eval,olympiad_eval'. Training-stability "
                          "diagnostic (pass@64 flat across training => coverage not collapsing).")
+    ap.add_argument("--passk_every_n_vals", type=int, default=1,
+                    help="Run pass@k (either tier) only every this-many VAL CHECKS, not every one -- "
+                         "block-eff itself is unaffected and still computed every --val_every regardless. "
+                         "pass@k's unbatched HF generate() loop is far pricier per-check than block-eff "
+                         "(measured: ~1-2h vs ~15min), so this decouples the two. Always an exact "
+                         "multiple of --val_every by construction (same reasoning as "
+                         "--passk_full_every_n_vals). Default 1 = every val check (old behaviour).")
     ap.add_argument("--passk_samples", type=int, default=64,
                     help="Samples/prompt for the ROUTINE pass@k tier (every val check). Must be "
                          ">= max k you want from this tier (e.g. 16 => pass@1/2/4/8/16 only). "
@@ -369,6 +378,26 @@ def parse_args():
                          "(the block-eff val's MAX_NEW_TOKENS=128 truncates most MATH solutions "
                          "before \\boxed{} => pass@k reads ~0). 512 is a safe default; raise for "
                          "very long solutions (cost scales linearly).")
+    ap.add_argument("--passk_backend", choices=["hf", "vllm"], default="hf",
+                    help="'hf' (default): unchanged in-process, unbatched HF generate() loop -- "
+                         "blocks training, ~1-2h per check. 'vllm': snapshot the current draft "
+                         "weights to an immutable dir and spawn scripts/passk_eval_and_log.py as a "
+                         "NON-BLOCKING background subprocess (from a separate venv-vllm, see "
+                         "scripts/setup_vllm_env.sh) that logs results into THIS SAME W&B run when "
+                         "it finishes -- training continues immediately, no ~1-2h stall.")
+    ap.add_argument("--vllm_python", type=str, default=None,
+                    help="Path to the venv-vllm python interpreter for --passk_backend vllm. "
+                         "Default: <repo_root>/venv-vllm/bin/python (scripts/setup_vllm_env.sh's "
+                         "convention).")
+    ap.add_argument("--vllm_gpu_mem_frac", type=float, default=0.2,
+                    help="--gpu_memory_utilization for the spawned vLLM subprocess. Kept low by "
+                         "default (unlike passk_eval.py's standalone default 0.9) because this "
+                         "process shares the GPU with the actively-training model/optimizer/"
+                         "activations, not a free GPU.")
+    ap.add_argument("--vllm_keep_snapshots", type=int, default=2,
+                    help="How many recent passk_snapshots/ dirs to retain if the spawned subprocess "
+                         "hasn't cleaned up its own yet (safety net against unbounded disk growth "
+                         "if a child crashes before self-deleting; each is just draft-model-sized).")
     ap.add_argument("--early_stop_patience", type=int, default=EARLY_STOP_PAT,
                     help=f"Stop training if smoothed val BE has not improved for this many "
                          f"consecutive val checks (default {EARLY_STOP_PAT}; 0 = disabled). "
@@ -460,6 +489,66 @@ def _train_passk(draft, tokenizer, prompts, golds, n, temp, k_values, max_new_to
         vals = [pass_at_k(n, c, k) for c in per_prompt_c]
         out[k] = sum(vals) / len(vals)   # {k: pass@k}
     return out
+
+
+def _spawn_vllm_passk(draft, tokenizer, output_dir, step, tier, datasets_csv,
+                       n, n_prompts, args, wandb_run):
+    """Snapshot the current draft weights to an IMMUTABLE per-step directory and
+    spawn scripts/passk_eval_and_log.py as a non-blocking background process
+    that logs pass@k into wandb_run once it finishes. Training continues
+    immediately -- never blocks like the --passk_backend hf path.
+
+    The snapshot (not ckpt_latest/ckpt_best) is what the child reads, because
+    ckpt_latest gets overwritten by future val checks while the child may
+    still be mid-read -- see scripts/passk_eval_and_log.py's docstring.
+    """
+    if wandb_run is None:
+        print("  [passk-vllm] skipped: no active W&B run to attach the async job to "
+              "(pass --no_wandb off, or use --passk_backend hf)")
+        return
+    if USE_LORA:
+        print("  [passk-vllm] skipped: USE_LORA=True -- save_pretrained here would write "
+              "adapter-only weights vLLM can't load as a full causal LM. Use --passk_backend hf.")
+        return
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    vllm_python = args.vllm_python or os.path.join(repo_root, "venv-vllm", "bin", "python")
+    if not os.path.isfile(vllm_python):
+        print(f"  [passk-vllm] skipped: vllm_python not found at {vllm_python} "
+              f"(run scripts/setup_vllm_env.sh, or pass --vllm_python)")
+        return
+
+    snap_root = os.path.join(output_dir, "passk_snapshots")
+    snap_name = f"step{step}_{tier}"
+    snap_dir = os.path.join(snap_root, snap_name)
+    draft.save_pretrained(snap_dir, safe_serialization=True)
+    tokenizer.save_pretrained(snap_dir)
+
+    # Safety net: prune old snapshot dirs beyond the retention window, in case a
+    # prior child crashed before self-deleting its own (--cleanup_model_dir).
+    # Each is just draft-model-sized (small: 0.6B/1.7B), but unbounded over a
+    # long run is still wasteful.
+    if os.path.isdir(snap_root):
+        others = sorted(
+            (d for d in os.listdir(snap_root) if d != snap_name
+             and os.path.isdir(os.path.join(snap_root, d))),
+            key=lambda d: os.path.getmtime(os.path.join(snap_root, d)))
+        for _old in others[:max(0, len(others) - (args.vllm_keep_snapshots - 1))]:
+            shutil.rmtree(os.path.join(snap_root, _old), ignore_errors=True)
+
+    script = os.path.join(repo_root, "scripts", "passk_eval_and_log.py")
+    cmd = [vllm_python, "-u", script,
+           "--model", snap_dir, "--datasets", datasets_csv,
+           "--n", str(n), "--n_prompts", str(n_prompts),
+           "--temp", str(args.passk_temp), "--max_tokens", str(args.passk_max_new_tokens),
+           "--gpu_memory_utilization", str(args.vllm_gpu_mem_frac),
+           "--wandb_run_id", wandb_run.id, "--wandb_project", WANDB_PROJECT,
+           "--train_step", str(step), "--tier", tier, "--cleanup_model_dir"]
+    log_path = os.path.join(snap_root, f"{snap_name}.log")
+    _logf = open(log_path, "w")
+    proc = subprocess.Popen(cmd, stdout=_logf, stderr=subprocess.STDOUT, cwd=repo_root)
+    _logf.close()   # child holds its own dup'd fd; safe to close the parent's handle
+    print(f"  [passk-vllm] spawned pid={proc.pid} tier={tier} step={step} "
+          f"snapshot={snap_dir} log={log_path}")
 
 
 def main():
@@ -604,6 +693,10 @@ def main():
         _n_gold = sum(1 for g in _go[:args.passk_n_prompts] if g is not None)
         print(f"[passk] {_ds}: {_n_gold}/{min(args.passk_n_prompts, len(_pr))} prompts gradeable "
               f"(routine: samples={args.passk_samples} n_prompts={args.passk_n_prompts} temp={args.passk_temp})")
+    if _passk_ds:
+        _passk_every_steps = args.val_every * args.passk_every_n_vals   # always exact by construction
+        print(f"[passk] cadence: every {args.passk_every_n_vals} val checks (= every {_passk_every_steps} steps); "
+              f"block-eff val itself still runs every {args.val_every} steps regardless")
     if _passk_ds and args.passk_full_every_n_vals > 0:
         _full_every_steps = args.val_every * args.passk_full_every_n_vals   # always exact by construction
         print(f"[passk] full tier: samples={args.passk_full_samples} n_prompts={passk_full_n_prompts} "
@@ -815,32 +908,45 @@ def main():
             if (step + 1) % args.val_every == 0:
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
-                # pass@k on each configured dataset, SAME cadence as this val check.
-                # Wrapped so a pass@k failure can never kill training. Logged as
-                # passk_<dataset>/k<K> so W&B plots one curve per dataset per K, regardless
-                # of which tier produced a given point (same quantity, cheaper vs pricier n).
+                # pass@k is decoupled from block-eff's cadence: block-eff above always runs
+                # every --val_every (cheap, ~15min), but pass@k's unbatched HF generate() loop
+                # is far pricier per-check (measured ~1-2h), so it only runs every
+                # --passk_every_n_vals-th val check. Wrapped so a pass@k failure can never
+                # kill training. Logged as passk_<dataset>/k<K> so W&B plots one curve per
+                # dataset per K, regardless of which tier produced a given point.
                 # (step+1) is already a val_every multiple here (we're inside the val-check
                 # block), so checking it's ALSO a multiple of val_every*n_vals is exactly
                 # "is this the n_vals-th val check" -- always exact, nothing to misalign.
                 _is_full_passk = (args.passk_full_every_n_vals > 0
                                    and (step + 1) % (args.val_every * args.passk_full_every_n_vals) == 0)
-                if _is_full_passk:
-                    _pk_n, _pk_nprompts, _pk_tier = args.passk_full_samples, passk_full_n_prompts, "full"
-                else:
-                    _pk_n, _pk_nprompts, _pk_tier = args.passk_samples, args.passk_n_prompts, "routine"
-                for _ds, (_pr_all, _go_all) in passk_sets.items():
-                    _pr, _go = _pr_all[:_pk_nprompts], _go_all[:_pk_nprompts]
-                    try:
-                        _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= _pk_n]
-                        _pk = _train_passk(draft, tokenizer, _pr, _go,
-                                           n=_pk_n, temp=args.passk_temp,
-                                           k_values=_pk_ks, max_new_tokens=args.passk_max_new_tokens)
-                        _passk.update({f"passk_{_ds}/k{k}": v for k, v in _pk.items()})
-                        if _pk:
-                            print(f"  [passk:{_ds}] ({_pk_tier}, n={_pk_n}) " + "  ".join(
-                                f"k{k}={v:.3f}" for k, v in _pk.items()))
-                    except Exception as _e:
-                        print(f"  [passk:{_ds}] skipped (error: {_e})")
+                _is_passk_check = _is_full_passk or (
+                    (step + 1) % (args.val_every * args.passk_every_n_vals) == 0)
+                if _is_passk_check:
+                    if _is_full_passk:
+                        _pk_n, _pk_nprompts, _pk_tier = args.passk_full_samples, passk_full_n_prompts, "full"
+                    else:
+                        _pk_n, _pk_nprompts, _pk_tier = args.passk_samples, args.passk_n_prompts, "routine"
+                    if args.passk_backend == "vllm":
+                        # Non-blocking: the spawned subprocess logs its own passk_* entry
+                        # directly into wandb_run at train/step=step+1 once it finishes --
+                        # _passk stays empty here on purpose, nothing to merge into THIS
+                        # step's wandb_run.log() call below.
+                        _spawn_vllm_passk(draft, tokenizer, output_dir, step + 1, _pk_tier,
+                                          args.passk_datasets, _pk_n, _pk_nprompts, args, wandb_run)
+                    else:
+                        for _ds, (_pr_all, _go_all) in passk_sets.items():
+                            _pr, _go = _pr_all[:_pk_nprompts], _go_all[:_pk_nprompts]
+                            try:
+                                _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= _pk_n]
+                                _pk = _train_passk(draft, tokenizer, _pr, _go,
+                                                   n=_pk_n, temp=args.passk_temp,
+                                                   k_values=_pk_ks, max_new_tokens=args.passk_max_new_tokens)
+                                _passk.update({f"passk_{_ds}/k{k}": v for k, v in _pk.items()})
+                                if _pk:
+                                    print(f"  [passk:{_ds}] ({_pk_tier}, n={_pk_n}) " + "  ".join(
+                                        f"k{k}={v:.3f}" for k, v in _pk.items()))
+                            except Exception as _e:
+                                print(f"  [passk:{_ds}] skipped (error: {_e})")
                 val_be_ema = val_be if val_be_ema is None else (1 - VAL_EMA_ALPHA) * val_be_ema + VAL_EMA_ALPHA * val_be
                 val_forget = _update_forgetting(best_per_prompt, _val_pp)
                 _n_easy   = sum(1 for b in _val_pp.values() if b >= _VAL_BE_EASY)

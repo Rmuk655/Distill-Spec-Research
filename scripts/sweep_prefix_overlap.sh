@@ -48,19 +48,41 @@ IFS=',' read -r -a METHODS <<< "${METHODS_STR}"
 # is a SEPARATE post-training run via scripts/passk_eval.py, not during the sweep.
 #
 # TWO-TIER cadence (measured 2026-07-14: plain block-eff val ~15min, val+full
-# pass@k(n=64,100prompts) ~55min under 2-jobs/GPU -> pass@k marginal ~40min):
-#   routine tier: n=16 (pass@1/2/4/8/16), EVERY val check -- cheap
-#   full tier:    n=64 (adds pass@32/64), every PASSK_FULL_EVERY_N_VALS-th val check
-#                 (a val-check MULTIPLIER, not a step count -- always an exact
-#                 multiple of whatever val_every is, nothing to misalign if it changes)
+# pass@k(n=64,100prompts) ~55min-2h under 2-jobs/GPU -> pass@k marginal ~40min-1.5h,
+# i.e. pass@k -- NOT block-eff -- is the dominant wall-clock cost of a val check):
+#   block-eff val: ALWAYS every --val_every steps, unaffected by anything below.
+#   pass@k (either tier): only every PASSK_EVERY_N_VALS-th val check -- decoupled from
+#                 block-eff so you're not paying pass@k's cost every single check.
+#   routine tier: n=16 (pass@1/2/4/8/16), on qualifying val checks.
+#   full tier:    n=64 (adds pass@32/64), every PASSK_FULL_EVERY_N_VALS-th val check.
+#   Both *_EVERY_N_VALS are val-check MULTIPLIERS, not step counts -- always an exact
+#   multiple of whatever val_every is, nothing to misalign if it changes.
 PASSK_DATASETS="${PASSK_DATASETS:-math_val}"
 PASSK_SAMPLES="${PASSK_SAMPLES:-16}"                       # routine tier n
 PASSK_TEMP="${PASSK_TEMP:-0.8}"
 PASSK_N_PROMPTS="${PASSK_N_PROMPTS:-100}"                  # routine tier n_prompts
 PASSK_MAX_NEW_TOKENS="${PASSK_MAX_NEW_TOKENS:-512}"        # must reach the answer; 128 (block-eff) truncates
+PASSK_EVERY_N_VALS="${PASSK_EVERY_N_VALS:-2}"              # pass@k (any tier) every 2nd val check only
 PASSK_FULL_SAMPLES="${PASSK_FULL_SAMPLES:-64}"             # full tier n
 PASSK_FULL_EVERY_N_VALS="${PASSK_FULL_EVERY_N_VALS:-4}"    # every 4th val check (= every 1600 steps @val_every=400)
 PASSK_FULL_N_PROMPTS="${PASSK_FULL_N_PROMPTS:-100}"        # full tier n_prompts (same as routine by default)
+
+# PASSK_BACKEND=hf (default): unchanged, blocking, in-process HF generate() loop.
+# PASSK_BACKEND=vllm: train.py snapshots the draft weights and spawns
+# scripts/passk_eval_and_log.py as a non-blocking background subprocess (from a
+# SEPARATE venv-vllm, see scripts/setup_vllm_env.sh) that logs into the SAME
+# W&B run once it finishes -- training doesn't stall waiting for pass@k.
+PASSK_BACKEND="${PASSK_BACKEND:-hf}"
+VLLM_PYTHON="${VLLM_PYTHON:-}"                              # default (empty): train.py falls back to <repo>/venv-vllm/bin/python
+VLLM_GPU_MEM_FRAC="${VLLM_GPU_MEM_FRAC:-0.2}"               # kept low -- shares the GPU with the actively-training model
+VLLM_KEEP_SNAPSHOTS="${VLLM_KEEP_SNAPSHOTS:-2}"
+
+# prefix_overlap "prob" objective: raw teacher.generate() sampling can collapse gradient
+# to ~0 on most tokens (rare huge outlier-token spikes instead) -- mitigated by
+# restricting the teacher's sampling to its top-k tokens. Rahul (2026-07-13): run the
+# vanilla LR/warmup/lr_min/wd sweep WITHOUT this first; only try top-k afterward if
+# vanilla prob fails across the whole grid. Default 0 = off; set explicitly to opt in.
+PREFIX_TEACHER_TOPK="${PREFIX_TEACHER_TOPK:-0}"
 
 # ---- staged sweep: which axis + locked (winner) values for the others --------
 STAGE="${STAGE:?set STAGE=lr|warmup|lr_min|wd}"
@@ -113,7 +135,7 @@ run_job() {   # $1 = gpu id, $2 = "m|lr|pct|lrmin|wd"
   local wu=$(( WU_TOTAL * pct / 100 )); (( wu < 1 )) && wu=1
   local loss_args name
   if [[ "$m" == "prob" ]]; then
-    loss_args="--loss prefix_overlap --prefix_objective prob"; name="po_prob"
+    loss_args="--loss prefix_overlap --prefix_objective prob --prefix_teacher_topk ${PREFIX_TEACHER_TOPK}"; name="po_prob"
   else
     loss_args="--loss jsd"; name="jsd"
   fi
@@ -130,9 +152,12 @@ run_job() {   # $1 = gpu id, $2 = "m|lr|pct|lrmin|wd"
     --lr ${lr} --warmup_steps ${wu} --lr_min_ratio ${lrmin} --weight_decay ${wd} \
     --passk_datasets ${PASSK_DATASETS} --passk_samples ${PASSK_SAMPLES} \
     --passk_temp ${PASSK_TEMP} --passk_n_prompts ${PASSK_N_PROMPTS} \
-    --passk_max_new_tokens ${PASSK_MAX_NEW_TOKENS} \
+    --passk_max_new_tokens ${PASSK_MAX_NEW_TOKENS} --passk_every_n_vals ${PASSK_EVERY_N_VALS} \
     --passk_full_samples ${PASSK_FULL_SAMPLES} --passk_full_every_n_vals ${PASSK_FULL_EVERY_N_VALS} \
     --passk_full_n_prompts ${PASSK_FULL_N_PROMPTS} \
+    --passk_backend ${PASSK_BACKEND} --vllm_gpu_mem_frac ${VLLM_GPU_MEM_FRAC} \
+    --vllm_keep_snapshots ${VLLM_KEEP_SNAPSHOTS} \
+    $([[ -n "${VLLM_PYTHON}" ]] && echo "--vllm_python ${VLLM_PYTHON}") \
     --output ${out} ${resume}"
 
   echo "[gpu${gpu}] RUN: ${name}"

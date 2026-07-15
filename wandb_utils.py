@@ -40,7 +40,7 @@ def run_slug(args) -> str:
             slug += f"_{args.prefix_aux}{args.prefix_aux_weight:g}"
             if args.prefix_anneal_steps > 0:
                 slug += f"anneal{args.prefix_anneal_steps}"
-        if args.draft:
+        if args.draft and os.path.isdir(args.draft):
             slug += "_warm"
         return slug
     uses_L = is_tree_loss(args.loss) or is_enrichment_loss(args.loss)

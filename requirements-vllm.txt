@@ -1,0 +1,13 @@
+# Separate, ISOLATED venv for vLLM-based pass@k eval (scripts/passk_eval.py,
+# scripts/run_passk_baselines.sh). Do NOT merge these into requirements.txt or
+# install into the main training venv.
+#
+# WHY SEPARATE: vllm==0.25.1 requires torch==2.11.0, but requirements.txt pins
+# torch==2.12.0 for the training pipeline (kernel/dispatch perf comparability
+# across boxes — see the comment there). Installing vllm into the SAME venv
+# silently downgrades torch and breaks that pin.
+#
+# Use scripts/setup_vllm_env.sh to create venv-vllm/ as a fully separate
+# environment, rather than running these pip installs by hand.
+torch==2.11.0
+vllm==0.25.1

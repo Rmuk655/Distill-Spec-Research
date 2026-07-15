@@ -9,8 +9,11 @@
 #   - This repo cloned (or at minimum scripts/passk_eval.py + passk_utils.py,
 #     but cloning the repo is the easy path since it also gives you the
 #     dataset-download tooling below).
-#   - `pip install vllm` (not in requirements.txt — vLLM has its own heavy,
-#     platform-specific deps; install it separately).
+#   - vLLM in a SEPARATE venv from training: `bash scripts/setup_vllm_env.sh`
+#     then `source venv-vllm/bin/activate` before running this script.
+#     (vllm==0.25.1 requires torch==2.11.0, which conflicts with
+#     requirements.txt's torch==2.12.0 pin for the training venv — installing
+#     vllm into that same venv silently downgrades torch and breaks it.)
 #   - The 3 eval datasets present under data_io/raw/ — if not already there:
 #       python -m data_io.download --datasets math_eval,gsm8k_eval,olympiad_eval
 #
