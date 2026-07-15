@@ -19,6 +19,8 @@
 #   CKPT_ROOT=/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
 #     GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
 #   DRY_RUN=1 CKPT_ROOT=... GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh   # preview only
+#   # set DRAFT_MODEL if the sweep isn't the default 0.6B/8B pair, e.g.:
+#   DRAFT_MODEL=Qwen/Qwen3-1.7B CKPT_ROOT=... GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
 #
 # Resumable: skips (model, dataset) pairs already in the output CSV (matched
 # on the ckpt dir path), so re-running after later sweep stages finish only
@@ -36,6 +38,13 @@ IFS=',' read -r -a DATASETS <<< "${DATASETS_STR}"
 N="${N:-64}"
 N_PROMPTS="${N_PROMPTS:-100}"
 PASSK_TEMP="${PASSK_TEMP:-0.8}"           # not TEMP -- collides with OS $TEMP on some shells
+# checkpointing.py's save_checkpoint() only writes model.safetensors/config.json/
+# optim.pt/state.json -- no tokenizer files. Loading ckpt_best as --model with no
+# --tokenizer makes vLLM fall back to a degenerate tokenizer that encodes every
+# prompt to 0 tokens ("decoder prompt cannot be empty"), regardless of dataset
+# content. The tokenizer never changes across training -- always re-derive it
+# from the base draft model id.
+DRAFT_MODEL="${DRAFT_MODEL:-Qwen/Qwen3-0.6B}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.9}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 OUT_CSV="${OUT_CSV:-${REPO}/results/passk_sweep_checkpoints.csv}"
@@ -93,7 +102,8 @@ run_job() {
     local model_dir="${CKPT_ROOT}/${run_name}/ckpt_best"
     local log="${LOG_DIR}/${run_name}__${ds}.out"
     local cmd="${PY} ${REPO}/scripts/passk_eval.py \
-        --model ${model_dir} --dataset ${REPO}/data_io/raw/${ds}.jsonl \
+        --model ${model_dir} --tokenizer ${DRAFT_MODEL} \
+        --dataset ${REPO}/data_io/raw/${ds}.jsonl \
         --n ${N} --n_prompts ${N_PROMPTS} --temp ${PASSK_TEMP} \
         --gpu_memory_utilization ${GPU_MEM_UTIL} --max_model_len ${MAX_MODEL_LEN} \
         --out ${OUT_CSV}"

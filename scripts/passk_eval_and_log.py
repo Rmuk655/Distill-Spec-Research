@@ -47,6 +47,12 @@ from data_io import get_path as dataset_path              # noqa: E402 -- same r
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="local checkpoint SNAPSHOT dir (must be immutable)")
+    ap.add_argument("--tokenizer", default=None,
+                    help="Override tokenizer source, default same as --model. train.py's "
+                         "_spawn_vllm_passk always saves the tokenizer into the snapshot dir "
+                         "alongside the weights, so this normally isn't needed -- present for "
+                         "consistency/defensiveness if --model is ever pointed at a checkpoint "
+                         "saved the old way (checkpointing.py's save_checkpoint(), no tokenizer).")
     ap.add_argument("--datasets", required=True, help="comma list, e.g. 'math_val' or 'math_val,math_eval'")
     ap.add_argument("--n", type=int, default=16)
     ap.add_argument("--temp", type=float, default=0.8)
@@ -79,7 +85,7 @@ def main():
     import wandb
     run = wandb.init(id=args.wandb_run_id, project=args.wandb_project, resume="must")
 
-    llm = LLM(model=args.model, seed=args.seed,
+    llm = LLM(model=args.model, tokenizer=args.tokenizer or args.model, seed=args.seed,
               gpu_memory_utilization=args.gpu_memory_utilization,
               tensor_parallel_size=args.tensor_parallel_size,
               max_model_len=args.max_model_len)
