@@ -12,6 +12,11 @@ each prefix_overlap-prob run — on a FIXED prompt set each time.
 
 USAGE (run on the cluster with a GPU; vLLM is not importable on the Windows dev box):
 
+    Run this from a SEPARATE venv, not the main training venv -- vllm==0.25.1
+    requires torch==2.11.0, which conflicts with requirements.txt's torch==2.12.0
+    pin. Set it up once with `bash scripts/setup_vllm_env.sh`, then:
+        source venv-vllm/bin/activate
+
     python scripts/passk_eval.py \
         --model Qwen/Qwen3-0.6B \
         --dataset data_io/raw/math_eval.jsonl \
@@ -63,6 +68,43 @@ def load_prompts(path: str, n_prompts: int):
     return out
 
 
+def compute_passk_for_dataset(llm, dataset_path: str, n: int, temp: float, top_p: float,
+                               max_tokens: int, n_prompts: int, k_values: list[int], seed: int):
+    """Run one dataset's pass@k against an ALREADY-CONSTRUCTED vLLM engine.
+
+    Split out from main() so a caller evaluating multiple datasets (e.g.
+    scripts/passk_eval_and_log.py) can build the LLM engine ONCE and reuse it
+    across datasets, instead of paying vLLM's ~1-2 min engine startup per dataset.
+
+    Returns (rows_out, n_graded, n_skipped) where rows_out is [(k, pass_at_k), ...].
+    """
+    from vllm import SamplingParams
+
+    data = load_prompts(dataset_path, n_prompts)
+    sp = SamplingParams(n=n, temperature=temp, top_p=top_p, max_tokens=max_tokens, seed=seed)
+    prompts = [d["prompt"] for d in data]
+    outputs = llm.generate(prompts, sp)
+
+    per_prompt_c, n_graded, n_skipped = [], 0, 0
+    for d, o in zip(data, outputs):
+        if d["gold"] is None:
+            n_skipped += 1
+            continue
+        c = sum(1 for comp in o.outputs if is_correct(extract_answer(comp.text), d["gold"]))
+        per_prompt_c.append(c)
+        n_graded += 1
+
+    rows_out = []
+    for k in k_values:
+        if k > n:
+            continue
+        vals = [pass_at_k(n, c, k) for c in per_prompt_c]
+        vals = [v for v in vals if not math.isnan(v)]
+        pak = sum(vals) / len(vals) if vals else float("nan")
+        rows_out.append((k, pak))
+    return rows_out, n_graded, n_skipped
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="HF id or local checkpoint dir")
@@ -85,30 +127,18 @@ def main():
         sys.exit(f"--n ({args.n}) must be >= max k ({max(k_values)})")
 
     try:
-        from vllm import LLM, SamplingParams
+        from vllm import LLM
     except ImportError:
         sys.exit("vLLM not installed. On the cluster: pip install vllm")
 
-    data = load_prompts(args.dataset, args.n_prompts)
     llm = LLM(model=args.model, seed=args.seed,
               gpu_memory_utilization=args.gpu_memory_utilization,
               tensor_parallel_size=args.tensor_parallel_size,
               max_model_len=args.max_model_len)
-    sp = SamplingParams(n=args.n, temperature=args.temp, top_p=args.top_p,
-                        max_tokens=args.max_tokens, seed=args.seed)
 
-    prompts = [d["prompt"] for d in data]
-    outputs = llm.generate(prompts, sp)
-
-    # per-prompt correct-count c out of n
-    per_prompt_c, n_graded, n_skipped = [], 0, 0
-    for d, o in zip(data, outputs):
-        if d["gold"] is None:
-            n_skipped += 1
-            continue
-        c = sum(1 for comp in o.outputs if is_correct(extract_answer(comp.text), d["gold"]))
-        per_prompt_c.append(c)
-        n_graded += 1
+    rows_out, n_graded, n_skipped = compute_passk_for_dataset(
+        llm, args.dataset, args.n, args.temp, args.top_p, args.max_tokens,
+        args.n_prompts, k_values, args.seed)
 
     if n_graded == 0:
         sys.exit("No gradeable prompts (all gold answers empty/None).")
@@ -116,13 +146,8 @@ def main():
     print(f"\nmodel={args.model}  dataset={os.path.basename(args.dataset)}  "
           f"n={args.n} temp={args.temp}  graded={n_graded} skipped={n_skipped}\n")
     print(f"{'k':>4}  {'pass@k':>8}")
-    rows_out = []
-    for k in k_values:
-        vals = [pass_at_k(args.n, c, k) for c in per_prompt_c]
-        vals = [v for v in vals if not math.isnan(v)]
-        pak = sum(vals) / len(vals) if vals else float("nan")
+    for k, pak in rows_out:
         print(f"{k:>4}  {pak:>8.4f}")
-        rows_out.append((k, pak))
 
     if args.out:
         newfile = not os.path.exists(args.out)
