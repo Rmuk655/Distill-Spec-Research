@@ -38,6 +38,12 @@
 # to --expected_steps only for very old checkpoints saved before train_args
 # was recorded in state.json.
 #
+# NOTE: the finished-check above is SKIPPED ENTIRELY in RUN_NAMES mode (mode
+# 2) -- you already know which runs you want, and not every old run has a
+# ckpt_latest to check (some only have ckpt_best + wandb_run.json). Only
+# ckpt_best's existence is verified there. The finished-check still applies
+# in auto-glob mode (mode 1), since you don't already know what's in there.
+#
 # Resumable: skips (model, dataset) pairs already in the output CSV (matched
 # on the ckpt dir path), so re-running after later sweep stages finish only
 # evaluates the newly-completed runs, not everything again.
@@ -89,12 +95,29 @@ fi
 # `stat`/`python` are real external processes `timeout` can actually kill --
 # bash's own `[[ -f ]]`/`[[ -d ]]` builtins run in-process and can't be
 # pre-empted this way, hence using `stat` here instead of `[[ ]]` directly.
+#
+# SKIPPED ENTIRELY in RUN_NAMES mode: you already know exactly which runs you
+# want evaluated, so the "did this finish" safety net (which needs
+# ckpt_latest/state.json -- not every old run has one, e.g. some only have
+# ckpt_best + wandb_run.json) would just silently drop runs you explicitly
+# asked for. Only checks ckpt_best actually exists (that's what gets
+# evaluated) in this mode. The auto-glob mode (CKPT_ROOT/*/, no RUN_NAMES)
+# keeps the full finished-check, since there you don't already know what's
+# in there or whether it's done.
 STAT_TIMEOUT="${STAT_TIMEOUT:-10}"
 FINISHED=()
 for _run_name in "${CANDIDATES[@]}"; do
     _run_dir="${CKPT_ROOT}/${_run_name}/"
-    _state="${_run_dir}ckpt_latest/state.json"
     _best="${_run_dir}ckpt_best"
+    if [[ -n "${RUN_NAMES_STR}" ]]; then
+        if ! timeout "${STAT_TIMEOUT}" stat "${_best}" >/dev/null 2>&1; then
+            echo "[passk-sweep] SKIP ${_run_name}: no ckpt_best, or timed out after ${STAT_TIMEOUT}s"
+            continue
+        fi
+        FINISHED+=("${_run_name}")
+        continue
+    fi
+    _state="${_run_dir}ckpt_latest/state.json"
     if ! timeout "${STAT_TIMEOUT}" stat "${_state}" >/dev/null 2>&1; then
         echo "[passk-sweep] SKIP ${_run_name}: no ckpt_latest/state.json, or ${_run_dir} timed out after ${STAT_TIMEOUT}s (stale NFS handle?)"
         continue
