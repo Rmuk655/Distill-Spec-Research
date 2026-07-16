@@ -39,7 +39,15 @@ USAGE (from venv-vllm, see scripts/setup_vllm_env.sh):
 """
 import argparse, os, shutil, sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# append, NOT insert(0, ...): the repo root contains a plain `wandb/` directory
+# (local W&B run-data storage, e.g. wandb/run-2026.../) with no __init__.py.
+# Python 3 still treats that as a valid namespace package -- putting repo_root
+# at sys.path[0] made `import wandb` below resolve to that empty local
+# directory instead of the real installed package in site-packages, silently
+# producing a module with no .init attribute. Appending keeps site-packages
+# (already earlier on sys.path by default) checked first for ambiguous names,
+# while still letting `scripts.passk_eval`/`data_io` resolve (no collision).
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.passk_eval import compute_passk_for_dataset  # noqa: E402
 from data_io import get_path as dataset_path              # noqa: E402 -- same resolver train.py uses
 
