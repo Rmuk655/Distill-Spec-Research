@@ -20,6 +20,10 @@
 # USAGE
 #   GPUS=0,1,2,3 bash scripts/run_passk_baselines.sh
 #   DRY_RUN=1 GPUS=0,1,2,3 bash scripts/run_passk_baselines.sh   # preview only
+#   # MODELS overrides the default 0.6B/8B pair, e.g. a single large model
+#   # sequentially on one GPU (GPUS with one entry = one worker, jobs run
+#   # one at a time -- important for a 32B-scale model's memory footprint):
+#   MODELS=Qwen/Qwen3-32B GPUS=3 bash scripts/run_passk_baselines.sh
 #
 # Resumable: each (model,dataset) job writes a marker file on success; rerunning
 # the same command skips anything already done instead of duplicating CSV rows.
@@ -34,7 +38,8 @@ MARKER_DIR="${REPO}/results/.passk_baseline_done"
 LOG_DIR="${REPO}/results/logs_passk_baselines"
 mkdir -p "$(dirname "$OUT_CSV")" "$MARKER_DIR" "$LOG_DIR"
 
-MODELS=("Qwen/Qwen3-0.6B" "Qwen/Qwen3-8B")     # draft (untrained), teacher
+MODELS_STR="${MODELS:-Qwen/Qwen3-0.6B,Qwen/Qwen3-8B}"   # comma list; default draft+teacher (0.6B/8B pair)
+IFS=',' read -r -a MODELS <<< "${MODELS_STR}"
 DATASETS=(math_eval gsm8k_eval olympiad_eval)  # held-out eval sets (not math_hard/math_val)
 
 # Same defaults as the in-training pass@k hook, for a fair before/after compare.
