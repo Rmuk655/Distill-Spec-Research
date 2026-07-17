@@ -318,8 +318,12 @@ def parse_args():
                          f"Rahul's 'final lr' sweep: try {{0.1, 0.01}}.")
     ap.add_argument("--weight_decay", type=float, default=0.0,
                     help="AdamW L2 weight-decay coefficient (regularisation). "
-                         "Default 0.0 = DistillSpec's no-regularisation setting. "
-                         "Sweep needs a NONZERO base (e.g. 0.01) for 1x/10x/0.1x to mean anything.")
+                         "Default 0.0 was previously attributed to 'DistillSpec's "
+                         "no-regularisation setting' -- checked the paper (arXiv:2310.08461) "
+                         "directly and this doesn't hold up: Table B.1 lists dropout=0.0, "
+                         "not weight decay, and never specifies a weight-decay value at all "
+                         "(also uses Adafactor, not AdamW). Rahul: weight decay should not be "
+                         "zero. Sweep needs a NONZERO base (e.g. 0.01) for 1x/10x/0.1x to mean anything.")
     ap.add_argument("--val_temp", type=float, default=0.2,
                     help="Sampling temperature for val block_eff decoding.  Low (0.2) "
                          "is near-deterministic → far lower run-to-run variance than "
@@ -608,7 +612,7 @@ def main():
         print("[optim] using bitsandbytes AdamW8bit (int8 optimizer state)")
     else:
         optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.999),
-                                      weight_decay=args.weight_decay)   # 0.0 = DistillSpec no-reg default
+                                      weight_decay=args.weight_decay)   # default 0.0 -- NOT actually a DistillSpec-cited value, see --weight_decay help
     # Cosine-decay floor: CLI --lr_min_ratio overrides the module constant.
     lr_min_ratio = args.lr_min_ratio if args.lr_min_ratio is not None else LR_MIN_RATIO
     if args.weight_decay != 0.0:
