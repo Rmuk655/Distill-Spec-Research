@@ -545,7 +545,15 @@ def _spawn_vllm_passk(draft, tokenizer, output_dir, step, tier, datasets_csv,
            "--train_step", str(step), "--tier", tier, "--cleanup_model_dir"]
     log_path = os.path.join(snap_root, f"{snap_name}.log")
     _logf = open(log_path, "w")
-    proc = subprocess.Popen(cmd, stdout=_logf, stderr=subprocess.STDOUT, cwd=repo_root)
+    # Strip WANDB_SERVICE: Popen inherits the full parent env by default, and this
+    # points at the wandb-core daemon THIS process is already using to stream the
+    # same run ID. The child's wandb.init(id=..., resume="must") reusing that same
+    # service collides with the parent's still-open handle on that run
+    # ("ServerResponseError: run ID <id> is in use") -- the child must spin up its
+    # own private wandb-core service instead of sharing the parent's.
+    _env = os.environ.copy()
+    _env.pop("WANDB_SERVICE", None)
+    proc = subprocess.Popen(cmd, stdout=_logf, stderr=subprocess.STDOUT, cwd=repo_root, env=_env)
     _logf.close()   # child holds its own dup'd fd; safe to close the parent's handle
     print(f"  [passk-vllm] spawned pid={proc.pid} tier={tier} step={step} "
           f"snapshot={snap_dir} log={log_path}")
