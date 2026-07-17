@@ -375,6 +375,68 @@ def fetch_olympiad_eval(force: bool = False):
     return eval_path
 
 
+def fetch_dapo_math(n: int = 17000, force: bool = False):
+    """
+    Build dapo_math_train.jsonl (TRAINING-ONLY, no val/eval split) from
+    BytedTsinghua-SIA/DAPO-Math-17k — a larger alternative to math_hard.jsonl
+    (~5,332 rows), raised by Rahul (2026-07-16 WhatsApp thread) as a way to
+    reduce same-prompt repetition over long training runs.
+
+    SCHEMA CAVEAT (checked live 2026-07-17, same discipline as
+    fetch_olympiad_eval's schema note — don't trust a dataset's field names
+    from memory): the HF `train` split reports num_examples=1,791,700 rows,
+    NOT ~17,000 as the "17k" name implies. First 5,000 streamed rows all had
+    unique `extra_info.index` UUIDs; full-dataset uniqueness was NOT verified
+    (would require streaming and hashing all 1.8M rows). Treat "17k" as a
+    legacy/marketing name, not a verified row count — this fetcher takes only
+    the first `n` (default 17000, matching the namesake) rather than assuming
+    the whole file is small or fully de-duplicated.
+
+    Row schema (confirmed live):
+        data_source   : str, e.g. "math_dapo"
+        prompt        : list[{"role": "user", "content": <full instruction-
+                         formatted problem text, already asks the model to
+                         answer in "Answer: $X" form>}] — single-turn, use
+                         prompt[0]["content"] directly as our "prompt" field
+        ability       : str, e.g. "MATH"
+        reward_model  : {"ground_truth": <short answer str>, "style": ...}
+        extra_info    : {"index": <uuid>}
+
+    This is a TRAINING pool only — no official val/test split shipped with
+    the dataset. Deliberately NOT wired into math_val/math_eval: keep those
+    untouched so existing results stay comparable. Use via
+    --train_dataset dapo_math_train once opted in (not fetched by default;
+    pass --datasets dapo_math_train explicitly).
+    """
+    path = os.path.join(DATA_DIR, "dapo_math_train.jsonl")
+    if os.path.isfile(path) and not force:
+        print("  dapo_math_train.jsonl already present — skipping")
+        return path
+
+    print(f"  fetching BytedTsinghua-SIA/DAPO-Math-17k (streaming, first {n} rows) ...")
+    try:
+        from datasets import load_dataset
+        ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train", streaming=True)
+        items = []
+        for row in ds:
+            msgs = row.get("prompt") or []
+            prompt = msgs[0]["content"] if msgs and "content" in msgs[0] else None
+            if not prompt:
+                continue
+            answer = (row.get("reward_model") or {}).get("ground_truth", "")
+            items.append({"prompt": prompt, "answer": answer,
+                          "source": row.get("data_source", "")})
+            if len(items) >= n:
+                break
+        save_jsonl(path, items)
+    except Exception as e:
+        print(f"  WARNING: DAPO-Math-17k download failed: {e}")
+        save_jsonl(path, [{"prompt": f"[dapo fallback] placeholder problem {i}.",
+                            "answer": "", "source": "canned_fallback"}
+                           for i in range(300)])
+    return path
+
+
 def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
               force: bool = False) -> None:
     """Top-level entry point — fetch every dataset we evaluate on."""
@@ -394,6 +456,9 @@ def fetch_all(n_eval: int = 100, train: bool = False, datasets: list = None,
     if "olympiad_eval" in requested:
         fetch_olympiad_eval(force=force)
 
+    if "dapo_math_train" in requested:
+        fetch_dapo_math(n=n_eval if n_eval != 100 else 17000, force=force)
+
     if "spec_bench" in requested:
         fetch_spec_bench(force=force)
 
@@ -408,7 +473,7 @@ def get_path(name: str) -> str:
     """Resolve a dataset name to its on-disk JSONL path (must be downloaded)."""
     known = ({"gsm8k_train", "gsm8k_val", "gsm8k_eval",
               "math_hard", "math_val", "math_eval",
-              "olympiad_eval",
+              "olympiad_eval", "dapo_math_train",
               "spec_bench"} | set(EVAL_DATASETS))
     if name in known:
         return os.path.join(DATA_DIR, f"{name}.jsonl")
