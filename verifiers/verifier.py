@@ -429,8 +429,13 @@ class TreeVerifier:
             q = self.q_probs_dict[leaf_parent.rep]
             p_prime = F.relu(leaf_parent.weight * p - q)
             p_prime_sum = p_prime.sum().item()
-            if p_prime_sum > 0:
-                leaf_parent.weight = p_prime_sum / (p_prime_sum + 1.0 - leaf_parent.weight)
+            # denom can hit exactly 0 when leaf_parent.weight drifts to p_prime_sum + 1.0
+            # (observed with near-duplicate q_paths, e.g. two sampled continuations
+            # differing only in their final token -- degenerate tree structure from a
+            # highly-converged/low-entropy draft). Guard separately from p_prime_sum>0.
+            denom = p_prime_sum + 1.0 - leaf_parent.weight
+            if p_prime_sum > 0 and denom > 0:
+                leaf_parent.weight = p_prime_sum / denom
                 self.p_probs_dict[leaf_parent.rep] = p_prime / p_prime_sum
             else:
                 leaf_parent.weight = 0.0
