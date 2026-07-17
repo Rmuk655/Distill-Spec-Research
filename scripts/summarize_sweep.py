@@ -97,7 +97,10 @@ def parse_log(log_path: str):
 
     if "[done]" in text:
         status = "finished"
-    elif re.search(r"^Traceback", text[-4000:], re.MULTILINE):
+    elif "Traceback (most recent call last)" in text[-20000:]:
+        # search a wide tail window, not just the last few thousand chars --
+        # a real crash traceback (e.g. a deep torch forward-call chain) can run
+        # to 4000+ chars on its own, before whatever wandb prints after it.
         status = "CRASHED"
     else:
         status = "running?"
