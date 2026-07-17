@@ -61,11 +61,16 @@ HPARAM_COLS = [
 
 
 def find_log(root: str, run_name: str):
-    """po_prob_* logs sit at <root>/<run>.log; jsd_* logs live under
-    <root>/logs/<run>.log instead -- check both."""
+    """Two different launch scripts, two different conventions:
+      - one-off manual launches (nohup ... > <root>/<run>.log)
+      - sweep_prefix_overlap.sh, which ALWAYS writes to
+        <root>/logs/<run>.out (note: .out, not .log -- see run_job() there)
+    Check all three combinations rather than assuming one."""
     candidates = [
         os.path.join(root, f"{run_name}.log"),
         os.path.join(root, "logs", f"{run_name}.log"),
+        os.path.join(root, "logs", f"{run_name}.out"),
+        os.path.join(root, f"{run_name}.out"),
     ]
     for c in candidates:
         if os.path.isfile(c):
