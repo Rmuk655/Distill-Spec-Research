@@ -63,12 +63,20 @@ Distill-Spec-Research/
 │   └── raw/             # downloaded JSONL files (gitignored)
 ├── scripts/
 │   ├── setup_a100.sh          # one-shot env setup wrapper
+│   ├── setup_vllm_env.sh      # separate venv-vllm for vLLM-backed pass@k generation (never pip install vllm into the main venv)
 │   ├── eval_grid.sh           # full post-training eval sweep, one GPU per checkpoint (see script header)
 │   ├── analyze_evals.py       # cross-checkpoint comparison across eval CSVs (pivots, Δ-vs-JSD heatmaps, K-trends)
 │   ├── analysis_buckets.json  # named comparison battery for analyze_evals.py --config
-│   └── analyze_wandb.py       # W&B training-run convergence analysis (job_type=train) → ranked CSV + HTML report
+│   ├── analyze_wandb.py       # W&B training-run convergence analysis (job_type=train) → ranked CSV + HTML report
+│   ├── sweep_prefix_overlap.sh / sweep_prob.yaml  # LR/warmup/lr_min/wd sweep driver + a W&B Sweeps config
+│   ├── summarize_sweep.py     # parse training logs into a status/best-BE table (avoids clicking through W&B per run)
+│   ├── mine_wandb_runs.py     # hyperparameter-importance + subgroup mining across all logged W&B runs
+│   ├── passk_eval.py / passk_eval_sweep_checkpoints.sh / run_passk_baselines.sh  # pass@k generation (vLLM/HF) + batch drivers
+│   ├── analyze_passk_movement.py / top_checkpoints_by_passk.py  # rank checkpoints by pass@k lift vs student, noise-floor gated
+│   └── plot_passk_*.py / plot_gap_closed.py / plot_prob_vs_jsd_advantage.py  # pass@k charts (curves, gap-closed, prob-vs-jsd)
 ├── checkpoints/         # train.py writes here (gitignored)
 ├── results.csv          # eval.py appends one row per (mode × K × L × dataset)
+├── results/passK/       # pass@k CSVs + charts (block-eff eval is results.csv; pass@k lives here)
 └── requirements.txt
 ```
 
@@ -233,6 +241,7 @@ failure modes (see [`prefix_overlap_research_note.md`](notes/prefix_overlap_rese
 |---|---|---|
 | `--prefix_objective` | `prob` | `prob` (exact, collapses in practice) / `logprob` (log-space) / `traversal` (K-aware reweight) / `nss` (masked CE) |
 | `--prefix_M` | 4 | Teacher continuations per root (single-root mode) |
+| `--prefix_teacher_topk` | 0 | `0` = disabled (teacher samples from full distribution). `>0` restricts the teacher's rollout sampling to its top-k tokens per step — narrows the continuation to high-prob tokens the draft can realistically match, to fight the `prob` objective's tail-token gradient collapse. |
 | `--prefix_root_spacing` | 0 | N > 0 → multi-root every N tokens (0 = single-root) |
 | `--prefix_rollout_len` | `MAX_NEW_TOKENS` | Teacher rollout length |
 | `--prefix_random_offset` | off | Randomise root position for unbiased coverage (Rahul §5) |
@@ -572,6 +581,56 @@ wait
 **Note on L2 hit rate and exact HBM GB/s:** these require DCGM
 (`sudo apt install datacenter-gpu-manager`).  The `gpu_mem_util_avg_pct` field
 (from standard NVML) is the closest available proxy without DCGM.
+
+---
+
+## Pass@k evaluation (accuracy, not just block-efficiency)
+
+Block-efficiency (`eval.py`) measures speculative-decoding speedup. **Pass@k**
+is a separate axis — the fraction of prompts a model solves given `k` sampled
+attempts — and answers "did training make the draft a better *problem solver*,
+not just a faster one". It uses the OpenAI HumanEval unbiased estimator
+(`passk_utils.py::pass_at_k`) over `n=64` samples per prompt, for
+`k ∈ {1,2,4,8,16,32,64}`, on the three held-out eval sets (`math_eval`,
+`gsm8k_eval`, `olympiad_eval`).
+
+Generation is GPU-heavy (vLLM), so it lives in a **separate `venv-vllm`** — never
+`pip install vllm` into the main venv (see `scripts/setup_vllm_env.sh`).
+
+```bash
+# 0. one-time: build the vLLM venv
+bash scripts/setup_vllm_env.sh
+
+# 1. untrained baselines (student + teacher) — the reference lines every chart needs
+source venv-vllm/bin/activate
+bash scripts/run_passk_baselines.sh          # → results/passK/passk_baselines.csv
+
+# 2. pass@k for a set of trained checkpoints (resumable; skips (model,dataset) already in the CSV)
+CKPT_ROOT=/path/to/checkpoints RUN_NAMES=run_a,run_b DRAFT_MODEL=Qwen/Qwen3-0.6B \
+  GPUS=0,1 OUT_CSV=results/passK/passk_hparam_sweep.csv \
+  bash scripts/passk_eval_sweep_checkpoints.sh
+```
+
+Then the **analysis scripts are CPU-only** (main venv — pandas/matplotlib, no
+GPU), reading the CSVs written above:
+
+```bash
+source venv/bin/activate
+python scripts/top_checkpoints_by_passk.py               # top-N checkpoints per k, noise-floor gated
+python scripts/plot_passk_curves_all.py                  # pass@k vs k, one line per checkpoint + student/teacher refs
+python scripts/plot_gap_closed.py --dataset math_eval.jsonl   # % of student→teacher gap closed per checkpoint
+python scripts/analyze_passk_movement.py                 # Δ pass@k vs student, ranked, per dataset
+```
+
+**Noise-floor gating:** with a single seed and no per-prompt data retained, there
+is no textbook confidence interval. These scripts derive a per-k floor as
+`2·std(pass@k)` over the flat low-LR `prefix_overlap/prob` cluster (established
+elsewhere as statistically indistinguishable in block-eff) and mark any
+checkpoint-to-checkpoint gap below it as *not distinguishable* — so single-seed
+wiggle isn't over-read as a real effect. When comparing loss families, compare
+the **one config each family would actually deploy** (its best by block-eff,
+chosen before looking at pass@k), not the best-of-sweep per family — the latter
+is a multiple-comparisons artifact.
 
 ---
 
