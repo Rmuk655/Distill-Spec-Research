@@ -5,22 +5,23 @@ mine_wandb_runs.py — offline insight-mining across EVERY logged W&B run.
 WHY: instead of tuning one hyperparameter at a time by hand ("graduate student
 descent"), pull the entire run history through the W&B API once and let the
 data say -- objectively, across all runs at once -- which knobs actually
-matter, what predicts collapse, how big the noise floor is, and whether any of
-the rejected/collapsed objectives (enrich, traversal, nss, depth_weight, ...)
-ever had salvageable value.
+matter, what predicts collapse, how big the noise floor is, whether any of the
+rejected objectives (enrich, traversal, nss, depth_weight, ...) had value, and
+which training runs actually moved pass@k (even where block-eff regressed).
 
-IMPORTANT CAVEAT (this is the real intellectual content, printed in the report
-too): these runs are an OBSERVATIONAL dataset, not a designed experiment. If
-high LR was always paired with short warmup, no method here can separate their
-effects -- the confound is baked in. So the mining gives ASSOCIATION (where to
-look, what correlates with good/bad), not clean CAUSAL attribution. Use it to
-decide which few CONTROLLED sweeps are worth running, not as a substitute for
-them.
+IMPORTANT CAVEAT (printed in the report too): these runs are an OBSERVATIONAL
+dataset, not a designed experiment. Confounded hyperparameters can't be
+separated here -- this gives ASSOCIATION (where to look), not CAUSATION. Use it
+to pick which controlled sweeps are worth running, not to replace them.
 
-USAGE (run on the cluster, where W&B auth already lives):
-    python scripts/mine_wandb_runs.py                       # writes Results/wandb_mining_report.md
-    python scripts/mine_wandb_runs.py --collapse_history    # also pull per-step history (slower)
-    python scripts/mine_wandb_runs.py --project distillspec-pipeline --out Results/mining.md
+GROUPING: every comparison is split by (loss, objective, draft/teacher pair,
+train_dataset) so a math_hard 0.6B/8B run is never averaged against a gsm8k or
+1.7B/32B run.
+
+USAGE (run on the cluster where W&B auth lives):
+    python scripts/mine_wandb_runs.py                    # cheap: config+summary only
+    python scripts/mine_wandb_runs.py --history          # + loss/grad/pass@k trends (slower)
+    python scripts/mine_wandb_runs.py --history --out Results/mining.md
 
 Needs: wandb, pandas. sklearn optional (falls back to correlation-only importance).
 """
@@ -28,20 +29,24 @@ import argparse
 import math
 import os
 import sys
-from collections import defaultdict
 
-# Hyperparameter config keys we care about (superset -- missing ones become NaN,
-# handling the schema drift across weeks of runs where new flags appeared).
 NUMERIC_HPARAMS = [
     "lr", "warmup_steps", "lr_min_ratio", "weight_decay",
     "prefix_teacher_topk", "prefix_M", "prefix_aux_weight",
     "prefix_anneal_steps", "prefix_root_spacing", "K", "L", "steps",
 ]
-CATEGORICAL_HPARAMS = ["loss", "prefix_objective", "prefix_aux", "draft", "teacher"]
+CATEGORICAL_HPARAMS = ["loss", "prefix_objective", "prefix_aux", "draft",
+                       "teacher", "train_dataset", "val_dataset"]
 
-# Candidate summary keys for "best block efficiency" -- naming drifted, try all.
 BEST_BE_KEYS = ["val/best_block_eff", "best_val_block_eff", "val/block_eff",
                 "best_block_eff"]
+PASSK_KS = [1, 2, 4, 8, 16, 32, 64]
+
+# grad_norm is logged every 10 raw steps but is only nonzero on optimizer steps
+# (grad_accum=8), i.e. every lcm(8,10)=40 raw steps -> ~3/4 of logged values are
+# EXPECTED zeros, not collapse. So "dead gradient" must mean: no nonzero grad in
+# a late window, not merely "many zeros". See grad-norm-zero-pattern memory.
+GRAD_ACCUM = 8
 
 
 def get_best_be(summary):
@@ -52,6 +57,11 @@ def get_best_be(summary):
     return None
 
 
+def _short(x):
+    x = str(x)
+    return x.split("/")[-1] if x and x != "None" else "?"
+
+
 def flatten_runs(runs):
     import pandas as pd
     rows = []
@@ -60,34 +70,38 @@ def flatten_runs(runs):
         summ = dict(r.summary)
         best_be = get_best_be(summ)
         final_be = summ.get("val/block_eff")
-        rows.append({
+        row = {
             "name": r.name, "id": r.id, "state": r.state,
             "best_be": best_be,
             "final_be": float(final_be) if isinstance(final_be, (int, float)) else None,
             **cfg,
-        })
+        }
+        # final (last-logged) pass@k straight from summary -- cheap, no history call
+        for k in PASSK_KS:
+            for ds in ("math_val", "math_eval"):
+                v = summ.get(f"passk_{ds}/k{k}")
+                if isinstance(v, (int, float)):
+                    row[f"passk_{ds}_k{k}"] = float(v)
+        rows.append(row)
     df = pd.DataFrame(rows)
-    # log10(lr) is the meaningful scale for a tree/correlation model, not raw lr.
     if "lr" in df:
         df["log10_lr"] = df["lr"].apply(
             lambda x: math.log10(x) if isinstance(x, (int, float)) and x and x > 0 else None)
     return df
 
 
+def group_key(df):
+    """Split by loss / objective / pair / train_dataset so nothing gets crossed."""
+    return (df["loss"].astype(str) + " / " +
+            df["prefix_objective"].astype(str).replace("None", "-") + " / " +
+            df["draft"].map(_short) + "→" + df["teacher"].map(_short) + " / " +
+            df["train_dataset"].astype(str))
+
+
 def loss_family_table(df):
-    """Per (loss, objective, pair) group: n, best/median BE, collapse rate.
-    Answers 'did the rejected objectives ever have value.'"""
     import pandas as pd
-    def pair(row):
-        d, t = str(row.get("draft")), str(row.get("teacher"))
-        d = d.split("/")[-1] if d and d != "None" else "?"
-        t = t.split("/")[-1] if t and t != "None" else "?"
-        return f"{d}/{t}"
     df = df.copy()
-    df["pair"] = df.apply(pair, axis=1)
-    df["group"] = (df["loss"].astype(str) + " / " +
-                   df["prefix_objective"].astype(str).replace("None", "-") + " / " +
-                   df["pair"])
+    df["group"] = group_key(df)
     out = []
     for g, sub in df.groupby("group"):
         be = sub["best_be"].dropna()
@@ -95,46 +109,35 @@ def loss_family_table(df):
             continue
         collapsed = ((sub["best_be"] < 2.0) |
                      ((sub["final_be"].notna()) & (sub["final_be"] < 0.7 * sub["best_be"]))).sum()
-        out.append({
-            "group": g, "n": len(sub), "best_BE": round(be.max(), 3),
-            "median_BE": round(be.median(), 3),
-            "collapse_rate": f"{collapsed}/{len(sub)}",
-        })
+        out.append({"group": g, "n": len(sub), "best_BE": round(be.max(), 3),
+                    "median_BE": round(be.median(), 3),
+                    "collapse_rate": f"{collapsed}/{len(sub)}"})
     return pd.DataFrame(out).sort_values("best_BE", ascending=False)
 
 
-def param_importance(df, subset_mask, target="best_be"):
-    """RandomForest feature importance on a clean numeric subset (default: the
-    prob-objective 0.6B/8B sweep). Falls back to |correlation| if no sklearn."""
+def param_importance(df, mask, target="best_be"):
     import pandas as pd
-    sub = df[subset_mask].copy()
+    sub = df[mask].dropna(subset=[target]).copy()
     feats = [c for c in ["log10_lr", "warmup_steps", "lr_min_ratio", "weight_decay",
                          "prefix_teacher_topk", "prefix_M", "prefix_aux_weight",
                          "prefix_anneal_steps"] if c in sub.columns]
-    sub = sub.dropna(subset=[target])
-    X = sub[feats].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-    y = sub[target]
     if len(sub) < 8:
-        return None, feats, len(sub), "too few runs (<8) for a meaningful fit"
-    # Drop zero-variance features (a param that never varied can't be 'important').
+        return None, len(sub), "too few runs (<8) for a meaningful fit"
+    X = sub[feats].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     varying = [f for f in feats if X[f].nunique() > 1]
-    X = X[varying]
+    X, y = X[varying], sub[target]
     try:
         from sklearn.ensemble import RandomForestRegressor
-        rf = RandomForestRegressor(n_estimators=300, random_state=0)
-        rf.fit(X, y)
-        imp = sorted(zip(varying, rf.feature_importances_), key=lambda t: -t[1])
-        return imp, varying, len(sub), "random_forest"
+        rf = RandomForestRegressor(n_estimators=300, random_state=0).fit(X, y)
+        return sorted(zip(varying, rf.feature_importances_), key=lambda t: -t[1]), len(sub), "random_forest"
     except ImportError:
         corr = sorted(((f, abs(X[f].corr(y))) for f in varying),
                       key=lambda t: -(t[1] if not math.isnan(t[1]) else 0))
-        return corr, varying, len(sub), "abs_correlation (sklearn not installed)"
+        return corr, len(sub), "abs_correlation (no sklearn)"
 
 
-def marginal_view(df, subset_mask):
-    """Coordinate-descent view computed across ALL runs at once: for each
-    hyperparam, mean best_be grouped by its value."""
-    sub = df[subset_mask]
+def marginal_view(df, mask):
+    sub = df[mask]
     out = {}
     for f in ["log10_lr", "warmup_steps", "lr_min_ratio", "weight_decay",
               "prefix_teacher_topk", "prefix_M", "prefix_aux_weight", "prefix_anneal_steps"]:
@@ -148,116 +151,138 @@ def marginal_view(df, subset_mask):
 
 
 def noise_floor(df):
-    """Near-duplicate configs -> spread in best_be = a lower bound on run-to-run
-    noise. If this is comparable to your 'wins', those wins aren't real."""
     key_cols = [c for c in ["loss", "prefix_objective", "log10_lr", "warmup_steps",
                             "lr_min_ratio", "weight_decay", "prefix_teacher_topk",
                             "prefix_M", "prefix_aux_weight", "prefix_anneal_steps",
-                            "draft", "teacher"] if c in df.columns]
-    dup_groups = []
-    for _, sub in df.dropna(subset=["best_be"]).groupby(
-            [df[c].astype(str) for c in key_cols]):
+                            "draft", "teacher", "train_dataset"] if c in df.columns]
+    groups = []
+    for _, sub in df.dropna(subset=["best_be"]).groupby([df[c].astype(str) for c in key_cols]):
         if len(sub) > 1:
             be = sub["best_be"]
-            dup_groups.append((sub["name"].iloc[0], len(sub),
-                               round(be.max() - be.min(), 3), round(be.std(), 4)))
-    return dup_groups
+            groups.append((sub["name"].iloc[0], len(sub),
+                           round(be.max() - be.min(), 3), round(be.std(), 4)))
+    return groups
 
 
-def collapse_timing(runs, df, collapse_be):
-    """For runs that collapsed, when did grad_norm first flatline / block_eff
-    first crash? Pulls per-step history (slow) -- only with --collapse_history."""
+def history_analysis(runs, df):
+    """One history pass per run -> training-health + pass@k movement.
+
+    Training health (Rahul: loss should be smooth, grads alive-not-spiking):
+      loss_cv       : std/|mean| of train/loss in the last 50% (lower = smoother)
+      grad_late_max : max NONZERO grad_norm in the last 25% (~0 => dead/collapsed)
+      grad_max      : max grad_norm over the run (spike magnitude)
+    Pass@k movement (recent runs only): first->last delta of passk_math_val/k{8,16}
+      and of val/block_eff, so we can surface runs where pass@k rose while BE fell.
+    """
     import pandas as pd
-    collapsed_names = set(df[(df["best_be"].notna()) &
-                             (df["best_be"] < collapse_be)]["name"])
-    rows = []
+    keys = (["train/loss", "train/grad_norm", "val/block_eff", "train/step"] +
+            [f"passk_math_val/k{k}" for k in PASSK_KS])
+    health, movement = [], []
     for r in runs:
-        if r.name not in collapsed_names:
-            continue
         try:
-            h = r.history(keys=["train/grad_norm", "val/block_eff", "train/step"],
-                          samples=2000)
+            h = r.history(keys=keys, samples=5000)
         except Exception:
             continue
         if h is None or h.empty:
             continue
+
+        loss = h.get("train/loss")
         gn = h.get("train/grad_norm")
-        first_dead = None
-        if gn is not None:
-            # first step where grad_norm stays ~0 for a stretch (dead-gradient onset)
-            dead = (gn.fillna(0).abs() < 1e-6)
-            run_len = 0
-            for i, d in enumerate(dead):
-                run_len = run_len + 1 if d else 0
-                if run_len >= 20:
-                    first_dead = int(h["train/step"].iloc[i]) if "train/step" in h else i
-                    break
-        rows.append((r.name, first_dead))
-    return rows
+        loss_cv = grad_late_max = grad_max = None
+        if loss is not None and loss.notna().sum() > 10:
+            lv = loss.dropna().to_numpy()
+            tail = lv[len(lv) // 2:]
+            m = abs(tail.mean())
+            loss_cv = round(float(tail.std() / m), 4) if m > 1e-9 else None
+        if gn is not None and gn.notna().sum() > 10:
+            gv = gn.fillna(0).to_numpy()
+            grad_max = round(float(gv.max()), 1)
+            tail = gv[int(len(gv) * 0.75):]
+            nz = tail[tail > 1e-6]
+            grad_late_max = round(float(nz.max()), 2) if nz.size else 0.0
+        if any(v is not None for v in (loss_cv, grad_late_max, grad_max)):
+            health.append((r.name, loss_cv, grad_late_max, grad_max))
+
+        def delta(col):
+            s = h.get(col)
+            if s is None:
+                return None
+            s = s.dropna()
+            return round(float(s.iloc[-1] - s.iloc[0]), 4) if len(s) >= 2 else None
+        d8, d16 = delta("passk_math_val/k8"), delta("passk_math_val/k16")
+        dbe = delta("val/block_eff")
+        if d8 is not None or d16 is not None:
+            movement.append((r.name, d8, d16, dbe))
+    return health, movement
 
 
 def write_report(path, df, runs, args):
-    import pandas as pd
     lines = []
     W = lines.append
     W("# W&B run-mining report\n")
     W(f"Mined **{len(df)} runs** from `{args.entity}/{args.project}`.\n")
-    W("> **Caveat (read first):** these are OBSERVATIONAL runs, not a designed "
-      "experiment. Confounded hyperparameters can't be separated here — this "
-      "gives *association* (where to look), not *causation*. Use it to pick "
-      "which controlled sweeps are worth running, not to replace them.\n")
+    W("> **Caveat:** OBSERVATIONAL runs, not a designed experiment — confounded "
+      "hyperparameters can't be separated. This is *association* (where to look), "
+      "not *causation*. Every table below is split by loss/objective/pair/dataset "
+      "so nothing is crossed.\n")
 
     W("## 1. Loss-family comparison — did the rejected objectives have value?\n")
     lf = loss_family_table(df)
-    W("| loss / objective / pair | n | best BE | median BE | collapse rate |")
+    W("| loss / objective / pair / dataset | n | best BE | median BE | collapse rate |")
     W("|---|---|---|---|---|")
     for _, r in lf.iterrows():
         W(f"| {r['group']} | {r['n']} | {r['best_BE']} | {r['median_BE']} | {r['collapse_rate']} |")
     W("")
 
-    W("## 2. Hyperparameter importance (prob-objective 0.6B/8B subset)\n")
-    mask = ((df["loss"] == "prefix_overlap") & (df["prefix_objective"] == "prob"))
-    imp, feats, n, method = param_importance(df, mask)
+    W("## 2. Hyperparameter importance (prefix_overlap/prob, 0.6B→8B, math_hard)\n")
+    mask = ((df["loss"] == "prefix_overlap") & (df["prefix_objective"] == "prob") &
+            (df["train_dataset"].astype(str).str.contains("math_hard", na=False)))
+    imp, n, method = param_importance(df, mask)
     if imp is None:
         W(f"_{method}_\n")
     else:
-        W(f"Fit on {n} runs via {method}. Ranked most→least important:\n")
-        W("| feature | importance |")
-        W("|---|---|")
+        W(f"Fit on {n} runs via {method}, most→least important:\n")
+        W("| feature | importance |\n|---|---|")
         for f, v in imp:
             W(f"| {f} | {round(v, 4)} |")
     W("")
 
-    W("## 3. Marginal effect per hyperparam (across all prob runs)\n")
-    mv = marginal_view(df, mask)
-    for f, rows in mv.items():
-        W(f"**{f}** — (value → mean best_BE, n):")
-        W("  " + "  ".join(f"{k}:{v}(n={n})" for k, v, n in rows))
-        W("")
+    W("## 3. Marginal effect per hyperparam (value → mean best_BE, n)\n")
+    for f, rows in marginal_view(df, mask).items():
+        W(f"**{f}** — " + "  ".join(f"{k}:{v}(n={n})" for k, v, n in rows) + "\n")
 
-    W("## 4. Noise floor (near-duplicate configs)\n")
+    W("## 4. Noise floor (repeated configs)\n")
     dups = noise_floor(df)
     if not dups:
-        W("_No repeated configs found — every run is a single seed, so the "
-          "run-to-run noise floor is UNKNOWN. Any 'win' smaller than a real "
-          "seed-to-seed spread is unverified. Strongly consider 2–3 seeds on "
-          "the current best config before trusting its margin._\n")
+        W("_No repeated configs — every run is a single seed, so the run-to-run "
+          "noise floor is UNKNOWN. Any 'win' smaller than a real seed-to-seed "
+          "spread is unverified. Run 2–3 seeds on the current best config before "
+          "trusting its margin._\n")
     else:
-        W("| example run | n dups | BE range | BE std |")
-        W("|---|---|---|---|")
+        W("| example run | n | BE range | BE std |\n|---|---|---|---|")
         for name, k, rng, std in dups:
             W(f"| {name} | {k} | {rng} | {std} |")
     W("")
 
-    if args.collapse_history:
-        W("## 5. Collapse timing (dead-gradient onset)\n")
-        ct = collapse_timing(runs, df, args.collapse_be)
-        W("| collapsed run | first dead-gradient step |")
-        W("|---|---|")
-        for name, step in ct:
-            W(f"| {name} | {step if step is not None else 'n/a'} |")
-        W("\n_If dead-gradient onset consistently precedes the final crash, an "
-          "ASHA-style auto-kill at that step would save the wasted compute._\n")
+    if args.history:
+        health, movement = history_analysis(runs, df)
+        W("## 5. Training health (loss smoothness + gradient sanity)\n")
+        W("loss_cv = std/|mean| of loss over the last half (lower = smoother, "
+          "Rahul wants low). grad_late_max = biggest NONZERO grad in the last "
+          "quarter (~0 ⇒ dead-gradient collapse). grad_max = spike magnitude.\n")
+        W("| run | loss_cv | grad_late_max | grad_max |\n|---|---|---|---|")
+        for name, cv, glm, gm in sorted(health, key=lambda t: (t[1] is None, t[1] or 0)):
+            W(f"| {name} | {cv} | {glm} | {gm} |")
+        W("")
+        W("## 6. Pass@k movement — which run moved k8/k16 most (recent runs only)\n")
+        W("first→last Δ of passk_math_val within each run. **Watch the rows where "
+          "Δk8/Δk16 > 0 but Δblock_eff < 0** — pass@k improving while BE regresses "
+          "means the run may be learning something BE alone misses.\n")
+        W("| run | Δpassk_k8 | Δpassk_k16 | Δblock_eff | passk↑ & BE↓? |\n|---|---|---|---|---|")
+        for name, d8, d16, dbe in sorted(movement, key=lambda t: -(t[2] or t[1] or -9)):
+            flag = "YES" if ((d16 or d8 or 0) > 0 and (dbe or 0) < 0) else ""
+            W(f"| {name} | {d8} | {d16} | {dbe} | {flag} |")
+        W("")
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -270,10 +295,8 @@ def main():
     ap.add_argument("--entity", default="rmukund16-indian-institute-of-technology-hyderabad")
     ap.add_argument("--project", default="distillspec-pipeline")
     ap.add_argument("--out", default="Results/wandb_mining_report.md")
-    ap.add_argument("--collapse_history", action="store_true",
-                    help="also pull per-step history for dead-gradient timing (slower)")
-    ap.add_argument("--collapse_be", type=float, default=2.0,
-                    help="best_be below this = 'collapsed' for the timing analysis")
+    ap.add_argument("--history", action="store_true",
+                    help="pull per-step history for loss/grad/pass@k trends (slower)")
     args = ap.parse_args()
 
     try:
@@ -281,10 +304,8 @@ def main():
         import pandas  # noqa
     except ImportError as e:
         sys.exit(f"needs wandb + pandas: {e}")
-
     import wandb
-    api = wandb.Api()
-    runs = list(api.runs(f"{args.entity}/{args.project}"))
+    runs = list(wandb.Api().runs(f"{args.entity}/{args.project}"))
     if not runs:
         sys.exit("no runs found — check --entity/--project")
     df = flatten_runs(runs)
