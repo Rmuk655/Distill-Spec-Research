@@ -97,13 +97,22 @@ def parse_log(log_path: str):
 
     if "[done]" in text:
         status = "finished"
-    elif "Traceback (most recent call last)" in text[-20000:]:
-        # search a wide tail window, not just the last few thousand chars --
-        # a real crash traceback (e.g. a deep torch forward-call chain) can run
-        # to 4000+ chars on its own, before whatever wandb prints after it.
-        status = "CRASHED"
     else:
-        status = "running?"
+        # A CAUGHT verifier error (validation.py's `except VerifierError` ->
+        # `[val-skip]`) prints a full traceback into the log but training keeps
+        # going -- so a traceback ALONE is not a crash. Only call it CRASHED if
+        # a traceback is the genuine LAST thing in the log (nothing logged after
+        # it), i.e. the process actually died there. A traceback followed by more
+        # step=/[val] lines was caught-and-survived, not fatal.
+        tail = text[-20000:]
+        tb = tail.rfind("Traceback (most recent call last)")
+        if tb != -1:
+            after = tail[tb:]
+            survived = ("[val-skip]" in after or "\nstep=" in after or " step=" in after
+                        or "[val]" in after)
+            status = "running?" if survived else "CRASHED"
+        else:
+            status = "running?"
 
     done_m = re.findall(
         r"best_val_block_eff = ([0-9.]+)\s+best_smoothed = ([0-9.]+)", text)
