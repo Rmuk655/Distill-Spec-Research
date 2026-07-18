@@ -42,17 +42,39 @@ LR_BUCKETS = {
     "collapse (>=3e-4)": ["lr0.0003", "lr0.003", "lr0.01", "lr3e-04", "lr3e-03", "lr1e-02"],
 }
 
-# CE-anneal sweep -- matched by the END of the actual W&B run name (verified
-# live, 2026-07-17), NOT the local checkpoint dir name (different convention
-# entirely). endswith(), not "in", because many sibling runs (topk/wd/lrmin
-# variants) share the same "lr1e-05_math_hard_s123" prefix -- only the tail
-# disambiguates which one this is.
-CEANNEAL_RUNS = {
-    "lr1e-05_math_hard_s123_warm": 0.0,          # no-anchor baseline (verify this exact suffix if no match)
-    "lr1e-05_math_hard_s123_ce0.5anneal3000": 0.5,
-    "lr1e-05_math_hard_s123_ce1anneal3000": 1.0,
-    "lr1e-05_math_hard_s123_ce2anneal3000": 2.0,
-}
+# CE-anneal sweep -- matched by CONFIG VALUES, not run name. Verified live
+# (2026-07-17): the W&B name slug does NOT encode weight_decay, lr_min_ratio,
+# warmup_steps, or top-k -- 8 different sweep variants (wd/lrmin/warmup/topk)
+# all share the IDENTICAL display name
+# "Qwen3-0.6B__Qwen3-8B__prefix_overlap_prob_singleM4_L8_lr1e-05_math_hard_s123".
+# Name-based matching is fundamentally ambiguous for the no-anchor baseline;
+# config values are exact ground truth regardless of naming.
+CEANNEAL_CONFIGS = [
+    # (aux_weight, dict of exact config values that must all match)
+    (0.0, {"lr": 1e-5, "warmup_steps": 125, "lr_min_ratio": 0.1, "weight_decay": 0.01,
+           "prefix_teacher_topk": 0, "prefix_aux_weight": 0.0}),
+    (0.5, {"lr": 1e-5, "prefix_aux_weight": 0.5, "prefix_anneal_steps": 3000}),
+    (1.0, {"lr": 1e-5, "prefix_aux_weight": 1.0, "prefix_anneal_steps": 3000}),
+    (2.0, {"lr": 1e-5, "prefix_aux_weight": 2.0, "prefix_anneal_steps": 3000}),
+]
+# every candidate must ALSO match this, regardless of which aux_weight bucket
+CEANNEAL_BASE_FILTER = {"loss": "prefix_overlap", "prefix_objective": "prob"}
+
+
+def config_matches(config, required):
+    for k, v in required.items():
+        cv = config.get(k)
+        if cv is None:
+            return False
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            try:
+                if abs(float(cv) - float(v)) > 1e-9:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif cv != v:
+            return False
+    return True
 
 
 def get_runs(entity, project):
@@ -143,15 +165,17 @@ def plot_forgetting_vs_auxweight(runs, outdir):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     points = []  # (aux_weight, mean_forgetting, final_forgetting, run_name)
     for r in runs:
-        for frag, aw in CEANNEAL_RUNS.items():
-            if r.name.endswith(frag):
+        if not config_matches(r.config, CEANNEAL_BASE_FILTER):
+            continue
+        for aw, required in CEANNEAL_CONFIGS:
+            if config_matches(r.config, required):
                 s = run_forgetting_series(r)
                 if s is None:
                     continue
                 points.append((aw, float(s.mean()), float(s.iloc[-1]), r.name))
                 break
     if not points:
-        print("[forgetting] no matching runs found -- check CEANNEAL_RUNS fragments")
+        print("[forgetting] no matching runs found -- check CEANNEAL_CONFIGS values against actual run.config")
         plt.close(fig)
         return
     points.sort()
