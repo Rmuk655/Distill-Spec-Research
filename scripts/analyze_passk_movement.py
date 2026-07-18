@@ -26,13 +26,13 @@ the CSV yet). Caveat this DOES still conflate two things -- true measurement
 noise vs. a possible tiny genuine LR effect within that "flat" region -- so
 treat it as an upper-bound-ish proxy, not a textbook confidence interval.
 
-Reads results/passk_hparam_sweep.csv (checkpoints) + Results/passK/passk_baselines.csv
+Reads results/passK/passk_hparam_sweep.csv (checkpoints) + results/passK/passk_baselines.csv
 (student/teacher) + the known best_be per checkpoint (hardcoded from
 summarize_sweep.py's table -- update this dict if the sweep changes).
 
 USAGE:
     python scripts/analyze_passk_movement.py
-    python scripts/analyze_passk_movement.py --dataset math_eval.jsonl --out results/passk_movement_report.md
+    python scripts/analyze_passk_movement.py --dataset math_eval.jsonl --out results/passK/passk_movement_report.md
 """
 import argparse
 import csv
@@ -195,7 +195,7 @@ def run_for_dataset(rows, base_rows, dataset, out_path, outdir):
 
     # -------- 1. ranking by delta vs student, gated by noise floor --------
     L.append("\n## 1. Ranked by movement vs untrained student (delta = checkpoint − student)\n")
-    L.append(f"![pass@k movement vs student](../Results/passK/{chart_name})\n")
+    L.append(f"![pass@k movement vs student](../results/passK/{chart_name})\n")
     move_rows = []
     for frag in BEST_BE:
         vals = {k: passk_at(rows, frag, dataset, k) for k in K_OF_INTEREST}
@@ -252,12 +252,12 @@ def run_for_dataset(rows, base_rows, dataset, out_path, outdir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="results/passk_hparam_sweep.csv")
-    ap.add_argument("--baselines_csv", default="Results/passK/passk_baselines.csv")
+    ap.add_argument("--csv", default="results/passK/passk_hparam_sweep.csv")
+    ap.add_argument("--baselines_csv", default="results/passK/passk_baselines.csv")
     ap.add_argument("--datasets", default="math_eval.jsonl,gsm8k_eval.jsonl,olympiad_eval.jsonl",
                     help="comma list -- run separately, never mixed, one report+chart each")
-    ap.add_argument("--out_prefix", default="results/passk_movement_report")
-    ap.add_argument("--outdir", default="Results/passK")
+    ap.add_argument("--out_prefix", default="results/passK/passk_movement_report")
+    ap.add_argument("--outdir", default="results/passK")
     args = ap.parse_args()
 
     if not os.path.isfile(args.csv):

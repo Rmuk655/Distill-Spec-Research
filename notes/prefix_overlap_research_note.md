@@ -2,7 +2,7 @@
 ## Research Note
 
 **Status:** Closed — negative. No PO objective *consistently* beats JSD flat on the traversal (deployment) verifier at **either** model pair. The 0.6B/8B "borderline" (NSS warm+logprob) is now fully evaluated: traversal K=3 = 6.025 (**+0.156**, just past the noise floor) but K=1/K=2/K=4 are all negative (−0.318/−0.196/−0.082) — a single-K win surrounded by losses, not a consistent effect. Cold-start PO at 1.7B/32B is clearly *worse* than JSD, and the `traversal` objective — the one that directly targets the deployment verifier — is the single worst variant of all.
-**Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm-start) **and** Qwen3-1.7B / Qwen3-32B (cold-start) | **Train:** math_hard | **Eval:** math_eval + olympiad_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B). Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`po_*`).
+**Draft–Teacher:** Qwen3-0.6B / Qwen3-8B (warm-start) **and** Qwen3-1.7B / Qwen3-32B (cold-start) | **Train:** math_hard | **Eval:** math_eval + olympiad_eval (100 prompts, A100, temp=0.2) | **JSD bars:** traversal K=3 = 5.870 (0.6B/8B), 5.783 (1.7B/32B). Raw CSVs: [`results/per_checkpoint_sweeps_2026-07/`](../results/per_checkpoint_sweeps_2026-07/) (`po_*`).
 
 **Math foundation:** Rahul's *Prefix-Overlap Distillation Objective* (internal PDF). Setup, LCP formula, unbiased estimator via teacher samples, multi-root scheme, CE mixing rationale — all in §1–8 there; not repeated here.
 

@@ -33,9 +33,9 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${PY:-python -u}"   # -u = unbuffered stdout, so `tail -f` on the redirected log shows
                         # progress live (see sweep_prefix_overlap.sh for why)
-OUT_CSV="${OUT_CSV:-${REPO}/results/passk_baselines.csv}"
-MARKER_DIR="${REPO}/results/.passk_baseline_done"
-LOG_DIR="${REPO}/results/logs_passk_baselines"
+OUT_CSV="${OUT_CSV:-${REPO}/results/passK/passk_baselines.csv}"
+MARKER_DIR="${REPO}/results/passK/.passk_baseline_done"
+LOG_DIR="${REPO}/results/passK/logs_passk_baselines"
 mkdir -p "$(dirname "$OUT_CSV")" "$MARKER_DIR" "$LOG_DIR"
 
 MODELS_STR="${MODELS:-Qwen/Qwen3-0.6B,Qwen/Qwen3-8B}"   # comma list; default draft+teacher (0.6B/8B pair)

@@ -440,7 +440,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--entity", default="rmukund16-indian-institute-of-technology-hyderabad")
     ap.add_argument("--project", default="distillspec-pipeline")
-    ap.add_argument("--out", default="Results/wandb_mining_report.md")
+    ap.add_argument("--out", default="results/wandb_mining_report.md")
     ap.add_argument("--history", action="store_true", help="pull per-step history (layers 4-8; slower)")
     args = ap.parse_args()
     try:

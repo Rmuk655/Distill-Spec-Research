@@ -8,14 +8,14 @@ is just "did ≥1 of 64 tries succeed" per prompt.
 
 ## Finding
 
-[passk_by_checkpoint_math_eval_06b_8b.png](../Results/passK/passk_by_checkpoint_math_eval_06b_8b.png):
+[passk_by_checkpoint_math_eval_06b_8b.png](../results/passK/passk_by_checkpoint_math_eval_06b_8b.png):
 `warm_anneal_lr1e5` and `jsd_mathhard_s123` beat the untrained `Qwen3-0.6B`
 at `k=1` (0.178/0.153 vs 0.119) but the untrained curve is steeper and
 crosses back above both by `k≈16-32`, finishing higher at `k=64`
 (0.570 vs 0.530/0.510). `lr5e6` and `ce_lr1e5` stay above baseline the whole
 curve — checkpoint-specific, not universal.
 
-[passk_by_model_size_all_datasets.png](../Results/passK/passk_by_model_size_all_datasets.png)
+[passk_by_model_size_all_datasets.png](../results/passK/passk_by_model_size_all_datasets.png)
 is the control: across model *size* (no training), every curve is strictly
 monotonic at every k — confirms the pass@k math is correct, this is a real
 training effect.
