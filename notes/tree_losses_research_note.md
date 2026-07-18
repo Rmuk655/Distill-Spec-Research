@@ -55,17 +55,17 @@ Two structural variants exist for how to train this:
 †GSM8K-trained, evaluated on gsm8k\_eval; JSD bar on gsm8k\_eval traversal K=3 ≈ 5.323.  
 ‡Δ computed vs gsm8k\_eval JSD baseline (5.323), not math\_eval baseline.  
 §Combined loss: JSD + depth\_weight\_lin + naive\_tree together, evaluated at K\_eval=3. At matched K=3 the Δ is +0.03 (within noise) — the run does **not** beat JSD; the earlier +0.293 came from reading the K\_eval=1 BE (6.163) against the K=3 baseline (5.870). See [`depth_weight_research_note.md`](depth_weight_research_note.md) for the depth\_weight attribution. Single seed, n=100.
-¶No eval CSV for the two warm 0.6B/8B log-space checkpoints (`traversal_log_K3_L8_lr1e5_s123`, `naive_log_K3_L8_lr1e5_s123`) exists in `Results/`; their BE values are read off wandb training curves ("wandb curve") and are **not reproducible from the committed data**.
+¶No eval CSV for the two warm 0.6B/8B log-space checkpoints (`traversal_log_K3_L8_lr1e5_s123`, `naive_log_K3_L8_lr1e5_s123`) exists in `results/`; their BE values are read off wandb training curves ("wandb curve") and are **not reproducible from the committed data**.
 
 Noise floor: SE ≈ 0.10–0.15 at n=100. Deltas below 0.15 are inconclusive.
 
-**Raw results:** [`Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv`](../Results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv) · [`Results/MathHardDSJSDNaiveTreeResults.csv`](../Results/MathHardDSJSDNaiveTreeResults.csv) · [`Results/NaiveTreeOffPolicyResults.csv`](../Results/NaiveTreeOffPolicyResults.csv)
+**Raw results:** [`results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv`](../results/jsd_jsd_dw_naive_tree_results_math_hard_40000_steps.csv) · [`results/MathHardDSJSDNaiveTreeResults.csv`](../results/MathHardDSJSDNaiveTreeResults.csv) · [`results/NaiveTreeOffPolicyResults.csv`](../results/NaiveTreeOffPolicyResults.csv)
 
 ---
 
 ## 1.7B/32B Cold-Start: Log-Space Losses Collapse (math\_eval + olympiad\_eval, L=8, n=100)
 
-Cold-start (no JSD warm), single seed. Δ = traversal BE − `jsd_math_hard_s123` at matched K. Raw CSVs: [`Results/per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/) (`*_Qwen32B-Qwen1.7B.csv`). **Backend (verified 2026-07):** both log-tree files and the baseline are **FA2 at K1–K3** (matched — the K1–K3 deltas below are backend-clean); only K4 is cross-backend (log-tree FA2 vs baseline sdpa), and the collapse is so large (≫ the ±0.37 backend range) that the conclusion is unaffected regardless.
+Cold-start (no JSD warm), single seed. Δ = traversal BE − `jsd_math_hard_s123` at matched K. Raw CSVs: [`results/per_checkpoint_sweeps_2026-07/`](../results/per_checkpoint_sweeps_2026-07/) (`*_Qwen32B-Qwen1.7B.csv`). **Backend (verified 2026-07):** both log-tree files and the baseline are **FA2 at K1–K3** (matched — the K1–K3 deltas below are backend-clean); only K4 is cross-backend (log-tree FA2 vs baseline sdpa), and the collapse is so large (≫ the ±0.37 backend range) that the conclusion is unaffected regardless.
 
 | Loss | trav Δ K1 | K2 | K3 | K4 | olympiad K1/K2/K3 |
 |---|---|---|---|---|---|

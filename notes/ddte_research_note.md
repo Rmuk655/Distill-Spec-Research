@@ -4,7 +4,7 @@
 **Status:** DDTE = **eval-time-only** delayed branching (K=1 stem for L1 steps, then K branches for L−L1). It is the **cleanest win in the program** and composes with training: it helps *every* trained draft on *both* pairs, uplift grows with K, and **traversal + enrich + DDTE = 6.418 is the global best BE at 0.6B/8B** (beats bv 6.283). But it **compensates for, does not substitute, training** (two-tier: collapsed drafts + DDTE stay ~0.5 BE below trained + DDTE). Extends Thomas et al. 2026 (arXiv:2602.16994), who tested untrained drafts only.
 
 **Draft–Teacher:** Qwen3-0.6B/8B (primary, 3 ckpts) + 1.7B/32B (cross-pair) | **Eval:** math_eval + olympiad_eval, n=100, seed 123, L=8, K=1–4 | **L1 variants:** `dL{2..6}` (fixed), `dAdapt` (entropy-lagged, deprecated), `dTau` (τ-lagged, no signal) | Impl: `delayed_draft.py`, `--L1`.
-**Data source:** §0 cross-checkpoint/both-pair sweep from [`per_checkpoint_sweeps_2026-07/`](../Results/per_checkpoint_sweeps_2026-07/); §1+ (0.6/8, 3 ckpts, single seed) from [`jsd_enrich_ddte_results.csv`](../Results/jsd_enrich_ddte_results.csv) (filter to s123 — file also has s456/ttemp1.5). Metric: **DDTE uplift = best-dL traversal BE − same ckpt's base (L1=0) traversal BE**, matched K.
+**Data source:** §0 cross-checkpoint/both-pair sweep from [`per_checkpoint_sweeps_2026-07/`](../results/per_checkpoint_sweeps_2026-07/); §1+ (0.6/8, 3 ckpts, single seed) from [`jsd_enrich_ddte_results.csv`](../results/jsd_enrich_ddte_results.csv) (filter to s123 — file also has s456/ttemp1.5). Metric: **DDTE uplift = best-dL traversal BE − same ckpt's base (L1=0) traversal BE**, matched K.
 
 ---
 

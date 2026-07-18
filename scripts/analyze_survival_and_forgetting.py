@@ -33,7 +33,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUTDIR_DEFAULT = "Results/passK"
+OUTDIR_DEFAULT = "results/passK"
 
 # LR buckets for the survival chart -- prob 0.6B/8B family, run-name fragment match.
 LR_BUCKETS = {

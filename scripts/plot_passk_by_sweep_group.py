@@ -2,26 +2,26 @@
 """
 plot_passk_by_sweep_group.py — one pass@k-vs-k chart PER sweep dimension,
 instead of cramming all 18 checkpoints (winner/near/below x 6 groups) onto one
-axis. Reads results/passk_hparam_sweep.csv (written by
+axis. Reads results/passK/passk_hparam_sweep.csv (written by
 scripts/passk_eval_sweep_checkpoints.sh in RUN_NAMES mode) and emits:
 
-    Results/passK/passk_group_lr.png            (prob LR: 3e-6 / 7e-6 / 1e-6)
-    Results/passK/passk_group_lr_jsd.png         (jsd LR:  1e-5 / 3e-6 / 1e-6)
-    Results/passK/passk_group_warmup.png         (5% / 10% / 20%)
-    Results/passK/passk_group_lrmin.png          (0.1 / 0.01)
-    Results/passK/passk_group_topk.png           (0 / 20 / 50)
-    Results/passK/passk_group_weight_decay.png   (0.01 / 0.001 / 0.0001)
-    Results/passK/passk_group_ceanneal.png       (anneal_steps + aux_weight winners)
+    results/passK/passk_group_lr.png            (prob LR: 3e-6 / 7e-6 / 1e-6)
+    results/passK/passk_group_lr_jsd.png         (jsd LR:  1e-5 / 3e-6 / 1e-6)
+    results/passK/passk_group_warmup.png         (5% / 10% / 20%)
+    results/passK/passk_group_lrmin.png          (0.1 / 0.01)
+    results/passK/passk_group_topk.png           (0 / 20 / 50)
+    results/passK/passk_group_weight_decay.png   (0.01 / 0.001 / 0.0001)
+    results/passK/passk_group_ceanneal.png       (anneal_steps + aux_weight winners)
 
 Every chart also overlays the untrained Qwen3-0.6B (student floor) and
-Qwen3-8B (teacher ceiling) baselines from Results/passK/passk_baselines.csv,
+Qwen3-8B (teacher ceiling) baselines from results/passK/passk_baselines.csv,
 as dashed gray reference lines -- so each sweep point is read against "how far
 did this move from the student, how much ceiling is left before the teacher,"
 not just against its sibling checkpoints.
 
 USAGE:
     python scripts/plot_passk_by_sweep_group.py
-    python scripts/plot_passk_by_sweep_group.py --dataset math_eval.jsonl --csv results/passk_hparam_sweep.csv
+    python scripts/plot_passk_by_sweep_group.py --dataset math_eval.jsonl --csv results/passK/passk_hparam_sweep.csv
 """
 import argparse
 import os
@@ -30,7 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-OUTDIR_DEFAULT = "Results/passK"
+OUTDIR_DEFAULT = "results/passK"
 FOREST = ["#2a78d6", "#008300", "#e34948", "#eda100", "#4a3aa7"]
 
 # checkpoint dir name (as it appears in the CSV's `model` path) -> readable label.
@@ -137,8 +137,8 @@ def plot_group(rows, group_name, members, dataset, outdir, baseline_rows):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="results/passk_hparam_sweep.csv")
-    ap.add_argument("--baselines_csv", default="Results/passK/passk_baselines.csv")
+    ap.add_argument("--csv", default="results/passK/passk_hparam_sweep.csv")
+    ap.add_argument("--baselines_csv", default="results/passK/passk_baselines.csv")
     ap.add_argument("--dataset", default="math_eval.jsonl")
     ap.add_argument("--outdir", default=OUTDIR_DEFAULT)
     args = ap.parse_args()

@@ -60,7 +60,7 @@ if [[ "$IS_INTERESTING" == "yes" ]]; then
     echo
     echo "  source venv-vllm/bin/activate"
     echo "  CKPT_ROOT=${CKPT_ROOT} RUN_NAMES=${RUN} DRAFT_MODEL=Qwen/Qwen3-0.6B \\"
-    echo "    GPUS=${GPU} OUT_CSV=results/passk_hparam_sweep.csv \\"
+    echo "    GPUS=${GPU} OUT_CSV=results/passK/passk_hparam_sweep.csv \\"
     echo "    bash scripts/passk_eval_sweep_checkpoints.sh"
 else
     echo "[check] below reference by more than ${MARGIN} -- not interesting enough to spend GPU time on pass@k."

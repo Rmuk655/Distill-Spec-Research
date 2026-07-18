@@ -70,8 +70,8 @@ PASSK_TEMP="${PASSK_TEMP:-0.8}"           # not TEMP -- collides with OS $TEMP o
 DRAFT_MODEL="${DRAFT_MODEL:-Qwen/Qwen3-0.6B}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.9}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
-OUT_CSV="${OUT_CSV:-${REPO}/results/passk_sweep_checkpoints.csv}"
-LOG_DIR="${REPO}/results/logs_passk_sweep_checkpoints"
+OUT_CSV="${OUT_CSV:-${REPO}/results/passK/passk_sweep_checkpoints.csv}"
+LOG_DIR="${REPO}/results/passK/logs_passk_sweep_checkpoints"
 mkdir -p "$(dirname "${OUT_CSV}")" "${LOG_DIR}"
 
 IFS=',' read -r -a GPU_ARR <<< "${GPUS:-0}"
