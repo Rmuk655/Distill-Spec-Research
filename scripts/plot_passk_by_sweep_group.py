@@ -13,6 +13,12 @@ scripts/passk_eval_sweep_checkpoints.sh in RUN_NAMES mode) and emits:
     Results/passK/passk_group_weight_decay.png   (0.01 / 0.001 / 0.0001)
     Results/passK/passk_group_ceanneal.png       (anneal_steps + aux_weight winners)
 
+Every chart also overlays the untrained Qwen3-0.6B (student floor) and
+Qwen3-8B (teacher ceiling) baselines from Results/passK/passk_baselines.csv,
+as dashed gray reference lines -- so each sweep point is read against "how far
+did this move from the student, how much ceiling is left before the teacher,"
+not just against its sibling checkpoints.
+
 USAGE:
     python scripts/plot_passk_by_sweep_group.py
     python scripts/plot_passk_by_sweep_group.py --dataset math_eval.jsonl --csv results/passk_hparam_sweep.csv
@@ -87,16 +93,29 @@ def series_for(rows, run_fragment, dataset):
     return pts
 
 
-def plot_group(rows, group_name, members, dataset, outdir):
+def plot_group(rows, group_name, members, dataset, outdir, baseline_rows):
     fig, ax = plt.subplots(figsize=(7, 5))
     any_data = False
+
+    # student floor / teacher ceiling, same on every chart for comparability
+    for label, model_id, style in (
+        ("Qwen3-0.6B (untrained student)", "Qwen/Qwen3-0.6B", dict(color="#888", linestyle="--")),
+        ("Qwen3-8B (teacher)", "Qwen/Qwen3-8B", dict(color="#888", linestyle=":")),
+    ):
+        pts = series_for(baseline_rows, model_id, dataset)
+        if pts:
+            ks = sorted(pts)
+            ax.plot(ks, [pts[k] for k in ks], marker="x", markersize=5, linewidth=1.5,
+                    label=label, zorder=1, **style)
+
     for (label, frag), color in zip(members.items(), FOREST):
         pts = series_for(rows, frag, dataset)
         if not pts:
             continue
         any_data = True
         ks = sorted(pts)
-        ax.plot(ks, [pts[k] for k in ks], "-o", color=color, linewidth=2, markersize=6, label=label)
+        ax.plot(ks, [pts[k] for k in ks], "-o", color=color, linewidth=2, markersize=6,
+                label=label, zorder=2)
     if not any_data:
         plt.close(fig)
         return False
@@ -119,6 +138,7 @@ def plot_group(rows, group_name, members, dataset, outdir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="results/passk_hparam_sweep.csv")
+    ap.add_argument("--baselines_csv", default="Results/passK/passk_baselines.csv")
     ap.add_argument("--dataset", default="math_eval.jsonl")
     ap.add_argument("--outdir", default=OUTDIR_DEFAULT)
     args = ap.parse_args()
@@ -126,11 +146,14 @@ def main():
     if not os.path.isfile(args.csv):
         raise SystemExit(f"{args.csv} not found -- run scripts/passk_eval_sweep_checkpoints.sh first")
     rows = load_csv(args.csv)
+    baseline_rows = load_csv(args.baselines_csv) if os.path.isfile(args.baselines_csv) else []
+    if not baseline_rows:
+        print(f"WARNING: {args.baselines_csv} not found -- charts will have no student/teacher overlay")
     os.makedirs(args.outdir, exist_ok=True)
 
     any_written = False
     for group_name, members in GROUPS.items():
-        any_written |= plot_group(rows, group_name, members, args.dataset, args.outdir)
+        any_written |= plot_group(rows, group_name, members, args.dataset, args.outdir, baseline_rows)
     if not any_written:
         print("No matching rows found for any group -- check --dataset and that the CSV "
               "actually contains these run names (grep the model column).")
