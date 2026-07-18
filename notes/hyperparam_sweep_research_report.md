@@ -12,7 +12,7 @@
 
 ![LR probe jsd vs prob](../Results/passK/lr_probe_jsd_vs_prob.png)
 
-- **LR boundary probe (below 1e-5):** `prob` peaks at `3e-6` (5.701), not `1e-5` — the vanilla sweep's "locked" LR wasn't optimal. `jsd` holds a flat plateau `3e-6`–`1e-5` (~5.97–5.99), dips below.
+- **LR boundary probe (below 1e-5):** `prob` peaks at `2e-6` (5.710), edging out `3e-6` (5.701) by less than that neighborhood's own noise floor (~0.20) — effectively a tie, both well clear of `1e-5` (5.608). The vanilla sweep's "locked" LR wasn't optimal either way. `jsd` holds a flat plateau `3e-6`–`1e-5` (~5.97–5.99), dips below.
 
 ![CE-anneal sweep dashboard](../Results/passK/sweep_dashboard_ceanneal.png)
 
