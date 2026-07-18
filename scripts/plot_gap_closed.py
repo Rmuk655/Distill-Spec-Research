@@ -16,11 +16,22 @@ so the best "lifter" is always leftmost.
 
 USAGE:
     python scripts/plot_gap_closed.py --dataset olympiad_eval.jsonl
+    python scripts/plot_gap_closed.py --dataset math_eval.jsonl
+    # override with an explicit list instead of auto-deriving:
     python scripts/plot_gap_closed.py --dataset math_eval.jsonl --checkpoints po_prob_lr3e-6_wu20,po_prob_lr7e-6_wu20
+
+CHECKPOINT SELECTION: by default, auto-derives the "significant" set the same
+way analyze_passk_movement.py's §1 does -- every 0.6B/8B checkpoint in the CSV
+whose delta-vs-student clears the derived per-k noise floor (2 x std over the
+flat low-LR prefix_overlap/prob cluster) at ANY of k2/k4/k8/k16. This means the
+significant set is genuinely different per dataset (math_eval/gsm8k_eval/
+olympiad_eval each have their own floor and their own noise), not a hardcoded
+list copied from one dataset's report. Pass --checkpoints to override.
 """
 import argparse
 import csv
 import os
+import statistics
 
 import matplotlib
 matplotlib.use("Agg")
@@ -29,22 +40,20 @@ import numpy as np
 
 K_OF_INTEREST = [2, 4, 8, 16]
 
-# significant (above-noise-floor) checkpoints from analyze_passk_movement.py's
-# olympiad_eval report -- override with --checkpoints for another dataset/list.
-DEFAULT_CHECKPOINTS = [
-    "po_prob_lr1e-5_wu5_lrmin0.1_wd0.01", "po_prob_lr1e-5_wu20_wd0.0001",
-    "po_prob_topk50_lr1e-5_wu20", "po_prob_lr1e-5_wu20_wd0.001",
-    "po_prob_lr1e-5_wu10_lrmin0.1_wd0.01", "po_prob_topk20_lr1e-5_wu20",
-    "po_prob_lr7e-6_wu20", "po_prob_ceanneal3000_auxw2.0_lr1e-5_wu20",
-    "po_prob_lr3e-6_wu20", "po_prob_ceanneal1500_lr1e-5_wu20",
-    "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01", "jsd_lr3e-6_wu10_lrmin0.1_wd0.01",
-    "po_prob_ceanneal_lr1e-5_wu20",
+NOISE_CLUSTER_PROB_06B_8B = [
+    "po_prob_lr1e-6_wu20", "po_prob_lr3e-6_wu20", "po_prob_lr7e-6_wu20",
+    "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01",
 ]
 
 
 def load_csv(path):
     with open(path, encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def run_name(model_path):
+    parts = model_path.rstrip("/").split("/")
+    return parts[-2] if len(parts) >= 2 else model_path
 
 
 def passk_at_frag(rows, frag, ds, k):
@@ -61,18 +70,43 @@ def passk_at_exact(rows, name, ds, k):
     return None
 
 
+def derive_noise_floor(rows, ds):
+    floor = {}
+    for k in K_OF_INTEREST:
+        vals = [v for v in (passk_at_frag(rows, f, ds, k) for f in NOISE_CLUSTER_PROB_06B_8B) if v is not None]
+        floor[k] = 2 * statistics.stdev(vals) if len(vals) >= 3 else None
+    return floor
+
+
+def auto_significant_checkpoints(rows, ds, student, floor):
+    """Same rule as analyze_passk_movement.py's §1: every checkpoint with at
+    least one |delta vs student| clearing that k's derived noise floor."""
+    all_names = sorted(set(run_name(r["model"]) for r in rows))
+    significant = []
+    for name in all_names:
+        for k in K_OF_INTEREST:
+            v = passk_at_frag(rows, name, ds, k)
+            if v is None or student.get(k) is None or floor.get(k) is None:
+                continue
+            if abs(v - student[k]) >= floor[k]:
+                significant.append(name)
+                break
+    return significant
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="results/passK/passk_hparam_sweep.csv")
     ap.add_argument("--baselines_csv", default="results/passK/passk_baselines.csv")
     ap.add_argument("--dataset", default="olympiad_eval.jsonl")
-    ap.add_argument("--checkpoints", default=",".join(DEFAULT_CHECKPOINTS))
+    ap.add_argument("--checkpoints", default=None,
+                    help="comma list to override; default auto-derives the "
+                         "noise-floor-significant set for this dataset")
     ap.add_argument("--outdir", default="results/passK")
     args = ap.parse_args()
 
     rows = load_csv(args.csv)
     base = load_csv(args.baselines_csv)
-    checkpoints = [c.strip() for c in args.checkpoints.split(",")]
     ds = args.dataset
     tag = ds.replace(".jsonl", "")
 
@@ -80,6 +114,13 @@ def main():
     teacher = {k: passk_at_exact(base, "Qwen/Qwen3-8B", ds, k) for k in K_OF_INTEREST}
     gap = {k: (teacher[k] - student[k]) if teacher[k] is not None and student[k] is not None else None
            for k in K_OF_INTEREST}
+
+    if args.checkpoints:
+        checkpoints = [c.strip() for c in args.checkpoints.split(",")]
+    else:
+        floor = derive_noise_floor(rows, ds)
+        checkpoints = auto_significant_checkpoints(rows, ds, student, floor)
+        print(f"[auto] {len(checkpoints)} checkpoint(s) clear the {tag} noise floor: {', '.join(checkpoints)}")
 
     data = []  # (name, {k: delta}, {k: pct_closed}, mean_pct)
     for ck in checkpoints:
