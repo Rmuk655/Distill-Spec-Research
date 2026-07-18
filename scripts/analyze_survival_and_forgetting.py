@@ -42,12 +42,16 @@ LR_BUCKETS = {
     "collapse (>=3e-4)": ["lr0.0003", "lr0.003", "lr0.01", "lr3e-04", "lr3e-03", "lr1e-02"],
 }
 
-# CE-anneal sweep run-name fragments -> aux_weight, for the forgetting chart.
+# CE-anneal sweep -- matched by the END of the actual W&B run name (verified
+# live, 2026-07-17), NOT the local checkpoint dir name (different convention
+# entirely). endswith(), not "in", because many sibling runs (topk/wd/lrmin
+# variants) share the same "lr1e-05_math_hard_s123" prefix -- only the tail
+# disambiguates which one this is.
 CEANNEAL_RUNS = {
-    "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01": 0.0,   # no-anchor baseline
-    "po_prob_ceanneal3000_auxw0.5_lr1e-5_wu20": 0.5,
-    "po_prob_ceanneal_lr1e-5_wu20": 1.0,
-    "po_prob_ceanneal3000_auxw2.0_lr1e-5_wu20": 2.0,
+    "lr1e-05_math_hard_s123_warm": 0.0,          # no-anchor baseline (verify this exact suffix if no match)
+    "lr1e-05_math_hard_s123_ce0.5anneal3000": 0.5,
+    "lr1e-05_math_hard_s123_ce1anneal3000": 1.0,
+    "lr1e-05_math_hard_s123_ce2anneal3000": 2.0,
 }
 
 
@@ -140,7 +144,7 @@ def plot_forgetting_vs_auxweight(runs, outdir):
     points = []  # (aux_weight, mean_forgetting, final_forgetting, run_name)
     for r in runs:
         for frag, aw in CEANNEAL_RUNS.items():
-            if frag in r.name:
+            if r.name.endswith(frag):
                 s = run_forgetting_series(r)
                 if s is None:
                     continue
