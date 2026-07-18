@@ -32,6 +32,13 @@
 
 - **Pass@k:** computation confirmed correct (monotonic in k everywhere); 2 of 5 checkpoints trail the untrained draft at high k despite beating it at k=1 — training narrows response diversity even as it raises single-shot accuracy (see [passk_diversity_collapse_research_note.md](passk_diversity_collapse_research_note.md)).
 
+![gap closed math_eval](../results/passK/gap_closed_math_eval.png)
+![gap closed gsm8k_eval](../results/passK/gap_closed_gsm8k_eval.png)
+![gap closed olympiad_eval](../results/passK/gap_closed_olympiad_eval.png)
+
+- **Who lifts pass@k closest to teacher (% of student→teacher gap closed, mean over k2/k4/k8/k16):** best is dataset-dependent — `po_prob_lr7e-6_wu20` on gsm8k (51.7%), `po_prob_lr1e-5_wu5_lrmin0.1_wd0.01` on olympiad (65.1%), `po_prob_ceanneal1500_lr1e-5_wu20` on math_eval (40.4%, much lower ceiling than the other two). No single checkpoint wins everywhere.
+- **jsd vs prob, by gap closed:** jsd is consistently worse — its best variant (`jsd_lr3e-6`) closes only 20-48% of the gap depending on dataset, vs prob's best at 37-65% — despite jsd having the better raw block_eff (5.97-5.99 vs prob's ~5.85). BE and "closeness to teacher on pass@k" favor different losses here.
+
 ## Caveat
 
 Single seed throughout — gaps under ~0.1 BE are within likely noise, not resolved without repeat seeds. Noise floor itself is non-uniform by LR (e.g. ~0.004 near `3e-6` vs ~0.20 near `2e-6`) — check any claimed gap against the local noise level, not a single sweep-wide number.
