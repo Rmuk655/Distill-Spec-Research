@@ -5,19 +5,26 @@ analyze_passk_movement.py — two questions the charts alone don't answer direct
   1. Which checkpoint moved pass@k (k=2,4,8,16 especially) the MOST relative to
      the untrained Qwen3-0.6B student baseline? Ranks every swept checkpoint by
      delta-vs-student at each k -- but only REPORTS a delta as real movement if
-     it clears a noise-floor threshold (see NOISE_FLOOR_PASSK below).
+     it clears a per-k noise-floor threshold (see derive_noise_floor() below).
   2. Did BE and pass@k8/k16 move in a correlated fashion across the sweep, or
      did some group move BE without moving pass@k (or vice versa)? Per sweep
      group: BE range vs pass@k8/k16 range.
 
-NOISE FLOOR CAVEAT (read before trusting any number here): this sweep has NO
-repeated seeds and NO repeated pass@k evals -- there is no MEASURED noise floor
-for pass@k anywhere in this project (same gap flagged for block_eff in
-mine_wandb_runs.py). NOISE_FLOOR_PASSK below is a HEURISTIC, chosen by analogy
-to the ~0.05 BE gap this whole sweep has treated as noise-level (e.g. the
-warmup/lr_min/wd stages), not a validated statistical bound. Treat any
-"significant" call below as a candidate worth a repeat-seed check, not a
-settled fact.
+NOISE FLOOR -- DERIVED FROM DATA, NOT ASSUMED: there are no repeated seeds and
+no per-prompt data saved (compute_passk_for_dataset aggregates to a single mean
+pass@k per (model,dataset,k) before it's ever written out), so a textbook
+repeated-measurement or bootstrap noise floor isn't available. But we DON'T
+need to borrow the BE heuristic either: the low-LR `prob` cluster
+(NOISE_CLUSTER_PROB below, lr=1e-6..1e-5) was ALREADY established as
+statistically indistinguishable in block_eff (~0.11 spread) earlier in this
+sweep. If BE is flat there, pass@k should be too, for the same underlying
+reason -- so the SPREAD of pass@k across that cluster, at each k, is a real
+number computed from data already in hand, not an assumption. This script
+derives floor[k] = 2 x std(pass@k across the cluster) per k, and
+uses that (falling back to a small default only if the cluster data isn't in
+the CSV yet). Caveat this DOES still conflate two things -- true measurement
+noise vs. a possible tiny genuine LR effect within that "flat" region -- so
+treat it as an upper-bound-ish proxy, not a textbook confidence interval.
 
 Reads results/passk_hparam_sweep.csv (checkpoints) + Results/passK/passk_baselines.csv
 (student/teacher) + the known best_be per checkpoint (hardcoded from
@@ -35,9 +42,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# HEURISTIC, not measured -- see caveat above. Deltas smaller than this are NOT
-# reported as real movement, only listed for completeness.
-NOISE_FLOOR_PASSK = 0.05
+# The already-established "flat" low-LR prob cluster (~0.11 BE spread, called
+# noise-level earlier in this sweep) -- used to DERIVE a per-k pass@k noise
+# floor from data, instead of assuming one. See module docstring.
+NOISE_CLUSTER_PROB = [
+    "po_prob_lr1e-6_wu20", "po_prob_lr3e-6_wu20", "po_prob_lr7e-6_wu20",
+    "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01",
+]
+DEFAULT_NOISE_FLOOR = 0.05  # fallback only, if the cluster isn't in the CSV yet
 
 # checkpoint dir fragment -> best_val_block_eff, from the summarize_sweep table
 # (hardcode -> update this if the sweep changes; keeps this script standalone).
@@ -95,33 +107,52 @@ def passk_at(rows, frag_or_id, dataset, k):
     return None
 
 
-def plot_movement(move_rows, outdir, dataset):
+def derive_noise_floor(rows, dataset):
+    """Per-k noise floor = 2 x std(pass@k) across NOISE_CLUSTER_PROB -- an
+    empirical proxy from data already in hand, not a borrowed constant. Falls
+    back to DEFAULT_NOISE_FLOOR per-k if fewer than 3 cluster members have data
+    (too few points to trust a std estimate)."""
+    import statistics
+    floor = {}
+    for k in K_OF_INTEREST:
+        vals = [v for v in (passk_at(rows, f, dataset, k) for f in NOISE_CLUSTER_PROB) if v is not None]
+        if len(vals) >= 3:
+            floor[k] = round(2 * statistics.stdev(vals), 4)
+        else:
+            floor[k] = DEFAULT_NOISE_FLOOR
+    return floor
+
+
+def plot_movement(move_rows, outdir, dataset, floor):
     """Grouped bar chart: Δk2/Δk4/Δk8/Δk16 vs student per checkpoint, with the
-    heuristic noise-floor band shaded -- only bars clearing it are solid;
+    DERIVED per-k noise-floor band shaded -- only bars clearing it are solid;
     below-floor bars are drawn hatched/faded so they read as 'not significant'."""
     import numpy as np
     names = [frag for frag, _ in move_rows]
     ks = K_OF_INTEREST
     colors = ["#2a78d6", "#008300", "#e34948", "#eda100"]
-    fig, ax = plt.subplots(figsize=(max(10, len(names) * 0.6), 6))
+    fig, ax = plt.subplots(figsize=(max(10, len(names) * 0.6), 6.5))
     x = np.arange(len(names))
     width = 0.2
     for i, k in enumerate(ks):
         vals = [d.get(k) if d.get(k) is not None else 0 for _, d in move_rows]
         bars = ax.bar(x + (i - 1.5) * width, vals, width, label=f"Δk{k}", color=colors[i])
         for b, v in zip(bars, vals):
-            if abs(v) < NOISE_FLOOR_PASSK:
+            if abs(v) < floor[k]:
                 b.set_alpha(0.3)
                 b.set_hatch("//")
-    ax.axhline(NOISE_FLOOR_PASSK, color="#888", linestyle="--", linewidth=1)
-    ax.axhline(-NOISE_FLOOR_PASSK, color="#888", linestyle="--", linewidth=1)
-    ax.text(len(names) - 0.5, NOISE_FLOOR_PASSK, f" heuristic noise floor (±{NOISE_FLOOR_PASSK})",
-            fontsize=8, color="#888", va="bottom", ha="right")
+    # per-k floor lines (different per k, so no single flat band)
+    for i, k in enumerate(ks):
+        ax.axhline(floor[k], color=colors[i], linestyle=":", linewidth=1, alpha=0.6)
+        ax.axhline(-floor[k], color=colors[i], linestyle=":", linewidth=1, alpha=0.6)
+    floor_str = ", ".join(f"k{k}=±{floor[k]}" for k in ks)
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
     ax.set_ylabel("Δ pass@k vs untrained student")
     ax.set_title(f"Pass@k movement vs untrained student ({dataset.replace('.jsonl','')})\n"
-                 "hatched/faded bars are BELOW the heuristic noise floor -- not reported as real")
+                 f"noise floor per k (2×std across the flat low-LR cluster): {floor_str}\n"
+                 "hatched/faded bars are below that checkpoint-and-k's floor -- not reported as real",
+                 fontsize=9)
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -147,14 +178,21 @@ def main():
 
     student_k = {k: passk_at(base_rows, "Qwen/Qwen3-0.6B", args.dataset, k) for k in K_OF_INTEREST}
     teacher_k = {k: passk_at(base_rows, "Qwen/Qwen3-8B", args.dataset, k) for k in K_OF_INTEREST}
+    floor = derive_noise_floor(rows, args.dataset)
 
     L = []
     L.append(f"# Pass@k movement analysis ({args.dataset.replace('.jsonl','')})\n")
-    L.append(f"> **Noise floor caveat:** no repeated seeds/evals anywhere in this sweep -- "
-             f"there is no MEASURED noise floor for pass@k. `NOISE_FLOOR_PASSK="
-             f"{NOISE_FLOOR_PASSK}` below is a HEURISTIC by analogy to the ~0.05 BE gap "
-             f"already treated as noise-level elsewhere in this sweep, not a validated bound. "
-             f"Deltas below it are shown but NOT reported as real movement.\n")
+    L.append(f"> **Noise floor — derived from data, not assumed:** no repeated seeds and no "
+             f"per-prompt data survive into the CSV, so a textbook repeated-measurement/"
+             f"bootstrap floor isn't directly available. Instead: the low-LR `prob` cluster "
+             f"(`{', '.join(NOISE_CLUSTER_PROB)}`) was already established as statistically "
+             f"indistinguishable in block_eff (~0.11 spread) earlier in this sweep — if BE is "
+             f"flat there, pass@k should be too. The per-k floor below is `2×std(pass@k)` "
+             f"across that cluster, computed from data already in hand: "
+             f"{', '.join(f'k{k}=±{floor[k]}' for k in K_OF_INTEREST)}. This still conflates "
+             f"true measurement noise with a possible tiny genuine LR effect in that region — "
+             f"an upper-bound-ish proxy, not a textbook CI. Deltas below it are shown but NOT "
+             f"reported as real movement.\n")
     L.append(f"Student (untrained 0.6B) pass@k: " +
              ", ".join(f"k{k}={student_k[k]}" for k in K_OF_INTEREST if student_k[k] is not None))
     L.append(f"\n\nTeacher (8B) pass@k: " +
@@ -174,11 +212,10 @@ def main():
     move_rows.sort(key=lambda t: -(t[1].get(8) or -9))
 
     significant = [(f, d) for f, d in move_rows
-                   if any(v is not None and abs(v) >= NOISE_FLOOR_PASSK for v in d.values())]
+                   if any(v is not None and abs(v) >= floor[k] for k, v in d.items())]
     below_floor = [f for f, d in move_rows if (f, d) not in significant]
 
-    L.append(f"\n**Checkpoints with ≥1 delta clearing the heuristic noise floor "
-             f"(±{NOISE_FLOOR_PASSK}):**\n")
+    L.append(f"\n**Checkpoints with ≥1 delta clearing its k's derived noise floor:**\n")
     L.append("| checkpoint | Δk2 | Δk4 | Δk8 | Δk16 |")
     L.append("|---|---|---|---|---|")
     for frag, d in significant:
@@ -190,8 +227,8 @@ def main():
     # -------- 2. per-group: did BE move with pass@k8/16? --------
     L.append("\n\n## 2. Per-group: did BE and pass@k8/k16 move together?\n")
     L.append("range = max−min across the group's checkpoints. `pass@k range` compared "
-             f"against the same heuristic floor ({NOISE_FLOOR_PASSK}); BE range compared "
-             "against the ~0.05 BE floor used elsewhere in this sweep.\n")
+             f"against the same derived per-k floor (k8=±{floor[8]}, k16=±{floor[16]}); "
+             "BE range compared against the ~0.05 BE floor used elsewhere in this sweep.\n")
     L.append("| group | BE range | passk_k8 range | passk_k16 range | correlated? |")
     L.append("|---|---|---|---|---|")
     for gname, frags in GROUPS.items():
@@ -204,7 +241,7 @@ def main():
         verdict = "?"
         if be_range is not None and k8_range is not None:
             be_big = be_range > 0.05
-            pk_big = (k8_range or 0) >= NOISE_FLOOR_PASSK or (k16_range or 0) >= NOISE_FLOOR_PASSK
+            pk_big = (k8_range or 0) >= floor[8] or (k16_range or 0) >= floor[16]
             verdict = "YES (moved together)" if be_big == pk_big else \
                       "NO -- BE moved, pass@k didn't" if be_big else "NO -- pass@k moved, BE didn't"
         L.append(f"| {gname} | {be_range} | {k8_range} | {k16_range} | {verdict} |")
@@ -215,7 +252,7 @@ def main():
     print(f"wrote {args.out}")
 
     os.makedirs(args.outdir, exist_ok=True)
-    plot_movement(move_rows, args.outdir, args.dataset)
+    plot_movement(move_rows, args.outdir, args.dataset, floor)
 
 
 if __name__ == "__main__":
