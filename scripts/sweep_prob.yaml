@@ -1,0 +1,51 @@
+# W&B Sweep config — removes the manual "read best_be, pick next value,
+# relaunch, babysit" loop. W&B picks configs (Bayesian) and its agents launch
+# them; `early_terminate` (Hyperband) auto-kills collapsing runs early instead
+# of wasting the full 5000 steps -- exactly the ASHA idea, built in.
+#
+# SETUP (once):
+#   wandb sweep scripts/sweep_prob.yaml
+#     -> prints a SWEEP_ID like: rmukund16-.../distillspec-pipeline/abc123
+#   # then start one agent PER GPU (each pulls configs and runs them):
+#   CUDA_VISIBLE_DEVICES=0 nohup wandb agent <SWEEP_ID> > sweep_gpu0.log 2>&1 & disown
+#   CUDA_VISIBLE_DEVICES=1 nohup wandb agent <SWEEP_ID> > sweep_gpu1.log 2>&1 & disown
+#   ...one per free GPU. Stop with: wandb sweep --cancel <SWEEP_ID>
+#
+# NOTE: train.py must read these from argv (it already does for all keys below).
+# W&B passes them as --key value automatically from the `parameters` block.
+program: train.py
+method: bayes                     # bayes | random | grid
+metric:
+  name: val/best_block_eff        # what W&B optimizes (matches train.py's summary key)
+  goal: maximize
+early_terminate:
+  type: hyperband                 # kill runs that look like they'll lose, early
+  min_iter: 800                   # give each run at least ~2 val checks before judging
+  eta: 3
+parameters:
+  # --- fixed across the sweep (the locked context) ---
+  loss:            {value: prefix_overlap}
+  prefix_objective: {value: prob}
+  draft:           {value: Qwen/Qwen3-0.6B}
+  teacher:         {value: Qwen/Qwen3-8B}
+  train_dataset:   {value: math_hard}
+  val_dataset:     {value: math_val}
+  steps:           {value: 5000}
+  seed:            {value: 123}
+  passk_datasets:  {value: math_val}
+  passk_backend:   {value: vllm}
+  passk_samples:   {value: 16}
+  passk_every_n_vals: {value: 5}
+  warmup_steps:    {value: 125}
+  lr_min_ratio:    {value: 0.1}
+  # --- searched ---
+  lr:
+    distribution: log_uniform_values
+    min: 0.000001                 # 1e-6
+    max: 0.00001                  # 1e-5 (everything above collapses — don't waste trials there)
+  weight_decay:
+    values: [0.01, 0.001, 0.0001]
+  prefix_aux_weight:
+    values: [0.0, 0.5, 1.0, 2.0]  # 0.0 = no CE-anchor baseline
+  prefix_anneal_steps:
+    values: [0, 1500, 3000, 4000]
