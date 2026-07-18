@@ -123,7 +123,7 @@ def derive_noise_floor(rows, dataset):
     return floor
 
 
-def plot_movement(move_rows, outdir, dataset, floor):
+def plot_movement(move_rows, outdir, dataset, floor, chart_name):
     """Grouped bar chart: Δk2/Δk4/Δk8/Δk16 vs student per checkpoint, with the
     DERIVED per-k noise-floor band shaded -- only bars clearing it are solid;
     below-floor bars are drawn hatched/faded so they read as 'not significant'."""
@@ -156,32 +156,27 @@ def plot_movement(move_rows, outdir, dataset, floor):
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    path = os.path.join(outdir, "passk_movement_vs_student.png")
+    path = os.path.join(outdir, chart_name)
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"wrote {path}")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="results/passk_hparam_sweep.csv")
-    ap.add_argument("--baselines_csv", default="Results/passK/passk_baselines.csv")
-    ap.add_argument("--dataset", default="math_eval.jsonl")
-    ap.add_argument("--out", default="results/passk_movement_report.md")
-    ap.add_argument("--outdir", default="Results/passK")
-    args = ap.parse_args()
-
-    if not os.path.isfile(args.csv):
-        raise SystemExit(f"{args.csv} not found -- run scripts/passk_eval_sweep_checkpoints.sh first")
-    rows = load_csv(args.csv)
-    base_rows = load_csv(args.baselines_csv)
-
-    student_k = {k: passk_at(base_rows, "Qwen/Qwen3-0.6B", args.dataset, k) for k in K_OF_INTEREST}
-    teacher_k = {k: passk_at(base_rows, "Qwen/Qwen3-8B", args.dataset, k) for k in K_OF_INTEREST}
-    floor = derive_noise_floor(rows, args.dataset)
+def run_for_dataset(rows, base_rows, dataset, out_path, outdir):
+    """One dataset's full report + chart -- datasets are NEVER mixed (math_hard's
+    checkpoints behave very differently on a saturated set like gsm8k vs. the
+    sensitive math_eval vs. the low-ceiling olympiad, so each needs its own
+    story, not an averaged-together one)."""
+    student_k = {k: passk_at(base_rows, "Qwen/Qwen3-0.6B", dataset, k) for k in K_OF_INTEREST}
+    teacher_k = {k: passk_at(base_rows, "Qwen/Qwen3-8B", dataset, k) for k in K_OF_INTEREST}
+    if all(v is None for v in student_k.values()):
+        print(f"  [skip] no baseline data for {dataset} in {out_path!r} run -- nothing to report")
+        return
+    floor = derive_noise_floor(rows, dataset)
+    chart_name = f"passk_movement_vs_student_{dataset.replace('.jsonl', '')}.png"
 
     L = []
-    L.append(f"# Pass@k movement analysis ({args.dataset.replace('.jsonl','')})\n")
+    L.append(f"# Pass@k movement analysis ({dataset.replace('.jsonl','')})\n")
     L.append(f"> **Noise floor — derived from data, not assumed:** no repeated seeds and no "
              f"per-prompt data survive into the CSV, so a textbook repeated-measurement/"
              f"bootstrap floor isn't directly available. Instead: the low-LR `prob` cluster "
@@ -200,10 +195,10 @@ def main():
 
     # -------- 1. ranking by delta vs student, gated by noise floor --------
     L.append("\n## 1. Ranked by movement vs untrained student (delta = checkpoint − student)\n")
-    L.append(f"![pass@k movement vs student](../Results/passK/passk_movement_vs_student.png)\n")
+    L.append(f"![pass@k movement vs student](../Results/passK/{chart_name})\n")
     move_rows = []
     for frag in BEST_BE:
-        vals = {k: passk_at(rows, frag, args.dataset, k) for k in K_OF_INTEREST}
+        vals = {k: passk_at(rows, frag, dataset, k) for k in K_OF_INTEREST}
         if all(v is None for v in vals.values()):
             continue
         deltas = {k: (round(vals[k] - student_k[k], 4) if vals[k] is not None and student_k[k] is not None else None)
@@ -233,8 +228,8 @@ def main():
     L.append("|---|---|---|---|---|")
     for gname, frags in GROUPS.items():
         bes = [BEST_BE[f] for f in frags if f in BEST_BE]
-        k8s = [v for v in (passk_at(rows, f, args.dataset, 8) for f in frags) if v is not None]
-        k16s = [v for v in (passk_at(rows, f, args.dataset, 16) for f in frags) if v is not None]
+        k8s = [v for v in (passk_at(rows, f, dataset, 8) for f in frags) if v is not None]
+        k16s = [v for v in (passk_at(rows, f, dataset, 16) for f in frags) if v is not None]
         be_range = round(max(bes) - min(bes), 3) if len(bes) > 1 else None
         k8_range = round(max(k8s) - min(k8s), 4) if len(k8s) > 1 else None
         k16_range = round(max(k16s) - min(k16s), 4) if len(k16s) > 1 else None
@@ -246,13 +241,35 @@ def main():
                       "NO -- BE moved, pass@k didn't" if be_big else "NO -- pass@k moved, BE didn't"
         L.append(f"| {gname} | {be_range} | {k8_range} | {k16_range} | {verdict} |")
 
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(L))
-    print(f"wrote {args.out}")
+    print(f"wrote {out_path}")
 
-    os.makedirs(args.outdir, exist_ok=True)
-    plot_movement(move_rows, args.outdir, args.dataset, floor)
+    os.makedirs(outdir, exist_ok=True)
+    plot_movement(move_rows, outdir, dataset, floor, chart_name)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--csv", default="results/passk_hparam_sweep.csv")
+    ap.add_argument("--baselines_csv", default="Results/passK/passk_baselines.csv")
+    ap.add_argument("--datasets", default="math_eval.jsonl,gsm8k_eval.jsonl,olympiad_eval.jsonl",
+                    help="comma list -- run separately, never mixed, one report+chart each")
+    ap.add_argument("--out_prefix", default="results/passk_movement_report")
+    ap.add_argument("--outdir", default="Results/passK")
+    args = ap.parse_args()
+
+    if not os.path.isfile(args.csv):
+        raise SystemExit(f"{args.csv} not found -- run scripts/passk_eval_sweep_checkpoints.sh first")
+    rows = load_csv(args.csv)
+    base_rows = load_csv(args.baselines_csv)
+
+    for dataset in [d.strip() for d in args.datasets.split(",")]:
+        tag = dataset.replace(".jsonl", "")
+        out_path = f"{args.out_prefix}_{tag}.md"
+        print(f"=== {dataset} ===")
+        run_for_dataset(rows, base_rows, dataset, out_path, args.outdir)
 
 
 if __name__ == "__main__":
