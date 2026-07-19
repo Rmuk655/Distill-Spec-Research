@@ -16,7 +16,7 @@ Over six weeks I:
 
 LLMs decode one token at a time, and each token costs a full forward pass. Speculative decoding adds a small, fast draft model that proposes several tokens ahead; a large target model verifies them in one parallel pass and accepts the longest matching prefix. The core metric is block efficiency: accepted tokens per target call. Since the target dominates inference cost, block efficiency is a direct, hardware-agnostic multiplier on decode throughput, the number worth optimizing rather than raw tokens-per-second from any one harness.
 
-Raising it means raising the draft's acceptance rate, and the standard lever is knowledge distillation ([DistillSpec](https://arxiv.org/abs/2310.08461), a paper Rahul co-authored): training the draft to match the target's output distribution. The central question: which distillation objective actually moves block efficiency, tested on a student-teacher pair (Qwen 0.6B/8B) and a wider one (Qwen 1.7B/32B), though the setup is easily extensible to other model families and pairings.
+Raising it means raising the draft's acceptance rate, and the standard lever is knowledge distillation ([DistillSpec](https://arxiv.org/abs/2310.08461)): training the draft to match the target's output distribution. The central question: which distillation objective actually moves block efficiency, tested on a student-teacher pair (Qwen 0.6B/8B) and a wider one (Qwen 1.7B/32B), though the setup is easily extensible to other model families and pairings.
 
 <img src="medium_chart_architecture.png" width="650" alt="Project architecture" />
 *The inference mechanism, the training loop, and the evaluation infrastructure built around both.*
