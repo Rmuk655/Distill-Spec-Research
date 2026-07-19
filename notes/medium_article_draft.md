@@ -2,12 +2,13 @@
 
 During my second-year summer, I worked on LLM inference optimization through speculative decoding, under the guidance of Rahul [@Rahul], an ML researcher at Columbia University.
 
-Over eight weeks I:
+Over six weeks I:
 
 - Ran 500+ tracked experiments (about 250 training runs), logged in Weights & Biases
 - Evaluated 71 trained checkpoints across 4,000+ measurements
 - Built and operated a multi-GPU speculative-decoding research platform, training, evaluation, and analysis, in PyTorch, HuggingFace, and vLLM, growing to roughly 10,000 lines of code
-- Set out to beat a strong, well-proven baseline with several new distillation objectives, some from published work and some designed from scratch; most struggled to beat it, but a few did, and validated why the rest fell short
+- Implemented and trained against 34 distinct distillation objectives across 8 conceptual families (on-policy tree losses, log-space reformulations, REINFORCE, depth-weighted curricula, enrichment, prefix-overlap, and more), some from published work and some designed from scratch, to find one that beat a strong, well-proven baseline
+- Most of those objectives struggled to beat the baseline, but a few did, and I validated why the rest fell short
 - Developed a multi-sample distillation approach that beat the standard flat-divergence baseline (JSD)
 - Extended a verification-time decoding technique to trained draft models, a case the original paper never evaluated
 
@@ -36,7 +37,7 @@ FlashAttention and PyTorch's native SDPA kernel compute mathematically identical
 
 ## Investigating training objectives
 
-We designed ablation studies to isolate which distillation objectives transfer to higher block efficiency versus which only look correct on paper.
+We designed ablation studies to isolate which distillation objectives transfer to higher block efficiency versus which only look correct on paper, sweeping on-policy tree losses, log-space reformulations, a REINFORCE variant, a depth-weighted curriculum, enrichment, prefix-overlap, and a published acceptance-rate-distillation loss, 34 objectives in total, and prefix-overlap alone carried four separately-reasoned reward formulations (raw probability, log-probability, the NSS verifier's estimator, and the traversal verifier's estimator). Not everything I tried was pre-approved before I ran it; part of the exploration phase was proposing and testing variants on my own, including a cross-entropy-annealing stabilization pass, and having Rahul weigh in on the results afterward rather than the plan beforehand.
 
 Rahul provided the verifier implementations and the papers behind them; on top of that, as part of an initial learning phase to explore by building, I designed two new objectives myself. One trains the draft to match the target deep into a sequence of guesses, not just the first token. Its gradient naturally vanishes with depth, so the standard fix moves it into log-space. I applied that fix and results got worse, including an outright collapse at a wider capacity gap, from scratch, where block efficiency dropped by 0.4 to 0.6: the reformulation solves vanishing gradients but overcorrects, shifting weight toward deep, low-probability continuations the draft rarely reaches. The second targeted the exact deployment verifier directly, the most "aligned" choice on paper; it turned out to be a dud, the single worst performer of anything tested, for the same reason. That is the lesson I took from it: an objective aligned with the eval metric on paper is not automatically trainable. Gradient allocation mattered more than how closely its form matched the final metric.
 
