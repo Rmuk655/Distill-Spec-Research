@@ -1,4 +1,4 @@
-# Building a multi GPU platform to find out what actually speeds up LLM inference
+# Building a multi GPU research platform for speeding up LLM inference
 
 During my second-year summer, I worked on LLM inference optimization through speculative decoding, under the guidance of Rahul [@Rahul], an ML researcher at Columbia University.
 
