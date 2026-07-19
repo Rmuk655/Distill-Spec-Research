@@ -1,6 +1,6 @@
 # Engineering an LLM inference research platform for speculative decoding
 
-During my second-year summer, I worked on LLM inference optimization through speculative decoding, under the guidance of Rahul [@Rahul], an ML researcher at Columbia University. Rahul developed the verifier implementations and supervised the project; I built the training infrastructure, experiment platform, and evaluation pipeline, implemented new distillation objectives, and ran the experimental analysis.
+During my second-year summer, I worked on LLM inference optimization through speculative decoding, under the guidance of Rahul [@Rahul], an ML researcher at Columbia University. Rahul developed the verifier implementations and guided the research; I built the training infrastructure, experiment platform, and evaluation pipeline, implemented new distillation objectives, and ran the experimental analysis.
 
 Over six weeks I:
 
