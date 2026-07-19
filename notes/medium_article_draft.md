@@ -1,6 +1,6 @@
 # Lessons from an LLM Inference Research Internship: Speculative Decoding, Distillation, and Evaluation
 
-During my second-year summer, I worked on LLM inference optimization through speculative decoding, under Rahul [@Rahul], a researcher at Columbia University.
+During my second-year summer, I worked on LLM inference optimization through speculative decoding, under the guidance of Rahul [@Rahul], an ML researcher at Columbia University.
 
 Over eight weeks I:
 
