@@ -7,7 +7,7 @@ Over eight weeks I:
 - Ran 500+ tracked experiments (about 250 training runs), logged in Weights & Biases
 - Evaluated 71 trained checkpoints across 4,000+ measurements
 - Built and operated a multi-GPU speculative-decoding research platform, training, evaluation, and analysis, in PyTorch, HuggingFace, and vLLM, growing to roughly 10,000 lines of code
-- Validated hypotheses for why several distillation objectives, some from published work and some designed from scratch, underperformed
+- Set out to beat a strong, well-proven baseline with several new distillation objectives, some from published work and some designed from scratch; most struggled to beat it, but a few did, and validated why the rest fell short
 - Developed a multi-sample distillation approach that beat the standard flat-divergence baseline (JSD)
 - Extended a verification-time decoding technique to trained draft models, a case the original paper never evaluated
 
