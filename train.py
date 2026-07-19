@@ -225,6 +225,9 @@ def parse_args():
                     help="Start a new W&B run even when resuming (default: reuse run id).")
     ap.add_argument("--teacher_temp", type=float, default=TEACHER_TEMP)
     ap.add_argument("--draft_temp",   type=float, default=DRAFT_TEMP)
+    ap.add_argument("--grad_clip", type=float, default=GRAD_CLIP,
+                    help="Max grad norm for clip_grad_norm_ (default: module GRAD_CLIP constant, "
+                         "1.0, the DistillSpec Table S1 / LLM fine-tuning standard).")
     # --- State-distribution interventions for jsd_flat_enrich (all off by default) ---
     ap.add_argument("--draft_prefix_max", type=int, default=0,
                     help="jsd_flat_enrich only. >0 enables draft-conditioned rollout: the "
@@ -872,9 +875,9 @@ def main():
         if not flat_enrich:
             (loss / GRAD_ACCUM).backward()
         if (step + 1) % GRAD_ACCUM == 0:
-            grad_norm = torch.nn.utils.clip_grad_norm_(trainable, GRAD_CLIP)
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.grad_clip)
             grad_opt_steps += 1
-            if grad_norm.item() > GRAD_CLIP:
+            if grad_norm.item() > args.grad_clip:
                 grad_clip_events += 1
             optimizer.step()
             scheduler.step()
