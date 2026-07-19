@@ -41,8 +41,8 @@ number, pip install `math_verify` and swap `is_correct` (in passk_utils.py) for 
 Theorem-proving rows (OlympiadBench proofs) have no short answer => skipped, counted
 in `n_skipped`.
 
-STATUS: written 2026-07-13, NOT yet run/tested (no vLLM+GPU on the dev box). Validate
-one small run (--n 4 --n_prompts 5) on the cluster before trusting the numbers.
+STATUS: validated on the cluster and used to generate the committed pass@k results
+in results/passK/ (see scripts/passk_eval_sweep_checkpoints.sh, scripts/run_passk_baselines.sh).
 """
 import argparse, json, math, os, sys
 
