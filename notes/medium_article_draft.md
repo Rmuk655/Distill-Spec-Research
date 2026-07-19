@@ -15,7 +15,7 @@ The project combined research, systems engineering, and experimental design. Tha
 
 ## The problem
 
-LLMs decode one token at a time, and each token costs a full forward pass. Speculative decoding adds a small, fast draft model that proposes several tokens ahead. A large target model then verifies them in one parallel pass and accepts the longest matching prefix. The core metric is block efficiency: accepted tokens per target call. Raising it means raising the draft's acceptance rate, and the standard lever for that is knowledge distillation, training the draft to match the target's output distribution. The project's central question was which distillation objective actually moves block efficiency, tested on a 0.6B/8B draft-target pair and a wider 1.7B/32B pair.
+LLMs decode one token at a time, and each token costs a full forward pass. Speculative decoding adds a small, fast draft model that proposes several tokens ahead. A large target model then verifies them in one parallel pass and accepts the longest matching prefix. The core metric is block efficiency: accepted tokens per target call. Raising it means raising the draft's acceptance rate, and the standard lever for that is knowledge distillation, training the draft to match the target's output distribution. The project's central question was which distillation objective actually moves block efficiency, tested on a Qwen 0.6B/8B draft-target pair and a wider Qwen 1.7B/32B pair.
 
 The codebase grew to roughly 10,000 lines of PyTorch training, evaluation, and experiment-management code, covering automated checkpointing, multi-GPU experiment orchestration, and analysis tooling. That excludes a separately vendored verifier library used as-is.
 
