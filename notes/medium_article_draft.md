@@ -6,7 +6,7 @@ Over eight weeks I:
 
 - Ran 500+ tracked experiments (about 250 training runs), logged in Weights & Biases
 - Evaluated 71 trained checkpoints across 4,000+ measurements
-- Built a multi-GPU experiment and evaluation pipeline in PyTorch, HuggingFace, and vLLM, growing to roughly 10,000 lines of code
+- Built and operated a multi-GPU speculative-decoding research platform, training, evaluation, and analysis, in PyTorch, HuggingFace, and vLLM, growing to roughly 10,000 lines of code
 - Validated hypotheses for why several distillation objectives, some from published work and some designed from scratch, underperformed
 - Developed a multi-sample distillation approach that beat the standard flat-divergence baseline (JSD)
 - Extended a verification-time decoding technique to trained draft models, a case the original paper never evaluated
@@ -25,6 +25,8 @@ Raising it means raising the draft's acceptance rate, and the standard lever is 
 I built the infrastructure needed to run, recover, evaluate, and analyze hundreds of training experiments in parallel across heterogeneous GPU hardware: a scheduler and checkpoint manager with crash recovery, an evaluation harness covering every verifier by tree-width by dataset combination, and cross-checkpoint analysis tooling on top, moving from a memory-constrained Colab T4 (4-bit quantization just to fit the 8B target) to Kaggle's dual-T4s to A100s for the full sweeps. A separate vLLM pipeline, with its own async backend and isolated environment, generated tens of thousands of samples for pass@k benchmarking, using a paged KV-cache (cached attention keys/values so tokens are never recomputed), continuous batching, and tensor-parallel sharding available for the larger 32B teacher, with resumable, checkpoint-skipping logic so a killed run never lost completed work.
 
 A typical iteration: implement a new objective in PyTorch, validate its gradients on a handful of toy steps, launch multi-GPU sweeps tracked in Weights & Biases, evaluate every checkpoint across the full verifier grid, and extend analysis scripts to check whether observed gains exceeded the estimated noise floor.
+
+Three optimizations kept that loop from wasting hardware. Evaluation ran one process per GPU rather than serially, so a full sweep finished in the time of its slowest cell, not the sum of all of them. CPU threads were capped per process to physical cores divided by GPU count, since uncapped threads across parallel evals contend for the same cache and skew timing measurements. And the eval harness cached completed (verifier, tree-width, checkpoint, dataset) cells to disk, so a killed sweep resumed only the unfinished work instead of redoing it.
 
 One systems lesson surprised me: profiling the harness (GPU utilization, memory bandwidth, PCIe/NVLink traffic, per-stage timing) showed it was dispatch-bound, not compute-bound, meaning tokens/sec from that setup would measure an implementation artifact, not the algorithm. That is why I reported block efficiency instead, the metric that transfers across implementations.
 
