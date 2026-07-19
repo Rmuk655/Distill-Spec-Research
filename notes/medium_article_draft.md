@@ -32,11 +32,11 @@ FlashAttention and PyTorch's native SDPA kernel compute mathematically identical
 
 ## Investigating training objectives
 
-I designed ablation studies to isolate which distillation objectives transfer to higher block efficiency versus which only look correct on paper.
+We designed ablation studies to isolate which distillation objectives transfer to higher block efficiency versus which only look correct on paper.
 
 One family trains the draft to match the target deep into a sequence of guesses, not just the first token. Its gradient naturally vanishes with depth, so the standard fix moves it into log-space. I applied that fix and results got worse, including an outright collapse at a wider capacity gap, from scratch, where block efficiency dropped by 0.4 to 0.6: the reformulation solves vanishing gradients but overcorrects, shifting weight toward deep, low-probability continuations the draft rarely reaches. A second objective, built to target the exact deployment verifier, the most "aligned" choice on paper, was the single worst performer, for the same reason. The lesson: an objective aligned with the eval metric on paper is not automatically trainable. Gradient allocation mattered more than how closely its form matched the final metric.
 
-Two further hypotheses looked unlikely to work before I ran them, and I confirmed both. A depth-weighted curriculum multiplied the loss by a detached scalar, which rescales gradient magnitude, not direction, so it could not fix a capacity bottleneck, and it did not. A REINFORCE-based formulation rewarded block efficiency directly, but that objective pulls a model toward its own high-reward trajectories rather than the target's broader distribution, and the metric declined in a clean, monotonic pattern consistent with that mechanism.
+We also tested two further hypotheses Rahul thought could work; why they didn't only became clear empirically, not from a rigorous argument in advance. A depth-weighted curriculum multiplied the loss by a detached scalar, which rescales gradient magnitude, not direction, so it could not fix a capacity bottleneck, and it did not. A REINFORCE-based formulation rewarded block efficiency directly, but that objective pulls a model toward its own high-reward trajectories rather than the target's broader distribution, and the metric declined in a clean, monotonic pattern consistent with that mechanism.
 
 ## Extending existing methods
 
@@ -51,7 +51,7 @@ I then derived the branch-point setting instead of grid-searching it, tracking e
 
 ## Building better evaluation metrics
 
-Block efficiency measures whether the draft matches the target's output distribution, not whether distillation makes it a better reasoner. To check that directly, I built a pass@k pipeline: sample k completions per problem, check whether any is correct.
+Block efficiency measures whether the draft matches the target's output distribution, not whether distillation makes it a better reasoner. To check that directly, I built a pass@k pipeline per Rahul's direction: sample k completions per problem, check whether any is correct.
 
 This revealed effects invisible to block efficiency alone. Some checkpoints improved pass@1 while regressing at pass@64: distillation sharpened single-sample accuracy but narrowed output diversity, the opposite of what many-sample decoding needs. Others improved reasoning despite lower acceptance rates than a different checkpoint, so the two metrics respond to training differently. Training closed a real but bounded fraction of the gap to the target, roughly a third to two-thirds, never all of it.
 
@@ -69,4 +69,4 @@ None of this is meaningful without knowing how much run-to-run noise to expect. 
 
 ## Closing
 
-This project reinforced something I'll carry forward: reliable systems come from optimization, evaluation, and infrastructure together, not any one in isolation. The most valuable output was not a single winning experiment, but the discipline to test hypotheses rigorously, build infrastructure solid enough to trust, and evaluate broadly enough to catch what one metric would miss.
+This project reinforced something I will carry forward: reliable systems come from optimization, evaluation, and infrastructure together, not any one in isolation. The most valuable output was not a single winning experiment, but the discipline to test hypotheses rigorously, build infrastructure solid enough to trust, and evaluate broadly enough to catch what one metric would miss.
