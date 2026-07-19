@@ -19,7 +19,7 @@ LLMs decode one token at a time, and each token costs a full forward pass. Specu
 
 Raising block efficiency means raising the draft's acceptance rate, and the standard lever for that is knowledge distillation: training the draft to match the target's output distribution. The project's central question was which distillation objective actually moves block efficiency, tested on a Qwen 0.6B/8B draft-target pair and a wider Qwen 1.7B/32B pair.
 
-![Project architecture](medium_chart_architecture.png)
+<img src="medium_chart_architecture.png" width="650" alt="Project architecture" />
 *Three layers: the inference-time mechanism being optimized, the training loop that shapes the draft model, and the evaluation infrastructure that measured whether it worked.*
 
 ## Building the research infrastructure
@@ -48,7 +48,7 @@ I found the strongest improvement on the verification side. A recent technique d
 
 I then derived the branch-point setting instead of grid-searching it. It tracks each checkpoint's own mean acceptance depth, so a stronger draft branches later on its own, a value read from the model's measured behavior rather than a search.
 
-![Delayed-branching lift, both model pairs](medium_chart_ddte_anon.png)
+<img src="medium_chart_ddte_anon.png" width="650" alt="Delayed-branching lift, both model pairs" />
 *Delayed tree-branching applied to every checkpoint I trained, across two draft/target size pairs. Nearly every checkpoint improved, with larger gains on weaker starting points.*
 
 ## Building better evaluation metrics
@@ -57,7 +57,7 @@ Block efficiency measures whether the draft's output distribution matches the ta
 
 Across checkpoints, this revealed effects invisible to block efficiency alone. Some checkpoints improved pass@1 while regressing at pass@64: distillation sharpened single-sample accuracy but narrowed output diversity, the opposite of what many-sample decoding needs. Others improved reasoning despite lower acceptance rates than a different checkpoint, so inference efficiency and reasoning quality respond to training differently. Training closed a real but bounded fraction of the gap to the target, roughly a third to two-thirds depending on dataset and k, never all of it.
 
-![pass@k across every trained checkpoint](medium_chart_passk_anon.png)
+<img src="medium_chart_passk_anon.png" width="650" alt="pass@k across every trained checkpoint" />
 *Training closes part of the gap to the target model, never all of it, and by how much depends heavily on k.*
 
 I added two further axes: forgetting (regression on previously-solved problems mid-training, a backward-transfer check) and difficulty-bucketed accuracy (easy, medium, hard, split by baseline performance). Both surfaced runs that looked healthy in aggregate but were quietly regressing on already-solved problems, or only helping the easy bucket.
@@ -66,7 +66,7 @@ Which dataset I evaluated on mattered almost as much as which checkpoint. I ran 
 
 None of this is meaningful without knowing how much run-to-run noise to expect. I estimated a per-k noise floor from near-duplicate configurations and compared it against the full spread observed across every setting swept.
 
-![Noise floor vs. observed spread, per k](medium_chart_noise_floor_anon.png)
+<img src="medium_chart_noise_floor_anon.png" width="650" alt="Noise floor vs. observed spread, per k" />
 *At most k, the floor and the full sweep's spread are nearly identical, meaning most apparent differences between configurations are noise, not signal. k=64 is the exception, where the spread clearly exceeds the floor.*
 
 ## Closing
