@@ -480,6 +480,100 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
     return loss
 
 
+def compute_prefix_overlap_multiroot_fresh_loss(draft, teacher, prompt_ids,
+                                                 L, N, rollout_len, teacher_temp=1.0,
+                                                 aux="ce", aux_weight=0.0,
+                                                 objective="prob", random_offset=False, K=3,
+                                                 min_root=0, teacher_topk=0, M=1):
+    """Multi-root prefix overlap (doc §5), independent-per-root variant.
+
+    Unlike compute_prefix_overlap_multiroot_loss (the tail-reuse M=1 estimator, which
+    slices one shared rollout for every root and is therefore correlated across roots),
+    this samples one teacher rollout only to DEFINE the root contexts c_r = (x, y_{1:r}),
+    then draws M fresh, independent continuations P^(r,m)_{1:L} ~ p(·|c_r) for each root,
+    each via its own teacher.generate() call — matching the doc's literal §5 estimator
+    L̂(θ) = -(1/|R|) Σ_r (1/M) Σ_m Σ_t qθ(P^(r,m)_{1:t} | c_r): average over the M samples
+    at each root first, then average those per-root scores across roots.
+
+    Cost: 1 (context-defining) rollout + num_roots x M independent teacher.generate()
+    calls + num_roots x M student forward passes — roughly (num_roots x M)x more
+    teacher-generation cost than the tail-reuse variant, since no continuation can be
+    sliced for free out of a single shared trajectory anymore. M samples per root are
+    drawn with M sequential teacher.generate() calls (not batched), so cost scales
+    linearly and directly with M.
+    """
+    attn_mask = torch.ones_like(prompt_ids)
+    C = prompt_ids.shape[1]
+    with torch.no_grad():
+        ctx_gen = teacher.generate(
+            prompt_ids, attention_mask=attn_mask,
+            max_new_tokens=rollout_len, do_sample=True, temperature=teacher_temp,
+            pad_token_id=teacher.config.eos_token_id, use_cache=True,
+            **({"top_k": teacher_topk} if teacher_topk > 0 else {}),
+        )
+    ctx_cont = ctx_gen[0, C:]                                 # y_1..y_T, defines root positions only
+    T = ctx_cont.numel()
+    if T == 0:
+        return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
+
+    start = int(torch.randint(0, N, (1,)).item()) if random_offset else 0
+    start = max(start, min_root)
+    roots = list(range(start, T - 1, N))
+    if not roots:
+        return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
+
+    prefix_terms, aux_terms = [], []
+    for r in roots:
+        root_ids = torch.cat([prompt_ids[0], ctx_cont[:r]]).unsqueeze(0)   # c_r = (x, y_{1:r})
+        root_mask = torch.ones_like(root_ids)
+        Cr = root_ids.shape[1]
+
+        # (1/M) Σ_m over M independent fresh continuations from THIS root (doc §5).
+        root_prefix_terms, root_aux_terms = [], []
+        for _m in range(M):
+            with torch.no_grad():
+                gen_r = teacher.generate(
+                    root_ids, attention_mask=root_mask,
+                    max_new_tokens=L, do_sample=True, temperature=teacher_temp,
+                    pad_token_id=teacher.config.eos_token_id, use_cache=True,
+                    **({"top_k": teacher_topk} if teacher_topk > 0 else {}),
+                )
+            cont_r = gen_r[0, Cr:]                             # fresh P^(r,m)_{1:L} ~ p(·|c_r)
+            if cont_r.numel() == 0:
+                continue
+            s_out_r    = draft(gen_r, return_dict=True)
+            s_logits_r = s_out_r.logits[0, Cr - 1:-1].float()
+            logp_r     = F.log_softmax(s_logits_r, dim=-1)
+            tok_lp_r   = logp_r.gather(-1, cont_r.unsqueeze(-1)).squeeze(-1)
+            S_r        = torch.cumsum(tok_lp_r, dim=0)
+
+            tok_tp_r, t_logits_r = None, None
+            if objective == "nss" or (aux_weight > 0.0 and aux != "ce"):
+                with torch.no_grad():
+                    t_logits_r = teacher(gen_r, return_dict=True).logits[0, Cr - 1:-1].float()
+                if objective == "nss":
+                    tok_tp_r = F.log_softmax(t_logits_r, dim=-1).gather(
+                        -1, cont_r.unsqueeze(-1)).squeeze(-1)
+
+            root_prefix_terms.append(_prefix_score(S_r, objective, tok_lp=tok_lp_r, K=K, tok_p=tok_tp_r))
+            if aux_weight > 0.0:
+                if aux == "ce":
+                    root_aux_terms.append(-tok_lp_r.sum())
+                else:
+                    root_aux_terms.append(jsd(s_logits_r, t_logits_r))
+        if not root_prefix_terms:
+            continue                                           # every m at this root hit EOS immediately
+        prefix_terms.append(torch.stack(root_prefix_terms).mean())     # (1/M) Σ_m, this root
+        if aux_weight > 0.0:
+            aux_terms.append(torch.stack(root_aux_terms).mean())
+    if not prefix_terms:
+        return draft(prompt_ids, return_dict=True).logits.sum() * 0.0
+    loss = -torch.stack(prefix_terms).mean()
+    if aux_weight > 0.0:
+        loss = loss + aux_weight * torch.stack(aux_terms).mean()
+    return loss
+
+
 # ---------------------------------------------------------------------------
 # Tree-loss path: sample K student paths, target tree pass, student tree pass.
 # ---------------------------------------------------------------------------
