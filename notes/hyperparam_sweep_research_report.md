@@ -2,6 +2,19 @@
 
 0.6B/8B, math_hard, 5k steps, single seed unless noted. Raw CSVs + all charts: [results/passK](https://github.com/Rmuk655/Distill-Spec-Research/tree/Pipeline/results/passK)
 
+![LR probe jsd vs prob](../results/passK/lr_probe_jsd_vs_prob.png)
+
+- **LR boundary probe (below 1e-5):** `prob` peaks at `2e-6` (5.710), edging out `3e-6` (5.701) by less than that neighborhood's own noise floor (~0.20) — effectively a tie, both well clear of `1e-5` (5.608). The vanilla sweep's "locked" LR wasn't optimal either way. `jsd` holds a flat plateau `3e-6`–`1e-5` (~5.97–5.99), dips below.
+
+![survival curves by LR bucket](../results/passK/survival_curves_by_lr.png)
+
+- **Collapse timing by LR bucket:** healthy range (1e-6–1e-5) never collapses; `1e-4` collapses gradually/staggered by step ~2000; `≥3e-4` collapses almost instantly.
+
+![pass@k by checkpoint](../results/passK/passk_by_checkpoint_math_eval_06b_8b.png)
+![pass@k by model size](../results/passK/passk_by_model_size_all_datasets.png)
+
+- **Pass@k:** computation confirmed correct (monotonic in k everywhere); 2 of 5 checkpoints trail the untrained draft at high k despite beating it at k=1 — training narrows response diversity even as it raises single-shot accuracy (see [passk_diversity_collapse_research_note.md](passk_diversity_collapse_research_note.md)).
+
 ![vanilla sweep dashboard](../results/passK/sweep_dashboard_vanilla.png)
 
 - **LR (jsd + prob):** both collapse hard above `lr=1e-4`; jsd's cliff is later/gentler than prob's.
@@ -11,30 +24,17 @@
 - **Weight decay {0.01,0.001,0.0001}:** no clear trend, all within noise (5.617/5.608/5.532).
 - **Grad clip {10} vs default (1.0):** `prob`, lr=1e-5, single seed each — 10 edges out the default (5.647 > 5.517). Spread is 0.130 BE, same order as the teacher_temp/lr_min probes at this exact baseline — within noise, no confirmed effect. [1.0 default](https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec-pipeline/runs/pe2pb5la) · [10](https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec-pipeline/runs/9w41gr72).
 - **Teacher temp {0.5,0.7} vs default (1.0):** `prob`, lr=1e-5, single seed each — 0.7 edges out 0.5 and the default (5.643 > 5.602 > 5.517). Spread is 0.126 BE, the same order as other single-axis probes at this exact lr=1e-5 point (grad_clip's spread was 0.130, lr_min's 0.072) — within noise, no confirmed effect. [0.5](https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec-pipeline/runs/dufzb7pw) · [0.7](https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec-pipeline/runs/tybxo9l6) · [1.0 default](https://wandb.ai/rmukund16-indian-institute-of-technology-hyderabad/distillspec-pipeline/runs/pe2pb5la).
-- **Multi-root, tail-reuse estimator — N {16,32} and random-offset, `prob` lr=1e-5:** N=16 vs N=32 (both fixed-offset): 5.699 vs 5.647, Δ=0.052 — within noise, no N effect. Offset on vs off at N=16: 5.744 vs 5.699, Δ=0.045 — within noise, no offset effect. All three beat the single-root baseline (5.608) by 0.039–0.136, with N=16+random-offset (5.744, Δ=0.136) sitting right at the edge of the noise floor — the same "borderline, not confirmed" pattern as the NSS warm+logprob K=3 case elsewhere in this project, not a verified win. best_val_block_eff read directly from `ckpt_latest/state.json`, not off wandb chart endpoints (this objective's early-peak-then-decline shape makes a chart's last plotted point unreliable as "best").
+- **Multi-root, tail-reuse estimator — N {16,32} and random-offset, `prob` lr=1e-5:** N=16 vs N=32 (both fixed-offset): 5.699 vs 5.647, Δ=0.052 — within noise, no N effect. Offset on vs off at N=16: 5.744 vs 5.699, Δ=0.045 — within noise, no offset effect. All three beat the single-root baseline (5.608) by 0.039–0.136, with N=16+random-offset (5.744, Δ=0.136) sitting right at the edge of the noise floor, not a verified win.
 - **Single-root M {4,8,16}, `prob` lr=3e-6, all cold-start from `Qwen/Qwen3-0.6B`:** M8 edges out M4 (5.810 vs 5.701, Δ=0.109) — right at the edge of the noise floor, borderline. M16 drops well below M8 (5.619 vs 5.810, Δ=-0.191) — this exceeds the 0.10-0.15 floor, a real decline, not noise; M16 vs M4 (5.619 vs 5.701, Δ=-0.082) is within noise. Non-monotonic: suggestive of a sweet spot near M=8, M=16 genuinely worse rather than "diminishing returns." Caveat: this M16 point is single-seed and is the same run whose surviving checkpoint later needed a crash-recovery warm-start (`_continued`) — its own recorded best should be unaffected by that later crash, but an independent cold-start replication (`po_prob_M16_lr3e-6_wu20_cold`) is in progress and should confirm this before treating "M=16 confirmed worse" as settled.
-
-![LR probe jsd vs prob](../results/passK/lr_probe_jsd_vs_prob.png)
-
-- **LR boundary probe (below 1e-5):** `prob` peaks at `2e-6` (5.710), edging out `3e-6` (5.701) by less than that neighborhood's own noise floor (~0.20) — effectively a tie, both well clear of `1e-5` (5.608). The vanilla sweep's "locked" LR wasn't optimal either way. `jsd` holds a flat plateau `3e-6`–`1e-5` (~5.97–5.99), dips below.
 
 ![CE-anneal sweep dashboard](../results/passK/sweep_dashboard_ceanneal.png)
 
 - **CE-anneal `anneal_steps` {1500,3000,4000}:** 3000 wins (5.796), 4000 close (5.764), 1500 lowest (5.737).
 - **CE-anneal `aux_weight` {0.5,1.0,2.0}:** 0.5 is the new overall best for `prob` (5.848), beating 1.0/2.0 (~5.79 both) and the 25k-step extension (5.833).
 
-![survival curves by LR bucket](../results/passK/survival_curves_by_lr.png)
-
-- **Collapse timing by LR bucket:** healthy range (1e-6–1e-5) never collapses; `1e-4` collapses gradually/staggered by step ~2000; `≥3e-4` collapses almost instantly.
-
 ![forgetting vs aux_weight](../results/passK/forgetting_vs_aux_weight.png)
 
 - **Forgetting vs `aux_weight`:** anchor reduces forgetting up to `aux_weight=1.0`, then rises again at `2.0` — doesn't track the BE-optimal `0.5`, so the anchor isn't working *purely* through reduced forgetting.
-
-![pass@k by checkpoint](../results/passK/passk_by_checkpoint_math_eval_06b_8b.png)
-![pass@k by model size](../results/passK/passk_by_model_size_all_datasets.png)
-
-- **Pass@k:** computation confirmed correct (monotonic in k everywhere); 2 of 5 checkpoints trail the untrained draft at high k despite beating it at k=1 — training narrows response diversity even as it raises single-shot accuracy (see [passk_diversity_collapse_research_note.md](passk_diversity_collapse_research_note.md)).
 
 ![gap closed math_eval](../results/passK/gap_closed_math_eval.png)
 ![gap closed gsm8k_eval](../results/passK/gap_closed_gsm8k_eval.png)
