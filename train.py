@@ -81,7 +81,8 @@ from losses.compute import (draft_tree_forward_with_grad, compute_flat_loss,
                              compute_flat_enrich_loss, compute_tree_loss,
                              compute_offpolicy_tree_loss, compute_enrichment_loss,
                              compute_prefix_overlap_loss,
-                             compute_prefix_overlap_multiroot_loss, expected_depth_scalar)
+                             compute_prefix_overlap_multiroot_loss,
+                             compute_prefix_overlap_multiroot_fresh_loss, expected_depth_scalar)
 from losses import LOSS_TO_VERIFIER
 from validation import compute_val_metrics, _update_forgetting
 from checkpointing import load_models, save_checkpoint, try_resume
@@ -210,6 +211,21 @@ def parse_args():
                     help="prefix_overlap multi-root only: start roots at a random offset "
                          "o~Unif{0..N-1} each step (doc §5 uniform-over-positions) "
                          "instead of a fixed 0 (every-Nth objective).")
+    ap.add_argument("--prefix_multiroot_fresh", action="store_true",
+                    help="prefix_overlap multi-root only: draw M independent, freshly-"
+                         "sampled continuations per root (own teacher.generate() calls) "
+                         "instead of slicing one shared rollout's tail. Removes the "
+                         "cross-root correlation of the default tail-reuse estimator, at "
+                         "roughly (num_roots x prefix_multiroot_M) x the teacher-generation "
+                         "cost per step. Required for --prefix_multiroot_M > 1 to have any "
+                         "effect (ignored otherwise, same as the tail-reuse estimator).")
+    ap.add_argument("--prefix_multiroot_M", type=int, default=1,
+                    help="prefix_overlap multi-root + --prefix_multiroot_fresh only: number "
+                         "of independent fresh continuations M sampled per root, averaged "
+                         "per doc §5's (1/M) Σ_m term before combining across roots. "
+                         "Default 1 (no averaging). Cost scales linearly with M on top of "
+                         "the num_roots x teacher-generation cost --prefix_multiroot_fresh "
+                         "already adds. Ignored unless --prefix_multiroot_fresh is set.")
     ap.add_argument("--lr",     type=float, default=LR,
                     help=f"Peak learning rate (default {LR}; use 1e-5 for bv/gbv_tree).")
     ap.add_argument("--train_dataset", default=TRAIN_DATASET,
@@ -783,7 +799,13 @@ def main():
             else:
                 aux_w = args.prefix_aux_weight
             if args.prefix_root_spacing > 0:
-                loss = compute_prefix_overlap_multiroot_loss(
+                multiroot_fn = (compute_prefix_overlap_multiroot_fresh_loss
+                                if args.prefix_multiroot_fresh
+                                else compute_prefix_overlap_multiroot_loss)
+                multiroot_kwargs = {}
+                if args.prefix_multiroot_fresh:
+                    multiroot_kwargs["M"] = args.prefix_multiroot_M
+                loss = multiroot_fn(
                     draft, teacher, ids, L=args.L,
                     N=args.prefix_root_spacing, rollout_len=args.prefix_rollout_len,
                     teacher_temp=args.teacher_temp,
@@ -791,7 +813,8 @@ def main():
                     objective=args.prefix_objective,
                     random_offset=args.prefix_random_offset, K=args.K,
                     min_root=args.prefix_min_root,
-                    teacher_topk=args.prefix_teacher_topk)
+                    teacher_topk=args.prefix_teacher_topk,
+                    **multiroot_kwargs)
             else:
                 loss = compute_prefix_overlap_loss(
                     draft, teacher, ids, M=args.prefix_M, L=args.L,
