@@ -121,7 +121,8 @@ LORA_DROPOUT    = 0.05
 VAL_EVERY       = 400                        # gradient-accum steps between val checks
 VAL_PROMPTS     = 100                        # larger set → lower SE, less winner's-curse bias
 SAVE_EVERY      = 400                        # ckpt_latest write cadence (matches VAL_EVERY)
-LOG_EVERY       = 10                         # console + W&B step-log cadence
+LOG_EVERY       = 8                          # console + W&B step-log cadence (matches GRAD_ACCUM so every
+                                              # logged grad_norm is a real post-accumulation reading, not 0.00 filler)
 VAL_EMA_ALPHA   = 0.3                        # smoothed-val EMA weight for checkpoint selection (α=0.3 → ~3-4 check window)
 EARLY_STOP_PAT  = 15                         # default patience: 15 × 400 = 6000 steps without smoothed improvement
 EARLY_STOP_DELTA = 0.0                       # min improvement threshold (0 = strict; >0 ignores noise-level fluctuations)
