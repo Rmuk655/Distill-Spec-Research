@@ -26,20 +26,40 @@ counts as real if it clears this.
   pass@k, per dataset:
   - `math_eval`: **0/27** configs clear the floor at any k — **no winner**,
     everything within noise.
+
+    ![pass@k, every checkpoint, math_eval](../results/passK/passk_curves_all_math_eval.png)
+
+    Best-prob (`ceanneal1500_lr1e-5_wu20`) tracks just above best-jsd
+    (`jsd_lr3e-6_wu10_lrmin0.1_wd0.01`) the whole curve, but the thin
+    per-run lines (every other checkpoint) are densely overlapping between
+    the two families — visually consistent with "no winner" once a floor
+    is applied; the gap between the two bold lines is not bigger than the
+    spread within each family.
+
   - `olympiad_eval`: **2/27** clear, marginally — **no major winner**.
+
+    ![pass@k, every checkpoint, olympiad_eval](../results/passK/passk_curves_all_olympiad_eval.png)
+
+    Same pattern as `math_eval`: best-prob (`lr1e-5_wu5_lrmin0.1_wd0.01`)
+    edges above best-jsd, but the thin-line clusters overlap heavily —
+    matches the floor-gated "no major winner" read.
+
   - `gsm8k_eval`: **~15/27** clear the floor, concentrated at k16/k32/k64
     — **the one dataset where several `prob` configs genuinely beat jsd on
     pass@k**, each at a real BE cost (their `best_val_block_eff` sits
     0.18–0.46 below jsd's 5.994).
 
-  ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
+    ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
 
-  Best-of-family by pass@k gap-closed (a different, hindsight selection
-  criterion than the BE-deployed-pick comparison above — see chart):
-  `po_prob_lr7e-6_wu20` sits clearly above jsd's own best-pass@k pick
-  (`jsd_lr3e-6_wu10_lrmin0.1_wd0.01`) across nearly the entire curve, both
-  above the untrained student and below the teacher — the clearest visual
-  confirmation of the floor-gated result above.
+    Different from the other two: best-prob (`po_prob_lr7e-6_wu20`) sits
+    clearly above best-jsd (`jsd_lr3e-6_wu10_lrmin0.1_wd0.01`) across
+    nearly the entire curve, and the red/blue thin-line clusters visibly
+    separate rather than overlap — the clearest visual confirmation of the
+    floor-gated result above.
+
+  All three charts use best-of-family by pass@k gap-closed (a different,
+  hindsight selection criterion than the BE-deployed-pick comparison used
+  elsewhere in this note) — a complementary view, not a contradiction.
 
 - **Multi-root (N=16, N=16+random-offset, N=32) consistently beats jsd on
   `gsm8k` k32/k64** — all three tested clear the floor at both k32 and k64
