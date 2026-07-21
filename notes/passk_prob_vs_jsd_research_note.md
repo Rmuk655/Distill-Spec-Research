@@ -34,19 +34,6 @@ measurements from two different data sources, not "BE on that dataset."
 - Cases where a trained checkpoint's pass@64 dips below the untrained
   baseline are explained in the footnote.
 
-- **Training-time BE (on `math_val`) is not correlated with held-out
-  pass@k on `gsm8k_eval`** — if anything, mildly *negatively* correlated
-  in this checkpoint set:
-
-  ![BE vs pass@k, gsm8k_eval](../results/passK/be_vs_passk_gsm8k_eval.png)
-
-  r = −0.31 (k4), −0.46 (k8), −0.52 (k16) across all 27 checkpoints. jsd's
-  points (blue, `best_val_block_eff` 5.75–6.0, measured on `math_val`
-  during training) cluster toward the *lower* end of `gsm8k_eval` pass@k
-  at every k shown; several `prob` points (red) with lower training-time
-  BE reach higher held-out pass@k. Best BE does not predict best pass@k
-  on this held-out set.
-
 - Checked against jsd on pass@k, per dataset:
   - `math_eval`: **0/27** configs clear the floor at any k — direction is
     prob-favoring but not above noise anywhere.
@@ -120,8 +107,8 @@ monotonic at every k — confirms the pass@k math itself is correct.
 ## Practical read
 
 - Judge a checkpoint by pass@k gap-closed to the teacher, per dataset —
-  not by pass@1 or by block_eff alone; the two axes diverge (BE-vs-pass@k
-  bullet above).
+  not by pass@1 or by training-time block_eff alone; block_eff is measured
+  on `math_val` only and is not a substitute for held-out pass@k.
 - `math_eval` and `olympiad_eval` pass@k differences are not currently
   usable as a go/no-go signal — direction favors prob, but nothing clears
   a real floor there.
