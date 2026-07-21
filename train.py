@@ -1128,6 +1128,40 @@ def main():
                            "cmd": sys.argv,
                            "train_args": _serializable_args(args)},
                     use_lora=USE_LORA)
+    # One-time FULL pass@k eval on ckpt_best (not the possibly-declined final-step
+    # weights currently in `draft`). This is the actual deployed checkpoint's
+    # pass@k -- exact, not the nearest-logged-row-before-the-peak approximation
+    # that mid-training passk checks are subject to (those run on a fixed step
+    # cadence decoupled from whether a given val check became the new best; see
+    # scripts/passk_vs_jsd_above_floor.py's docstring for the analysis-side
+    # workaround this replaces). Logged to wandb SUMMARY (not history) so it
+    # can't collide with the training curve's step ordering (this runs after
+    # the final step, but ckpt_best's own step is usually much earlier).
+    _ckpt_best_dir = os.path.join(output_dir, "ckpt_best")
+    if os.path.isdir(_ckpt_best_dir) and passk_sets:
+        try:
+            from transformers import AutoModelForCausalLM
+            print(f"[passk:final] loading ckpt_best from {_ckpt_best_dir} for one-time full pass@k eval...")
+            _best_state = AutoModelForCausalLM.from_pretrained(
+                _ckpt_best_dir, torch_dtype=torch.bfloat16).state_dict()
+            draft.load_state_dict(_best_state, strict=False)
+            _final_passk = {}
+            for _ds, (_pr_all, _go_all) in passk_sets.items():
+                _pr, _go = _pr_all[:passk_full_n_prompts], _go_all[:passk_full_n_prompts]
+                _pk_ks = [k for k in (1, 2, 4, 8, 16, 32, 64) if k <= args.passk_full_samples]
+                _pk = _train_passk(draft, tokenizer, _pr, _go,
+                                   n=args.passk_full_samples, temp=args.passk_temp,
+                                   k_values=_pk_ks, max_new_tokens=args.passk_max_new_tokens)
+                for k, v in _pk.items():
+                    _final_passk[f"passk_deployed_{_ds}/k{k}"] = v
+                print(f"  [passk:final:{_ds}] " + "  ".join(f"k{k}={v:.3f}" for k, v in _pk.items()))
+            if wandb_run and _final_passk:
+                wandb_run.summary.update(_final_passk)
+        except Exception as e:
+            print(f"[passk:final] skipped (error: {e})")
+    else:
+        print("[passk:final] skipped (no ckpt_best saved or no --passk_datasets configured)")
+
     print(f"\n[done] {args.loss}: total time = {(time.time()-t0)/60:.1f} min  "
           f"best_val_block_eff = {best_val_block_eff:.3f}  best_smoothed = {best_smoothed_be:.3f}")
     if wandb_run:
