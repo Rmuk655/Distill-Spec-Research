@@ -9,6 +9,7 @@ _KNOWN = {
     "math_train", "math_hard", "math_val", "math_eval",
     "olympiad_eval",   # eval-only — no olympiad_hard/olympiad_val split
     "spec_bench",
+    "dapo_math_train",   # training-only — no dapo_val/dapo_eval split, see fetch_dapo_math
 }
 
 
