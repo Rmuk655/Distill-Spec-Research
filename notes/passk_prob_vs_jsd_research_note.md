@@ -6,7 +6,7 @@
 `c` correct among them, averaged over 100 held-out prompts. At `k=n=64` this
 is just "did ≥1 of 64 tries succeed" per prompt.
 
-27 checkpoints, real `ckpt_best` offline eval:
+33 checkpoints, real `ckpt_best` offline eval:
 [results/passK/passk_hparam_sweep.csv](../results/passK/passk_hparam_sweep.csv).
 Noise floor = 2×std(pass@k) across the flat low-LR `prob` cluster, per k per
 dataset — a delta only counts as real if it clears this.
@@ -35,14 +35,14 @@ measurements from two different data sources, not "BE on that dataset."
   baseline are explained in the footnote.
 
 - Checked against jsd on pass@k, per dataset. Two different questions,
-  not the same thing: **direction** (of 27 checkpoints, how many sit
+  not the same thing: **direction** (of 33 checkpoints, how many sit
   numerically above jsd at this k) vs **floor-clearing** (whether that gap
   is big enough to call a real effect, not just noise). Direction turns
   out to be overwhelmingly prob-favoring on *every* dataset — the
   difference between datasets is entirely in whether that direction
   survives a floor.
 
-  - `math_eval`: **21–25 of 27** sit above jsd at k1–k32 (drops to 13/22 at
+  - `math_eval`: **26–31 of 33** sit above jsd at k1–k32 (drops to 18/28 at
     k64). Despite that consistent direction, **nothing clears a real
     floor** at any k — the per-config gaps are individually too small.
 
@@ -53,9 +53,9 @@ measurements from two different data sources, not "BE on that dataset."
     lines sit above the thin blue lines too — but the two families'
     spreads overlap enough that no single gap clears a real floor.
 
-  - `olympiad_eval`: **23–26 of 27** sit above jsd at k1–k32 (drops to
-    15/23 at k64) — just as consistent a direction as `math_eval`, if not
-    more so. Same result as `math_eval` though: only 2/27 gaps are large
+  - `olympiad_eval`: **27–32 of 33** sit above jsd at k1–k32 (drops to
+    18/29 at k64) — just as consistent a direction as `math_eval`, if not
+    more so. Same result as `math_eval` though: only 2/33 gaps are large
     enough to individually clear the floor.
 
     ![pass@k, every checkpoint, olympiad_eval](../results/passK/passk_curves_all_olympiad_eval.png)
@@ -66,8 +66,9 @@ measurements from two different data sources, not "BE on that dataset."
     consistent the raw direction actually is here; it's the *floor*, not
     the direction, that most configs don't clear.
 
-  - `gsm8k_eval`: **~15/27** clearly win above noise, concentrated at
-    k16/k32/k64 — the one held-out set with a real pattern. Each of these
+  - `gsm8k_eval`: **14–21/33** clearly win above noise, concentrated at
+    k16/k32/k64 (0/33 at k1–k4) — the one held-out set with a real
+    pattern. Each of these
     checkpoints' *training-time* `best_val_block_eff` (measured on
     `math_val`, unrelated to `gsm8k_eval`) sits 0.18–0.46 below jsd's
     5.994 — the checkpoints that do best on this held-out pass@k set were
@@ -90,13 +91,32 @@ measurements from two different data sources, not "BE on that dataset."
   across the whole N-family tested.**
 
 - **Grad_clip does NOT show a consistent pass@k effect** — `gradclip100`
-  clears `gsm8k` k16/k32/k64 (Δ 0.033–0.04); `gradclip1000` clears nothing
-  anywhere. **No consistent winner across the family** — don't generalize
-  from the `gradclip100` result alone.
+  clears `gsm8k` k16/k32/k64 (Δ 0.033–0.04); `gradclip10` and `gradclip1000`
+  clear nothing anywhere (gradclip10's closest miss is k32, Δ=0.020 vs
+  floor 0.021). **No consistent winner across the family** — don't
+  generalize from the `gradclip100` result alone; it's 1 of 3 clip values
+  tested, not a trend.
 
-- **Prefix_M family: not yet assessable.** Only `M16_lr3e-6_wu20_cold` is in
-  the current offline-eval set; `M4`/`M8` haven't gone through `passk_eval.py`
-  yet (pending the `/sensei-fs-3` batch). Revisit once that data lands.
+- **Prefix_M family does NOT show a consistent pass@k effect either**, now
+  that `M4`/`M8`/`M16` (bare)/`M16_cold` are all in the offline-eval set.
+  Three of the four clear `gsm8k` k16/k32/k64 — `M4` (Δ 0.021–0.030), `M8`
+  (Δ 0.030–0.037), `M16` bare (Δ 0.030–0.032) — but the clean cold-start
+  `M16` replication clears nothing (Δ 0.010–0.021, below floor). Since two
+  same-config `M16` seeds land on opposite sides of the floor, and the
+  clearing magnitude doesn't scale with `M`, this isn't an `M` lever — it's
+  the same already-known gsm8k pattern showing up in most (not all)
+  `prob` checkpoints regardless of family.
+
+- **Teacher temp shows the same isolated, non-lever pattern**: `ttemp=0.5`
+  clears `gsm8k` k16/k32/k64 (Δ 0.027–0.033), `ttemp=0.7` clears nothing
+  anywhere. One point in a two-point family clearing isn't a confirmed
+  temp effect, same caveat as `gradclip100` above.
+
+- **CE-anneal (aux_weight=0.5) at lr=3e-6 tracks its own no-anneal base**,
+  not a new effect: both clear `gsm8k` k32 (anneal Δ=0.028, base Δ=0.021),
+  anneal additionally clears k16 (Δ=0.033) where the base doesn't. Anneal
+  doesn't move the needle much at this LR — unlike lr=1e-5, where
+  `ceanneal3000_auxw0.5` is prob's actual best-BE deployment pick.
 
 ## Footnote — why one checkpoint's trained draft is below the untrained student
 
