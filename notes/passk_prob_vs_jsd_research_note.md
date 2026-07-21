@@ -34,24 +34,37 @@ measurements from two different data sources, not "BE on that dataset."
 - Cases where a trained checkpoint's pass@64 dips below the untrained
   baseline are explained in the footnote.
 
-- Checked against jsd on pass@k, per dataset:
-  - `math_eval`: direction is prob-favoring, but **nothing clearly wins
-    above noise** at any k.
+- Checked against jsd on pass@k, per dataset. Two different questions,
+  not the same thing: **direction** (of 27 checkpoints, how many sit
+  numerically above jsd at this k) vs **floor-clearing** (whether that gap
+  is big enough to call a real effect, not just noise). Direction turns
+  out to be overwhelmingly prob-favoring on *every* dataset — the
+  difference between datasets is entirely in whether that direction
+  survives a floor.
+
+  - `math_eval`: **21–25 of 27** sit above jsd at k1–k32 (drops to 13/22 at
+    k64). Despite that consistent direction, **nothing clears a real
+    floor** at any k — the per-config gaps are individually too small.
 
     ![pass@k, every checkpoint, math_eval](../results/passK/passk_curves_all_math_eval.png)
 
     Best-prob (`ceanneal1500_lr1e-5_wu20`) tracks just above best-jsd
-    (`jsd_lr3e-6_wu10_lrmin0.1_wd0.01`) the whole curve, and most thin
-    red lines sit above the thin blue lines too — but the two families'
-    spreads overlap enough that the gap doesn't clear a real floor.
+    (`jsd_lr3e-6_wu10_lrmin0.1_wd0.01`) the whole curve, and most thin red
+    lines sit above the thin blue lines too — but the two families'
+    spreads overlap enough that no single gap clears a real floor.
 
-  - `olympiad_eval`: nearly the same — only a couple of configs edge above
-    noise, not enough for a real pattern.
+  - `olympiad_eval`: **23–26 of 27** sit above jsd at k1–k32 (drops to
+    15/23 at k64) — just as consistent a direction as `math_eval`, if not
+    more so. Same result as `math_eval` though: only 2/27 gaps are large
+    enough to individually clear the floor.
 
     ![pass@k, every checkpoint, olympiad_eval](../results/passK/passk_curves_all_olympiad_eval.png)
 
-    Same pattern as `math_eval`: best-prob (`lr1e-5_wu5_lrmin0.1_wd0.01`)
-    edges above best-jsd, thin-line clusters overlap heavily.
+    Best-prob (`lr1e-5_wu5_lrmin0.1_wd0.01`) edges above best-jsd, and
+    (matching the count above) most thin red lines sit above thin blue —
+    the chart's visual impression of "a mixed picture" undersells how
+    consistent the raw direction actually is here; it's the *floor*, not
+    the direction, that most configs don't clear.
 
   - `gsm8k_eval`: **~15/27** clearly win above noise, concentrated at
     k16/k32/k64 — the one held-out set with a real pattern. Each of these
