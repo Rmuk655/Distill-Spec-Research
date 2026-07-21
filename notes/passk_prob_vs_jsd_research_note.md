@@ -35,8 +35,8 @@ measurements from two different data sources, not "BE on that dataset."
   baseline are explained in the footnote.
 
 - Checked against jsd on pass@k, per dataset:
-  - `math_eval`: **0/27** configs clear the floor at any k — direction is
-    prob-favoring but not above noise anywhere.
+  - `math_eval`: direction is prob-favoring, but **nothing clearly wins
+    above noise** at any k.
 
     ![pass@k, every checkpoint, math_eval](../results/passK/passk_curves_all_math_eval.png)
 
@@ -45,19 +45,20 @@ measurements from two different data sources, not "BE on that dataset."
     red lines sit above the thin blue lines too — but the two families'
     spreads overlap enough that the gap doesn't clear a real floor.
 
-  - `olympiad_eval`: **2/27** clear, marginally.
+  - `olympiad_eval`: nearly the same — only a couple of configs edge above
+    noise, not enough for a real pattern.
 
     ![pass@k, every checkpoint, olympiad_eval](../results/passK/passk_curves_all_olympiad_eval.png)
 
     Same pattern as `math_eval`: best-prob (`lr1e-5_wu5_lrmin0.1_wd0.01`)
     edges above best-jsd, thin-line clusters overlap heavily.
 
-  - `gsm8k_eval`: **~15/27** clear the floor, concentrated at k16/k32/k64
-    — the one held-out set where several `prob` configs clear it, each
-    from a checkpoint whose *training-time* `best_val_block_eff` (measured
-    on `math_val`, unrelated to `gsm8k_eval`) sits 0.18–0.46 below jsd's
-    5.994 — i.e. the checkpoints that do best on this held-out pass@k set
-    were not the ones jsd's own training-time metric would have picked.
+  - `gsm8k_eval`: **~15/27** clearly win above noise, concentrated at
+    k16/k32/k64 — the one held-out set with a real pattern. Each of these
+    checkpoints' *training-time* `best_val_block_eff` (measured on
+    `math_val`, unrelated to `gsm8k_eval`) sits 0.18–0.46 below jsd's
+    5.994. **Best training-time BE does not predict best pass@k on this
+    held-out set.**
 
     ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
 
@@ -101,8 +102,8 @@ monotonic at every k — confirms the pass@k math itself is correct.
 | dataset | k=64, 0.6B→8B | note |
 |---|---|---|
 | `olympiad_eval` | 0.240 → 0.330 | lowest absolute scores everywhere (32B teacher itself only hits 0.36) |
-| `math_eval` | 0.570 → 0.630 | mid-range, not saturated — but 0/27 configs clear a real floor here regardless |
-| `gsm8k_eval` | 0.920 → 0.990 | near-ceiling by absolute level, yet the most floor-clearing-sensitive dataset found |
+| `math_eval` | 0.570 → 0.630 | mid-range, not saturated — but nothing clearly wins above noise here regardless |
+| `gsm8k_eval` | 0.920 → 0.990 | near-ceiling by absolute level, yet the dataset where a real prob-vs-jsd pattern actually shows up |
 
 ## Practical read
 
@@ -110,9 +111,9 @@ monotonic at every k — confirms the pass@k math itself is correct.
   not by pass@1 or by training-time block_eff alone; block_eff is measured
   on `math_val` only and is not a substitute for held-out pass@k.
 - `math_eval` and `olympiad_eval` pass@k differences are not currently
-  usable as a go/no-go signal — direction favors prob, but nothing clears
-  a real floor there.
-- `gsm8k_eval` at k16/k32/k64, floor-gated, is currently the most useful
-  lens for a real prob-vs-jsd gap.
+  usable as a go/no-go signal — direction favors prob, but nothing clearly
+  wins above noise there.
+- `gsm8k_eval` at k16/k32/k64 is currently the most useful lens for a real
+  prob-vs-jsd gap.
 - Re-derive the floor whenever the checkpoint set changes; it moves as new
   runs join the reference cluster.
