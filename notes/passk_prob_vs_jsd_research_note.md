@@ -57,8 +57,8 @@ measurements from two different data sources, not "BE on that dataset."
     k16/k32/k64 — the one held-out set with a real pattern. Each of these
     checkpoints' *training-time* `best_val_block_eff` (measured on
     `math_val`, unrelated to `gsm8k_eval`) sits 0.18–0.46 below jsd's
-    5.994. **Best training-time BE does not predict best pass@k on this
-    held-out set.**
+    5.994 — the checkpoints that do best on this held-out pass@k set were
+    not the ones jsd's own training-time metric would have picked.
 
     ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
 
@@ -85,7 +85,7 @@ measurements from two different data sources, not "BE on that dataset."
   the current offline-eval set; `M4`/`M8` haven't gone through `passk_eval.py`
   yet (pending the `/sensei-fs-3` batch). Revisit once that data lands.
 
-## Footnote — one checkpoint-specific example (not a general finding)
+## Footnote — why one checkpoint's trained draft is below the untrained student
 
 [passk_by_checkpoint_math_eval_06b_8b.png](../results/passK/passk_by_checkpoint_math_eval_06b_8b.png):
 `warm_anneal_lr1e5` and `jsd_mathhard_s123` beat the untrained `Qwen3-0.6B`
