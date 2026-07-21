@@ -40,7 +40,12 @@ import math
 import statistics
 import sys
 
-PASSK_KS = [2, 4, 8, 16]
+PASSK_KS = [2, 4, 8, 16, 32, 64]
+# k32/k64 come from the SPARSER "full" pass@k tier (passk_full_samples=64,
+# logged every passk_full_every_n_vals val checks, vs every passk_every_n_vals
+# for k1-16) -- the "nearest logged row at/before the BE peak" approximation
+# in passk_at_deployment() has more lag at these k's. Treat k32/k64 deltas as
+# noisier / less precisely time-aligned to ckpt_best than k2-16.
 BEST_BE_KEYS = ["val/best_block_eff", "best_val_block_eff", "val/block_eff", "best_block_eff"]
 
 # The already-established "flat" low-LR prob cluster (~0.11 BE spread, same
