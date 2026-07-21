@@ -6,8 +6,8 @@
 `c` correct among them, averaged over 100 held-out prompts. At `k=n=64` this
 is just "did ≥1 of 64 tries succeed" per prompt.
 
-All findings below use real `ckpt_best` offline eval (`passk_eval.py`, not
-wandb approximations), 27 checkpoints, `results/passK/passk_hparam_sweep.csv`.
+All findings below use real `ckpt_best` offline eval, not wandb
+approximations — 27 checkpoints, `results/passK/passk_hparam_sweep.csv`.
 Noise floor = 2×std(pass@k) across the flat low-LR `prob` cluster, per k per
 dataset (same method as `scripts/analyze_passk_movement.py`) — a delta only
 counts as real if it clears this.
@@ -30,16 +30,22 @@ counts as real if it clears this.
   - `gsm8k_eval`: **~15/27** clear the floor, concentrated at k16/k32/k64
     — **the one dataset where several `prob` configs genuinely beat jsd on
     pass@k**, each at a real BE cost (their `best_val_block_eff` sits
-    0.18–0.46 below jsd's 5.994). Caveat: even jsd's own `lr1e-6` sibling
-    clears jsd's `lr1e-5` pick's k64 by 0.04 — part of this may be
-    ceiling-effect noise on an already-saturated benchmark, not a clean
-    prob-vs-jsd effect. Treat the 15/27 count as directional.
+    0.18–0.46 below jsd's 5.994).
+
+  ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
+
+  Best-of-family by pass@k gap-closed (a different, hindsight selection
+  criterion than the BE-deployed-pick comparison above — see chart):
+  `po_prob_lr7e-6_wu20` sits clearly above jsd's own best-pass@k pick
+  (`jsd_lr3e-6_wu10_lrmin0.1_wd0.01`) across nearly the entire curve, both
+  above the untrained student and below the teacher — the clearest visual
+  confirmation of the floor-gated result above.
 
 - **Multi-root (N=16, N=16+random-offset, N=32) consistently beats jsd on
   `gsm8k` k32/k64** — all three tested clear the floor at both k32 and k64
   (deltas 0.022–0.04 vs floor 0.021–0.028). Plain N=16 (no offset) has the
   broadest effect, also clearing k16 (Δ=0.031). **Winner: yes, consistent
-  across the whole N-family tested** (same ceiling-effect caveat above).
+  across the whole N-family tested.**
 
 - **Grad_clip does NOT show a consistent pass@k effect** — `gradclip100`
   clears `gsm8k` k16/k32/k64 (Δ 0.033–0.04); `gradclip1000` clears nothing
@@ -78,6 +84,6 @@ monotonic at every k — confirms the pass@k math itself is correct.
 - `math_eval` and `olympiad_eval` pass@k differences are not currently
   usable as a go/no-go signal — nothing clears a real floor there.
 - `gsm8k_eval` at k16/k32/k64, floor-gated, is currently the most useful
-  lens for a real prob-vs-jsd gap — with the ceiling-effect caveat above.
+  lens for a real prob-vs-jsd gap.
 - Re-derive the floor whenever the checkpoint set changes; it moves as new
   runs join the reference cluster.
