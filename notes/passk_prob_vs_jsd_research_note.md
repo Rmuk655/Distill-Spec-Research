@@ -20,20 +20,32 @@ clear it, prob is still numerically ahead, just by less than what a single
 seed's own noise could produce on its own — so it isn't confirmed as a
 real effect, not "prob is worse."
 
+**What `best_val_block_eff` is, and isn't:** it's a training-time metric
+only — computed once per checkpoint during training, on `math_val`, via
+the block-efficiency verifier. It was never computed on `math_eval`,
+`gsm8k_eval`, or `olympiad_eval` — those three are held-out pass@k sets
+only, with no verifier/block_eff run on them at all. Every "BE" number
+below is that single training-time value; comparing it against a
+checkpoint's pass@k on any of the three held-out sets is comparing two
+measurements from two different data sources, not "BE on that dataset."
+
 ## Findings
 
 - Cases where a trained checkpoint's pass@64 dips below the untrained
   baseline are explained in the footnote.
 
-- **BE and pass@k are not correlated on `gsm8k_eval`** — if anything,
-  mildly *negatively* correlated in this checkpoint set:
+- **Training-time BE (on `math_val`) is not correlated with held-out
+  pass@k on `gsm8k_eval`** — if anything, mildly *negatively* correlated
+  in this checkpoint set:
 
   ![BE vs pass@k, gsm8k_eval](../results/passK/be_vs_passk_gsm8k_eval.png)
 
   r = −0.31 (k4), −0.46 (k8), −0.52 (k16) across all 27 checkpoints. jsd's
-  points (blue, `best_val_block_eff` 5.75–6.0) cluster toward the *lower*
-  end of pass@k at every k shown; several `prob` points (red) with lower BE
-  reach higher pass@k. Best BE does not predict best pass@k here.
+  points (blue, `best_val_block_eff` 5.75–6.0, measured on `math_val`
+  during training) cluster toward the *lower* end of `gsm8k_eval` pass@k
+  at every k shown; several `prob` points (red) with lower training-time
+  BE reach higher held-out pass@k. Best BE does not predict best pass@k
+  on this held-out set.
 
 - Checked against jsd on pass@k, per dataset:
   - `math_eval`: **0/27** configs clear the floor at any k — direction is
@@ -54,9 +66,11 @@ real effect, not "prob is worse."
     edges above best-jsd, thin-line clusters overlap heavily.
 
   - `gsm8k_eval`: **~15/27** clear the floor, concentrated at k16/k32/k64
-    — the one dataset where several `prob` configs clear it, each at a
-    real BE cost (their `best_val_block_eff` sits 0.18–0.46 below jsd's
-    5.994).
+    — the one held-out set where several `prob` configs clear it, each
+    from a checkpoint whose *training-time* `best_val_block_eff` (measured
+    on `math_val`, unrelated to `gsm8k_eval`) sits 0.18–0.46 below jsd's
+    5.994 — i.e. the checkpoints that do best on this held-out pass@k set
+    were not the ones jsd's own training-time metric would have picked.
 
     ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
 
