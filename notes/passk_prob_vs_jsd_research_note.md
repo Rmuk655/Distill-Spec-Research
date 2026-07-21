@@ -101,13 +101,14 @@ measurements from two different data sources, not "BE on that dataset."
   generalize from the `gradclip100` result alone.
 
 - **Prefix_M family does NOT show a consistent pass@k effect either**, now
-  that `M4`/`M8`/`M16` (bare)/`M16_cold` are all in the offline-eval set.
-  `M4` clears `gsm8k` k16/k32/k64 (Δ 0.021–0.030), `M8` clears the same
-  three (Δ 0.030–0.037), `M16` bare also clears them (Δ 0.030–0.032), but
-  `M16_cold` (same config, different seed) doesn't clear anywhere
-  (Δ 0.010–0.021, inside the floor). No trend with `M` itself — it's the
-  same already-known gsm8k pattern showing up in most (not all) `prob`
-  checkpoints regardless of family.
+  that `M4`/`M8`/`M16` (warm-started)/`M16_cold` are all in the
+  offline-eval set. `M4` clears `gsm8k` k16/k32/k64 (Δ 0.021–0.030), `M8`
+  clears the same three (Δ 0.030–0.037), `M16` warm-started also clears
+  them (Δ 0.030–0.032), but `M16_cold` (same config, clean cold-start redo
+  of the warm-started run) doesn't clear anywhere (Δ 0.010–0.021, inside
+  the floor). No trend with `M` itself — it's the same already-known
+  gsm8k pattern showing up in most (not all) `prob` checkpoints
+  regardless of family.
 
 - **Teacher temp shows the same isolated, non-lever pattern**: `ttemp=0.5`
   clears `gsm8k` k16/k32/k64 (Δ 0.027–0.033), `ttemp=0.7` stays inside the
