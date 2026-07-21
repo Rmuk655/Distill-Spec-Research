@@ -239,12 +239,16 @@ def core_checks(C, jsd, R):
     Cn, T = prompt.shape[1], rollout.numel()
     s_logits = student(full).logits[0, Cn - 1:Cn - 1 + T].double()
     tok_lp = F.log_softmax(s_logits, dim=-1).gather(-1, rollout.view(-1, 1)).squeeze(-1)
-    roots = list(range(0, T - 1, N))
+    # roots(r+L<=T only, i.e. full windows) -- matches the post-M1-fix code exactly;
+    # deliberately picked T=12 not a multiple of N=3 so a truncated-window root
+    # (old r=9 -> tok_lp[9:13], only 3 of 4 elements) would exist under the OLD
+    # bound and must now be correctly EXCLUDED, proving the fix took effect.
+    roots = list(range(0, T - Lm + 1, N))
     scores = [torch.cumsum(tok_lp[r:r + Lm], 0).exp().sum() for r in roots]
     expected = -torch.stack(scores).mean()
-    R.add("C8 multiroot tail-reuse == indep recompute",
+    R.add("C8 multiroot tail-reuse == indep recompute (full windows only, post-M1-fix)",
           torch.allclose(lossm.double(), expected, atol=1e-5),
-          f"code={lossm.item():.6f} indep={expected.item():.6f}")
+          f"code={lossm.item():.6f} indep={expected.item():.6f} roots={roots} (r=9 correctly excluded)")
 
     # C9 -- loss decreases
     st = StudentLM(seed=2)
