@@ -1,4 +1,4 @@
-# Pass@k diversity collapse — and why math_eval isn't the differentiator once you add a noise floor
+# Pass@k at high k: distillation can leave the draft worse than doing nothing — and math_eval isn't the noise-floor-gated differentiator
 
 ## Formula
 
