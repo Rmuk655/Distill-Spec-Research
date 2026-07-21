@@ -129,9 +129,10 @@ measurements from two different data sources, not "BE on that dataset."
 `warm_anneal_lr1e5` and `jsd_mathhard_s123` beat the untrained `Qwen3-0.6B`
 at `k=1` (0.178/0.153 vs 0.119) but the untrained curve is steeper and
 crosses back above both by `k≈16-32`, finishing higher at `k=64`
-(0.570 vs 0.530/0.510). `lr5e6` and `ce_lr1e5` stay above baseline the whole
-curve on the same dataset — this crossover is checkpoint-specific, not a
-property of training in general. [passk_by_model_size_all_datasets.png](../results/passK/passk_by_model_size_all_datasets.png)
+(0.570 vs 0.530/0.510). `lr5e6` and `ce_lr1e5` — also trained, same
+dataset — stay above baseline the whole curve, so training itself doesn't
+cause this; it's specific to those two checkpoints.
+[passk_by_model_size_all_datasets.png](../results/passK/passk_by_model_size_all_datasets.png)
 is the control: across model *size* (no training), every curve is strictly
 monotonic at every k — confirms the pass@k math itself is correct.
 
