@@ -29,6 +29,33 @@ stumble onto a fix elsewhere — some prompts go from "occasionally solved" to
 reasoning capacity" (pass@1↑, pass@256 flat/down vs. base) — here for
 KL-based distillation, not RL.
 
+## Main lesson — trained vs untrained draft vs teacher
+
+Distillation training exists to close the pass@64 gap between the
+untrained draft and the teacher. That's not what happens reliably. Using
+the untrained-0.6B → teacher-8B endpoints already in the table above as
+the gap, and % gap closed = (checkpoint − untrained) / (teacher − untrained):
+
+| checkpoint | math_eval | gsm8k_eval | olympiad_eval |
+|---|---|---|---|
+| `lr5e6` | 67% | 0% | **100%** |
+| `ce_lr1e5` | 33% | 43% | 78% |
+| `lr1e5` | **−17%** | **−57%** | 78% |
+| `warm_anneal_lr1e5` | **−67%** | 14% | **−11%** |
+| `jsd_mathhard_s123` | **−100%** | 0% | 33% |
+
+Negative = the checkpoint ends up *further from the teacher than the
+untrained draft already was* — not a small effect. `jsd_mathhard_s123` on
+`math_eval` gives back a full gap-width; `lr1e5` on `gsm8k_eval` gives back
+more than half. No checkpoint here closes gap on all three datasets except
+`ce_lr1e5`, and even it never gets above 78%.
+
+**So: pass@1 improving is not evidence the draft moved toward the
+teacher's actual behavior at high k.** Training can leave the draft
+*worse* than doing nothing, depending on dataset — check pass@64 gap-closed
+per dataset before calling a checkpoint an improvement, don't infer it
+from pass@1 or from block_eff alone.
+
 ## Finding 2 — which dataset actually differentiates configs needs a noise floor, not eyeballing
 
 Absolute k=64 level by dataset, 0.6B→8B:
