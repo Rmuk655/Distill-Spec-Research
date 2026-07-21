@@ -460,7 +460,16 @@ def compute_prefix_overlap_multiroot_loss(draft, teacher, prompt_ids,
     start = int(torch.randint(0, N, (1,)).item()) if random_offset else 0
     start = max(start, min_root)                            # deep-bias: skip shallow roots
     prefix_terms, aux_terms = [], []
-    for r in range(start, T - 1, N):                       # roots every N positions
+    # Roots every N positions, but ONLY where a full L-token window exists (r+L<=T).
+    # Bound was T-1 (any root with >=1 token left); a root near an early-EOS
+    # rollout's tail (T < rollout_len) could then get a silently truncated
+    # window tok_lp[r:r+L] with <L terms -- since every "prob"-objective term is
+    # >=0, dropping trailing terms mechanically deflates that root's score
+    # regardless of student quality (audit finding M1). Full-length rollouts
+    # (T==rollout_len, the common case here per train.py's own note that most
+    # MATH solutions don't reach EOS within MAX_NEW_TOKENS) are unaffected
+    # either way -- this only changes behavior on early-EOS rollouts.
+    for r in range(start, T - L + 1, N):
         win_lp = tok_lp[r:r + L]                            # student log-probs from root r
         if win_lp.numel() == 0:
             break
