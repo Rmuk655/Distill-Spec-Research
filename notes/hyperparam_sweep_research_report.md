@@ -13,7 +13,7 @@
 ![pass@k by checkpoint](../results/passK/passk_by_checkpoint_math_eval_06b_8b.png)
 ![pass@k by model size](../results/passK/passk_by_model_size_all_datasets.png)
 
-- **Pass@k:** computation confirmed correct (monotonic in k everywhere); 2 of 5 checkpoints trail the untrained draft at high k despite beating it at k=1 — training narrows response diversity even as it raises single-shot accuracy (see [passk_diversity_collapse_research_note.md](passk_diversity_collapse_research_note.md)).
+- **Pass@k:** computation confirmed correct (monotonic in k everywhere); one 2-of-5-checkpoint example trails the untrained draft at high k despite beating it at k=1 — checkpoint-specific, not general (see [passk_prob_vs_jsd_research_note.md](passk_prob_vs_jsd_research_note.md) for the full pass@k analysis, including BE-vs-pass@k divergence and the prob-vs-jsd comparison).
 
 ![vanilla sweep dashboard](../results/passK/sweep_dashboard_vanilla.png)
 
