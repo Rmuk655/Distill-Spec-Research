@@ -54,25 +54,25 @@ measurements from two different data sources, not "BE on that dataset."
     spreads overlap enough that no single gap clears a real floor.
 
   - `olympiad_eval`: **27–32 of 33** sit above jsd at k1–k32 (drops to
-    18/29 at k64) — just as consistent a direction as `math_eval`, if not
-    more so. Same result as `math_eval` though: only 2/33 gaps are large
-    enough to individually clear the floor.
+    18/29 at k64) — a similarly consistent direction to `math_eval` by
+    per-checkpoint count. Same result as `math_eval` though: only 2/33
+    gaps are large enough to individually clear the floor.
 
     ![pass@k, every checkpoint, olympiad_eval](../results/passK/passk_curves_all_olympiad_eval.png)
 
-    Best-prob (`lr1e-5_wu5_lrmin0.1_wd0.01`) edges above best-jsd, and
-    (matching the count above) most thin red lines sit above thin blue —
-    the chart's visual impression of "a mixed picture" undersells how
-    consistent the raw direction actually is here; it's the *floor*, not
-    the direction, that most configs don't clear.
+    The bold best-of-family lines tell a different visual story than the
+    count: best-prob (`lr1e-5_wu5_lrmin0.1_wd0.01`) and best-jsd sit almost
+    on top of each other through k1–32, only pulling apart at k64 (0.330
+    vs 0.310) — much tighter than `math_eval`'s bold lines, which stay
+    visibly separated the whole curve. The per-checkpoint count (above) is
+    against the single jsd reference checkpoint across all 33 configs, not
+    the gap between these two hindsight-picked bold lines — don't read the
+    bold-line closeness as contradicting the count, they're answering
+    different questions.
 
   - `gsm8k_eval`: **14–21/33** clearly win above noise, concentrated at
     k16/k32/k64 (0/33 at k1–k4) — the one held-out set with a real
-    pattern. Each of these
-    checkpoints' *training-time* `best_val_block_eff` (measured on
-    `math_val`, unrelated to `gsm8k_eval`) sits 0.18–0.46 below jsd's
-    5.994 — the checkpoints that do best on this held-out pass@k set were
-    not the ones jsd's own training-time metric would have picked.
+    pattern.
 
     ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
 
