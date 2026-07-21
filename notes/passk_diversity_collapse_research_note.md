@@ -1,4 +1,4 @@
-# Trained drafts trail the untrained baseline at high k
+# Pass@k diversity collapse — and why math_eval isn't the differentiator once you add a noise floor
 
 ## Formula
 
@@ -55,8 +55,33 @@ genuinely improve on the untrained draft, `warm_anneal`/`jsd_mathhard`
 regress below it. `gsm8k_eval` barely moves either direction — consistent
 with it already being saturated regardless of training.
 
-## Practical read
+## Correction — the ranking above had no noise floor (2026-07-21)
 
-Track `math_eval` pass@64 as the primary go/no-go regression check —
-it's the only one of the three that actually distinguishes a good
-training run from a bad one.
+The "did training move these" table used raw deltas against one baseline,
+eyeballed, no noise floor. Re-checked against a derived per-k/per-dataset
+floor (2×std across the flat low-LR `prob` cluster, same method as
+`scripts/analyze_passk_movement.py`), comparing every offline-evaluated
+checkpoint's real `ckpt_best` pass@k (`results/passK/passk_hparam_sweep.csv`,
+27 checkpoints) against jsd's actual deployed pick:
+
+- `math_eval`: **0/27** configs clear the floor at any k — the floor itself
+  is wide (0.04–0.09), wide enough to swamp every raw delta in the table
+  above. The "math_eval is where checkpoints split" read below was never
+  verified against noise.
+- `gsm8k_eval`: **~15/27** configs clear the floor at k8–k64, several by
+  2–3x the floor size (deltas 0.04–0.08 vs floor 0.02–0.04) — the opposite
+  of "barely moves."
+- `olympiad_eval`: only 2/27 clear, and marginally.
+
+Caveat: even jsd's own `lr1e-6` sibling clears jsd's `lr1e-5` pick's k64 by
+0.04, so part of the `gsm8k_eval` signal may be ceiling-effect noise on an
+already-saturated benchmark rather than a clean training effect — read the
+15/27 count directionally, not as 15 confirmed wins.
+
+## Practical read (revised)
+
+`math_eval` pass@64 movement in the table above was never noise-gated —
+do not use it as a go/no-go check without deriving a floor first.
+Floor-gated, `gsm8k_eval` at k32/k64 is currently the most robust
+differentiator found so far (caveat above still applies). Re-derive the
+floor whenever the checkpoint set changes — it is not a fixed constant.
