@@ -90,15 +90,31 @@ def get_best_be(summary):
 
 
 def passk_at_deployment(run):
-    """Pull val/block_eff + passk_math_val/k{...} history; return (best_be, best_be_step,
-    {k: passk value at the nearest passk-logged step <= best_be_step})."""
+    """Return (best_be, best_be_step, {k: passk value}, exact) for this run's
+    deployed (ckpt_best) checkpoint.
+
+    Prefers the EXACT one-time full pass@k eval that train.py now runs on
+    ckpt_best itself after training finishes (logged to run.summary as
+    passk_deployed_math_val/k{k}, added alongside the train.py fix for this
+    exact approximation problem). Falls back to the history-based "nearest
+    passk-logged row at/before the BE peak" approximation for older runs
+    that predate this field -- see module docstring for why that's only an
+    approximation, not an exact match to ckpt_best.
+    """
+    summary = run.summary
+    best_be = get_best_be(summary)
+    exact_passk = {k: summary.get(f"passk_deployed_math_val/k{k}") for k in PASSK_KS}
+    exact_passk = {k: float(v) for k, v in exact_passk.items() if isinstance(v, (int, float))}
+    if best_be is not None and exact_passk:
+        return best_be, summary.get("val/step"), exact_passk, True
+
     keys = ["train/step", "val/block_eff"] + [f"passk_math_val/k{k}" for k in PASSK_KS]
     try:
         h = run.history(keys=keys, samples=6000)
     except Exception:
-        return None, None, {}
+        return None, None, {}, False
     if h is None or h.empty or "val/block_eff" not in h or h["val/block_eff"].dropna().empty:
-        return None, None, {}
+        return None, None, {}, False
     vb = h["val/block_eff"].dropna()
     best_idx = vb.idxmax()
     best_be = float(vb.loc[best_idx])
@@ -116,7 +132,7 @@ def passk_at_deployment(run):
         prior = sub.loc[:best_idx]
         row = prior.iloc[-1] if not prior.empty else sub.iloc[0]
         passk[k] = float(row[col])
-    return best_be, best_step, passk
+    return best_be, best_step, passk, False
 
 
 def derive_floor(cluster_passk):
@@ -165,21 +181,21 @@ def main():
     for r in all_runs:
         cfg = r.config
         if is_jsd_anchor(cfg, args.jsd_lr, args.jsd_lr_min_ratio, args.jsd_weight_decay):
-            best_be, best_step, passk = passk_at_deployment(r)
+            best_be, best_step, passk, exact = passk_at_deployment(r)
             if best_be is not None and (jsd_run is None or best_be > jsd_run["best_be"]):
                 jsd_run = {"run": r, "cfg": cfg, "url": r.url, "best_be": best_be,
-                          "best_step": best_step, "passk": passk}
+                          "best_step": best_step, "passk": passk, "exact": exact}
             continue
         is_prob = cfg.get("loss") == "prefix_overlap" and cfg.get("prefix_objective") == "prob"
         if not is_prob:
             continue
         if args.ceanneal_only and (cfg.get("prefix_anneal_steps") or 0) <= 0:
             continue
-        best_be, best_step, passk = passk_at_deployment(r)
+        best_be, best_step, passk, exact = passk_at_deployment(r)
         if best_be is None:
             continue
         entry = {"run": r, "cfg": cfg, "url": r.url, "best_be": best_be,
-                 "best_step": best_step, "passk": passk}
+                 "best_step": best_step, "passk": passk, "exact": exact}
         prob_hits.append(entry)
         if is_noise_cluster_member(cfg):
             cluster_hits.append(entry)
@@ -193,7 +209,8 @@ def main():
     print(f"\n[noise floor] derived from {len(cluster_hits)} noise-cluster runs (lrs {NOISE_CLUSTER_LRS}): "
           + ", ".join(f"k{k}=±{floor[k]}" for k in PASSK_KS))
     print(f"[jsd anchor] {label(jsd_run['cfg'])}  best_be={jsd_run['best_be']:.3f} @ step {jsd_run['best_step']}  "
-          f"passk={ {k: round(v,4) for k,v in jsd_run['passk'].items()} }")
+          f"passk={ {k: round(v,4) for k,v in jsd_run['passk'].items()} }  "
+          f"[{'EXACT (ckpt_best eval)' if jsd_run['exact'] else 'APPROX (nearest-logged-row)'}]")
     print(f"             {jsd_run['url']}")
 
     rows = []
@@ -209,11 +226,12 @@ def main():
     rows.sort(key=lambda t: -(t[2] if t[2] is not None else -99))
 
     print(f"\n{'run (from config)':<45} {'best_be':>8} {'Δbe_vs_jsd':>11}   "
-          + "  ".join(f"{'Δk'+str(k)+'_vs_jsd':>14}" for k in PASSK_KS) + "   clears_floor")
+          + "  ".join(f"{'Δk'+str(k)+'_vs_jsd':>14}" for k in PASSK_KS) + "   clears_floor  passk_source")
     for name, d, d_be, d_pk, clears in rows:
         pk_str = "  ".join(f"{(round(d_pk[k],4) if d_pk[k] is not None else '-'):>14}" for k in PASSK_KS)
         flag = ",".join(f"k{k}" for k in clears) if clears else "-"
-        print(f"{name:<45} {d['best_be']:>8.3f} {d_be:>11.3f}   {pk_str}   {flag}")
+        src = "exact" if d["exact"] else "approx"
+        print(f"{name:<45} {d['best_be']:>8.3f} {d_be:>11.3f}   {pk_str}   {flag:<12}  {src}")
         print(f"{'':<45} {d['url']}")
 
     winners = [(name, d, cl) for name, d, _, _, cl in rows if cl]
