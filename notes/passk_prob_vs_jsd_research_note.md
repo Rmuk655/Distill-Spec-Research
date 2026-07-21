@@ -88,29 +88,33 @@ measurements from two different data sources, not "BE on that dataset."
   `gsm8k` k32/k64** — all three tested clear the floor at both k32 and k64
   (deltas 0.022–0.04 vs floor 0.021–0.028). Plain N=16 (no offset) has the
   broadest effect, also clearing k16 (Δ=0.031). **Winner: yes, consistent
-  across the whole N-family tested.**
+  across the whole N-family tested.** `N=8` is training now (not yet
+  through `passk_eval.py`) — add once its `ckpt_best` is evaluated.
 
 - **Grad_clip does NOT show a consistent pass@k effect** — `gradclip100`
   clears `gsm8k` k16/k32/k64 (Δ 0.033–0.04); `gradclip10` and `gradclip1000`
-  clear nothing anywhere (gradclip10's closest miss is k32, Δ=0.020 vs
-  floor 0.021). **No consistent winner across the family** — don't
-  generalize from the `gradclip100` result alone; it's 1 of 3 clip values
-  tested, not a trend.
+  "clear nothing" meaning their gap to jsd stays inside the noise floor at
+  every k (gradclip10's closest miss is k32, Δ=0.020 vs floor 0.021), not
+  that they fall below jsd. The default (`gradclip=1.0`) was never run
+  through `passk_eval.py`, so it can't be included in this comparison.
+  **No consistent winner across the 3 clip values tested** — don't
+  generalize from the `gradclip100` result alone.
 
 - **Prefix_M family does NOT show a consistent pass@k effect either**, now
   that `M4`/`M8`/`M16` (bare)/`M16_cold` are all in the offline-eval set.
-  Three of the four clear `gsm8k` k16/k32/k64 — `M4` (Δ 0.021–0.030), `M8`
-  (Δ 0.030–0.037), `M16` bare (Δ 0.030–0.032) — but the clean cold-start
-  `M16` replication clears nothing (Δ 0.010–0.021, below floor). Since two
-  same-config `M16` seeds land on opposite sides of the floor, and the
-  clearing magnitude doesn't scale with `M`, this isn't an `M` lever — it's
-  the same already-known gsm8k pattern showing up in most (not all)
-  `prob` checkpoints regardless of family.
+  `M4` clears `gsm8k` k16/k32/k64 (Δ 0.021–0.030), `M8` clears the same
+  three (Δ 0.030–0.037), `M16` bare also clears them (Δ 0.030–0.032), but
+  `M16_cold` (same config, different seed) doesn't clear anywhere
+  (Δ 0.010–0.021, inside the floor). No trend with `M` itself — it's the
+  same already-known gsm8k pattern showing up in most (not all) `prob`
+  checkpoints regardless of family.
 
 - **Teacher temp shows the same isolated, non-lever pattern**: `ttemp=0.5`
-  clears `gsm8k` k16/k32/k64 (Δ 0.027–0.033), `ttemp=0.7` clears nothing
-  anywhere. One point in a two-point family clearing isn't a confirmed
-  temp effect, same caveat as `gradclip100` above.
+  clears `gsm8k` k16/k32/k64 (Δ 0.027–0.033), `ttemp=0.7` stays inside the
+  floor everywhere. Default is `ttemp=1.0`, not evaluated through
+  `passk_eval.py` (same gap as the grad_clip default above). One point in
+  a two-point family clearing isn't a confirmed temp effect, same caveat
+  as `gradclip100` above.
 
 - **CE-anneal (aux_weight=0.5) at lr=3e-6 tracks its own no-anneal base**,
   not a new effect: both clear `gsm8k` k32 (anneal Δ=0.028, base Δ=0.021),
