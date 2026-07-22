@@ -102,8 +102,16 @@ measurements from two different data sources, not "BE on that dataset."
   clear anywhere on this dataset, vs tail-reuse's k4/k8), but this
   dataset is where almost nothing ever clears, so that's thin evidence
   next to the `gsm8k` reversal.
-  Single seed so far — `freshM1_ceanneal3000` (the best-BE fresh-family
-  point, 5.779) still pending pass@k eval, which could change this.
+  Single seed so far.
+
+  **Update — `freshM1_ceanneal3000` (best-BE fresh-family point, 5.779)
+  partially closes the reversal but doesn't clear the floor.** On
+  `gsm8k`, its gap to jsd is +0.007 at k8 (vs bare `freshM1`'s −0.009) and
+  only −0.009/−0.010 at k32/k64 (vs bare `freshM1`'s −0.028/−0.040) — the
+  anneal substantially shrinks the negative dip, but every k still falls
+  short of the floor (0.021–0.028), landing at "roughly tied with jsd"
+  rather than "reproduces tail-reuse N16's win." `olympiad_eval` for this
+  checkpoint is still pending eval — will refresh once it lands.
 
 - **Grad_clip does NOT show a consistent pass@k effect** — `gradclip100`
   clears `gsm8k` k16/k32/k64 (Δ 0.033–0.04); `gradclip10` and `gradclip1000`
