@@ -6,7 +6,7 @@
 `c` correct among them, averaged over 100 held-out prompts. At `k=n=64` this
 is just "did ≥1 of 64 tries succeed" per prompt.
 
-34 checkpoints, real `ckpt_best` offline eval:
+35 checkpoints, real `ckpt_best` offline eval:
 [results/passK/passk_hparam_sweep.csv](../results/passK/passk_hparam_sweep.csv).
 Noise floor = 2×std(pass@k) across the flat low-LR `prob` cluster, per k per
 dataset — a delta only counts as real if it clears this.
@@ -35,14 +35,14 @@ measurements from two different data sources, not "BE on that dataset."
   baseline are explained in the footnote.
 
 - Checked against jsd on pass@k, per dataset. Two different questions,
-  not the same thing: **direction** (of 34 checkpoints, how many sit
+  not the same thing: **direction** (of 35 checkpoints, how many sit
   numerically above jsd at this k) vs **floor-clearing** (whether that gap
   is big enough to call a real effect, not just noise). Direction turns
   out to be overwhelmingly prob-favoring on *every* dataset — the
   difference between datasets is entirely in whether that direction
   survives a floor.
 
-  - `math_eval`: **26–32 of 34** sit above jsd at k1–k32 (drops to 19/29 at
+  - `math_eval`: **26–33 of 35** sit above jsd at k1–k32 (drops to 20/30 at
     k64). Despite that consistent direction, **nothing clears a real
     floor** at any k — the per-config gaps are individually too small.
 
@@ -53,9 +53,9 @@ measurements from two different data sources, not "BE on that dataset."
     lines sit above the thin blue lines too — but the two families'
     spreads overlap enough that no single gap clears a real floor.
 
-  - `olympiad_eval`: **28–33 of 34** sit above jsd at k1–k32 (drops to
-    19/30 at k64) — a similarly consistent direction to `math_eval` by
-    per-checkpoint count. Same result as `math_eval` though: only 2/34
+  - `olympiad_eval`: **29–34 of 35** sit above jsd at k1–k32 (drops to
+    20/31 at k64) — a similarly consistent direction to `math_eval` by
+    per-checkpoint count. Same result as `math_eval` though: only 3/35
     gaps are large enough to individually clear the floor.
 
     ![pass@k, every checkpoint, olympiad_eval](../results/passK/passk_curves_all_olympiad_eval.png)
@@ -65,13 +65,13 @@ measurements from two different data sources, not "BE on that dataset."
     on top of each other through k1–32, only pulling apart at k64 (0.330
     vs 0.310) — much tighter than `math_eval`'s bold lines, which stay
     visibly separated the whole curve. The per-checkpoint count (above) is
-    against the single jsd reference checkpoint across all 34 configs, not
+    against the single jsd reference checkpoint across all 35 configs, not
     the gap between these two hindsight-picked bold lines — don't read the
     bold-line closeness as contradicting the count, they're answering
     different questions.
 
-  - `gsm8k_eval`: **14–21/34** clearly win above noise, concentrated at
-    k16/k32/k64 (0/34 at k1–k4) — the one held-out set with a real
+  - `gsm8k_eval`: **14–21/35** clearly win above noise, concentrated at
+    k16/k32/k64 (0/35 at k1–k4) — the one held-out set with a real
     pattern.
 
     ![pass@k, every checkpoint, gsm8k_eval](../results/passK/passk_curves_all_gsm8k_eval.png)
@@ -91,6 +91,19 @@ measurements from two different data sources, not "BE on that dataset."
   anywhere — its closest miss is k32 (Δ=0.020 vs floor 0.021) and k64
   (Δ=0.020 vs floor 0.028). So it's not "any N ≥ some value wins" — N=8 is
   the odd one out in a family that otherwise looked consistent.
+
+- **The doc-faithful fresh multiroot estimator (`freshM1`, N=16, M=1) does
+  NOT reproduce this win — it reverses on `gsm8k`.** Tail-reuse N=16 clears
+  the floor at k16/k32/k64 (Δ +0.031 to +0.034, all positive). `freshM1`
+  clears nothing there, and goes *negative* at k8–k64 (Δ −0.009 to −0.040)
+  — it falls below jsd, not just below tail-reuse. `math_eval` stays flat
+  for both (nothing clears there for any config). `olympiad_eval` favors
+  `freshM1` (clears k16/k64, one of only 3/35 configs project-wide that
+  clear anywhere on this dataset, vs tail-reuse's k4/k8), but this
+  dataset is where almost nothing ever clears, so that's thin evidence
+  next to the `gsm8k` reversal.
+  Single seed so far — `freshM1_ceanneal3000` (the best-BE fresh-family
+  point, 5.779) still pending pass@k eval, which could change this.
 
 - **Grad_clip does NOT show a consistent pass@k effect** — `gradclip100`
   clears `gsm8k` k16/k32/k64 (Δ 0.033–0.04); `gradclip10` and `gradclip1000`
