@@ -769,3 +769,10 @@ model,dataset,n,temp,n_graded,n_skipped,k,pass_at_k
 /home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,gsm8k_eval.jsonl,64,0.8,100,0,16,0.837036
 /home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,gsm8k_eval.jsonl,64,0.8,100,0,32,0.871056
 /home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,gsm8k_eval.jsonl,64,0.8,100,0,64,0.900000
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,1,0.077656
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,2,0.111121
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,4,0.146856
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,8,0.185706
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,16,0.226968
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,32,0.265993
+/home/colligo/local_ckpts/prefix_overlap/po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20/ckpt_best,olympiad_eval.jsonl,64,0.8,100,0,64,0.300000
