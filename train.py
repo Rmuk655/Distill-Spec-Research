@@ -94,7 +94,7 @@ from wandb_utils import run_slug, setup_wandb
 # ═══════════════════════════════════════════════════════════════════════════
 # Training hyper-parameters
 STEPS           = 4000                       # number of gradient-accum steps
-GRAD_ACCUM      = 8                          # opt-steps = STEPS / GRAD_ACCUM = 500
+GRAD_ACCUM      = 8                          # default for --grad_accum; opt-steps = STEPS / GRAD_ACCUM = 500
 LR              = 3e-5                       # bv_tree / gbv_tree may need 1e-5
 WARMUP_STEPS    = 50                         # fallback only — overridden in main() to 10% of total_opt_steps
 GRAD_CLIP       = 1.0                        # DistillSpec Table S1 (arXiv:2310.08461) — 1.0 is the LLM fine-tuning standard (LLaMA, GPT-3, Qwen3)
@@ -122,8 +122,9 @@ LORA_DROPOUT    = 0.05
 VAL_EVERY       = 400                        # gradient-accum steps between val checks
 VAL_PROMPTS     = 100                        # larger set → lower SE, less winner's-curse bias
 SAVE_EVERY      = 400                        # ckpt_latest write cadence (matches VAL_EVERY)
-LOG_EVERY       = 8                          # console + W&B step-log cadence (matches GRAD_ACCUM so every
-                                              # logged grad_norm is a real post-accumulation reading, not 0.00 filler)
+# Console/W&B step-log cadence now tracks the resolved `grad_accum` local directly
+# (not a fixed module constant), so every logged grad_norm is always a real
+# post-accumulation reading regardless of --grad_accum, never 0.00 filler.
 VAL_EMA_ALPHA   = 0.3                        # smoothed-val EMA weight for checkpoint selection (α=0.3 → ~3-4 check window)
 EARLY_STOP_PAT  = 15                         # default patience: 15 × 400 = 6000 steps without smoothed improvement
 EARLY_STOP_DELTA = 0.0                       # min improvement threshold (0 = strict; >0 ignores noise-level fluctuations)
@@ -245,6 +246,13 @@ def parse_args():
     ap.add_argument("--grad_clip", type=float, default=GRAD_CLIP,
                     help="Max grad norm for clip_grad_norm_ (default: module GRAD_CLIP constant, "
                          "1.0, the DistillSpec Table S1 / LLM fine-tuning standard).")
+    ap.add_argument("--grad_accum", type=int, default=GRAD_ACCUM,
+                    help=f"Micro-steps accumulated per optimizer step (default {GRAD_ACCUM}, "
+                         f"the module GRAD_ACCUM constant — omitting this flag reproduces "
+                         f"exactly today's behavior). On --resume, the value saved in the "
+                         f"checkpoint's state.json takes precedence over this flag, the same "
+                         f"way --steps/--warmup_steps are anchored, so resuming a run never "
+                         f"needs (or risks a mismatched) --grad_accum on the command line.")
     # --- State-distribution interventions for jsd_flat_enrich (all off by default) ---
     ap.add_argument("--draft_prefix_max", type=int, default=0,
                     help="jsd_flat_enrich only. >0 enables draft-conditioned rollout: the "
@@ -646,18 +654,26 @@ def main():
     # resume — restarting with a different --steps or --warmup_steps doesn't
     # reshape the already-completed portion of the schedule.
     sched_steps = args.steps
+    grad_accum = args.grad_accum   # anchored to state.json on resume, same pattern as sched_steps below
     warmup_opt_steps_override = None   # restored from state.json on resume if present
     if args.resume:
         _sp = os.path.join(output_dir, "ckpt_latest", "state.json")
         if os.path.isfile(_sp):
             _saved = json.load(open(_sp, encoding="utf-8"))
             sched_steps = _saved.get("sched_steps", args.steps)
+            # Old checkpoints (pre-dating this flag) never saved "grad_accum" —
+            # fall back to args.grad_accum, whose own default (GRAD_ACCUM=8)
+            # matches what those checkpoints were actually trained with.
+            grad_accum = _saved.get("grad_accum", args.grad_accum)
             warmup_opt_steps_override = _saved.get("warmup_opt_steps", None)
             if sched_steps != args.steps:
                 print(f"[lr] schedule horizon anchored to original {sched_steps} steps "
                       f"(--steps={args.steps}); steps beyond {sched_steps} run at "
                       f"LR_MIN_RATIO={lr_min_ratio}*peak (no LR jump on resume)")
-    total_opt_steps = sched_steps // GRAD_ACCUM
+            if grad_accum != args.grad_accum:
+                print(f"[grad_accum] anchored to original {grad_accum} "
+                      f"(--grad_accum={args.grad_accum} ignored on resume)")
+    total_opt_steps = sched_steps // grad_accum
     # Warmup: explicit --warmup_steps overrides auto; on resume, the saved value
     # takes precedence over both so the curve stays continuous across restarts.
     if warmup_opt_steps_override is not None:
@@ -840,7 +856,7 @@ def main():
             loss, path_div = compute_flat_enrich_loss(loss_fn, draft, teacher, ids,
                                                       K=K, max_new_tokens=MAX_NEW_TOKENS,
                                                       teacher_temp=args.teacher_temp,
-                                                      grad_accum=GRAD_ACCUM,
+                                                      grad_accum=grad_accum,
                                                       draft_prefix_min=args.draft_prefix_min,
                                                       draft_prefix_max=args.draft_prefix_max,
                                                       teacher_temps=_teacher_temps,
@@ -891,14 +907,14 @@ def main():
                                         max_new_tokens=MAX_NEW_TOKENS)
             loss = loss + args.aux_weight * aux
 
-        # Gradient accumulation: scale by 1/GRAD_ACCUM, only step every GRAD_ACCUM micro-steps.
+        # Gradient accumulation: scale by 1/grad_accum, only step every grad_accum micro-steps.
         # flat_enrich already backpropagated internally, per-rollout, inside
         # compute_flat_enrich_loss (memory-safe against a large teacher) — its
         # returned loss is detached and calling .backward() on it again would
         # either error (no grad_fn) or be a silent no-op.
         if not flat_enrich:
-            (loss / GRAD_ACCUM).backward()
-        if (step + 1) % GRAD_ACCUM == 0:
+            (loss / grad_accum).backward()
+        if (step + 1) % grad_accum == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.grad_clip)
             grad_opt_steps += 1
             if grad_norm.item() > args.grad_clip:
@@ -928,8 +944,8 @@ def main():
                 else (1 - _alpha) * prompt_entropy_ema[prompt_idx] + _alpha * _entropy)
 
         # Console log + W&B train metrics
-        if (step + 1) % LOG_EVERY == 0:
-            avg = sum(losses_log[-LOG_EVERY:]) / LOG_EVERY
+        if (step + 1) % grad_accum == 0:
+            avg = sum(losses_log[-grad_accum:]) / grad_accum
             elapsed = time.time() - t0
             print(f"step={step+1:5d}/{args.steps}  loss={avg:.4f}  "
                   f"lr={scheduler.get_last_lr()[0]:.2e}  "
@@ -1030,8 +1046,8 @@ def main():
 
         # Validation + checkpoint best (val_be already computed above if LOG step)
         if (step + 1) % args.val_every == 0:
-            if (step + 1) % LOG_EVERY != 0:
-                # VAL_EVERY not a multiple of LOG_EVERY — compute val now
+            if (step + 1) % grad_accum != 0:
+                # VAL_EVERY not a multiple of grad_accum — compute val now
                 _clear_node_caches()
                 val_be, _val_pp = compute_val_metrics(draft, teacher, tokenizer, val_prompts, mode=LOSS_TO_VERIFIER.get(args.loss, "traversal"), val_temp=args.val_temp, max_new_tokens=MAX_NEW_TOKENS, val_k=VAL_K, val_l=VAL_L, n_prompts=VAL_PROMPTS)
                 val_be_ema = val_be if val_be_ema is None else (1 - VAL_EMA_ALPHA) * val_be_ema + VAL_EMA_ALPHA * val_be
@@ -1069,7 +1085,7 @@ def main():
                 if wandb_run:
                     wandb_run.summary["val/best_smoothed_be"] = best_smoothed_be
             else:
-                _opt_step_now = (step + 1) // GRAD_ACCUM
+                _opt_step_now = (step + 1) // grad_accum
                 _in_warmup = _opt_step_now < warmup_opt_steps
                 if _in_warmup:
                     print(f"  [val] no improve (warmup, patience frozen at "
@@ -1096,6 +1112,7 @@ def main():
                                            "val_be_ema": val_be_ema,
                                            "no_improve_count": no_improve_count,
                                            "sched_steps": sched_steps,
+                                           "grad_accum": grad_accum,
                                            "warmup_opt_steps": warmup_opt_steps,
                                            "cmd": sys.argv,
                                            "train_args": _serializable_args(args)},
@@ -1124,7 +1141,8 @@ def main():
                            "best_smoothed_be": best_smoothed_be,
                            "val_be_ema": val_be_ema,
                            "no_improve_count": no_improve_count,
-                           "sched_steps": sched_steps, "warmup_opt_steps": warmup_opt_steps,
+                           "sched_steps": sched_steps, "grad_accum": grad_accum,
+                           "warmup_opt_steps": warmup_opt_steps,
                            "cmd": sys.argv,
                            "train_args": _serializable_args(args)},
                     use_lora=USE_LORA)
