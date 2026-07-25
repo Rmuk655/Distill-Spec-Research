@@ -315,6 +315,21 @@ def parse_args():
                          "state, freeing headroom that can let a flat-loss run afford the "
                          "full bf16 teacher instead of 4-bit, avoiding the generate() "
                          "slowdown described under --load_in_4bit.")
+    ap.add_argument("--hidden_weight", type=float, default=0.0,
+                    help="Auxiliary hidden-state-distance loss weight (default 0.0 = off). "
+                         "total = primary_loss + hidden_weight * hidden_state_distance. "
+                         "See notes/hidden_state_overlap_objective.md. Reuses the SAME "
+                         "teacher/draft forward passes compute_flat_loss already does — "
+                         "only the flat (non-tree) --loss path supports this flag.")
+    ap.add_argument("--hidden_layer_draft", type=int, default=-2,
+                    help="Which draft hidden_states index to read (negative = from the "
+                         "end; -2 is the layer immediately before the one feeding the "
+                         "draft's own LM head). Default matches --hidden_layer_teacher.")
+    ap.add_argument("--hidden_layer_teacher", type=int, default=-2,
+                    help="Which teacher hidden_states index to read (see --hidden_layer_draft).")
+    ap.add_argument("--hidden_distance", choices=["smooth_l1", "cosine", "mse"], default="smooth_l1",
+                    help="Distance metric between (LayerNorm'd) projected draft hidden "
+                         "state and teacher hidden state.")
     ap.add_argument("--aux_loss",   type=str, default=None,
                     choices=sorted(ALL_LOSSES.keys()),
                     help="Optional auxiliary loss: total = primary + aux_weight * aux. "
@@ -627,8 +642,24 @@ def main():
                                              load_in_4bit=args.load_in_4bit,
                                              lora_config={"r": LORA_R, "alpha": LORA_ALPHA, "dropout": LORA_DROPOUT} if USE_LORA else None)
 
+    # Optional hidden-state auxiliary loss (see notes/hidden_state_overlap_objective.md):
+    # trainable linear adapter draft_hidden_dim -> teacher_hidden_dim, since the
+    # two models have different hidden sizes and no natural layer correspondence.
+    # Its parameters must join the optimizer's trainable list below, same as the
+    # draft's own weights, since it is a first-class trainable component, not a
+    # per-call temporary.
+    hidden_proj = None
+    if args.hidden_weight > 0:
+        hidden_proj = torch.nn.Linear(draft.config.hidden_size, teacher.config.hidden_size, bias=True)
+        hidden_proj = hidden_proj.to(device=draft.device, dtype=next(draft.parameters()).dtype)
+        print(f"[hidden] weight={args.hidden_weight} distance={args.hidden_distance} "
+              f"layer_draft={args.hidden_layer_draft} layer_teacher={args.hidden_layer_teacher} "
+              f"proj={draft.config.hidden_size}->{teacher.config.hidden_size}")
+
     # Optimiser + linear warmup → constant LR
     trainable = [p for p in draft.parameters() if p.requires_grad]
+    if hidden_proj is not None:
+        trainable = trainable + list(hidden_proj.parameters())
     if args.optim_8bit:
         try:
             import bitsandbytes as bnb
@@ -698,7 +729,8 @@ def main():
     # Resume?
     start_step, train_state = (0, {})
     if args.resume:
-        start_step, train_state = try_resume(draft, optimizer, scheduler, output_dir)
+        start_step, train_state = try_resume(draft, optimizer, scheduler, output_dir,
+                                             hidden_proj=hidden_proj)
     best_val_block_eff = train_state.get("best_val_block_eff", 0.0)
     best_smoothed_be   = train_state.get("best_smoothed_be", 0.0)
     val_be_ema         = train_state.get("val_be_ema", None)
@@ -879,7 +911,12 @@ def main():
                                      teacher_temp=args.teacher_temp)
         else:
             loss = compute_flat_loss(loss_fn, draft, teacher, ids,
-                                     max_new_tokens=MAX_NEW_TOKENS)
+                                     max_new_tokens=MAX_NEW_TOKENS,
+                                     hidden_weight=args.hidden_weight,
+                                     hidden_layer_draft=args.hidden_layer_draft,
+                                     hidden_layer_teacher=args.hidden_layer_teacher,
+                                     hidden_proj=hidden_proj,
+                                     hidden_distance=args.hidden_distance)
 
         if args.aux_mode == "depth_weight":
             # (3) Multiply the (flat) primary loss by a detached depth weight.
@@ -1080,7 +1117,7 @@ def main():
                                         "val_be_ema": val_be_ema,
                                         "no_improve_count": no_improve_count,
                                         "train_args": _serializable_args(args)},
-                                use_lora=USE_LORA)
+                                use_lora=USE_LORA, hidden_proj=hidden_proj)
                 print(f"  [val] saved ckpt_best (smoothed={val_be_ema:.3f}  raw={val_be:.3f})")
                 if wandb_run:
                     wandb_run.summary["val/best_smoothed_be"] = best_smoothed_be
@@ -1116,7 +1153,7 @@ def main():
                                            "warmup_opt_steps": warmup_opt_steps,
                                            "cmd": sys.argv,
                                            "train_args": _serializable_args(args)},
-                                    use_lora=USE_LORA)
+                                    use_lora=USE_LORA, hidden_proj=hidden_proj)
                     break
 
         # Rolling latest checkpoint
@@ -1131,7 +1168,7 @@ def main():
                                    "warmup_opt_steps": warmup_opt_steps,
                                    "cmd": sys.argv,
                                    "train_args": _serializable_args(args)},
-                            use_lora=USE_LORA)
+                            use_lora=USE_LORA, hidden_proj=hidden_proj)
 
     # Final save — refresh the rolling ckpt_latest (no separate ckpt_final dir,
     # so a multi-combo sweep keeps only ckpt_best + ckpt_latest per run and does
@@ -1145,7 +1182,7 @@ def main():
                            "warmup_opt_steps": warmup_opt_steps,
                            "cmd": sys.argv,
                            "train_args": _serializable_args(args)},
-                    use_lora=USE_LORA)
+                    use_lora=USE_LORA, hidden_proj=hidden_proj)
     # One-time FULL pass@k eval on ckpt_best (not the possibly-declined final-step
     # weights currently in `draft`). This is the actual deployed checkpoint's
     # pass@k -- exact, not the nearest-logged-row-before-the-peak approximation

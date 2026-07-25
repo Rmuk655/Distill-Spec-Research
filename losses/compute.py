@@ -117,12 +117,41 @@ def draft_tree_forward_with_grad(
 # Flat-loss path: teacher generates a sequence, student forward, divergence.
 # ---------------------------------------------------------------------------
 
+def hidden_state_distance(h_q: torch.Tensor, h_p: torch.Tensor, kind: str = "smooth_l1") -> torch.Tensor:
+    """
+    Per-position distance between (already projected, same-dim) student and
+    teacher hidden states, normalised first since raw activation norms drift
+    across depth and across model scale (0.6B draft vs 8B teacher here) — see
+    notes/hidden_state_overlap_objective.md Β§3. Returns a scalar (mean over
+    position and hidden dim).
+    """
+    h_q = F.layer_norm(h_q, h_q.shape[-1:])
+    h_p = F.layer_norm(h_p, h_p.shape[-1:])
+    if kind == "cosine":
+        return (1.0 - F.cosine_similarity(h_q, h_p, dim=-1)).mean()
+    if kind == "mse":
+        return F.mse_loss(h_q, h_p)
+    return F.smooth_l1_loss(h_q, h_p)
+
+
 def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
-                       max_new_tokens=128):
+                       max_new_tokens=128,
+                       hidden_weight=0.0, hidden_layer_draft=-2, hidden_layer_teacher=-2,
+                       hidden_proj=None, hidden_distance="smooth_l1"):
     """
     Teacher greedily generates max_new_tokens.  Student is then forwarded on
     [prompt + generated_tokens] WITH grad.  Loss = divergence(student_logits,
     teacher_logits) on the generated portion only.
+
+    hidden_weight>0 (see notes/hidden_state_overlap_objective.md) adds an
+    auxiliary hidden-state-distance term computed on the SAME two forward
+    passes above (output_hidden_states=True costs nothing extra here — no new
+    forward pass), scored at hidden_layer_draft / hidden_layer_teacher
+    (negative indices into the model's own hidden_states tuple, so -2 is the
+    layer immediately before the final one feeding the LM head). hidden_proj
+    projects the draft's hidden dim onto the teacher's; caller owns its
+    lifetime/optimizer registration since it is a trainable module, not a
+    per-call temporary.
     """
     with torch.no_grad():
         # Teacher rollout — argmax (do_sample=False) for stable training data.
@@ -138,12 +167,21 @@ def compute_flat_loss(loss_fn, draft, teacher, prompt_ids,
             use_cache=True,
         )
         # Forward teacher once on the full sequence to grab logits for the loss.
-        t_out = teacher(gen, return_dict=True)
+        t_out = teacher(gen, return_dict=True, output_hidden_states=hidden_weight > 0)
         t_logits = t_out.logits[0, prompt_ids.shape[1]-1:-1].float()   # [T, V]
 
-    s_out = draft(gen, return_dict=True)
+    s_out = draft(gen, return_dict=True, output_hidden_states=hidden_weight > 0)
     s_logits = s_out.logits[0, prompt_ids.shape[1]-1:-1].float()        # [T, V]
-    return loss_fn(s_logits, t_logits)
+    loss = loss_fn(s_logits, t_logits)
+
+    if hidden_weight > 0:
+        T = prompt_ids.shape[1] - 1
+        h_p = t_out.hidden_states[hidden_layer_teacher][0, T:-1].float().detach()   # [T, d_p]
+        h_q = s_out.hidden_states[hidden_layer_draft][0, T:-1].float()               # [T, d_q]
+        h_q_proj = hidden_proj(h_q)                                                  # [T, d_p], trainable
+        loss = loss + hidden_weight * hidden_state_distance(h_q_proj, h_p, kind=hidden_distance)
+
+    return loss
 
 
 # ---------------------------------------------------------------------------
