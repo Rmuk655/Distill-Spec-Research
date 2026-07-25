@@ -83,25 +83,26 @@ below is shorthand for: that config's pass@k gap vs jsd on `gsm8k_eval` is
 bigger than the noise floor at the k's where it's reported.
 
 Deltas below are vs jsd on `gsm8k_eval` at k16/k32/k64, noise floor derived
-per k from the flat low-LR `prob` cluster (2×std): 0.031/0.027/0.034. Charts
-are pass@k-vs-k curves, same style as the dataset charts above, zoomed in to
-each family's own variants plus its jsd baseline (not all 38 checkpoints):
+per k from the flat low-LR `prob` cluster (2×std): 0.031/0.027/0.034. Every
+family gets a chart per dataset (math_eval/gsm8k_eval/olympiad_eval), same
+style as the dataset charts above, zoomed in to each family's own variants
+plus its jsd baseline (not all 38 checkpoints):
 [scripts/plot_ablation_families.py](../scripts/plot_ablation_families.py).
 
-| variable | values tested | effect on pass@k | chart |
+| variable | values tested | effect on pass@k | charts |
 |---|---|---|---|
-| grad_clip | 10, 100, 1000 | no consistent winner — only `gradclip100` beats jsd beyond noise on `gsm8k`, the other two don't | [chart](../results/passK/ablation_grad_clip.png) |
-| M (samples/root) | 4 (default), 8, 16 (warm), 16 (cold) | no trend with M; `M16_cold` fails to beat jsd where its warm-started twin did | [chart](../results/passK/ablation_M_samples_per_root.png) |
-| teacher_temp | 1.0 (default), 0.7, 0.5 | **the default beats jsd by the widest margin of the three (+0.038/+0.035/+0.040 at k16/32/64), `ttemp=0.5` also clears (+0.033/+0.027/+0.030), `ttemp=0.7` doesn't (+0.013/+0.018/+0.020, inside the floor).** With the default actually included, there's no support for "lowering teacher_temp helps" — the unmodified default is the strongest point, not the weakest. One confound: the default checkpoint used here also differs in `lr_min_ratio`/`weight_decay` from the two ttemp points (0.1/0.01 vs their bare CLI defaults), so this isn't a perfectly clean single-axis read, just the closest match available in the sweep. | [chart](../results/passK/ablation_teacher_temp.png) |
-| CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both beat jsd beyond noise on `gsm8k` k32 similarly; anneal doesn't move the needle at this LR | [chart](../results/passK/ablation_CE_anneal_timing_lr3e-6.png) |
-| root spacing offset | fixed vs random | negligible vs plain N=16 | [chart](../results/passK/ablation_root_spacing_offset.png) |
+| grad_clip | 10, 100, 1000 | no consistent winner — only `gradclip100` beats jsd beyond noise on `gsm8k`, the other two don't | [math_eval](../results/passK/ablation_grad_clip_math_eval.png) · [gsm8k_eval](../results/passK/ablation_grad_clip_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_grad_clip_olympiad_eval.png) |
+| M (samples/root) | 4 (default), 8, 16 (warm), 16 (cold) | no trend with M; `M16_cold` fails to beat jsd where its warm-started twin did | [math_eval](../results/passK/ablation_M_samples_per_root_math_eval.png) · [gsm8k_eval](../results/passK/ablation_M_samples_per_root_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_M_samples_per_root_olympiad_eval.png) |
+| teacher_temp | 1.0 (default), 0.7, 0.5 | **the default beats jsd by the widest margin of the three (+0.038/+0.035/+0.040 at k16/32/64), `ttemp=0.5` also clears (+0.033/+0.027/+0.030), `ttemp=0.7` doesn't (+0.013/+0.018/+0.020, inside the floor).** With the default actually included, there's no support for "lowering teacher_temp helps" — the unmodified default is the strongest point, not the weakest. One confound: the default checkpoint used here also differs in `lr_min_ratio`/`weight_decay` from the two ttemp points (0.1/0.01 vs their bare CLI defaults), so this isn't a perfectly clean single-axis read, just the closest match available in the sweep. | [math_eval](../results/passK/ablation_teacher_temp_math_eval.png) · [gsm8k_eval](../results/passK/ablation_teacher_temp_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_teacher_temp_olympiad_eval.png) |
+| CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both beat jsd beyond noise on `gsm8k` k32 similarly; anneal doesn't move the needle at this LR | [math_eval](../results/passK/ablation_CE_anneal_timing_lr3e-6_math_eval.png) · [gsm8k_eval](../results/passK/ablation_CE_anneal_timing_lr3e-6_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_CE_anneal_timing_lr3e-6_olympiad_eval.png) |
+| root spacing offset | fixed vs random | negligible vs plain N=16 | [math_eval](../results/passK/ablation_root_spacing_offset_math_eval.png) · [gsm8k_eval](../results/passK/ablation_root_spacing_offset_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_root_spacing_offset_olympiad_eval.png) |
 | dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise | [math_eval](../results/passK/passk_dapo_jsd_vs_prob_math_eval.png) · [gsm8k_eval](../results/passK/passk_dapo_jsd_vs_prob_gsm8k_eval.png) · [olympiad_eval](../results/passK/passk_dapo_jsd_vs_prob_olympiad_eval.png) |
-| N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** | [chart](../results/passK/ablation_N_root_spacing.png) |
-| warmup % | 5, 10, 20 (lr=1e-5) | 20% beats jsd beyond noise on `gsm8k` at all three k's (k16/32/64); 10% beats it at two (k16/k32); 5% at one (k32 only) — directionally consistent with more warmup helping, unlike BE which showed no clear trend on this axis | — |
-| lr_min_ratio | 0.1 (default), 0.01 | 0.1 beats jsd beyond noise at all three k's; 0.01 beats it at none — a real divergence from the BE result, which showed no effect | — |
-| teacher top-k | 0 (default), 20, 50 | all three beat jsd beyond noise at all three k's, similar magnitude — no harm in pass@k despite BE showing "mild harm at higher k" | — |
-| weight decay | 0.0001, 0.001, 0.01 (default) | 0.0001 beats jsd beyond noise most strongly (all three k's, largest gaps), 0.01 also beats it at all three, **0.001 beats it at none** — non-monotonic, worse than both its neighbors | — |
-| CE-anneal `anneal_steps` | 1500, 3000 (BE-best pick), 4000 | 1500 and 3000 beat jsd beyond noise at none of the three k's; 4000 beats it at two (k32/k64) — **the BE-optimal `anneal_steps` (3000) doesn't carry over to pass@k** | — |
+| N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** | [math_eval](../results/passK/ablation_N_root_spacing_math_eval.png) · [gsm8k_eval](../results/passK/ablation_N_root_spacing_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_N_root_spacing_olympiad_eval.png) |
+| warmup % | 5, 10, 20 (lr=1e-5) | 20% beats jsd beyond noise on `gsm8k` at all three k's (k16/32/64); 10% beats it at two (k16/k32); 5% at one (k32 only) — directionally consistent with more warmup helping, unlike BE which showed no clear trend on this axis | [math_eval](../results/passK/ablation_warmup_pct_math_eval.png) · [gsm8k_eval](../results/passK/ablation_warmup_pct_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_warmup_pct_olympiad_eval.png) |
+| lr_min_ratio | 0.1 (default), 0.01 | 0.1 beats jsd beyond noise at all three k's; 0.01 beats it at none — a real divergence from the BE result, which showed no effect | [math_eval](../results/passK/ablation_lr_min_ratio_math_eval.png) · [gsm8k_eval](../results/passK/ablation_lr_min_ratio_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_lr_min_ratio_olympiad_eval.png) |
+| teacher top-k | 0 (default), 20, 50 | all three beat jsd beyond noise at all three k's, similar magnitude — no harm in pass@k despite BE showing "mild harm at higher k" | [math_eval](../results/passK/ablation_teacher_topk_math_eval.png) · [gsm8k_eval](../results/passK/ablation_teacher_topk_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_teacher_topk_olympiad_eval.png) |
+| weight decay | 0.0001, 0.001, 0.01 (default) | 0.0001 beats jsd beyond noise most strongly (all three k's, largest gaps), 0.01 also beats it at all three, **0.001 beats it at none** — non-monotonic, worse than both its neighbors | [math_eval](../results/passK/ablation_weight_decay_math_eval.png) · [gsm8k_eval](../results/passK/ablation_weight_decay_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_weight_decay_olympiad_eval.png) |
+| CE-anneal `anneal_steps` | 1500, 3000 (BE-best pick), 4000 | 1500 and 3000 beat jsd beyond noise at none of the three k's; 4000 beats it at two (k32/k64) — **the BE-optimal `anneal_steps` (3000) doesn't carry over to pass@k** | [math_eval](../results/passK/ablation_CE_anneal_steps_math_eval.png) · [gsm8k_eval](../results/passK/ablation_CE_anneal_steps_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_CE_anneal_steps_olympiad_eval.png) |
 
 ## Multi-root: two different ways to build the continuation at each root
 
@@ -133,9 +134,10 @@ every other row at once:
 | fresh | 16 | 2 | no | ~0.000 by k64 | ties jsd, doesn't beat it |
 | fresh | 32 | 1 | no | +0.030 at k32/k64 | **beats jsd beyond noise** |
 
-Chart (all five lines together): [pass@k vs k, `gsm8k_eval`](../results/passK/ablation_tail_reuse_vs_fresh.png).
-Tail-reuse across N specifically (N=8/16/16-offset/32, method held fixed):
-[same data as the N row in the ablations table above](../results/passK/ablation_N_root_spacing.png).
+Charts (all five lines together): [math_eval](../results/passK/ablation_tail_reuse_vs_fresh_math_eval.png) · [gsm8k_eval](../results/passK/ablation_tail_reuse_vs_fresh_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_tail_reuse_vs_fresh_olympiad_eval.png).
+Tail-reuse across N specifically (N=8/16/16-offset/32, method held fixed) —
+same data as the N row in the ablations table above:
+[math_eval](../results/passK/ablation_N_root_spacing_math_eval.png) · [gsm8k_eval](../results/passK/ablation_N_root_spacing_gsm8k_eval.png) · [olympiad_eval](../results/passK/ablation_N_root_spacing_olympiad_eval.png).
 
 The four *valid* single-axis reads, each holding the other three columns fixed:
 
