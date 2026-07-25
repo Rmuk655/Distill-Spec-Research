@@ -17,17 +17,17 @@ as real if it clears this.
 - **Trained on `dapo_math_train` instead of `math_hard`, the gap opens up on
   `olympiad_eval` too** — the first fair jsd-vs-prob pair in this sweep with
   a floor-clearing gap outside `gsm8k`.
-- **Of every hyperparameter ablated (grad_clip, prefix_M, teacher_temp,
-  CE-anneal timing, root spacing offset), none changed the qualitative
-  picture.** The one exception is multi-root `N`, and even there the effect
-  is inconsistent across estimator variants (see below).
+- **Of every hyperparameter ablated (grad_clip, M, teacher_temp, CE-anneal
+  timing, root spacing offset), none changed the qualitative picture.** The
+  one exception is root spacing `N`, and even there the effect is
+  inconsistent across estimator variants (see below).
 - **`best_val_block_eff` is a training-time-only metric** (computed on
   `math_val` during training) — never computed on the three held-out sets.
   Don't compare it to held-out pass@k as if it were "BE on that dataset."
 
 ## Prob vs jsd, by dataset
 
-| dataset | direction (of 38) | clears floor? | read |
+| dataset | direction (of 38) | beats jsd beyond noise? | read |
 |---|---|---|---|
 | `math_eval` | 30–36/38 above jsd (k1–k32), 23/33 at k64 | never | directional only |
 | `olympiad_eval` | 32–37/38 above jsd (k1–k32), 23/34 at k64 | 3/38 configs | directional only |
@@ -42,7 +42,7 @@ below): [math_eval](../results/passK/passk_curves_all_math_eval.png) ·
 **Trained on `dapo_math_train` instead of `math_hard`** (real deployment
 picks per family, not cherry-picked after seeing pass@k):
 
-| dataset | Δ (prob − jsd) | clears floor? |
+| dataset | Δ (prob − jsd) | beats jsd beyond noise? |
 |---|---|---|
 | `olympiad_eval` | k16 +0.036, k32 +0.048, k64 +0.070 | yes, widening with k |
 | `math_eval` | k16 +0.027, k64 +0.030 | right at the floor |
@@ -57,37 +57,63 @@ outside `gsm8k`.
 
 ## Ablations tested — none changed the qualitative picture, except N
 
+Two separate knobs get tested below, not one: **M** = number of teacher
+continuations sampled per root (design doc §4, CLI flag `--prefix_M`).
+**N** = spacing between roots along one teacher rollout (design doc §5,
+CLI flag `--prefix_root_spacing`) — a *larger* N means *fewer, more
+widely-spaced* roots, not more roots. "Beats jsd beyond noise on `gsm8k`"
+below is shorthand for: that config's pass@k gap vs jsd on `gsm8k_eval` is
+bigger than the noise floor at the k's where it's reported.
+
 | variable | values tested | effect on pass@k |
 |---|---|---|
-| grad_clip | 10, 100, 1000 | no consistent winner (`gradclip100` alone clears `gsm8k`, other two don't — not generalizable) |
-| prefix_M | 4, 8, 16 (warm), 16 (cold) | no trend with M; `M16_cold` fails to clear where its warm-started twin did |
-| teacher_temp | 0.5, 0.7 | `ttemp=0.5` clears `gsm8k`, `0.7` doesn't — one point, not confirmed |
-| CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both clear `gsm8k` k32 similarly; anneal doesn't move the needle at this LR |
+| grad_clip | 10, 100, 1000 | no consistent winner — only `gradclip100` beats jsd beyond noise on `gsm8k`, the other two don't |
+| M (samples/root) | 4, 8, 16 (warm), 16 (cold) | no trend with M; `M16_cold` fails to beat jsd where its warm-started twin did |
+| teacher_temp | 0.5, 0.7 | `ttemp=0.5` beats jsd beyond noise on `gsm8k`, `0.7` doesn't. **Gap: the default (`ttemp=1.0`) was never run through pass@k, and only 2 non-default points were tested — not enough points to see a real trend or rule one out. Adding the default plus a third temp value is the natural next step before drawing any conclusion here.** |
+| CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both beat jsd beyond noise on `gsm8k` k32 similarly; anneal doesn't move the needle at this LR |
 | root spacing offset | fixed vs random | negligible vs plain N=16 |
-| dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap clears on — real, not noise |
-| multi-root N | 8, 16, 16+offset, 32 | N=16/16+offset/32 clear `gsm8k` k32/k64; **N=8 clears nothing** |
+| dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise |
+| N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** |
 
-## Multi-root: N works, but the fresh (on-policy-style) estimator only reproduces it at N=32
+## Multi-root: two different ways to build the continuation at each root
 
-Tail-reuse estimator, `gsm8k` k32/k64 Δ vs jsd: N=16 **+0.03–0.04** (clears),
-N=32 **+0.022–0.030** (clears), N=8 **~+0.02** (does not clear).
+Both variants below use the same N (root spacing, §5). They differ in
+*where the teacher continuation at each root comes from*:
 
-Doc-faithful fresh estimator (`freshM1`, single roots resampled fresh each
-step) at the **same N=16 does not reproduce this** — it reverses (Δ −0.009 to
-−0.040 at k8–k64). Variants tried to close the gap:
+- **Tail-reuse** (the cheap approximation): the teacher generates ONE long
+  rollout up front; every root along it just reuses the remaining tail of
+  that same rollout as its "continuation." One teacher `generate()` call
+  total, but continuations at different roots are correlated (they're all
+  slices of the same sampled path) — not the independent-per-root sampling
+  the design doc's unbiasedness proof (§5) actually assumes.
+- **Fresh** (`freshM{1,2}`, doc-faithful): the teacher draws a genuinely new,
+  independent continuation sample at *each* root separately, matching the
+  doc's literal spec — at the cost of extra teacher calls.
+
+Tail-reuse, `gsm8k` k32/k64 Δ vs jsd: N=16 **+0.03–0.04** (beats jsd beyond
+noise), N=32 **+0.022–0.030** (beats jsd beyond noise), N=8 **~+0.02** (does
+not).
+
+Fresh at the **same N=16 does not reproduce tail-reuse's win** — it reverses
+(Δ −0.009 to −0.040 at k8–k64):
 
 | variant | N | gsm8k vs jsd | verdict |
 |---|---|---|---|
-| tail-reuse (baseline) | 16 | clears k16/k32/k64 | wins |
-| `freshM1` bare | 16 | −0.009 to −0.040 | reverses |
-| `freshM1_ceanneal3000` | 16 | −0.009 to +0.007 | ~ties, doesn't clear |
-| `freshM2` (M=2) | 16 | ~0.000 by k64 | ties, doesn't clear |
-| `freshM1` | 32 | +0.030 at k32/k64 | **clears — reproduces the win** |
+| tail-reuse (baseline) | 16 | beats jsd beyond noise at k16/k32/k64 | wins |
+| `freshM1` bare | 16 | −0.009 to −0.040 | reverses, worse than jsd |
+| `freshM1_ceanneal3000` | 16 | −0.009 to +0.007 | ~ties jsd, doesn't beat it |
+| `freshM2` (M=2) | 16 | ~0.000 by k64 | ties jsd, doesn't beat it |
+| `freshM1` | 32 | +0.030 at k32/k64 | **beats jsd beyond noise — reproduces the win** |
 
-Net: every N=16 fresh variant sits at or below parity with jsd; N=32 is the
-one that reproduces tail-reuse's win. Reads as "the effect is real but
-concentrated at higher N," not "fresh is broken" — worth confirming with a
-second seed before generalizing either way.
+**Conclusion: the cheap approximation (tail-reuse) is the one that currently
+works. The theoretically-correct estimator (fresh) only matches it once N is
+increased to 32 — it does not reproduce the win at the same N=16 tail-reuse
+uses.** Two readings are both consistent with this, and it isn't settled
+which is right: either fresh genuinely needs more roots to bring its own
+variance down to a competitive level, or the correlation tail-reuse
+introduces (repeatedly scoring against the same sampled rollout) is doing
+something actively useful rather than just being a passable approximation.
+Single seed — worth confirming before leaning on either explanation.
 
 ## Anomalies
 
@@ -104,17 +130,18 @@ confirming the pass@k math itself is fine: across model
 
 **Same crossing shows up on the dapo-trained checkpoints, `math_eval`
 only.** Both jsd and prob trained on dapo lead the student at k=1 (+0.006,
-+0.028) but finish k=64 below it (−0.060, −0.030). The same two checkpoints
-do *not* cross on `gsm8k_eval` or `olympiad_eval` — ruling out a generic
-"training narrows diversity" story (that would show up everywhere, not one
-dataset). Lines up with the dataset mismatch already established for dapo
-(trails on `math_eval`, leads on `gsm8k_eval`): whatever dapo's problem
-distribution favors seems to preserve sample diversity on
-`gsm8k_eval`/`olympiad_eval`-style problems but narrow it specifically on
-`math_eval`-style ones. This is a hypothesis from the curve shape, not a
-measured mechanism — confirming it needs a per-prompt output-diversity
-comparison on the `math_eval` prompts where the dapo checkpoint fails at
-high k, not yet done.
++0.028) but finish k=64 below it (−0.060, −0.030) —
+[chart](../results/passK/passk_dapo_jsd_vs_prob_math_eval.png). The same two
+checkpoints do *not* cross on `gsm8k_eval` or `olympiad_eval`. That rules out
+a generic "training narrows diversity" explanation, since that would show up
+on every dataset, not just one. It matches the dataset mismatch already
+established for dapo (trails on `math_eval`, leads on `gsm8k_eval`): dapo's
+training distribution preserves sample diversity on
+`gsm8k_eval`/`olympiad_eval`-style problems but narrows it specifically on
+`math_eval`-style ones. **This mechanism is a hypothesis inferred from the
+curve shape, not a measured result** — the direct test would be comparing
+per-prompt output diversity between the dapo- and math_hard-trained
+checkpoints on the `math_eval` prompts where dapo fails at high k.
 
 ## Dataset headroom (k=64, untrained 0.6B → teacher 8B)
 
@@ -127,10 +154,10 @@ high k, not yet done.
 ## Practical read
 
 - Judge a checkpoint by pass@k gap-closed to the teacher, per dataset — not
-  by pass@1 or training-time block_eff alone.
-- `math_eval`/`olympiad_eval` on `math_hard`-trained checkpoints: not a
-  usable go/no-go signal. On `dapo`-trained checkpoints, `olympiad_eval` now
-  is.
-- `gsm8k_eval` at k16/k32/k64 remains the most reliable lens for a real
-  prob-vs-jsd gap.
-- Re-derive the noise floor whenever the checkpoint set changes.
+  by pass@1 or training-time block_eff alone. Charts:
+  [math_eval](../results/passK/gap_closed_math_eval.png) ·
+  [gsm8k_eval](../results/passK/gap_closed_gsm8k_eval.png) ·
+  [olympiad_eval](../results/passK/gap_closed_olympiad_eval.png).
+- `gsm8k_eval` beats jsd beyond the noise floor for `math_hard`-trained
+  checkpoints. `olympiad_eval` beats jsd beyond the noise floor for
+  `dapo`-trained checkpoints. `math_eval` beats it for neither.
