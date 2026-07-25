@@ -76,15 +76,19 @@ widely-spaced* roots, not more roots. "Beats jsd beyond noise on `gsm8k`"
 below is shorthand for: that config's pass@k gap vs jsd on `gsm8k_eval` is
 bigger than the noise floor at the k's where it's reported.
 
-| variable | values tested | effect on pass@k |
-|---|---|---|
-| grad_clip | 10, 100, 1000 | no consistent winner — only `gradclip100` beats jsd beyond noise on `gsm8k`, the other two don't |
-| M (samples/root) | 4, 8, 16 (warm), 16 (cold) | no trend with M; `M16_cold` fails to beat jsd where its warm-started twin did |
-| teacher_temp | 0.5, 0.7 | `ttemp=0.5` beats jsd beyond noise on `gsm8k`, `0.7` doesn't. **Gap: the default (`ttemp=1.0`) was never run through pass@k, and only 2 non-default points were tested — not enough points to see a real trend or rule one out. Adding the default plus a third temp value is the natural next step before drawing any conclusion here.** |
-| CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both beat jsd beyond noise on `gsm8k` k32 similarly; anneal doesn't move the needle at this LR |
-| root spacing offset | fixed vs random | negligible vs plain N=16 |
-| dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise |
-| N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** |
+Deltas below are vs jsd on `gsm8k_eval` at k16/k32/k64, noise floor derived
+per k from the flat low-LR `prob` cluster (2×std): 0.031/0.027/0.034.
+Charts: [scripts/plot_ablation_families.py](../scripts/plot_ablation_families.py).
+
+| variable | values tested | effect on pass@k | chart |
+|---|---|---|---|
+| grad_clip | 10, 100, 1000 | no consistent winner — only `gradclip100` beats jsd beyond noise on `gsm8k`, the other two don't | [chart](../results/passK/ablation_grad_clip.png) |
+| M (samples/root) | 4 (default), 8, 16 (warm), 16 (cold) | no trend with M; `M16_cold` fails to beat jsd where its warm-started twin did | [chart](../results/passK/ablation_M_samples_per_root.png) |
+| teacher_temp | 1.0 (default), 0.7, 0.5 | **the default beats jsd by the widest margin of the three (+0.038/+0.035/+0.040 at k16/32/64), `ttemp=0.5` also clears (+0.033/+0.027/+0.030), `ttemp=0.7` doesn't (+0.013/+0.018/+0.020, inside the floor).** With the default actually included, there's no support for "lowering teacher_temp helps" — the unmodified default is the strongest point, not the weakest. One confound: the default checkpoint used here also differs in `lr_min_ratio`/`weight_decay` from the two ttemp points (0.1/0.01 vs their bare CLI defaults), so this isn't a perfectly clean single-axis read, just the closest match available in the sweep. | [chart](../results/passK/ablation_teacher_temp.png) |
+| CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both beat jsd beyond noise on `gsm8k` k32 similarly; anneal doesn't move the needle at this LR | [chart](../results/passK/ablation_CE_anneal_timing_lr3e-6.png) |
+| root spacing offset | fixed vs random | negligible vs plain N=16 | [chart](../results/passK/ablation_root_spacing_offset.png) |
+| dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise | see dapo charts above |
+| N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** | [chart](../results/passK/ablation_N_root_spacing.png) |
 
 ## Multi-root: two different ways to build the continuation at each root
 
@@ -143,7 +147,10 @@ confirming the pass@k math itself is fine: across model
 only.** Both jsd and prob trained on dapo lead the student at k=1 (+0.006,
 +0.028) but finish k=64 below it (−0.060, −0.030) —
 [chart](../results/passK/passk_dapo_jsd_vs_prob_math_eval.png). The same two
-checkpoints do *not* cross on `gsm8k_eval` or `olympiad_eval`. That rules out
+checkpoints do *not* cross on
+[`gsm8k_eval`](../results/passK/passk_dapo_jsd_vs_prob_gsm8k_eval.png) or
+[`olympiad_eval`](../results/passK/passk_dapo_jsd_vs_prob_olympiad_eval.png).
+That rules out
 a generic "training narrows diversity" explanation, since that would show up
 on every dataset, not just one. It matches the dataset mismatch already
 established for dapo (trails on `math_eval`, leads on `gsm8k_eval`): dapo's
