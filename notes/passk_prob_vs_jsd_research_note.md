@@ -107,20 +107,40 @@ Both variants below use the same N (root spacing, §5). They differ in
   independent continuation sample at *each* root separately, matching the
   doc's literal spec — at the cost of extra teacher calls.
 
-Tail-reuse, `gsm8k` k32/k64 Δ vs jsd: N=16 **+0.03–0.04** (beats jsd beyond
-noise), N=32 **+0.022–0.030** (beats jsd beyond noise), N=8 **~+0.02** (does
-not).
+Four separate variables get tangled together in the checkpoints tested here
+— sampling method (tail-reuse vs fresh), M (continuations per root), whether
+a CE-anneal is mixed in, and N (root spacing). Only five points were run, not
+a full grid, so laid out with one column per variable, each row below
+differs from *one specific other row* in exactly one variable — not from
+every other row at once:
 
-Fresh at the **same N=16 does not reproduce tail-reuse's win** — it reverses
-(Δ −0.009 to −0.040 at k8–k64):
+| method | N | M | CE-anneal | `gsm8k` Δ vs jsd (k16/k32/k64) | verdict |
+|---|---|---|---|---|---|
+| tail-reuse | 16 | 1 | no | beats jsd beyond noise at all three | wins |
+| fresh | 16 | 1 | no | −0.009 to −0.040 | reverses, worse than jsd |
+| fresh | 16 | 1 | yes (ceanneal3000) | −0.009 to +0.007 | ~ties jsd, doesn't beat it |
+| fresh | 16 | 2 | no | ~0.000 by k64 | ties jsd, doesn't beat it |
+| fresh | 32 | 1 | no | +0.030 at k32/k64 | **beats jsd beyond noise** |
 
-| variant | N | gsm8k vs jsd | verdict |
-|---|---|---|---|
-| tail-reuse (baseline) | 16 | beats jsd beyond noise at k16/k32/k64 | wins |
-| `freshM1` bare | 16 | −0.009 to −0.040 | reverses, worse than jsd |
-| `freshM1_ceanneal3000` | 16 | −0.009 to +0.007 | ~ties jsd, doesn't beat it |
-| `freshM2` (M=2) | 16 | ~0.000 by k64 | ties jsd, doesn't beat it |
-| `freshM1` | 32 | +0.030 at k32/k64 | **beats jsd beyond noise — reproduces the win** |
+Chart (all five lines together): [pass@k vs k, `gsm8k_eval`](../results/passK/ablation_tail_reuse_vs_fresh.png).
+Tail-reuse across N specifically (N=8/16/16-offset/32, method held fixed):
+[same data as the N row in the ablations table above](../results/passK/ablation_N_root_spacing.png).
+
+The four *valid* single-axis reads, each holding the other three columns fixed:
+
+1. **Method** (tail-reuse vs fresh, N=16/M=1/no-anneal fixed): tail-reuse
+   wins, fresh reverses. This is the headline result.
+2. **M** (1 vs 2, fresh/N=16/no-anneal fixed): M=1 reverses, M=2 roughly
+   ties jsd — doesn't reverse as badly, still doesn't beat it.
+3. **CE-anneal** (on vs off, fresh/N=16/M=1 fixed): off reverses, on roughly
+   ties jsd — closes most of the reversal, doesn't flip it into a win.
+4. **N** (16 vs 32, fresh/M=1/no-anneal fixed): N=16 reverses, N=32 beats
+   jsd beyond noise — the same N that makes tail-reuse work also makes
+   fresh work.
+
+Tail-reuse itself, across N=8/16/32 (a separate comparison, not part of the
+table above): N=16 **+0.03–0.04** (beats jsd beyond noise), N=32
+**+0.022–0.030** (beats jsd beyond noise), N=8 **~+0.02** (does not).
 
 **Conclusion: the cheap approximation (tail-reuse) is the one that currently
 works. The theoretically-correct estimator (fresh) only matches it once N is
