@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-DATASET = "gsm8k_eval.jsonl"
+DATASETS = ["math_eval.jsonl", "gsm8k_eval.jsonl", "olympiad_eval.jsonl"]
 ALL_K = [1, 2, 4, 8, 16, 32, 64]
 
 JSD_LR1E5 = "jsd_lr1e-5_wu10_lrmin0.1_wd0.01"
@@ -41,6 +41,30 @@ FAMILIES = [
         ("ttemp=1.0 (default)", "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01"),
         ("ttemp=0.7", "po_prob_ttemp0.7_lr1e-5_wu20"),
         ("ttemp=0.5", "po_prob_ttemp0.5_lr1e-5_wu20"),
+    ]),
+    ("warmup_pct", ("jsd", JSD_LR1E5), [
+        ("wu=5%", "po_prob_lr1e-5_wu5_lrmin0.1_wd0.01"),
+        ("wu=10%", "po_prob_lr1e-5_wu10_lrmin0.1_wd0.01"),
+        ("wu=20% (default)", "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01"),
+    ]),
+    ("lr_min_ratio", ("jsd", JSD_LR1E5), [
+        ("lrmin=0.1 (default)", "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01"),
+        ("lrmin=0.01", "po_prob_lr1e-5_wu20_lrmin0.01_wd0.01"),
+    ]),
+    ("teacher_topk", ("jsd", JSD_LR1E5), [
+        ("topk=0 (default)", "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01"),
+        ("topk=20", "po_prob_topk20_lr1e-5_wu20"),
+        ("topk=50", "po_prob_topk50_lr1e-5_wu20"),
+    ]),
+    ("weight_decay", ("jsd", JSD_LR1E5), [
+        ("wd=0.0001", "po_prob_lr1e-5_wu20_wd0.0001"),
+        ("wd=0.001", "po_prob_lr1e-5_wu20_wd0.001"),
+        ("wd=0.01 (default)", "po_prob_lr1e-5_wu20_lrmin0.1_wd0.01"),
+    ]),
+    ("CE_anneal_steps", ("jsd", JSD_LR1E5), [
+        ("anneal_steps=1500", "po_prob_ceanneal1500_lr1e-5_wu20"),
+        ("anneal_steps=3000 (BE-best)", "po_prob_ceanneal_lr1e-5_wu20"),
+        ("anneal_steps=4000", "po_prob_ceanneal4000_lr1e-5_wu20"),
     ]),
     ("CE_anneal_timing_lr3e-6", ("jsd", JSD_LR3E6), [
         ("no anneal", "po_prob_lr3e-6_wu20"),
@@ -91,41 +115,45 @@ def main():
     outdir = "results/passK"
     os.makedirs(outdir, exist_ok=True)
 
-    student = [passk_at_exact(base, "Qwen/Qwen3-0.6B", DATASET, k) for k in ALL_K]
-    teacher = [passk_at_exact(base, "Qwen/Qwen3-8B", DATASET, k) for k in ALL_K]
+    for dataset in DATASETS:
+        tag = dataset.replace(".jsonl", "")
+        student = [passk_at_exact(base, "Qwen/Qwen3-0.6B", dataset, k) for k in ALL_K]
+        teacher = [passk_at_exact(base, "Qwen/Qwen3-8B", dataset, k) for k in ALL_K]
 
-    for title, (jsd_label, jsd_frag), variants in FAMILIES:
-        jsd_ys = [passk_at_frag(rows, jsd_frag, DATASET, k) for k in ALL_K]
+        for title, (jsd_label, jsd_frag), variants in FAMILIES:
+            jsd_ys = [passk_at_frag(rows, jsd_frag, dataset, k) for k in ALL_K]
 
-        fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        ax.plot(ALL_K, student, "--", color="black", linewidth=2, zorder=3,
-                label="untrained student (0.6B)")
-        ax.plot(ALL_K, teacher, "--", color="gray", linewidth=2, zorder=3,
-                label="teacher (8B)")
-        ax.plot(ALL_K, jsd_ys, "--", color="#0b3d91", linewidth=2, zorder=4,
-                label=f"{jsd_label} baseline ({jsd_frag})")
+            fig, ax = plt.subplots(figsize=(7.5, 5.5))
+            ax.plot(ALL_K, student, "--", color="black", linewidth=2, zorder=3,
+                    label="untrained student (0.6B)")
+            ax.plot(ALL_K, teacher, "--", color="gray", linewidth=2, zorder=3,
+                    label="teacher (8B)")
+            ax.plot(ALL_K, jsd_ys, "--", color="#0b3d91", linewidth=2, zorder=4,
+                    label=f"{jsd_label} baseline ({jsd_frag})")
 
-        for i, (label, frag) in enumerate(variants):
-            ys = [passk_at_frag(rows, frag, DATASET, k) for k in ALL_K]
-            if any(y is None for y in ys):
-                print(f"  [skip] {title}: {frag} missing data on {DATASET}")
-                continue
-            ax.plot(ALL_K, ys, "-o", color=COLORS[i % len(COLORS)], linewidth=2,
-                     markersize=5, zorder=5, label=label)
+            skipped = False
+            for i, (label, frag) in enumerate(variants):
+                ys = [passk_at_frag(rows, frag, dataset, k) for k in ALL_K]
+                if any(y is None for y in ys):
+                    print(f"  [skip] {title}/{tag}: {frag} missing data on {dataset}")
+                    skipped = True
+                    continue
+                ax.plot(ALL_K, ys, "-o", color=COLORS[i % len(COLORS)], linewidth=2,
+                         markersize=5, zorder=5, label=label)
 
-        ax.set_xscale("log", base=2)
-        ax.set_xticks(ALL_K)
-        ax.set_xticklabels([str(k) for k in ALL_K])
-        ax.set_xlabel("k")
-        ax.set_ylabel("pass@k")
-        ax.set_title(f"{title} -- {DATASET.replace('.jsonl', '')}", fontsize=10)
-        ax.grid(alpha=0.3, which="both")
-        ax.legend(fontsize=7, loc="lower right")
-        fig.tight_layout()
-        path = os.path.join(outdir, f"ablation_{title}.png")
-        fig.savefig(path, dpi=150)
-        plt.close(fig)
-        print(f"wrote {path}")
+            ax.set_xscale("log", base=2)
+            ax.set_xticks(ALL_K)
+            ax.set_xticklabels([str(k) for k in ALL_K])
+            ax.set_xlabel("k")
+            ax.set_ylabel("pass@k")
+            ax.set_title(f"{title} -- {tag}", fontsize=10)
+            ax.grid(alpha=0.3, which="both")
+            ax.legend(fontsize=7, loc="lower right")
+            fig.tight_layout()
+            path = os.path.join(outdir, f"ablation_{title}_{tag}.png")
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            print(f"wrote {path}" + ("  (partial, some variants missing)" if skipped else ""))
 
 
 if __name__ == "__main__":
