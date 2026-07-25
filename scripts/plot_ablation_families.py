@@ -22,7 +22,7 @@ ALL_K = [1, 2, 4, 8, 16, 32, 64]
 JSD_LR1E5 = "jsd_lr1e-5_wu10_lrmin0.1_wd0.01"
 JSD_LR3E6 = "jsd_lr3e-6_wu10_lrmin0.1_wd0.01"
 
-COLORS = ["#b30000", "#e08214", "#1a9850", "#762a83"]
+COLORS = ["#b30000", "#e08214", "#1a9850", "#762a83", "#2166ac"]
 
 # (family title, jsd baseline label+frag, [(variant label, checkpoint frag), ...])
 FAMILIES = [
@@ -55,6 +55,13 @@ FAMILIES = [
         ("N=16", "po_prob_multiroot_N16_lr1e-5_wu20"),
         ("N=16 random offset", "po_prob_multiroot_N16_randoff_lr1e-5_wu20"),
         ("N=32", "po_prob_multiroot_N32_lr1e-5_wu20"),
+    ]),
+    ("tail_reuse_vs_fresh", ("jsd", JSD_LR1E5), [
+        ("tail-reuse N=16 (baseline)", "po_prob_multiroot_N16_lr1e-5_wu20"),
+        ("freshM1 N=16 bare", "po_prob_multiroot_N16_freshM1_lr1e-5_wu20"),
+        ("freshM1_ceanneal3000 N=16", "po_prob_multiroot_N16_freshM1_ceanneal3000_auxw0.5_lr1e-5_wu20"),
+        ("freshM2 N=16", "po_prob_multiroot_N16_freshM2_lr1e-05_wu20"),
+        ("freshM1 N=32", "po_prob_multiroot_N32_freshM1_lr1e-5_wu20"),
     ]),
 ]
 
