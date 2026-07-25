@@ -20,10 +20,16 @@ as real if it clears this.
   hollow by comparison: both checkpoints lose to the untrained student there
   (see Anomalies), so "prob beats jsd" on `math_eval` is a race between two
   checkpoints that both failed to learn on that dataset.
-- **Of every hyperparameter ablated (grad_clip, M, teacher_temp, CE-anneal
-  timing, root spacing offset), none changed the qualitative picture.** The
-  one exception is root spacing `N`, and even there the effect is
-  inconsistent across estimator variants (see below).
+- **Several hyperparameters that showed no effect on BE do show a real
+  pass@k effect, and it isn't always the BE-preferred value that wins:**
+  warmup 20% clearly beats jsd on `gsm8k` where 5%/10% don't as cleanly;
+  `lr_min_ratio=0.1` beats jsd where `0.01` doesn't at all; weight decay
+  `0.001` beats jsd nowhere despite sitting between two values that both
+  do; and CE-anneal `anneal_steps=3000` — the actual BE-best pick — beats
+  jsd nowhere on pass@k, while `4000` (worse on BE) beats it at two of
+  three k's. `grad_clip`, `M`, `teacher_temp`, and root spacing offset show
+  no consistent pass@k lever. Root spacing `N` is the other confirmed
+  effect, though inconsistent across estimator variants (see below).
 - **`best_val_block_eff` is a training-time-only metric** (computed on
   `math_val` during training) — never computed on the three held-out sets.
   Don't compare it to held-out pass@k as if it were "BE on that dataset."
@@ -91,6 +97,11 @@ each family's own variants plus its jsd baseline (not all 38 checkpoints):
 | root spacing offset | fixed vs random | negligible vs plain N=16 | [chart](../results/passK/ablation_root_spacing_offset.png) |
 | dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise | [math_eval](../results/passK/passk_dapo_jsd_vs_prob_math_eval.png) · [gsm8k_eval](../results/passK/passk_dapo_jsd_vs_prob_gsm8k_eval.png) · [olympiad_eval](../results/passK/passk_dapo_jsd_vs_prob_olympiad_eval.png) |
 | N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** | [chart](../results/passK/ablation_N_root_spacing.png) |
+| warmup % | 5, 10, 20 (lr=1e-5) | 20% beats jsd beyond noise on `gsm8k` at all three k's (k16/32/64); 10% beats it at two (k16/k32); 5% at one (k32 only) — directionally consistent with more warmup helping, unlike BE which showed no clear trend on this axis | — |
+| lr_min_ratio | 0.1 (default), 0.01 | 0.1 beats jsd beyond noise at all three k's; 0.01 beats it at none — a real divergence from the BE result, which showed no effect | — |
+| teacher top-k | 0 (default), 20, 50 | all three beat jsd beyond noise at all three k's, similar magnitude — no harm in pass@k despite BE showing "mild harm at higher k" | — |
+| weight decay | 0.0001, 0.001, 0.01 (default) | 0.0001 beats jsd beyond noise most strongly (all three k's, largest gaps), 0.01 also beats it at all three, **0.001 beats it at none** — non-monotonic, worse than both its neighbors | — |
+| CE-anneal `anneal_steps` | 1500, 3000 (BE-best pick), 4000 | 1500 and 3000 beat jsd beyond noise at none of the three k's; 4000 beats it at two (k32/k64) — **the BE-optimal `anneal_steps` (3000) doesn't carry over to pass@k** | — |
 
 ## Multi-root: two different ways to build the continuation at each root
 
