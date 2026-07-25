@@ -77,8 +77,10 @@ below is shorthand for: that config's pass@k gap vs jsd on `gsm8k_eval` is
 bigger than the noise floor at the k's where it's reported.
 
 Deltas below are vs jsd on `gsm8k_eval` at k16/k32/k64, noise floor derived
-per k from the flat low-LR `prob` cluster (2×std): 0.031/0.027/0.034.
-Charts: [scripts/plot_ablation_families.py](../scripts/plot_ablation_families.py).
+per k from the flat low-LR `prob` cluster (2×std): 0.031/0.027/0.034. Charts
+are pass@k-vs-k curves, same style as the dataset charts above, zoomed in to
+each family's own variants plus its jsd baseline (not all 38 checkpoints):
+[scripts/plot_ablation_families.py](../scripts/plot_ablation_families.py).
 
 | variable | values tested | effect on pass@k | chart |
 |---|---|---|---|
@@ -87,7 +89,7 @@ Charts: [scripts/plot_ablation_families.py](../scripts/plot_ablation_families.py
 | teacher_temp | 1.0 (default), 0.7, 0.5 | **the default beats jsd by the widest margin of the three (+0.038/+0.035/+0.040 at k16/32/64), `ttemp=0.5` also clears (+0.033/+0.027/+0.030), `ttemp=0.7` doesn't (+0.013/+0.018/+0.020, inside the floor).** With the default actually included, there's no support for "lowering teacher_temp helps" — the unmodified default is the strongest point, not the weakest. One confound: the default checkpoint used here also differs in `lr_min_ratio`/`weight_decay` from the two ttemp points (0.1/0.01 vs their bare CLI defaults), so this isn't a perfectly clean single-axis read, just the closest match available in the sweep. | [chart](../results/passK/ablation_teacher_temp.png) |
 | CE-anneal timing (lr=3e-6) | anneal vs no-anneal | both beat jsd beyond noise on `gsm8k` k32 similarly; anneal doesn't move the needle at this LR | [chart](../results/passK/ablation_CE_anneal_timing_lr3e-6.png) |
 | root spacing offset | fixed vs random | negligible vs plain N=16 | [chart](../results/passK/ablation_root_spacing_offset.png) |
-| dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise | see dapo charts above |
+| dataset | `math_hard` vs `dapo_math_train` | changes *which* dataset the prob-jsd gap beats noise on — real, not noise | [math_eval](../results/passK/passk_dapo_jsd_vs_prob_math_eval.png) · [gsm8k_eval](../results/passK/passk_dapo_jsd_vs_prob_gsm8k_eval.png) · [olympiad_eval](../results/passK/passk_dapo_jsd_vs_prob_olympiad_eval.png) |
 | N (root spacing) | 8, 16, 16+offset, 32 | N=16/16+offset/32 beat jsd beyond noise on `gsm8k` k32/k64; **N=8 doesn't beat it anywhere** | [chart](../results/passK/ablation_N_root_spacing.png) |
 
 ## Multi-root: two different ways to build the continuation at each root
