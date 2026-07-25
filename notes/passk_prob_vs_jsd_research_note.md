@@ -14,9 +14,12 @@ as real if it clears this.
 - **Prob beats jsd in direction on every dataset, but only `gsm8k_eval`
   clears the noise floor.** `math_eval` and `olympiad_eval` are directionally
   prob-favoring but not usable as a go/no-go signal on their own.
-- **Trained on `dapo_math_train` instead of `math_hard`, the gap opens up on
-  `olympiad_eval` too** — the first fair jsd-vs-prob pair in this sweep with
-  a floor-clearing gap outside `gsm8k`.
+- **Trained on `dapo_math_train` instead of `math_hard`, prob genuinely beats
+  the untrained student on `olympiad_eval`, jsd only ties it** — a real
+  win, not just a jsd-vs-prob artifact. The matching gap on `math_eval` is
+  hollow by comparison: both checkpoints lose to the untrained student there
+  (see Anomalies), so "prob beats jsd" on `math_eval` is a race between two
+  checkpoints that both failed to learn on that dataset.
 - **Of every hyperparameter ablated (grad_clip, M, teacher_temp, CE-anneal
   timing, root spacing offset), none changed the qualitative picture.** The
   one exception is root spacing `N`, and even there the effect is
@@ -27,11 +30,11 @@ as real if it clears this.
 
 ## Prob vs jsd, by dataset
 
-| dataset | direction (of 38) | beats jsd beyond noise? | read |
-|---|---|---|---|
-| `math_eval` | 30–36/38 above jsd (k1–k32), 23/33 at k64 | never | directional only |
-| `olympiad_eval` | 32–37/38 above jsd (k1–k32), 23/34 at k64 | 3/38 configs | directional only |
-| `gsm8k_eval` | consistently above | 14–22/38 configs, concentrated at k16/k32/k64 | the one real pattern |
+| dataset | direction (of 38) | beats jsd beyond noise? | beats untrained student? | read |
+|---|---|---|---|---|
+| `math_eval` | 30–36/38 above jsd (k1–k32), 23/33 at k64 | never | yes, except 2 checkpoints that cross back below at high k (see Anomalies) | learning happens, jsd/prob tie |
+| `olympiad_eval` | 32–37/38 above jsd (k1–k32), 23/34 at k64 | 3/38 configs | yes, no crossing cases documented here | learning happens, jsd/prob mostly tie |
+| `gsm8k_eval` | consistently above | 14–22/38 configs, concentrated at k16/k32/k64 | yes, no crossing cases documented here | learning happens, and prob pulls ahead of jsd |
 
 Charts (best-of-family, hindsight-selected by pass@k gap-closed — a
 different, complementary selection to the BE-deployed-pick comparisons
@@ -42,18 +45,26 @@ below): [math_eval](../results/passK/passk_curves_all_math_eval.png) ·
 **Trained on `dapo_math_train` instead of `math_hard`** (real deployment
 picks per family, not cherry-picked after seeing pass@k):
 
-| dataset | Δ (prob − jsd) | beats jsd beyond noise? |
-|---|---|---|
-| `olympiad_eval` | k16 +0.036, k32 +0.048, k64 +0.070 | yes, widening with k |
-| `math_eval` | k16 +0.027, k64 +0.030 | right at the floor |
-| `gsm8k_eval` | k64 +0.010 | no |
+| dataset | jsd vs student (k1→k64) | prob vs student (k1→k64) | prob vs jsd | beats jsd beyond noise? |
+|---|---|---|---|---|
+| `olympiad_eval` | +0.004 → −0.010, ties (not the Anomalies crossing) | +0.013 → +0.060, **wins outright, growing with k** | k16 +0.036, k32 +0.048, k64 +0.070 | yes, widening with k |
+| `math_eval` | +0.006 → **−0.060, loses to student** (Anomalies crossing) | +0.028 → **−0.030, loses to student** (Anomalies crossing) | k16 +0.027, k64 +0.030 | right at the floor |
+| `gsm8k_eval` | +0.047 → +0.000, ties by k64 | +0.076 → +0.010, **wins**, margin shrinks with k | k64 +0.010 | no |
+
+This is the difference your question was pointing at: on `olympiad_eval`,
+prob isn't just edging out jsd, it's genuinely learning something jsd isn't
+— it beats the untrained student outright and the margin *grows* with k. On
+`math_eval`, prob "beating jsd beyond noise" would mean nothing on its own,
+since **both are losing to the untrained student there** — that's a race
+between two checkpoints that both failed to learn on this dataset, not a
+real win. `gsm8k_eval` sits in between: both beat the student, but the
+margin over the *student* shrinks toward zero by k64 for both, even though
+prob still edges jsd there by k64.
 
 Charts: [math_eval](../results/passK/passk_dapo_jsd_vs_prob_math_eval.png) ·
 [gsm8k_eval](../results/passK/passk_dapo_jsd_vs_prob_gsm8k_eval.png) ·
 [olympiad_eval](../results/passK/passk_dapo_jsd_vs_prob_olympiad_eval.png).
-Single seed, one checkpoint per family, same caveat as everywhere else here —
-but the first dataset in the whole sweep where prob clears the floor
-outside `gsm8k`.
+Single seed, one checkpoint per family, same caveat as everywhere else here.
 
 ## Ablations tested — none changed the qualitative picture, except N
 
