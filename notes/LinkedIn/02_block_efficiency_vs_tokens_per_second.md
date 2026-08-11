@@ -43,6 +43,8 @@ Our own profiling shows this directly. The 32B teacher has four times the parame
 
 So decode speed tracks memory bandwidth and interconnect, not raw compute. Move the same model from an A100 to an H100 to a B200, and NVLink bandwidth between GPUs alone jumps from about 900 GB/s to 1.8 TB/s, on top of a faster HBM generation. Same model, same code, newer hardware, more tokens per second, with zero change to the algorithm. That alone makes tokens per second a bad metric for my question.
 
+For a deeper, first principles tour of this same ground, the memory wall, kernels, quantization, and serving, [The Engineering Behind LLM Inference](https://www.youtube.com/playlist?list=PLqO45Dg1pMhlDBZTMqVL2GU-14xYip2y2) is a good watch.
+
 ## The software axis: the serving stack moves it too
 
 The rest of the number comes from the serving system, none of which touches model quality. The real ones people run in production: KV caching, more efficient attention variants that shrink the cache, continuous batching, fused kernels like FlashAttention, quantization, prefix caching, pruning, paged attention, prefill and decode disaggregation, and speculative decoding itself. We did not use any of these other techniques, because the goal was to isolate the impact of speculative decoding on its own.
