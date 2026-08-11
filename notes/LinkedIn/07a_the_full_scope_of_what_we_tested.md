@@ -15,22 +15,22 @@ Three are newer and not OT based, block verification style instead:
 
 - bv: block verification, one path at a time
 - traversal: multi path, from my mentor Rahul's own published work
-- gbv: greedy block verification, multi path, also his, tied to the delayed branching technique from post 10
+- gbv: greedy block verification, multi path, also his, tied to a delayed branching technique that changes where the guess tree splits
 
 ## The loss functions, by category
 
 - **Flat baselines**: forward KL, reverse KL, JSD, L1. Match the teacher's whole output distribution, no tree structure involved.
 - **Tree losses**: one shaped around nearly every verifier above, naive, traversal, bv, gbv, nss, specinfer, spectr, khisti, plus a fully differentiable variant. These train on the draft's own sampled guess tree instead of a fixed teacher sequence.
-- **Log space tree losses**: the same family, reformulated to fix a vanishing gradient at depth. Six variants, and the ones I covered in post 8.
+- **Log space tree losses**: the same family, reformulated to fix a vanishing gradient at depth. Six variants.
 - **Off policy tree losses**: two variants trained on trajectories from a fixed reference policy rather than the live one.
-- **Enrichment**: flat and tree versions, trained on several stochastic teacher rollouts instead of one greedy one. The one family covered in post 10.
+- **Enrichment**: flat and tree versions, trained on several stochastic teacher rollouts instead of one greedy one.
 - **Prefix overlap**: four objective variants targeting the teacher's prefix probability directly, each with a cold start and a warm start version.
-- **Depth weighted curriculum**: not a new loss on its own, a wrapper that reweights any tree loss by expected acceptance depth. Covered in post 9.
+- **Depth weighted curriculum**: not a new loss on its own, a wrapper that reweights any tree loss by expected acceptance depth.
 - **LK alpha**: acceptance rate distillation from a recent paper, plus an enrichment variant of it.
-- **REINFORCE**: one variant, rewarding block efficiency directly. Also in post 9, and later removed.
+- **REINFORCE**: one variant, rewarding block efficiency directly, later removed.
 
 That is more than thirty named objectives, checked against nine verifiers, across two model pairs. Most of that grid is not glamorous. Most cells confirm the same plateau. But you cannot tell a real signal from a lucky cell without filling in the rest of the grid first, and as far as I can tell, nobody had actually done that before for this specific problem.
 
 ---
 
-Part of a series on building a speculative decoding research platform. Next: the loss that matched my metric and still lost.
+Part of a series on building a speculative decoding research platform.

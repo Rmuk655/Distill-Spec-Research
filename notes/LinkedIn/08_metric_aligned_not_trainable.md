@@ -21,4 +21,4 @@ I expected the opposite: closer to the metric, better to train. The data disagre
 
 ---
 
-Post 8. Next: two more ideas that failed, and why the data told me before any argument could.
+Post 8.

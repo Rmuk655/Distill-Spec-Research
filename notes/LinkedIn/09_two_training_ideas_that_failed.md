@@ -21,4 +21,4 @@ The bigger lesson: I could not always argue in advance which ideas would fail. B
 
 ---
 
-Post 9. Next: the one change that actually beat the baseline, and the honest reason it might not hold.
+Post 9.

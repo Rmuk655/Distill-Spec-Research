@@ -18,4 +18,4 @@ The lesson is that memory is not one number. It is a budget with several line it
 
 ---
 
-Part of the series. This is post 6. Next: why I could not just call the model in a loop, and what a KV cache actually is.
+Part of the series. This is post 6.

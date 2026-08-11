@@ -20,4 +20,4 @@ The lesson stuck with me more than most. A measurement bug looks exactly like a 
 
 ---
 
-Part of the series. This is post 4. Next: the time a real looking 0.2 gain turned out to be a rounding error.
+Part of the series. This is post 4.

@@ -25,4 +25,4 @@ The lesson is that generating text at scale is a systems problem, not just a mod
 
 ---
 
-Part of the series. This is post 7. Next: the training objective that matched my metric perfectly and still lost.
+Part of the series. This is post 7.

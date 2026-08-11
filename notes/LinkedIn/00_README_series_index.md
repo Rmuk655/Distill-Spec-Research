@@ -31,6 +31,7 @@ Add this at the end of the platform overview so it points forward to the rest of
 5. Show what failed. Every post should admit at least one thing I got wrong.
 6. Every number is real and traceable to the notes, the results CSVs, or the git log. No invented figures.
 7. Drop hype words: crucial, testament, landscape, robust, seamless, delve.
+8. Only reference already-published posts, never a later one, with no exceptions. Posts go out sequentially, so a forward reference like "post 10 covers this," or even a "Next: ..." teaser in the footer, is a dead pointer to a reader who has no way to see it yet. The series footer should only say which post this is, nothing about what comes after.
 
 ## Grounding sources per post
 

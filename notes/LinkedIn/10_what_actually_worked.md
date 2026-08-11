@@ -21,4 +21,4 @@ The lesson: when reshaping the loss kept hitting the same wall, the things that 
 
 ---
 
-Part of the series. This is post 10. Next, the finale: when one metric was not enough, and what a second one revealed.
+Part of the series. This is post 10.
