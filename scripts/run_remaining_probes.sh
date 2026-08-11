@@ -12,7 +12,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
+OUT="$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
 mkdir -p "$OUT"
 
 IFS=',' read -r -a GPU_ARR <<< "${GPUS:-0}"

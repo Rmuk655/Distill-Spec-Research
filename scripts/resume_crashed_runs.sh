@@ -8,7 +8,7 @@
 # and pointing CKPT_ROOT at the migrated location.
 #
 # Usage:
-#   GPUS=0,1,2,3 CKPT_ROOT=/sensei-fs/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
+#   GPUS=0,1,2,3 CKPT_ROOT=$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
 #     bash scripts/resume_crashed_runs.sh po_prob_ttemp0.5_lr1e-5_wu20 po_prob_ttemp0.7_lr1e-5_wu20 \
 #          po_prob_gradclip10_lr1e-5_wu20 po_prob_M16_lr3e-6_wu20_continued
 set -uo pipefail

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# migrate_ckpt_root.sh — move a checkpoint root off the full /sensei-fs-3 onto
-# /sensei-fs (381T avail vs. /sensei-fs-3's 126G avail across ALL users), without
-# deleting anything until sizes are verified to match.
+# migrate_ckpt_root.sh — move a checkpoint root off a full filesystem onto one
+# with more available space, without deleting anything until sizes are verified
+# to match.
 #
 # Usage:
-#   OLD_ROOT=/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
-#   NEW_ROOT=/sensei-fs/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
+#   OLD_ROOT=$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
+#   NEW_ROOT=$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
 #     bash scripts/migrate_ckpt_root.sh
 set -euo pipefail
 
-OLD_ROOT="${OLD_ROOT:?set OLD_ROOT to the full checkpoint dir on /sensei-fs-3}"
-NEW_ROOT="${NEW_ROOT:?set NEW_ROOT to the destination dir on /sensei-fs}"
+OLD_ROOT="${OLD_ROOT:?set OLD_ROOT to the full checkpoint dir on the source filesystem}"
+NEW_ROOT="${NEW_ROOT:?set NEW_ROOT to the destination dir on the target filesystem}"
 
 echo "[migrate] rsyncing ${OLD_ROOT}/ -> ${NEW_ROOT}/ (large checkpoints, this can take a while)"
 mkdir -p "$NEW_ROOT"

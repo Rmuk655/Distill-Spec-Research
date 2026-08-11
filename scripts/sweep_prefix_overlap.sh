@@ -25,7 +25,7 @@
 set -uo pipefail
 
 # ---- fixed paths / models ----------------------------------------------------
-CKPT_ROOT="/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
+CKPT_ROOT="$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
 DRAFT="Qwen/Qwen3-0.6B"
 TEACHER="Qwen/Qwen3-8B"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
