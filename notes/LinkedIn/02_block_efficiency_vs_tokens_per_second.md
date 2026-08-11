@@ -17,7 +17,7 @@ The obvious speed metric is tokens processed per second. The trouble is that it 
 
 Speculative decoding was the one technique I worked inside of, and inside that, one narrow question: can a small draft model be trained to predict tokens as close as possible to what the big teacher would have predicted, and which loss function actually makes the draft the better learner.
 
-Change any one of these and tokens per second moves. If I reported it, no one could tell whether a gain came from a better trained draft, from a smarter serving stack, or from the accelerator, meaning the GPU or chip actually doing the math, that I happened to grab that day. I needed a metric that holds the hardware and the rest of the serving stack fixed and isolates just the draft's training.
+Change any one of these and tokens per second moves. If I reported it, no one could tell whether a gain came from a better trained draft, from a smarter serving stack, or from the hardware I happened to grab that day. I needed a metric that holds the hardware and the rest of the serving stack fixed and isolates just the draft's training.
 
 ## What block efficiency is, by example
 
@@ -48,12 +48,14 @@ Every technique on that list swings tokens per second without changing what the 
 ![Where my work sits in the inference stack](../../results/passK/linkedin_post2_where_our_work_sits.png)
 *Hardware and serving software were fixed, given. Speculative decoding itself is an existing technique. Inside it, two separate levers, both tested: the distillation loss that trains the draft to mimic the teacher, and the verifier, specifically delayed tree branching applied to already trained drafts, which the original paper had only tested on untrained ones. Block efficiency is what tells me whether either piece moved.*
 
-![Block efficiency and throughput per verifier](../../results/passK/L_L1_fig1_be_throughput_vs_L_all_verifiers_math_eval.png)
-*Block efficiency (left) and measured throughput (right), by verifier, as L, how many tokens ahead the draft guesses, increases. At a fixed L the verifier ranking is preserved on both sides, so comparing verifiers on block efficiency is fair. But look within one verifier as L grows: block efficiency rises while throughput falls. Guessing further ahead means more sequential, dispatch bound draft steps before the target ever verifies, and that wall clock cost grows faster than the extra acceptance pays back. Block efficiency is the right metric for comparing algorithms at a fixed L. It is not a substitute for asking how far ahead is worth guessing in the first place, that part still needs throughput.*
+Here is that link made concrete, with a real before and after. Same draft and teacher, same verifier, same K, the tree width at evaluation, same hardware, same harness. The only thing that changed between the two bars in each group is how the draft was trained, plain JSD against enrichment, the multi rollout training method from post 10.
+
+![Training the draft differently moved block efficiency, and throughput moved with it](../../results/passK/linkedin_post2_training_moved_be_and_throughput.png)
+*Left: block efficiency. Right: measured throughput, tokens per second. At K=2, 3, and 4, enrichment training raised block efficiency over the plain JSD baseline, and throughput rose right along with it, by about 2 to 2.5 tokens per second each time. At K=1 both numbers barely move, which is honest to show rather than hide, the effect only shows up once the tree has more than one guess to branch into. This is block efficiency doing its job: it predicted the throughput gain before I ever needed to measure wall clock time to know the training method was working.*
 
 ## The takeaway
 
-Once I saw that tokens per second is really f(hardware, serving stack), and my own work was one narrow term buried inside that second factor, the choice made sense. Block efficiency was Rahul's idea, my research mentor's: hold the hardware and the rest of the serving stack fixed and measure only the draft's training. I built the infrastructure to actually test that across hundreds of runs. It is a pure ratio, no seconds in it, invariant to the machine and the harness. And seeing how one innocent number tangled together HBM bandwidth, cache design, batching, and one specific loss function is exactly what got me hooked on ML systems.
+Once I saw that tokens per second is really f(hardware, serving stack), and my own work was one narrow term buried inside that second factor, the choice made sense. Block efficiency was Rahul's idea, my research mentor's: hold the hardware and the rest of the serving stack fixed and measure only the draft's training. I built the infrastructure to actually test that across hundreds of runs. It is a pure ratio, no seconds in it, invariant to the machine and the harness. One throughput number was quietly reporting on memory bandwidth, cache design, and batching, three things that had nothing to do with whether my draft was any good. Learning to pull those apart is what got me hooked on ML systems.
 
 ---
 
