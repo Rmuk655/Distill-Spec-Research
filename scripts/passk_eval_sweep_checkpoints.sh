@@ -18,7 +18,7 @@
 #
 # USAGE (from venv-vllm, see scripts/setup_vllm_env.sh):
 #   # mode 1: every run under a single sweep root (auto-glob CKPT_ROOT/*/)
-#   CKPT_ROOT=/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
+#   CKPT_ROOT=$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap \
 #     GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
 #   DRY_RUN=1 CKPT_ROOT=... GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh   # preview only
 #   # set DRAFT_MODEL if the sweep isn't the default 0.6B/8B pair, e.g.:
@@ -27,7 +27,7 @@
 #   # mode 2: an explicit list of run dir names, scattered directly under
 #   # CKPT_ROOT (e.g. older one-off experiments, not one common sweep root) --
 #   # RUN_NAMES overrides the CKPT_ROOT/*/ auto-glob entirely.
-#   CKPT_ROOT=/sensei-fs-3/users/rkrishna/checkpoints \
+#   CKPT_ROOT=$USER_HOME/checkpoints \
 #     RUN_NAMES=po_mh_prob_ce_lr1e5,po_mh_prob_lr1e5,po_mh_prob_lr5e6,po_mh_prob_warm_anneal_lr1e5,po_mh_logprob_N2_lr1e5,jsd_mathhard_s123,jsd_flat_enrich_K3_mathhard_s123,jsd_flat_enrich_K4_math_hard_s123 \
 #     GPUS=3 bash scripts/passk_eval_sweep_checkpoints.sh
 #

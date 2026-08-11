@@ -32,7 +32,7 @@ actually use); falls back to ckpt_latest/state.json if ckpt_best is missing
 (e.g. a run that never improved past init).
 
 USAGE:
-    python scripts/summarize_sweep.py /sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap
+    python scripts/summarize_sweep.py $USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap
     # sort by best block_eff descending:
     python scripts/summarize_sweep.py <root> --sort best_be
 """

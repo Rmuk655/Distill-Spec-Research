@@ -29,7 +29,7 @@ REF="${2:?need a reference best_be to compare against}"
 MARGIN="${3:-0.02}"
 GPU="${4:-0}"
 
-CKPT_ROOT="/sensei-fs-3/users/rkrishna/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
+CKPT_ROOT="$USER_HOME/checkpoints/Qwen0.6B_Qwen8B/prefix_overlap"
 LOG="${CKPT_ROOT}/${RUN}.log"
 
 if [[ ! -f "$LOG" ]]; then
