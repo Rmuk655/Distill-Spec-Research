@@ -8,16 +8,16 @@ Block efficiency is accepted tokens per target model call. For this problem it i
 
 Training a large model is a one time bill. Inference is paid on every request, forever, and the volume is enormous. Products like ChatGPT are reported to handle on the order of a billion messages a day, and every message is many forward passes through a large model. For a deployed model, inference, not training, dominates lifetime cost.
 
-At that scale small percentages turn into big money. Cut the cost per token by a few percent, times a billion requests a day, and you save millions of dollars a year. The same speedup also cuts latency, so the product feels fast instead of slow. Inference is where systems and ML meet, and both the money and the user experience depend on it.
+At that scale small percentages turn into big money. Cut the cost per token by a few percent, times a billion requests a day, and you save millions of dollars a year. The same speedup also cuts latency, so the product feels fast instead of slow. This is where systems engineering and machine learning intersect in a genuinely interesting way, and neither field explains inference speed on its own.
 
-## The problem: tokens per second measures three things at once
+## The problem: tokens per second depends on hardware and software optimizations, not just the algorithm
 
 The obvious speed metric is tokens processed per second. The trouble is that it is a function of two independent things, and my own work is a narrow slice of the second one:
 
 1. the underlying compute and memory hardware, [what it looks like](https://www.intoai.pub/p/what-every-ai-engineer-must-know-about-nvidia-gpus) and [how it actually behaves during inference](https://www.intoai.pub/p/a-hardware-level-tour-of-llm-inference),
 2. [how optimized the inference serving stack is](https://www.intoai.pub/p/10-llm-inference-optimization-techniques): KV caching, quantization, continuous batching, and speculative decoding, which pairs a small draft model from the same family as the target, sharing its tokenizer and vocabulary, with the large target model, all sitting in that same list of techniques.
 
-Speculative decoding was the one technique I worked inside of, and inside that, one narrow question: can a small draft model be trained to predict tokens as close as possible to what the big teacher would have predicted, and which loss function actually makes the draft the better learner.
+Speculative decoding was the one technique I worked inside of, and inside that, two narrow questions, not one. First, training: can a small draft model be trained to predict tokens as close as possible to what the big teacher would have predicted, including losses shaped directly around a specific verifier's own acceptance rule, not just generic distribution matching. Second, verification: independent of how the draft is trained, does changing the verifier itself, for instance restructuring how its guess tree branches, get more out of a draft that is already trained. I worked on both.
 
 Change any one of these and tokens per second moves. If I reported it, no one could tell whether a gain came from a better trained draft, from a smarter serving stack, or from the hardware I happened to grab that day. I needed a metric that holds the hardware and the rest of the serving stack fixed and isolates just the draft's training.
 
