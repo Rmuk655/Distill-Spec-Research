@@ -1,6 +1,8 @@
 # Tokens per second measures the system. Block efficiency measures the algorithm.
 
-In [Engineering an LLM inference research platform for speculative decoding](LINK_TO_POST_1), I wrote one line almost in passing: I optimized block efficiency, not tokens per second. Here is why I said that.
+In [Engineering an LLM inference research platform for speculative decoding](LINK_TO_POST_1), I wrote one line almost in passing: I optimized block efficiency, not tokens per second. If you wondered why, read on.
+
+Block efficiency is accepted tokens per target model call. For this problem it is the better metric, because it isolates the algorithm from the hardware and the serving stack sitting underneath it.
 
 ## Why inference speed is worth obsessing over
 
