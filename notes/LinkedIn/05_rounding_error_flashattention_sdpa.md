@@ -21,4 +21,4 @@ The lesson: know your numerics before you call something a result. Low precision
 
 ---
 
-Post 5. Next: the memory puzzle of fitting a 32B model onto one GPU.
+Post 5.

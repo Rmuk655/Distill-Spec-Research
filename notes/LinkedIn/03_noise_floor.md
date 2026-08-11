@@ -25,4 +25,4 @@ The lesson: measure your noise before you measure your improvement. If you do it
 
 ---
 
-Part of the series. This is post 3. Next: the eval bug where the same model scored differently every time I ran it.
+Part of the series. This is post 3.
