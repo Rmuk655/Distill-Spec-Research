@@ -12,6 +12,29 @@ Before any of this, there was a 44 configuration hyperparameter sweep, learning 
 
 Then look at the same two configs at pass@64: 0.92 and 0.96, a gap of about 0.04. Same runs, same models, opposite conclusion, depending only on which k you happened to plot. The sweep is not exploration for its own sake. It is the only way to find out that a result's truth value depends on where you looked.
 
+## Two different sweeps, and they are not the same kind of knob
+
+Worth separating cleanly, because they get confused. Training time knobs, learning rate, warmup, weight decay, grad clip, CE anneal timing, how many teacher rollouts per prompt, decide what checkpoint you end up with. Eval time knobs, tree width, draft length, where the tree branches, which verifier, which dataset, decide what you learn about a checkpoint you already have. A training time sweep changes the model. An eval time sweep only changes the question you are asking it. Mixing the two up, tuning an eval knob and believing you improved the model, is an easy mistake to make and I made it more than once before separating them explicitly in my own head.
+
+Neither sweep is glamorous. It is running one config, waiting, reading a number off a dashboard, deciding if it cleared the noise floor, and running the next one. Most of the actual calendar time in this project was this loop, not any single clever idea.
+
+## The learning rate has a real sweet spot, and here is the shape of it
+
+My mentor described this before I had the data to show it: too high and training diverges, too low and it never gets anywhere in the step budget you actually have. The shape is not a guess, it shows up directly in the sweep.
+
+![Block efficiency across the full learning rate range, both loss families](../../results/passK/lr_probe_jsd_vs_prob.png)
+*Left: the full range. Both losses climb through the low end, sit on a plateau, then fall off a cliff past 1e-4, the collapse zone. Right: zoomed into the healthy region, JSD keeps improving up to 1e-5 before dipping, prob is closer to flat and noisy across the same range.*
+
+The plateau is not instant, and the cliff is not the same speed at every point past it. A separate view of the same sweep, tracking what fraction of runs are still healthy at each training step, shows the collapse timing directly: the healthy band, 1e-6 to 1e-5, never collapses across the whole run. At 1e-4 runs collapse, but gradually, staggered out to about step 2000. At 3e-4 and above, collapse is almost immediate. So "too high" is not one cliff, it is a spectrum from mild and slow to catastrophic and instant, and the sweep is what tells you which side of that line a given learning rate sits on before you commit a full run's worth of compute to it.
+
+## When nothing clears noise, how do you actually pick
+
+Most of the other knobs in the sweep did not move block efficiency beyond its local noise floor at all, grad accumulation, teacher top-k, weight decay, several others. That raises the honest question: if nothing wins cleanly, what does "we picked the best one" even mean.
+
+The sharpest example of why this matters is teacher temperature. Ranked by block efficiency alone, 0.7 beat 0.5 beat the default. Ranked by pass@k, the order flipped completely, the default beat 0.5 beat 0.7, and the default cleared the noise floor by the widest margin of the three while 0.7, the best-looking point on block efficiency, cleared it nowhere. The value that actually shipped was the default, the worst performer on the metric I was directly optimizing, because it was the best performer on the metric that generalizes.
+
+That is the philosophy, stated plainly: when a knob does not clear its own noise floor, keep the default rather than let noise crown a winner, and when two metrics disagree about which value is best, trust the one measured further from what you are directly optimizing, not the one closer to it. A couple of other knobs followed the same pattern. The CE anneal step count that won on block efficiency lost on pass@k, while a worse-on-block-efficiency setting cleared it at most k values instead. The LR schedule's minimum ratio showed no effect on block efficiency at all, yet one of its two settings cleared pass@k cleanly while the other cleared nothing. In both cases the choice that survived was the one pass@k supported, not the one block efficiency preferred. Picking a hyperparameter is not always picking a winner. Often it is refusing to let a number that has not earned trust make the decision for you.
+
 ## One hundred prompts was not enough
 
 The first stage was running a config a few times and watching how much the number wobbled on its own, with nothing else changed. At one hundred evaluation prompts, that wobble in block efficiency sits around 0.10 to 0.15, purely from run to run variation. Any claimed improvement smaller than that is not a result yet. I started graying those out in my own analysis instead of reporting them.
