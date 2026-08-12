@@ -1,4 +1,4 @@
-# Computer architecture: tokens per second measures the system, block efficiency measures the algorithm.
+# Isolating variables: my piece of the puzzle, not the whole one
 
 In [Engineering an LLM inference research platform for speculative decoding](LINK_TO_POST_1), I wrote one line almost in passing: I optimized block efficiency, not tokens per second. If you wondered why, read on.
 
