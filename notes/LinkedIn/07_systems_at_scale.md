@@ -20,6 +20,14 @@ The lesson is that memory is not one number. It is a budget with several line it
 
 One distinction worth being precise about, since it is easy to blur: everything above is GPU orchestration, scheduling many independent single GPU jobs across four hardware tiers, packing several small runs onto one card when they fit, one eval per GPU when they did not. It is not distributed training. Every model in this project, including the 32B teacher, fit entirely on one GPU. There was never a model split across GPUs with NCCL collectives, no tensor or pipeline parallelism, no cross GPU communication to reason about. Orchestration and distributed computation solve different problems and get confused often. This project only needed the first.
 
+## Future work: what changes past one GPU
+
+Everything above assumed a model that fits on a single card, true for every model in this project, even the 32B teacher. That assumption breaks past a certain size, and the next problem is worth naming rather than skipping. A 70 billion parameter model in full precision is roughly 140GB of weights alone, before optimizer state, activations, or cache, and that does not fit on one 80GB H100. It has to be split across several GPUs, and how well that works depends on how those GPUs actually talk to each other, not just how many of them there are.
+
+An 8 GPU H100 server has 640GB of HBM in total, but only if the GPUs can share work efficiently. With NVSwitch, every GPU gets a full 900GB/s of bandwidth to every other GPU at once, and that number does not shrink as more GPUs join the exchange. Without NVSwitch, that same 900GB/s has to be split into separate point to point links instead, about 128GB/s to each of the other seven GPUs in an eight GPU box, so the bandwidth any pair actually gets depends on how many GPUs are talking at once. Same hardware otherwise, a very different ceiling on how fast the GPUs can cooperate.
+
+From there the real question is how you split the work, model parallel, dividing the model itself across GPUs, against workload parallel, dividing which requests go where while keeping a full copy of the model on each. I have not built either. It is the direct next problem past everything else in this post, and it is where I would start if I ever needed to move past a single card.
+
 ## Fitting the model was half the problem, serving it fast was the other half
 
 At one point I needed to check something different from block efficiency. I wanted to know if a trained draft model could actually solve problems, so I needed to sample many full answers per problem, tens of thousands of samples in total, and grade them. My first instinct was the simple one. Load the model, call it in a loop, collect the outputs.
@@ -47,7 +55,7 @@ Capacity planning and serving are the same discipline applied at two different t
 
 ## Further reading
 
-Kwon et al., [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180) (2023), the vLLM paper, for paged attention and continuous batching in full.
+Kwon et al., [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180) (2023), the vLLM paper, for paged attention and continuous batching in full. NVIDIA, [NVLink and NVSwitch Supercharge Large Language Model Inference](https://developer.nvidia.com/blog/nvidia-nvlink-and-nvidia-nvswitch-supercharge-large-language-model-inference/), for the bandwidth figures used above.
 
 ---
 
