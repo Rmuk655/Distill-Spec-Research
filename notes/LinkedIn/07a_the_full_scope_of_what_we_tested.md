@@ -1,4 +1,4 @@
-# Most people test one loss against one verifier. We tested 34 against 9.
+# ML fundamentals: most people test one loss against one verifier, we tested 34 against 9.
 
 A lot of work in this space picks one training objective, checks it against one verifier, and reports a result. That comparison hides a real question: does an objective that helps on the verifier it was designed for still help on a different one. Before believing any single result, I wanted the full grid, not one cell of it.
 

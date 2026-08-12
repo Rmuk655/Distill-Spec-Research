@@ -1,4 +1,4 @@
-# The 0.2 gain that was a rounding error
+# Scientific computing: the 0.2 gain that was a rounding error
 
 Post 5. The second time a measurement fooled me, and a subtler one.
 

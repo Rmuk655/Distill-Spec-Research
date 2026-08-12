@@ -1,4 +1,4 @@
-# Tokens per second measures the system. Block efficiency measures the algorithm.
+# Computer architecture: tokens per second measures the system, block efficiency measures the algorithm.
 
 In [Engineering an LLM inference research platform for speculative decoding](LINK_TO_POST_1), I wrote one line almost in passing: I optimized block efficiency, not tokens per second. If you wondered why, read on.
 

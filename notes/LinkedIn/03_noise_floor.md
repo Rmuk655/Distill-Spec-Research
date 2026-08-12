@@ -1,4 +1,4 @@
-# Freezing every other variable was not enough
+# Statistics: freezing every other variable was not enough
 
 Post 2 ended on a partial derivative: hold hardware and the serving stack still, and the only thing left free to move is the one variable you actually care about. That sounds like it should settle things. It does not, and the reason is worth sitting with.
 
@@ -24,13 +24,17 @@ A method that looked solid on one set of math problems did not always carry over
 
 This is the one that stretched the point furthest. A training method that beat the baseline cleanly on a smaller draft and teacher pair did not cleanly repeat on a bigger one. The gains flipped sign depending on how far ahead the draft was allowed to guess, instead of the same clear pattern the smaller pair had shown. The part that made me careful rather than just disappointed: I never even measured the noise floor for that bigger pair. Every number I had for it came from a single run. So I could not call it a real failure to replicate, only that I did not yet have enough runs to say anything with confidence either way.
 
-## Eventually, even one loss family was not enough
+## Even a full sweep does not always clear the floor
 
-The last stage was realizing that a pattern holding up within one family of objectives is not the same as it holding up in general. A result can look consistent purely because you are still inside the variance of the one thing you tested, not because you found something true more broadly. After enough of this, one honest study across a whole set of comparisons came back with no result clearing the floor almost anywhere. That is not a result to be embarrassed about. It is what happens when you actually go looking with the right level of rigor instead of stopping at the first number that looks good.
+Zooming out further, one complete study, comparing many training configurations against each other at once, after accounting for all of this run to run noise, came back with no result clearing the floor almost anywhere. That is not a result to be embarrassed about. It is what a real search looks like once you stop stopping at the first number that looks good.
+
+## And every bit of this was still one model family
+
+Here is the limitation I have not closed. Every escalation above, more prompts, more seeds, more datasets, more model pairs, still only ever touched one family of models, Qwen. A claim solid enough for a paper needs the same effect checked against other families entirely, Gemma, GPT, Llama, not just more seeds and datasets inside the one family already tested. That escalation is the one I have not done, and it is worth saying plainly rather than pretending the story is more finished than it is.
 
 ## What this actually teaches
 
-Every one of these escalations traces back to the same cause. Speculative decoding's randomness, in generation and in the accept or reject draw itself, does not go away just because every other variable was held perfectly still. It survives the partial derivative. Statistics, in this context, is not a formality bolted on afterward. It is the discipline of knowing how much of what you are looking at is signal, and how much is the noise a perfectly controlled experiment still has left over.
+Every escalation up through the model pairs traces back to the same cause. Speculative decoding's randomness, in generation and in the accept or reject draw itself, does not go away just because every other variable was held perfectly still. It survives the partial derivative. The model family gap is a different kind of limitation, not noise but reach, how far a result is actually allowed to generalize, and it is the honest reason this is a well tested finding on one family, not yet a settled one. Statistics, in this context, is not a formality bolted on afterward. It is the discipline of knowing how much of what you see is signal, how much is leftover noise, and how far what you found is actually allowed to travel.
 
 ---
 

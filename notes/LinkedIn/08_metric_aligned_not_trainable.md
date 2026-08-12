@@ -1,4 +1,4 @@
-# The loss that matched my metric and still lost
+# ML fundamentals: the loss that matched my metric and still lost
 
 Post 8. The result that changed how I think about training objectives.
 
