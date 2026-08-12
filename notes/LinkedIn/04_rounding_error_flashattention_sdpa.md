@@ -1,6 +1,6 @@
 # Scientific computing: the 0.2 gain that was a rounding error
 
-Post 5. The second time a measurement fooled me, and a subtler one.
+Post 4. The second time a measurement fooled me, and a subtler one.
 
 There are two ways to compute attention in these models: FlashAttention and the default one, SDPA. They compute the same thing. I assumed the only difference was speed.
 
@@ -23,4 +23,4 @@ The lesson: know your numerics before you call something a result. Low precision
 
 ---
 
-Post 5.
+Post 4.

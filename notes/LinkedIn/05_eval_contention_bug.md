@@ -1,6 +1,6 @@
 # Operating systems: the checkpoint that scored differently every run
 
-This is post 4 in my series. It is about a bug that taught me not to trust my own measurements until I understood them.
+This is post 5 in my series. It is about a bug that taught me not to trust my own measurements until I understood them.
 
 I was trying to move fast, so I packed work onto every GPU I had. If a GPU had room, I put another job on it. This worked fine for training. Then I did the same thing for evaluation, and something strange happened.
 
@@ -20,4 +20,4 @@ The lesson stuck with me more than most. A measurement bug looks exactly like a 
 
 ---
 
-Part of the series. This is post 4.
+Part of the series. This is post 5.
