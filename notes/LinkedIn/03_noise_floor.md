@@ -1,28 +1,37 @@
-# Measuring the noise floor
+# Freezing every other variable was not enough
 
-This is post 3 in my series on building a speculative decoding platform. It is about the habit that saved me from reporting things that were not true.
+Post 2 ended on a partial derivative: hold hardware and the serving stack still, and the only thing left free to move is the one variable you actually care about. That sounds like it should settle things. It does not, and the reason is worth sitting with.
 
-Early on I got excited about a result. One of my training methods looked like it beat the baseline by a wide margin. I wrote it down as a real win.
+Speculative decoding's accept or reject step is a probability draw, not a lookup. Even with the exact same checkpoint, the exact same prompt, and every other variable frozen solid, the number you measure still has width to it, because the sampling itself is random. Freezing everything else does not remove the noise. It just makes sure the noise left over actually belongs to the one thing you meant to test.
 
-It was not. When I went back and checked the raw numbers row by row, the win came from comparing two different settings that were not supposed to be compared. The number I had cited as a large gain was measured under one setting. The baseline was measured under another. Once I lined them up correctly, the real difference was tiny. It sat well inside the range where I could not tell it apart from luck.
+So the real question was never just "did the number move." It was "did it move by more than the width of the noise it was always going to have anyway." That took longer to earn than I expected, and it escalated through stages I did not see coming at the start.
 
-That mistake taught me the single most useful habit of the whole project. Before believing any improvement, measure how much your numbers move on their own.
+## One hundred prompts was not enough
 
-Here is what that means in practice. I took configurations that were basically the same and ran them, and I looked at how far apart their scores landed just from randomness. On my setup, with one hundred evaluation prompts, that spread was around 0.10 to 0.15 in block efficiency. So any improvement smaller than about 0.15 was inside the noise. It could be a real effect. It could also be the same thing that makes two near identical runs disagree. I had no way to tell them apart.
+The first stage was running a config a few times and watching how much the number wobbled on its own, with nothing else changed. At one hundred evaluation prompts, that wobble in block efficiency sits around 0.10 to 0.15, purely from run to run variation. Any claimed improvement smaller than that is not a result yet. I started graying those out in my own analysis instead of reporting them.
 
-So I drew a line. Any change smaller than that spread got greyed out in my analysis. Not called a win. Not called a loss. Just, not distinguishable from noise.
+## One seed was not enough
 
-![Several trained variants bunched together between the untrained student and the teacher](../../results/passK/ablation_tail_reuse_vs_fresh_gsm8k_eval.png)
-*The dashed lines are the untrained student at the bottom and the teacher at the top. Every solid line is a different training variant I swept. They sit bunched together, close enough that telling them apart means nothing until you know how much a single run wobbles on its own. That is what the noise floor measures.*
+I learned this one the hard way. One training run, a combination of plain distribution matching, a depth weighted curriculum, and a tree shaped loss, had a headline number, a block efficiency gain of about 0.293 over the baseline, well above that 0.10 to 0.15 floor, which made it look real. When I went back to write it up properly and pulled the raw rows, the comparison was wrong. The 0.293 came from reading a result at a tree width of one and comparing it against the baseline's number at a tree width of three, two different settings, not the same one. Lined up correctly, at the same tree width on both sides, the real difference was 0.03. Inside the noise. Not a result at all.
 
-This sounds obvious written down. It is not obvious in the moment. In the moment you have a number that is bigger than the baseline and you want it to be real. The noise floor is the thing that stops you from fooling yourself, because you set it before you look at the result you care about.
+That mistake is why I stopped trusting any number from a single run, however good it looked. A single seed can hand you something that looks like signal purely because it is one draw from a noisy process, and you will not know it until you check.
 
-It also changed how I read other people's claims. A single number that beats a baseline means very little on its own. What matters is whether it beats the baseline by more than the run to run wobble, and whether it holds across more than one setting and more than one random seed. A lot of my project ended up being not, this method wins, but rather, this method does not clear the noise floor, so I cannot say anything yet.
+## One dataset was not enough
 
-That is a less exciting story to tell. It is also the honest one, and it is the reason I trust the few results I did keep.
+A method that looked solid on one set of math problems did not always carry over to a harder set. Training and evaluating on the same distribution can flatter a result in a way that quietly stops holding once the questions get harder, or just different. A real claim needed to survive more than the one dataset it was tuned against.
 
-The lesson: measure your noise before you measure your improvement. If you do it the other way around, you will always find a win, because noise always hands you one.
+## One model pair was not enough
+
+This is the one that stretched the point furthest. A training method that beat the baseline cleanly on a smaller draft and teacher pair did not cleanly repeat on a bigger one. The gains flipped sign depending on how far ahead the draft was allowed to guess, instead of the same clear pattern the smaller pair had shown. The part that made me careful rather than just disappointed: I never even measured the noise floor for that bigger pair. Every number I had for it came from a single run. So I could not call it a real failure to replicate, only that I did not yet have enough runs to say anything with confidence either way.
+
+## Eventually, even one loss family was not enough
+
+The last stage was realizing that a pattern holding up within one family of objectives is not the same as it holding up in general. A result can look consistent purely because you are still inside the variance of the one thing you tested, not because you found something true more broadly. After enough of this, one honest study across a whole set of comparisons came back with no result clearing the floor almost anywhere. That is not a result to be embarrassed about. It is what happens when you actually go looking with the right level of rigor instead of stopping at the first number that looks good.
+
+## What this actually teaches
+
+Every one of these escalations traces back to the same cause. Speculative decoding's randomness, in generation and in the accept or reject draw itself, does not go away just because every other variable was held perfectly still. It survives the partial derivative. Statistics, in this context, is not a formality bolted on afterward. It is the discipline of knowing how much of what you are looking at is signal, and how much is the noise a perfectly controlled experiment still has left over.
 
 ---
 
-Part of the series. This is post 3.
+Part of a series on building a speculative decoding research platform.
