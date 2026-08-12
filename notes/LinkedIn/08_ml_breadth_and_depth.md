@@ -52,9 +52,17 @@ This is the lesson I repeat most from the whole grid. Matching the form of your 
 
 I expected the opposite: closer to the metric, better to train. The data disagreed, twice, in a grid built specifically to catch exactly this kind of illusion. Now I stop asking does this match the metric, and ask where does this send the gradient.
 
+## One axis I did not touch, and the tree suite already built here is the reason to care about it
+
+Every objective in the grid above changes how the draft's one step ahead distribution is trained to match the teacher's, while leaving the draft's own architecture untouched. There is a different axis I never touched at all: giving the draft access to the target's own internal representation, and building its guesses as a tree shaped directly by how confident it is, instead of a fixed shape decided in advance.
+
+The reason this is worth naming specifically, rather than as a vague direction, is that it maps onto the tree verifier suite already built here almost exactly. A verifier only ever needs, at each node, the draft's probability and the target's probability for that token, it does not care how the draft arrived at its guess. That means a tree built this way could feed directly into the existing verifiers, naive, traversal, the OTLP family, all of them, with no change to the verifier code at all, only to how the tree gets built in the first place. And unlike a naive multi head predictor, where each future position is guessed independently of the others, this style of drafting genuinely chains each guess through the one before it, so it actually satisfies the assumption the tree verifiers are built on, real sequential dependence between a node and its children, rather than violating it.
+
+Two pieces would need building, and neither is small. First, the draft would need to read the target's hidden state at each position, not just its own, and extrapolate forward from it, a real architecture change, the first one anywhere in this project, everything else here only ever changed the training script. Second, the tree shape itself would need to come from the draft's own confidence rather than a fixed width decided ahead of time, expanding branches where it is uncertain and stopping where it is not, since a well calibrated draft's confidence tracks its actual acceptance rate closely enough to guide that decision. Neither is a loss function change. Both are real follow up work, not a result I have.
+
 ## Further reading
 
-Samarin et al., [LK alpha: Beyond KL for Speculative Decoding Distillation](https://arxiv.org/abs/2602.23881), the acceptance rate objective this post's negative result is built on. Miao et al., [SpecInfer: Accelerating Generative LLM Serving with Speculative Inference and Token Tree Verification](https://arxiv.org/abs/2305.09781), one of the OTLP verifiers in the grid above.
+Samarin et al., [LK alpha: Beyond KL for Speculative Decoding Distillation](https://arxiv.org/abs/2602.23881), the acceptance rate objective this post's negative result is built on. Miao et al., [SpecInfer: Accelerating Generative LLM Serving with Speculative Inference and Token Tree Verification](https://arxiv.org/abs/2305.09781), one of the OTLP verifiers in the grid above. Li et al., [EAGLE-2: Faster Inference of Language Models with Dynamic Draft Trees](https://arxiv.org/abs/2406.16858) (2024), for the confidence driven tree construction referenced above.
 
 ---
 
