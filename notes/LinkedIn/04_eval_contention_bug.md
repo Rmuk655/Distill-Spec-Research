@@ -1,4 +1,4 @@
-# The checkpoint that scored differently every run
+# Operating systems: the checkpoint that scored differently every run
 
 This is post 4 in my series. It is about a bug that taught me not to trust my own measurements until I understood them.
 

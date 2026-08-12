@@ -1,4 +1,4 @@
-# Fitting a 32B model on one GPU
+# Capacity planning: fitting a 32B model on one GPU
 
 This is post 6 in my series. It is where I actually learned how GPU memory works, because I had no choice.
 

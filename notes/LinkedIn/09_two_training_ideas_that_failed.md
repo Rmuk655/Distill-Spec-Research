@@ -1,4 +1,4 @@
-# Two training ideas that failed
+# ML fundamentals: two training ideas that failed
 
 Post 9. Two things I tried that did not work, and learning to delete my own code.
 

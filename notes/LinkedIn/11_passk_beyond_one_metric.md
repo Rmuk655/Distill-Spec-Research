@@ -1,4 +1,4 @@
-# When one metric was not enough
+# Statistics: when one metric was not enough
 
 This is post 11, the finale of my series. It is about the moment I realized my main metric was hiding things, and what I did about it.
 
