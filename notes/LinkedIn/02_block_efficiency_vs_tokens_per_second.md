@@ -59,7 +59,7 @@ Here is that connection made concrete, with a real before and after. Same draft 
 
 ## The takeaway
 
-Once I saw that tokens per second is really f(hardware, serving stack), and our work was one narrow term buried inside that second factor, the choice made sense. Block efficiency was Rahul's idea, my research mentor's: hold the hardware and the rest of the serving stack fixed and measure only the draft's training. I trusted that only after checking it held up across many runs, not just one comparison that could have looked good by chance, a random seed or a lucky checkpoint, rather than a real effect. And because the ratio itself carries no seconds and no hardware in it, once it moved, I knew the algorithm had actually changed, not the machine underneath it. Once I could separate memory bandwidth, cache design, and batching from the algorithm itself, systems work stopped feeling intimidating. It started feeling like a puzzle I actually wanted to solve. That is what got me hooked on ML systems.
+Tokens per second is really f(hardware, serving stack), with our work buried inside the second term. Learning how much one variable matters means holding every other one still, that is just a partial derivative. Block efficiency did exactly that: froze hardware and the serving stack, and left only the piece we cared about free to move.
 
 ---
 
