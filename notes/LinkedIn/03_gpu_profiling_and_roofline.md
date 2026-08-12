@@ -37,6 +37,8 @@ The harness also records NVLink traffic, the high speed link between GPUs. On ev
 
 Profiling changed my conclusion, it did not just decorate it. I went in assuming the big model was the cost. The telemetry said the big model was mostly idle and a cheap model's launch overhead was the real ceiling. Knowing which of compute, memory bandwidth, or dispatch is actually your wall, and being able to show it from counters rather than guess it from wall clock time, is the difference between benchmarking a system and understanding one.
 
+Being dispatch bound also points at the specific fix, and I want to name it honestly rather than leave it vague. A dispatch bound workload is exactly what CUDA graphs or a fused custom kernel are for, replaying a captured sequence of GPU work instead of paying Python and driver overhead on every single token. That is a concrete, identified lever to raise real tokens per second, sitting directly on top of this profiling result. I did not write one. It is real follow up work, not a hole in this post.
+
 ---
 
 Part of a series on building a speculative decoding research platform. Post 3.
