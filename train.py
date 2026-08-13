@@ -1012,7 +1012,8 @@ def main():
                 _is_full_passk = (args.passk_full_every_n_vals > 0
                                    and (step + 1) % (args.val_every * args.passk_full_every_n_vals) == 0)
                 _is_passk_check = _is_full_passk or (
-                    (step + 1) % (args.val_every * args.passk_every_n_vals) == 0)
+                    args.passk_every_n_vals > 0
+                    and (step + 1) % (args.val_every * args.passk_every_n_vals) == 0)
                 if _is_passk_check:
                     if _is_full_passk:
                         _pk_n, _pk_nprompts, _pk_tier = args.passk_full_samples, passk_full_n_prompts, "full"

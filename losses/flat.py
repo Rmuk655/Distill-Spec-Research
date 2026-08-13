@@ -116,14 +116,26 @@ def lk_alpha(student_logits, teacher_logits, eps=1e-8, **_kw):
     return -(alpha.clamp(min=eps).log()).mean()
 
 
+def _prefix_overlap_not_callable(*_args, **_kwargs):
+    """prefix_overlap is not a flat divergence over logits. It is routed through
+    compute_prefix_overlap_loss (losses/compute.py) via train.py's
+    is_prefix_overlap_loss branch, using the --prefix_* flags. This registry slot
+    exists only so get_loss()/argparse recognise the name; it must not be called
+    directly (a caller expecting a flat divergence here would be misled)."""
+    raise NotImplementedError(
+        "prefix_overlap has no flat-divergence form; train with "
+        "`--loss prefix_overlap` (+ --prefix_* flags), which routes through "
+        "compute_prefix_overlap_loss, not this registry callable.")
+
+
 # Registry: name → callable.  train.py looks the loss up here by --loss flag.
 FLAT_LOSSES = {
     "forward_kl":      forward_kl,
     "reverse_kl":      reverse_kl,
     "jsd":             jsd,
-    "jsd_flat_enrich": jsd,   # same loss fn — routing in train.py samples K stochastic teacher paths
-    "prefix_overlap":  jsd,   # placeholder — real math is in compute_prefix_overlap_loss; entry only for get_loss/argparse
+    "jsd_flat_enrich": jsd,   # real: compute_flat_enrich_loss applies jsd per token over K stochastic rollouts
+    "prefix_overlap":  _prefix_overlap_not_callable,   # routed elsewhere; see stub above
     "l1":              l1,
     "lk_alpha":        lk_alpha,   # greedy teacher rollout (compute_flat_loss)
-    "lk_alpha_enrich": lk_alpha,   # K stochastic teacher rollouts (FLAT_ENRICH_LOSSES routing)
+    "lk_alpha_enrich": lk_alpha,   # real: compute_flat_enrich_loss applies lk_alpha over K stochastic rollouts
 }
