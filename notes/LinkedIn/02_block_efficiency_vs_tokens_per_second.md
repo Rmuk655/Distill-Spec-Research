@@ -41,7 +41,7 @@ For a deeper tour of this ground, [The Engineering Behind LLM Inference](https:/
 KV caching, continuous batching, FlashAttention, quantization, paged attention, prefill and decode disaggregation: real production techniques, none touching model quality, none used here, since the goal was to isolate speculative decoding on its own.
 
 ![Where my work sits in the inference stack](../../results/passK/linkedin_post2_where_our_work_sits.png)
-*Hardware and serving software stayed fixed. Speculative decoding is an existing technique. Inside it, two levers, both tested: the loss that trains the draft, and the verifier, specifically delayed tree branching on already trained drafts, which the original paper only tested on untrained ones.*
+*Hardware and serving software stayed fixed. Speculative decoding is an existing technique. Inside it, two levers, both tested: the loss that trains the draft, and the verifier, specifically delayed tree branching on already trained drafts, which [the original paper](https://arxiv.org/abs/2602.16994) only tested on untrained ones.*
 
 A real before and after: same draft, teacher, verifier, K, hardware. I compared two training objectives. Plain JSD trains on one greedy teacher rollout, so the training contexts come from the teacher's single most likely continuation, and JSD matches full distributions at each context. Enrichment trains on several sampled continuations instead, so the draft learns more than the teacher's top pick.
 
