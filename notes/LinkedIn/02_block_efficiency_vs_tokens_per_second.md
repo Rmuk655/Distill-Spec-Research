@@ -2,11 +2,11 @@
 
 In [Post 1](LINK_TO_POST_1), I said I optimized block efficiency, not tokens per second. Here is why.
 
-Block efficiency = accepted tokens / target model calls. It isolates the algorithm from the hardware and serving stack underneath it.
+Block efficiency = generated tokens / target model calls. It isolates the algorithm from the hardware and serving stack underneath it.
 
 ## Why inference speed matters
 
-Training is a one time cost. Inference is paid on every request, forever, at huge volume. A small saving per token, times a billion requests a day, is real money and lower latency.
+Training is an upfront cost. Inference is paid on every request, forever, at huge volume. A small saving per token, times a billion requests a day, is real money and lower latency.
 
 ## The problem with tokens per second
 
@@ -16,7 +16,7 @@ We worked on two things inside speculative decoding: training the draft, and cho
 
 ## What block efficiency is
 
-Normal decoding predicts one token, then runs the whole model again for the next one. Speculative decoding lets a small draft guess several tokens ahead; the target checks them all in one pass and keeps the longest prefix it agrees with. Block efficiency counts how many guesses got confirmed per expensive target call.
+Normal decoding predicts one token, then runs the whole model again for the next one. Speculative decoding lets a small draft guess several tokens ahead; the target checks them all in one pass and keeps the longest prefix it agrees with. Block efficiency counts how many tokens that yields per expensive target call.
 
 α = acceptance probability at one node. Every verifier defines its own α, so it is not comparable across verifiers and says nothing about tree depth. Block efficiency is comparable across all nine and accounts for depth, which is why it, not α, is the headline metric.
 
@@ -24,21 +24,21 @@ Prompt: "The capital of France is", target says "Paris, which sits on the Seine.
 
 Both drafts above produce the same final text; the draft only changes how many target calls that costs. Block efficiency measures that cost, not quality, and not measured speed, though the two usually move together. Later in this post, I describe a case where they do not.
 
-Block efficiency barely depends on hardware, since accepting a token is just a probability check. One exception: different attention kernels round bf16 slightly differently, which can flip an accept or reject decision and move block efficiency by a few tenths.
+Block efficiency barely depends on hardware: it is a function of the draft and target's output probabilities, not of how fast those probabilities were computed. One exception: different attention kernels round bf16 slightly differently, which can flip an accept or reject decision and move block efficiency by a few tenths.
 
 ## Why tokens per second is hardware dependent
 
-Prefill, the whole prompt in one pass, is compute bound. Decode, one token at a time, is usually memory bandwidth bound at low batch size: little math, lots of bytes to stream per token. Larger batches push decode back toward compute bound, which is why serving stacks batch aggressively. My numbers below are read at the low batch regime I actually ran.
+Prefill, the whole prompt in one pass, is often compute bound. Decode, one token at a time, is usually memory bandwidth bound at low batch size: little math, lots of bytes to stream per token. Larger batches push decode back toward compute bound, which is why serving stacks batch aggressively. My numbers below are read at the low batch regime I actually ran.
 
 The 32B teacher used about 66 GB of an 80 GB card, yet GPU compute utilization sat at 33.5 percent, barely above the 8B teacher's 31.6. If tensor cores were the bottleneck, a model that size should have kept them far busier. It did not. The bigger model also took longer per call, 49ms against 86, and that extra time is HBM traffic, not extra math.
 
-So decode speed tracks memory bandwidth more than compute, interconnect too for multi GPU models, everything here ran on one. HBM bandwidth alone rises substantially from an A100 to an H100 to a B200. Same model, same code, newer hardware, more tokens per second, zero change to the algorithm. That alone makes tokens per second the wrong metric for isolating what I actually changed.
+So decode speed tracks memory bandwidth more than compute, interconnect too for multi GPU models, everything here ran on one. HBM bandwidth alone rises substantially from an A100 to an H100 to a B200. Same model, same code, newer hardware can produce more tokens per second, zero change to the algorithm. That alone makes tokens per second the wrong metric for isolating what I actually changed.
 
 For a deeper tour of this ground, [The Engineering Behind LLM Inference](https://www.youtube.com/playlist?list=PLqO45Dg1pMhlDBZTMqVL2GU-14xYip2y2).
 
 ## The serving stack moves it too
 
-KV caching, continuous batching, FlashAttention, quantization, paged attention, prefill and decode disaggregation: real production techniques, none touching model quality, none used here, since the goal was to isolate speculative decoding on its own.
+KV caching, continuous batching, FlashAttention, quantization, paged attention, prefill and decode disaggregation: real production techniques that can change throughput without touching the speculative decoding algorithm itself. None used here, since the goal was to isolate that algorithm on its own.
 
 ![Where my work sits in the inference stack](../../results/passK/linkedin_post2_where_our_work_sits.png)
 *Hardware and serving software stayed fixed. Speculative decoding is an existing technique. Inside it, two levers, both tested: the loss that trains the draft, and the verifier, specifically delayed tree branching on already trained drafts, which [the original paper](https://arxiv.org/abs/2602.16994) only tested on untrained ones.*
@@ -58,9 +58,9 @@ That is the honest limit of the metric: it measures whether the algorithm conver
 
 ## The takeaway
 
-Tokens per second = f(hardware, serving stack, algorithm). Move one, the number moves, so alone it never says which. Block efficiency holds hardware and serving stack fixed and measures the algorithm's acceptance effectiveness alone.
+Tokens per second = f(model, algorithm, hardware, serving stack, workload). Block efficiency removes hardware and serving stack from the measurement and asks whether speculative decoding converts target calls into accepted tokens well.
 
-Block efficiency asks whether speculative decoding is proposing and confirming tokens well. But throughput is what actually matters in real world systems.
+Neither replaces the other: block efficiency explains why an algorithmic change works. Throughput is what actually matters in real world systems.
 
 ---
 
