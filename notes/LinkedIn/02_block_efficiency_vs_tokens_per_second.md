@@ -43,7 +43,7 @@ KV caching, continuous batching, FlashAttention, quantization, paged attention, 
 ![Where my work sits in the inference stack](../../results/passK/linkedin_post2_where_our_work_sits.png)
 *Hardware and serving software stayed fixed. Speculative decoding is an existing technique. Inside it, two levers, both tested: the loss that trains the draft, and the verifier, specifically delayed tree branching on already trained drafts, which [the original paper](https://arxiv.org/abs/2602.16994) only tested on untrained ones.*
 
-A real before and after: same draft, teacher, verifier, K, hardware. I compared two training objectives. Plain JSD trains on one greedy teacher rollout, so the training contexts come from the teacher's single most likely continuation, and JSD matches full distributions at each context. Enrichment trains on several sampled continuations instead, so the draft learns more than the teacher's top pick.
+A real before and after: same draft, teacher, verifier, K, hardware. I compared two training objectives. Plain JSD trains on one greedy teacher rollout, so the training contexts come from the teacher's single most likely continuation, and JSD matches full distributions at each context. Enrichment, my own variant, trains on several sampled continuations instead, so the draft learns more than the teacher's top pick.
 
 ![Training the draft differently moved block efficiency, and throughput moved with it](../../results/passK/linkedin_post2_training_moved_be_and_throughput.png)
 *Left: block efficiency. Right: throughput. At K=2, 3, 4, enrichment raises both together, throughput by about 2 to 2.5 tokens per second each time. At K=1 both are flat: enrichment's benefit is a second guess to fall back on, and K=1 has none.*
