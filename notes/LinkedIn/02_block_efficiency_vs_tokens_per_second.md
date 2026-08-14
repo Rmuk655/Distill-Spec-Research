@@ -50,8 +50,6 @@ A real before and after: same draft, teacher, verifier, K, hardware. I compared 
 
 ## Where block efficiency and throughput split
 
-The enrichment result above: block efficiency up, throughput up together. Not guaranteed. Here is where it breaks.
-
 Increasing tree depth from L=16 to L=32, same checkpoint, verifier, K, dataset: block efficiency rises from 7.56 to 8.93. Throughput drops from 11.7 to 7.4 tokens per second. Same direction on a different verifier, dataset, and checkpoint. A deeper tree accepts more guesses, but costs more draft and verification work than those guesses are worth.
 
 Block efficiency went up. The system got slower.
