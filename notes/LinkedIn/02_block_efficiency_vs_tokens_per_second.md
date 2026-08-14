@@ -10,7 +10,7 @@ Training is a one time cost. Inference is paid on every request, forever, at hug
 
 ## The problem with tokens per second
 
-Tokens per second depends on three things: hardware, [the serving stack](https://www.intoai.pub/p/10-llm-inference-optimization-techniques) (KV caching, quantization, batching, speculative decoding), and the algorithm. Change any one and the number moves. Report it alone and no one can tell which one changed.
+Tokens per second depends on three things: [the hardware](https://www.intoai.pub/p/what-every-ai-engineer-must-know-about-nvidia-gpus), [the serving stack](https://www.intoai.pub/p/10-llm-inference-optimization-techniques) (KV caching, quantization, batching, speculative decoding), and the algorithm. Change any one and the number moves. Report it alone and no one can tell which one changed.
 
 We worked on two things inside speculative decoding: training the draft, and choosing the verifier. We needed a metric that held hardware and serving stack fixed, and moved only when the algorithm did.
 
