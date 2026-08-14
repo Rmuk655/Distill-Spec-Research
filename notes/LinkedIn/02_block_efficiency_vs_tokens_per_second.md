@@ -26,8 +26,6 @@ Both drafts above produce the same final text; the draft only changes how many t
 
 Block efficiency barely depends on hardware, since accepting a token is just a probability check. One exception: different attention kernels round bf16 slightly differently, which can flip an accept or reject decision and move block efficiency by a few tenths.
 
-In one profiled run across 100 prompts, the draft spent 766 seconds generating in total, the target only 109, and GPU utilization sat at 31 percent, because the draft dispatches one tiny operation per token.
-
 ## Why tokens per second is hardware dependent
 
 Prefill, the whole prompt in one pass, is compute bound. Decode, one token at a time, is usually memory bandwidth bound at low batch size: little math, lots of bytes to stream per token. Larger batches push decode back toward compute bound, which is why serving stacks batch aggressively. My numbers below are read at the low batch regime I actually ran.
