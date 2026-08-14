@@ -18,17 +18,17 @@ We worked on two things inside speculative decoding: training the draft, and cho
 
 Normal decoding predicts one token, then runs the whole model again for the next one. Speculative decoding lets a small draft guess several tokens ahead; the target checks them all in one pass and keeps the longest prefix it agrees with. Block efficiency counts how many guesses got confirmed per expensive target call.
 
-Every verifier also computes a more local number, an acceptance probability at one node, written α. Each of the nine verifiers defines its own α, so it is not comparable across verifiers, and it says nothing about tree depth or shape. Block efficiency does both in one number, which is why it is the headline metric, not α.
+α = acceptance probability at one node. Every verifier defines its own α, so it is not comparable across verifiers and says nothing about tree depth. Block efficiency is comparable across all nine and accounts for depth, which is why it, not α, is the headline metric.
 
 Prompt: "The capital of France is", target says "Paris, which sits on the Seine." A good draft guessing "Paris, which sits on" gets all five tokens accepted in one pass. A weak draft guessing "Paris, a lovely old" gets only "Paris," accepted, two tokens.
 
-Speculative decoding is lossless: it preserves the target's output distribution exactly. Both drafts above produce the same final text; the draft only changes how many target calls that costs. Block efficiency measures that cost, not quality, and not measured speed, though the two usually move together. Later in this post, a case where they do not.
+Both drafts above produce the same final text; the draft only changes how many target calls that costs. Block efficiency measures that cost, not quality, and not measured speed, though the two usually move together. Later in this post, I describe a case where they do not.
 
 Block efficiency barely depends on hardware, since accepting a token is just a probability check. One exception: different attention kernels round bf16 slightly differently, which can flip an accept or reject decision and move block efficiency by a few tenths.
 
-In one profiled run, the draft spent 766 seconds generating, the target only 109, and GPU utilization sat at 31 percent, because the draft dispatches one tiny operation per token. Making that cheaper, batching, CUDA graphs, a warm process, is a real lever we did not build.
+In one profiled run across 100 prompts, the draft spent 766 seconds generating in total, the target only 109, and GPU utilization sat at 31 percent, because the draft dispatches one tiny operation per token.
 
-## Why tokens per second tracks memory bandwidth, not compute
+## Why tokens per second is hardware dependent
 
 Prefill, the whole prompt in one pass, is compute bound. Decode, one token at a time, is usually memory bandwidth bound at low batch size: little math, lots of bytes to stream per token. Larger batches push decode back toward compute bound, which is why serving stacks batch aggressively. My numbers below are read at the low batch regime I actually ran.
 
@@ -45,7 +45,7 @@ KV caching, continuous batching, FlashAttention, quantization, paged attention, 
 ![Where my work sits in the inference stack](../../results/passK/linkedin_post2_where_our_work_sits.png)
 *Hardware and serving software stayed fixed. Speculative decoding is an existing technique. Inside it, two levers, both tested: the loss that trains the draft, and the verifier, specifically delayed tree branching on already trained drafts, which the original paper only tested on untrained ones.*
 
-A real before and after: same draft, teacher, verifier, K, hardware. Only the training changed. Plain JSD trains on one greedy teacher rollout, so the training contexts come from the teacher's single most likely continuation, and JSD matches full distributions at each context. Enrichment trains on several sampled continuations instead, so the draft learns more than the teacher's top pick.
+A real before and after: same draft, teacher, verifier, K, hardware. I compared two training objectives. Plain JSD trains on one greedy teacher rollout, so the training contexts come from the teacher's single most likely continuation, and JSD matches full distributions at each context. Enrichment trains on several sampled continuations instead, so the draft learns more than the teacher's top pick.
 
 ![Training the draft differently moved block efficiency, and throughput moved with it](../../results/passK/linkedin_post2_training_moved_be_and_throughput.png)
 *Left: block efficiency. Right: throughput. At K=2, 3, 4, enrichment raises both together, throughput by about 2 to 2.5 tokens per second each time. At K=1 both are flat: enrichment's benefit is a second guess to fall back on, and K=1 has none.*
@@ -64,7 +64,7 @@ That is the honest limit of the metric: it measures whether the algorithm conver
 
 Tokens per second = f(hardware, serving stack, algorithm). Move one, the number moves, so alone it never says which. Block efficiency holds hardware and serving stack fixed and measures the algorithm's acceptance effectiveness alone.
 
-But that does not make the algorithm's own cost disappear, the L result above is proof. Block efficiency asks whether speculative decoding is proposing and confirming tokens well. Throughput asks whether that gain survived its own cost. Two different questions. Neither stands in for the other.
+Block efficiency asks whether speculative decoding is proposing and confirming tokens well. But throughput is what actually matters in real world systems.
 
 ---
 
