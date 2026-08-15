@@ -14,8 +14,10 @@ The cause was silent. Both machines could run FlashAttention, but I had only ins
 
 But speculative decoding turns a tiny numerical difference into a discrete decision: accept or reject. Two values sitting close to the threshold, and a small difference flips it. Once one token flips, the rest of the generation follows a different path. The gap I measured reached about 0.2 block efficiency, the size of my run to run noise floor, leaning in neither direction.
 
-![Same checkpoint, same seed, same prompts, only the attention kernel changed](../../results/passK/linkedin_post5_backend_divergence.png)
-*Each point is one evaluation cell: block efficiency under SDPA on the x axis, under FlashAttention on the y axis. If the kernel did not matter, every point would sit on the dashed line. The red ones land outside the run to run noise band, from nothing but the kernel.*
+The cross machine version of this is confounded, of course. Two machines differ in more than the library. So I isolated it: I ran both backends on the same A100, same checkpoint, same seed, same prompts, and toggled only whether FlashAttention was in use. The divergence stayed. With the hardware held fixed, the kernel is the only thing left to blame.
+
+![Same A100, same checkpoint, same seed, same prompts, only the attention kernel changed](../../results/passK/linkedin_post5_backend_divergence.png)
+*Each point is one evaluation cell, both backends run on the same A100. Block efficiency under SDPA on the x axis, under FlashAttention on the y axis. If the kernel did not matter, every point would sit on the dashed line. The red ones land outside the run to run noise band, from nothing but the kernel.*
 
 ## The catch: it was never pure FlashAttention
 
@@ -26,6 +28,8 @@ To verify a whole tree of proposed tokens in one pass, the target uses a custom 
 ## The lesson
 
 I standardized on SDPA everywhere. It runs on every GPU I had, and it makes every run comparable to every other run. I gave up FlashAttention's speed to get that. When I audited old results, some had mixed backends, so I flagged those rather than trust the difference as a model effect.
+
+This is really a reproducibility problem, and it reaches past the backend. [My earlier post](02_block_efficiency_vs_tokens_per_second.md) said to hold the hardware and serving stack fixed and move only the algorithm. But on a rented cloud machine you never get the same physical box twice, so you hold the software fixed instead: a setup script and a pinned requirements file that install the exact same torch and transformers every run, FlashAttention present or absent on purpose, not by accident. I pin those versions because an unpinned torch drifted between installs and quietly made throughput non comparable. A rented A100 today has to match a rented A100 next week, and only deliberate pinning gets you there.
 
 Low precision differences are usually harmless. But put a hard decision boundary downstream, and speculative decoding is exactly that, a tiny numerical difference becomes a measurable experimental signal.
 
