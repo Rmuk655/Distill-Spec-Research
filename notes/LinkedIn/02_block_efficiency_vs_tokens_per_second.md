@@ -1,6 +1,6 @@
 # Isolating variables: my piece of the puzzle, not the whole one
 
-In [Post 1](LINK_TO_POST_1), I said I optimized block efficiency, not tokens per second. Here is why.
+In [my previous post](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I said I optimized block efficiency, not tokens per second. Here is why.
 
 Block efficiency = generated tokens / target model calls. It isolates the algorithm from the hardware and serving stack underneath it.
 
