@@ -23,7 +23,7 @@ Low activity on both counters is consistent with the GPU spending most of its ti
 Hold tree depth fixed, only the eval dataset varies within one verifier at a time, same checkpoint throughout: block efficiency and throughput move together tightly, mean within-group correlation 0.96 across 33 groups (three eval datasets per group, gsm8k, math, and olympiad). Different verifiers do move block efficiency by different amounts and cost somewhat differently to run, but that cost difference is small next to the draft's own, which is most of a block's total time.
 
 ![Block efficiency predicts throughput when cost is held fixed](../../results/passK/linkedin_post3_be_tps_correlation_collapse.png)
-*One checkpoint, one verifier, one tree depth. Only the eval dataset changes across the three points.*
+*One correlation per group, 33 groups total, each group holding tree depth, verifier, and checkpoint fixed while only the eval dataset varies. Nearly every group clusters near 1.0.*
 
 Tree depth is what actually breaks the proxy, because it restructures the draft's cost directly: the L=16 to L=32 result above is the clearest case, block efficiency rose while throughput fell.
 
