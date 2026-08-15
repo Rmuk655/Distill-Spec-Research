@@ -1,57 +1,46 @@
-# GPU profiling: the expensive GPU was barely working
+# GPU profiling: the drafter dominated runtime, not the teacher
 
-In post 2 I said GPU utilization during evaluation sat around 31 percent, and used it to argue tokens per second is the wrong metric. This post is about what I did to get that number, and the more uncomfortable thing it turned out to mean.
+Post 2 showed GPU compute utilization staying flat around 32 percent, whether the teacher was 8B or 32B. I assumed the big teacher was the expensive part of every run. Profiling across the whole experiment grid, not just that one comparison, said otherwise.
 
-## Benchmarking tells you the number, profiling tells you why
+## What I expected
 
-Benchmarking is easy: run it, time it, report tokens per second. It tells you how fast, never why. Profiling is the other question, where did the time actually go, and which resource was the wall.
+Going from an 8B teacher to a 32B one is four times the parameters. I expected the bigger model to take over as the dominant cost: more math, more weight bytes to move, more GPU time spent per run.
 
-So I added a telemetry sidecar to the eval harness (`telemetry.py`). It polls the GPU through NVML on a background thread while the eval runs, and records, per run, the averages of a few things: compute utilization (how busy the streaming multiprocessors were), memory controller utilization (how hard HBM was being driven), PCIe traffic in both directions, NVLink traffic if any, plus clocks and temperature. Every number below is a column in the committed results CSV, not something I eyeballed.
+## What the whole grid showed
 
-## What prefill and decode actually are
+Over 3,200 eval runs, spanning different losses, verifiers, K, L, and checkpoints, the small draft model consumed most of the measured draft-plus-target inference time, not the large teacher. Draft time was 78 to 94 percent of combined draft-plus-target time, averaging 85 percent, and the draft never stopped being the majority of the time in any single sweep. Even after making the teacher four times larger, the draft was still where most of the measured time went. That is the actual surprise here, not a specific percentage.
 
-Generation splits into two phases. Prefill processes the whole prompt in a single forward pass, every position at once, and this is also where the KV cache, the saved keys and values for each prompt token, gets built for the first time. Because every position runs in parallel, prefill keeps the tensor cores genuinely busy. It is compute bound, and a faster prefill is a shorter wait before the first output token appears.
+Target cost nearly doubled as expected going from the 8B teacher to the 32B one, 48ms to 84ms per block. Draft cost did not move with it, 344ms with the 0.6B draft against 333ms with the 1.7B one, roughly flat. Making the teacher four times larger increased target latency substantially, but not enough to make it the dominant cost: draft share fell only from 88 to 80 percent.
 
-Decode comes after, one output token per forward pass. Instead of recomputing every past token's key and value, the model reuses what prefill already cached and only computes the new token's own key and value, appending it for the next step. That reuse is exactly why decode is cheap to compute and expensive in a different way: with almost no math to do, the bottleneck becomes how fast the model's weights can stream out of HBM for that one token, not how much arithmetic the tensor cores can perform. Every kernel is bounded by one of two things, math or memory, and single token decode is the textbook memory bound case.
+With an increase in tree depth, draft time increased far more than target time: going from L=16 to L=32, draft time per block nearly doubled, 575ms to 1122ms, while target time rose only 56ms to 81ms. Of the additional wall time added by going deeper, 95 percent came from the draft, 3 percent from the target, 2 percent from verification. The reason is execution structure, not model size: the draft constructs the tree through sequential depth steps, with the K branches at each step batched together, while the target evaluates the finished tree in one batched pass, once. Model size was not predicting the bottleneck. Execution structure was.
 
-I do not have a clean phase by phase measurement of this split in my own eval data. The telemetry sidecar records total time per prompt, split into how long the draft spent generating and how long the target spent verifying, not prefill time against decode time within either one. The one connection worth drawing, carefully, not overstated: the draft's loop, one token proposed at a time, is structurally the decode case, repeated many times over, and it is exactly where the dispatch bound result below shows up. The target's single verification pass over several proposed tokens at once is structurally closer to a small prefill, several positions processed together in one parallel pass, part of why it is cheaper per call despite running a much larger model. That is an analogy grounded in how the two components are actually built, not a claim that I measured prefill and decode directly.
+## Why 12 percent does not mean "barely using memory"
 
-## The roofline question
+The 32B teacher held about 66 GB on an 80 GB card, yet its memory-bus reading was 13.2 percent, barely above the 8B teacher's 12.2, and compute utilization sat at 31 to 34 percent for both. These readings come from NVML, the same driver library behind `nvidia-smi`. They are activity counters, the percent of time each resource was doing anything at all, not measurements of achieved FLOPs or memory bandwidth, so they cannot by themselves identify a bottleneck. NVML utilization could not identify the bottleneck. Decomposing wall-clock time did.
 
-Post 2 already showed the roofline read that confirms decode is the memory bound case in practice, not just in theory. Going from the 8B teacher to the 32B teacher is 4 times the parameters, but time per target call only went from about 49 to 86 milliseconds, less than double, not quadruple, and compute utilization barely moved. If it were compute bound, 4 times the math would have cost roughly 4 times the time. It did not. So the target model is memory bound, as expected.
+Low activity on both counters is consistent with the GPU spending most of its time between small draft calls rather than continuously busy on either kind of work. PCIe traffic rules out one culprit in the meantime: 77 MB/s back from the GPU against 17 MB/s out, both orders of magnitude below link capacity, so bandwidth was not saturated either.
 
-## The uncomfortable part: nothing was saturated
+## When does block efficiency actually predict throughput?
 
-Here is what the fuller telemetry showed, and it is not what "memory bound" alone would predict.
+Hold tree depth fixed, only the checkpoint varies within one verifier at a time: block efficiency and throughput move together tightly, mean within-group correlation 0.96 across 33 groups (three checkpoints per group). Different verifiers do move block efficiency by different amounts and cost somewhat differently to run, but that cost difference is small next to the draft's own, which is most of a block's total time. Tree depth is what actually breaks the proxy, because it restructures the draft's cost directly: the L=16 to L=32 result above is the clearest case, block efficiency rose while throughput fell.
 
-![Neither compute nor memory was saturated](../../results/passK/linkedin_post3_nothing_saturated.png)
-*Average utilization during eval. Compute sat at 31.6 percent for the 8B run and 33.5 for the 32B run. The memory controller was even lower, 12.2 and 13.2 percent. Both a long way from saturated.*
+This was not specific to traversal, the verifier used above. Across eleven verifiers at the same tree shape, throughput fell from L=8 to L=32 in every single case, and block efficiency rose in ten of eleven, specinfer was essentially flat past L=16.
 
-If decode were cleanly memory bound in practice, I would expect the memory controller pinned near 100 percent and compute low. Instead both were low. Memory was only about 12 percent utilized. Nothing was the wall in the usual sense, because at batch size one, with a tiny draft generating one token at a time, the real bottleneck was upstream of the GPU entirely: the CPU launching a stream of small kernels, one per token, and waiting on each. This is dispatch bound, not compute bound and not even memory bandwidth bound. The GPU spent most of the run idle, waiting to be told what to do next. That matches post 2's other number, the draft's own generation loop dominating wall time at that 31 percent occupancy.
+![Block efficiency and throughput move in opposite directions as tree depth grows, for every verifier](../../results/passK/linkedin_post3_be_tps_by_verifier_across_L.png)
+*Blue: block efficiency. Red: throughput. Same shape for every verifier tested.*
 
-The precise version is worth saying because it is the kind of distinction an interview probes: decode is memory bound in the regime the roofline assumes, a saturated pipeline. This run was not in that regime. It was starved further up, at kernel launch, so neither hardware resource ever got the chance to become the limit.
+![Block efficiency predicts throughput only when cost is held fixed](../../results/passK/linkedin_post3_be_tps_correlation_collapse.png)
+*Left: one configuration, three checkpoints, tree depth and verifier fixed. Right: the same verifier at two tree depths pooled together.*
 
-Here is a second, independent check of the same idea, from a different angle: what happens to each side's own time when you change its own model size, not the other one's. Swap the draft from 0.6B to 1.7B, nearly tripling it, and the draft's own per call time barely moves, about 348 milliseconds for the small one against about 358 for the larger, a gap so small it is close to noise. Swap the teacher from 8B to 32B and target time visibly responds, the 49 to 86 milliseconds already shown above. That asymmetry is exactly what a dispatch bound draft next to a genuinely working batched target call should look like. The draft pays a fixed launch tax eight separate times per call, once per tree depth, and that tax barely cares how big the model behind it is. The target pays that same kind of tax once, in a single batched pass over the whole tree, so its number is free to reflect real work instead of being swamped by launch overhead. Varying the wrong side's size and watching nothing happen is stronger evidence for dispatch bound than watching one number move once.
+Block efficiency is a reliable proxy for throughput within one fixed tree depth and verifier, the two things that set how much draft and target work a block actually costs. It stops being one across different tree depths, the clearest case here: going from L=16 to L=32, it points the opposite way from throughput.
 
-One more connection worth making explicit, since it ties this post back to the metric the rest of the series is built on. Block efficiency only ever counts target calls, so by construction it is entirely a decode phase metric, it has nothing to say about prefill, which happens once before this loop even starts. It also has nothing to say about the draft's own cost. A better trained draft can raise block efficiency without the draft's own dispatch bound loop, the thing measured above, getting any cheaper at all. The metric captures whether you reduced the expensive model's decode burden. It is silent on whether the cheap model's own decode loop became the new bottleneck, which, in this run, it did.
+## What I would test next
 
-## One more thing the traffic showed
-
-PCIe traffic was lopsided: about 77 MB/s coming back from the GPU to the host against about 17 MB/s going out to it, on both pairs. Roughly four times as much flowing back. That is the shape of a chatty loop, each step ships a little work to the GPU and pulls results back, over and over, rather than doing one big batched transfer. Same story as the utilization, from a different angle.
-
-## What I did not measure, and why the empty columns are honest
-
-The harness also records NVLink traffic, the high speed link between GPUs. On every run those columns are empty, and that is not a bug. Everything here ran on a single GPU, so there was no interconnect traffic to record. That is the honest boundary of this work: it is single GPU profiling. Multi GPU interconnect analysis, NVLink and NCCL collective behavior, the thing that actually matters once a model is sharded across a rack, is exactly what I did not do, and the empty columns are the proof of where the work stopped.
+No CUDA timeline trace, so I know where the time went, not yet the exact low-level cause, a tool like Nsight Systems is the obvious next measurement. Two optimizations used by production serving engines are absent here too: [continuous batching](https://www.usenix.org/conference/osdi22/presentation/yu), the technique behind vLLM, could amortize small draft steps across multiple prompts instead of evaluating one at a time, and [CUDA graphs](https://pytorch.org/docs/stable/notes/cuda.html#cuda-graphs) could reduce repeated launch overhead by replaying captured GPU work instead of dispatching it fresh every step. I have not measured how much either would recover, that needs the timeline trace first. I also only ever trained 0.6B and 1.7B drafts, two points, not a scaling curve on how draft size affects draft latency.
 
 ## The lesson
 
-Profiling changed my conclusion, it did not just decorate it. I went in assuming the big model was the cost. The telemetry said the big model was mostly idle and a cheap model's launch overhead was the real ceiling. Knowing which of compute, memory bandwidth, or dispatch is actually your wall, and being able to show it from counters rather than guess it from wall clock time, is the difference between benchmarking a system and understanding one.
-
-Being dispatch bound also points at the specific fix, and I want to name it honestly, including what does not fix it. Keeping the draft's weights resident does not help, they already are, this measurement never reloads the model between prompts. A prompt's own KV cache does not help either, it is specific to that one sequence and cannot carry over to the next prompt no matter how the serving stack is built. The two things that would actually help are batching, so one kernel launch does useful work for several sequences at once instead of one, and CUDA graphs or a fused custom kernel, replaying a captured sequence of GPU work instead of paying dispatch overhead fresh on every single token. Both are concrete, identified levers sitting directly on top of this profiling result. I did not implement either. It is real follow up work, not a hole in this post.
-
-## Further reading
-
-[A hardware level tour of LLM inference](https://www.intoai.pub/p/a-hardware-level-tour-of-llm-inference), for prefill, decode, and the memory bandwidth arithmetic behind the roofline argument used here.
+A higher block efficiency does not mean higher throughput once the cost of producing the tree changes, tree depth was the clearest example, deeper trees accepted more tokens per target call while making the system slower. Do not infer the bottleneck from model size, and do not stop at the metric you optimized. Profile the path that actually determines wall-clock time.
 
 ---
 

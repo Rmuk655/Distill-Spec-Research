@@ -14,7 +14,7 @@ Then look at the same two configs at pass@64: 0.92 and 0.96, a gap of about 0.04
 
 ## Two different sweeps, and they are not the same kind of knob
 
-Worth separating cleanly, because they get confused. Training time knobs, learning rate, warmup, weight decay, grad clip, CE anneal timing, how many teacher rollouts per prompt, decide what checkpoint you end up with. Eval time knobs, tree width, draft length, where the tree branches, which verifier, which dataset, decide what you learn about a checkpoint you already have. A training time sweep changes the model. An eval time sweep only changes the question you are asking it. Mixing the two up, tuning an eval knob and believing you improved the model, is an easy mistake to make and I made it more than once before separating them explicitly in my own head.
+Worth separating cleanly, because they get confused. Training time knobs, learning rate, warmup, weight decay, grad clip, CE anneal timing, how many teacher rollouts per prompt, decide what checkpoint you end up with. Eval time knobs, tree width, draft length, which verifier, which dataset, decide what you learn about a checkpoint you already have. A training time sweep changes the model. An eval time sweep only changes the question you are asking it. Tuning an eval knob and believing you improved the model is an easy mistake to make, and I made it more than once.
 
 Neither sweep is glamorous. It is running one config, waiting, reading a number off a dashboard, deciding if it cleared the noise floor, and running the next one. Most of the actual calendar time in this project was this loop, not any single clever idea.
 
@@ -33,7 +33,7 @@ Most of the other knobs in the sweep did not move block efficiency beyond its lo
 
 The sharpest example of why this matters is teacher temperature. Ranked by block efficiency alone, 0.7 beat 0.5 beat the default. Ranked by pass@k, the order flipped completely, the default beat 0.5 beat 0.7, and the default cleared the noise floor by the widest margin of the three while 0.7, the best-looking point on block efficiency, cleared it nowhere. The value that actually shipped was the default, the worst performer on the metric I was directly optimizing, because it was the best performer on the metric that generalizes.
 
-That is the philosophy, stated plainly: when a knob does not clear its own noise floor, keep the default rather than let noise crown a winner, and when two metrics disagree about which value is best, trust the one measured further from what you are directly optimizing, not the one closer to it. A couple of other knobs followed the same pattern. The CE anneal step count that won on block efficiency lost on pass@k, while a worse-on-block-efficiency setting cleared it at most k values instead. The LR schedule's minimum ratio showed no effect on block efficiency at all, yet one of its two settings cleared pass@k cleanly while the other cleared nothing. In both cases the choice that survived was the one pass@k supported, not the one block efficiency preferred. Picking a hyperparameter is not always picking a winner. Often it is refusing to let a number that has not earned trust make the decision for you.
+That is the philosophy, stated plainly: when a knob does not clear its own noise floor, keep the default rather than let noise crown a winner, and when two metrics disagree about which value is best, trust the one measured further from what you are directly optimizing. Two other knobs, CE anneal step count and the LR schedule's minimum ratio, followed the same pattern: the setting that won on block efficiency lost on pass@k. Picking a hyperparameter is not always picking a winner. Often it is refusing to let a number that has not earned trust make the decision for you.
 
 ## One hundred prompts was not enough
 
@@ -66,7 +66,7 @@ Here is the limitation I have not closed. Every escalation above, more prompts, 
 
 ## What this actually teaches
 
-Every escalation up through the model pairs traces back to the same cause. Speculative decoding's randomness, in generation and in the accept or reject draw itself, does not go away just because every other variable was held perfectly still. It survives the partial derivative. The dataset axis is a different kind of trap, not randomness but where on a difficulty curve you happen to be standing, and the model family gap is different again, not noise but reach, how far a result is actually allowed to generalize. Statistics, in this context, is not a formality bolted on afterward. It is the discipline of knowing how much of what you see is signal, how much is leftover noise, which eval set is even capable of showing you the difference, and how far what you found is actually allowed to travel.
+Every escalation above traces back to the same cause. Speculative decoding's randomness does not go away just because every other variable was held perfectly still, it survives the partial derivative. The dataset axis is a different trap, not randomness but where on a difficulty curve you happen to be standing. The model family gap is different again, not noise but reach, how far a result actually generalizes. Knowing which of the three you are looking at is most of the job.
 
 ## Further reading
 

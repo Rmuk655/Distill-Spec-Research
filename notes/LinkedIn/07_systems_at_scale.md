@@ -24,9 +24,9 @@ One distinction worth being precise about, since it is easy to blur: everything 
 
 Everything above assumed a model that fits on a single card, true for every model in this project, even the 32B teacher. That assumption breaks past a certain size, and the next problem is worth naming rather than skipping. A 70 billion parameter model in full precision is roughly 140GB of weights alone, before optimizer state, activations, or cache, and that does not fit on one 80GB H100. It has to be split across several GPUs, and how well that works depends on how those GPUs actually talk to each other, not just how many of them there are.
 
-An 8 GPU H100 server has 640GB of HBM in total, but only if the GPUs can share work efficiently. With NVSwitch, every GPU gets a full 900GB/s of bandwidth to every other GPU at once, and that number does not shrink as more GPUs join the exchange. Without NVSwitch, that same 900GB/s has to be split into separate point to point links instead, about 128GB/s to each of the other seven GPUs in an eight GPU box, so the bandwidth any pair actually gets depends on how many GPUs are talking at once. Same hardware otherwise, a very different ceiling on how fast the GPUs can cooperate.
+An 8 GPU H100 server has 640GB of HBM in total, but only if the GPUs can share work efficiently. With NVSwitch, every GPU gets a full 900GB/s to every other GPU at once. Without it, that same 900GB/s splits into separate point to point links, about 128GB/s per pair in an eight GPU box. Same hardware otherwise, a very different ceiling on how fast the GPUs can cooperate.
 
-From there the real question is how you split the work, model parallel, dividing the model itself across GPUs, against workload parallel, dividing which requests go where while keeping a full copy of the model on each. I have not built either. It is the direct next problem past everything else in this post, and it is where I would start if I ever needed to move past a single card.
+From there the real question is how you split the work, model parallel across GPUs versus workload parallel with a full copy on each. I have not built either. It is the direct next problem past everything else in this post.
 
 ## Fitting the model was half the problem, serving it fast was the other half
 
@@ -34,15 +34,9 @@ At one point I needed to check something different from block efficiency. I want
 
 That was far too slow, and understanding why taught me two ideas I had heard of but never really felt.
 
-The first is the KV cache, the same memory structure from the budget above, now seen from the serving side. When a model generates text one token at a time, each new token attends to all the tokens before it. If you recomputed everything from scratch at every step, you would redo the same work over and over. Instead the model saves the attention keys and values for the tokens it has already seen, and reuses them. It is what makes generation not scale terribly with length. It is also why long sequences eat so much memory, because the cache grows with every token, the same fact that made the memory budget above so tight in the first place.
+The first is the KV cache, the same memory structure from the budget above, now seen from the serving side: it is why long sequences eat so much memory, and it is also the reason a naive generation loop wastes so much of it, one sequence at a time, nothing shared.
 
-The second idea is what a real serving engine does with that cache. I used vLLM for this part. Two things it does mattered to me.
-
-One is paged attention. A naive setup gives each sequence one big block of memory for its cache. When sequences have different lengths and finish at different times, that memory fragments and gets wasted. Paged attention instead breaks the cache into small fixed pages, like how an operating system manages memory. Nothing gets stranded, and a finished sequence frees its pages immediately for the next one.
-
-The other is continuous batching. In a naive batch you wait for every sequence in the batch to finish before starting new ones, so the whole batch moves at the speed of its slowest member. Continuous batching admits a new sequence the moment a slot frees up. The GPU stays busy instead of idling while it waits for one long straggler.
-
-Put together, these are why the sampling job that would have taken a very long time in a plain loop finished in a reasonable one.
+The second is what a real serving engine does about that. I used vLLM for this part, mainly for two things: paged attention, which breaks the cache into small fixed pages instead of one big block per sequence, so nothing gets stranded when sequences finish at different times, and continuous batching, which admits a new sequence the moment a slot frees up instead of waiting for the whole batch's slowest member. Put together, these are why the sampling job that would have taken a very long time in a plain loop finished in a reasonable one.
 
 ![The evaluation pipeline, with the pass at k path running on vLLM with a batched KV cache](../medium_chart_architecture.png)
 *The evaluation half of the platform. The pass at k path runs on vLLM with a batched KV cache, in its own isolated environment, kept separate from the training stack.*
