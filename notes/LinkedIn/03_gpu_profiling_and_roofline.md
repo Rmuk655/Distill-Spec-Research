@@ -2,11 +2,11 @@
 
 Post 2 showed GPU compute utilization staying flat around 32 percent, whether the teacher was 8B or 32B. I assumed the big teacher was the expensive part of every run. Profiling across the whole experiment grid, not just that one comparison, said otherwise.
 
-## What I expected
+## Bigger models should dominate runtime and memory bus, right?
 
 Going from an 8B teacher to a 32B one is four times the parameters. I expected the bigger model to take over as the dominant cost: more math, more weight bytes to move, more GPU time spent per run.
 
-## What the whole grid showed
+## Why the "cheap" draft model was the expensive part
 
 Over 3,200 eval runs, spanning different losses, verifiers, K, L, and checkpoints, the small draft model consumed most of the measured draft-plus-target inference time, not the large teacher. Draft time was 78 to 94 percent of combined draft-plus-target time, averaging 85 percent, and the draft never stopped being the majority of the time in any single sweep. Even after making the teacher four times larger, the draft was still where most of the measured time went. That is the actual surprise here, not a specific percentage.
 
@@ -14,7 +14,7 @@ Target cost nearly doubled as expected going from the 8B teacher to the 32B one,
 
 With an increase in tree depth, draft time increased far more than target time: going from L=16 to L=32, draft time per block nearly doubled, 575ms to 1122ms, while target time rose only 56ms to 81ms. Of the additional wall time added by going deeper, 95 percent came from the draft, 3 percent from the target, 2 percent from verification. The reason is execution structure, not model size: the draft constructs the tree through sequential depth steps, with the K branches at each step batched together, while the target evaluates the finished tree in one batched pass, once. Model size was not predicting the bottleneck. Execution structure was.
 
-## Why 12 percent does not mean "barely using memory"
+## If the memory-bus reading is 12 percent, is the GPU's memory free?
 
 The 32B teacher held about 66 GB on an 80 GB card, yet its memory-bus reading was 13.2 percent, barely above the 8B teacher's 12.2, and compute utilization sat at 31 to 34 percent for both. These readings come from NVML, the same driver library behind `nvidia-smi`. They are activity counters, the percent of time each resource was doing anything at all, not measurements of achieved FLOPs or memory bandwidth, so they cannot by themselves identify a bottleneck. NVML utilization could not identify the bottleneck. Decomposing wall-clock time did.
 
@@ -34,9 +34,9 @@ This was not specific to traversal, the verifier used above. Across eleven verif
 
 Block efficiency is a reliable proxy for throughput within one fixed tree depth and verifier, the two things that set how much draft and target work a block actually costs. It stops being one across different tree depths, the clearest case here: going from L=16 to L=32, it points the opposite way from throughput.
 
-## What I would test next
+## How production systems get around this
 
-No CUDA timeline trace, so I know where the time went, not yet the exact low-level cause, a tool like Nsight Systems is the obvious next measurement. Two optimizations used by production serving engines are absent here too: [continuous batching](https://www.usenix.org/conference/osdi22/presentation/yu), the technique behind vLLM, could amortize small draft steps across multiple prompts instead of evaluating one at a time, and [CUDA graphs](https://pytorch.org/docs/stable/notes/cuda.html#cuda-graphs) could reduce repeated launch overhead by replaying captured GPU work instead of dispatching it fresh every step. I have not measured how much either would recover, that needs the timeline trace first. I also only ever trained 0.6B and 1.7B drafts, two points, not a scaling curve on how draft size affects draft latency.
+This evaluation harness runs one prompt at a time, which is exactly why the draft's cost shows up so plainly here. A real serving stack does not eat that cost the way this harness does. [Continuous batching](https://www.usenix.org/conference/osdi22/presentation/yu), the technique behind vLLM, keeps many prompts in flight together, so each small draft step is shared across a batch of requests instead of paid one prompt at a time. [CUDA graphs](https://pytorch.org/docs/stable/notes/cuda.html#cuda-graphs) replay a captured sequence of GPU work instead of dispatching it fresh every step, cutting the repeated launch overhead that many small sequential draft calls add up to. Both are exactly the kind of thing that would let a system keep speculative decoding's algorithmic gain, more accepted tokens per expensive target call, without paying for it in draft-side wall clock the way this harness does. I have not measured how much either would recover here, that needs a CUDA timeline trace first, which I did not capture. I also only ever trained 0.6B and 1.7B drafts, two points, not a scaling curve on how draft size affects draft latency.
 
 ## The lesson
 
