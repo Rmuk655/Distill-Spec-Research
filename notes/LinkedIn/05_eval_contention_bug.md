@@ -12,7 +12,7 @@ So the model was identical, the seed was identical, the inputs were identical, a
 
 The thing that finally pointed me at the answer was a column in my logging. I record CPU usage during each run. When two evaluations shared the same GPU, that CPU usage spiked. The two processes were fighting over the same underlying CPU cores. Speculative decoding does a fair amount of work on the CPU, building and checking the tree of proposed tokens. When two of those ran on one GPU, they interfered with each other in a way that leaked into the results, not just the speed.
 
-I want to be honest about the depth of what I know here. What I proved is that isolating evaluation to one process per GPU made the numbers stable and repeatable again. Exactly why the contention changed the output of a fixed seed run, rather than just slowing it down, I have a reasonable theory about but did not trace all the way to the bottom. I fixed it and moved on, because a stable measurement was what I needed.
+What I proved is that isolating evaluation to one process per GPU made the numbers stable and repeatable again. Exactly why the contention changed the output of a fixed-seed run, rather than just slowing it down, I have a theory about but did not trace to the bottom. I fixed it and moved on, a stable measurement was what I needed.
 
 The fix was simple once I understood it. One evaluation per GPU. No sharing. Training could still pack, but evaluation could not.
 
