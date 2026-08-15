@@ -4,7 +4,7 @@ My evaluation was slow. One verifier on one hundred prompts took fifteen to twen
 
 ## What SDPA and FlashAttention are
 
-Attention is the most expensive operation in these models, and there is [more than one way to compute it](https://docs.pytorch.org/tutorials/intermediate/scaled_dot_product_attention_tutorial.html). SDPA is PyTorch's built in default. FlashAttention is a faster version that never writes the large intermediate attention matrix to memory. Same math, different order of arithmetic. FlashAttention only runs on Ampere generation GPUs or newer, which is why it was an option on my A100 and H100 but not the older free tier cards I started on.
+Attention is the most expensive operation in these models, and there is more than one way to compute it. SDPA is PyTorch's built in default. [FlashAttention](https://huggingface.co/docs/text-generation-inference/en/conceptual/flash_attention) is a faster version that never writes the large intermediate attention matrix to memory. Same math, different order of arithmetic. FlashAttention only runs on Ampere generation GPUs or newer, which is why it was an option on my A100 and H100 but not the older free tier cards I started on.
 
 ## The accident: same everything, two different scores
 
