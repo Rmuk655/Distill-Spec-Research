@@ -22,15 +22,15 @@ Low activity on both counters is consistent with the GPU spending most of its ti
 
 Hold tree depth fixed, only the eval dataset varies within one verifier at a time, same checkpoint throughout: block efficiency and throughput move together tightly, mean within-group correlation 0.96 across 33 groups (three eval datasets per group, gsm8k, math, and olympiad). Different verifiers do move block efficiency by different amounts and cost somewhat differently to run, but that cost difference is small next to the draft's own, which is most of a block's total time.
 
+![Block efficiency predicts throughput when cost is held fixed](../../results/passK/linkedin_post3_be_tps_correlation_collapse.png)
+*One checkpoint, one verifier, one tree depth. Only the eval dataset changes across the three points.*
+
 Tree depth is what actually breaks the proxy, because it restructures the draft's cost directly: the L=16 to L=32 result above is the clearest case, block efficiency rose while throughput fell.
 
 This was not specific to traversal, the verifier used above. Across eleven verifiers at the same tree shape, throughput fell from L=8 to L=32 in every single case, and block efficiency rose in ten of eleven, specinfer was essentially flat past L=16.
 
 ![Every verifier: block efficiency rises, throughput falls, as tree depth grows](../../results/passK/linkedin_post3_be_tps_by_verifier_across_L.png)
 *Left: block efficiency vs tree depth. Right: throughput vs tree depth. Same verifier, same color, in both panels. The L=8 point comes from a different checkpoint than L=16 and L=32, same jsd loss family, not the same training run, so treat it as directional rather than a strict controlled comparison.*
-
-![Block efficiency predicts throughput only when cost is held fixed](../../results/passK/linkedin_post3_be_tps_correlation_collapse.png)
-*Left: one checkpoint, three eval datasets, tree depth and verifier fixed. Right: the same verifier and checkpoint at two tree depths pooled together.*
 
 Block efficiency is a reliable proxy for throughput within one fixed tree depth and verifier, the two things that set how much draft and target work a block actually costs. It stops being one across different tree depths, the clearest case here: going from L=16 to L=32, it points the opposite way from throughput.
 
