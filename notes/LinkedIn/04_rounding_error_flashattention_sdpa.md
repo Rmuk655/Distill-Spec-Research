@@ -1,25 +1,31 @@
-# Scientific computing: the 0.2 gain that was a rounding error
+# Scientific computing: I sped up my eval, and it started giving different answers
 
-Post 4. The second time a measurement fooled me, and a subtler one.
+My evaluation was slow. One verifier on one hundred prompts took fifteen to twenty minutes, nine verifiers per checkpoint was close to three hours, and across three datasets it was most of a day. I had dozens of checkpoints. So I went looking for something faster, and found FlashAttention. Around the same time I got access to an H100 where it was supported, so I moved some runs onto it and kept the rest on my A100. I expected a free speedup and nothing else. I was wrong.
 
-There are two ways to compute attention in these models: FlashAttention and the default one, SDPA. They compute the same thing. I assumed the only difference was speed.
+## What SDPA and FlashAttention are
 
-Then two runs of the same trained model landed about 0.2 apart in block efficiency. That is bigger than my noise floor, so it looked real. But nothing about the model had changed. The only difference was the attention backend.
+Attention is the most expensive operation in these models, and there is more than one way to compute it. [SDPA](https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html) is PyTorch's built in default. [FlashAttention](https://arxiv.org/abs/2307.08691) is a faster implementation that never writes the large intermediate attention matrix to memory. Same math, different order of arithmetic, and it only runs on Ampere generation GPUs or newer, which is why it worked on my A100 and H100 but not the older free tier cards I started on.
 
-Here is why that matters. These models run in bf16, which keeps only a few digits. The two backends do the same math in a different order, and in low precision, order changes the last digit. Normally that digit does not matter.
+## Why the same checkpoint gave two different scores
 
-But speculative decoding has a sharp edge. Whether a token is accepted is a comparison. If two numbers are close, a last digit difference flips it. One backend accepts, the other rejects, and once one token flips the rest of the generation follows a different path. A rounding difference at one token becomes a visibly different result.
+Running evals in parallel across both machines, I saw something that should have been impossible: the same checkpoint, the same fixed seed, scored two different block efficiencies depending on which machine ran it.
 
-![Same checkpoint, only the attention backend changed](../../results/passK/linkedin_post5_backend_divergence.png)
-*Each bar is one evaluation cell for the same checkpoint. The only thing that changed between the two runs of a cell was the attention kernel. That alone moved block efficiency from about minus 0.2 to plus 0.4.*
+The cause was silent. The library picks the attention backend based on whether FlashAttention happens to be installed, and only one machine had it. So the same code quietly ran two different implementations. These models run in bf16, which has far less precision than fp32, and doing the same math in a different order can change the last bits of the result. Normally that does not matter.
 
-So the gap was not my model improving. It was the same model rounding differently, snowballing through the acceptance test.
+But speculative decoding turns a tiny numerical difference into a discrete decision: accept or reject. Two values sitting close to the threshold, and a small difference flips it. Once one token flips, the rest of the generation follows a different path. The gap I measured reached about 0.2 block efficiency, the size of my run to run noise floor, leaning in neither direction.
 
-The fix: pin one backend everywhere, log which one ran, and only compare like with like. When I audited old results, some had mixed backends, and I had to treat those with suspicion.
+![Same checkpoint, same seed, same prompts, only the attention kernel changed](../../results/passK/linkedin_post5_backend_divergence.png)
+*Each point is one evaluation cell: block efficiency under SDPA on the x axis, under FlashAttention on the y axis. If the kernel did not matter, every point would sit on the dashed line. The red ones land outside the run to run noise band, from nothing but the kernel.*
 
-There is a second, separate issue underneath this one. For flat losses, both backends run fine, they just round differently, the 0.2 swing above. For tree losses it was not a rounding choice at all: the draft's custom tree mask needs a dict-based attention mask, which FlashAttention does not support, so SDPA had to be forced on that code path regardless of speed or numerics. One is two correct implementations disagreeing in the last decimal. The other is one implementation simply not being usable there. Worth keeping straight, mixing them up is its own way to compare the wrong things.
+## One backend could not run the tree at all
 
-The lesson: know your numerics before you call something a result. Low precision rounding is usually invisible. But if your system has a hard threshold, and speculative decoding does, it can turn into a fake signal.
+There was a separate issue underneath this one. To verify a whole tree of proposed tokens in one pass, the target model uses a custom mask describing which tokens are ancestors of which. This comes from the verification step itself, not the training loss, so it holds for every checkpoint. The drop in FlashAttention path only accepts ordinary causal or padding masks, so it crashed on the tree mask. That is not a fundamental limit: production systems run tree verification on fast custom kernels all the time. [SpecInfer](https://arxiv.org/abs/2305.09781) introduced one; EAGLE and Medusa ship their own. I had no such kernel, so the target stayed on SDPA and only the small draft could switch to FlashAttention. That is why my logged backend read as a mix: draft on FlashAttention, target on SDPA.
+
+## The lesson
+
+The fix was simple once I understood it. Pin one backend, log which one ran, compare like with like. When I audited old results, some comparisons had mixed backends, so I flagged those rather than trust the difference as a model effect.
+
+Low precision differences are usually harmless. But put a hard decision boundary downstream, and speculative decoding is exactly that, a tiny numerical difference becomes a measurable experimental signal. The measurement was real. Blaming it on the model would have been the mistake.
 
 ---
 
