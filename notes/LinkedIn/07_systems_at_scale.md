@@ -53,4 +53,4 @@ Kwon et al., [Efficient Memory Management for Large Language Model Serving with 
 
 ---
 
-Part of a series on building a speculative decoding research platform. Post 7.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 7.

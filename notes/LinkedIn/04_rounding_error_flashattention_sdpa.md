@@ -23,4 +23,4 @@ The lesson: know your numerics before you call something a result. Low precision
 
 ---
 
-Post 4.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 4.

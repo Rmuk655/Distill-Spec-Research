@@ -66,4 +66,4 @@ Samarin et al., [LK alpha: Beyond KL for Speculative Decoding Distillation](http
 
 ---
 
-Part of a series on building a speculative decoding research platform. Post 8.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 8.

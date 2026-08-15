@@ -47,7 +47,7 @@ And the honest closing note for the whole series. After accounting for run to ru
 
 ## The thread underneath every post in this series
 
-LLM inference is a coupled system: training objective, draft distribution, speculation tree, verifier, kernels and numerics, hardware, and the evaluation metric itself are all links in one chain, and improving one link does not guarantee the chain improves end to end. The rounding error post was the numerics link quietly lying to the metric. This post is two more examples at once, the verifier link mattering more than the training link everyone assumes matters most, and the evaluation link splitting into two disagreeing measurements. A lot of real research time goes into exactly this, checking whether a chain that looks simple on a whiteboard actually holds together once every link is measured separately.
+LLM inference is a coupled system: training objective, draft distribution, speculation tree, verifier, kernels and numerics, hardware, and the evaluation metric itself are all links in one chain, and improving one link does not guarantee the chain improves end to end. [The 0.2 gain that was a rounding error](04_rounding_error_flashattention_sdpa.md) was the numerics link quietly lying to the metric. This post is two more examples at once, the verifier link mattering more than the training link everyone assumes matters most, and the evaluation link splitting into two disagreeing measurements. A lot of real research time goes into exactly this, checking whether a chain that looks simple on a whiteboard actually holds together once every link is measured separately.
 
 Thank you for reading this far. If you went through the whole series, you saw the real shape of a research project: mostly plumbing, careful measurement, a lot of dead ends, and a few things that held up. That is what doing this work actually looks like.
 
@@ -57,4 +57,4 @@ Thomas et al., the delayed tree branching technique extended here to trained dra
 
 ---
 
-This is the final post in the series on building a speculative decoding research platform. Start from post 1 if you want the full picture.
+This is the final post in the series on building a speculative decoding for LLM inference research platform. Start from post 1 if you want the full picture.

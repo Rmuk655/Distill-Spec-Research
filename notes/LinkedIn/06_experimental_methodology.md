@@ -1,6 +1,6 @@
 # Experimental methodology: the sweep, the seeds, and the eval set you did not train on
 
-Post 2 ended on a partial derivative: hold hardware and the serving stack still, and the only thing left free to move is the one variable you actually care about. That sounds like it should settle things. It does not, and the reason is worth sitting with.
+[Isolating variables: my piece of the puzzle, not the whole one](02_block_efficiency_vs_tokens_per_second.md) ended on a partial derivative: hold hardware and the serving stack still, and the only thing left free to move is the one variable you actually care about. That sounds like it should settle things. It does not, and the reason is worth sitting with.
 
 Speculative decoding's accept or reject step is a probability draw, not a lookup. Even with the exact same checkpoint, the exact same prompt, and every other variable frozen solid, the number you measure still has width to it, because the sampling itself is random. Freezing everything else does not remove the noise. It just makes sure the noise left over actually belongs to the one thing you meant to test.
 
@@ -74,4 +74,4 @@ Chen et al., [Evaluating Large Language Models Trained on Code](https://arxiv.or
 
 ---
 
-Part of a series on building a speculative decoding research platform. Post 6.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 6.
