@@ -1,5 +1,7 @@
 # Scientific computing: how a faster attention backend faked a 0.2 gain
 
+In [my platform overview](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I flagged this one in a sentence: FlashAttention versus SDPA looked like just a speed choice, until two runs that differed only in the attention backend diverged by about 0.2 block efficiency, enough to look like a real result when it was only bf16 rounding. Here is the full story.
+
 My evaluation was slow. One verifier on one hundred prompts took fifteen to twenty minutes, nine verifiers per checkpoint was close to three hours, and across three datasets it was most of a day. I had dozens of checkpoints. So I went looking for something faster, and found FlashAttention. I set it up on one of my machines and started moving runs onto it, expecting a free speedup and nothing else. I was wrong.
 
 ## What SDPA and FlashAttention are
