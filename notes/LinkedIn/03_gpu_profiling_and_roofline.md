@@ -1,6 +1,6 @@
-# GPU profiling: the drafter dominated runtime, not the teacher
+# GPU profiling: the bigger teacher was not the bottleneck. The smaller draft was.
 
-Post 2 showed GPU compute utilization staying flat around 32 percent, whether the teacher was 8B or 32B. I assumed the big teacher was the expensive part of every run. Profiling across the whole experiment grid, not just that one comparison, said otherwise.
+[Isolating variables: my piece of the puzzle, not the whole one](02_block_efficiency_vs_tokens_per_second.md) showed GPU compute utilization staying flat around 32 percent, whether the teacher was 8B or 32B. I assumed the big teacher was the expensive part of every run. Profiling across the whole experiment grid, not just that one comparison, said otherwise.
 
 ## Bigger models should dominate runtime and memory bus, right?
 
@@ -44,4 +44,4 @@ A higher block efficiency does not mean higher throughput once the cost of produ
 
 ---
 
-Part of a series on building a speculative decoding research platform. Post 3.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 3.

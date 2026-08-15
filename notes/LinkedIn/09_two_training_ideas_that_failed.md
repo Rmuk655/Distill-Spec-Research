@@ -21,4 +21,4 @@ The bigger lesson: I could not always argue in advance which ideas would fail. B
 
 ---
 
-Post 9.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 9.

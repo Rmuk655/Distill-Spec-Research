@@ -64,4 +64,4 @@ Neither replaces the other: block efficiency explains why an algorithmic change 
 
 ---
 
-Part of a series on building a speculative decoding research platform. Post 2.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 2.

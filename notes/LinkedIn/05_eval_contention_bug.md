@@ -20,4 +20,4 @@ The lesson stuck with me more than most. A measurement bug looks exactly like a 
 
 ---
 
-Part of the series. This is post 5.
+Part of a series on building a speculative decoding for LLM inference research platform. Post 5.
