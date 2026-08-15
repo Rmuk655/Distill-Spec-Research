@@ -2,15 +2,13 @@
 
 In [my previous post](02_block_efficiency_vs_tokens_per_second.md), I talked about how tokens per second depends on hardware. I assumed the big teacher was the expensive part of every run. I was in for a surprise.
 
-## Bigger models should dominate runtime and memory bus, right?
-
-Going from an 8B teacher to a 32B one is four times the parameters. I expected the bigger model to take over as the dominant cost: more math, more weight bytes to move, more GPU time spent per run.
-
 ## Why the "cheap" draft model was the expensive part
 
 Over 3,200 eval runs, spanning different losses, verifiers, K, L, and checkpoints, the small draft model consumed most of the measured draft-plus-target inference time, not the large teacher. Draft time was 78 to 94 percent of combined draft-plus-target time, averaging 85 percent, and the draft never stopped being the majority of the time in any single sweep. Even after making the teacher four times larger, the draft was still where most of the measured time went. That is the actual surprise here, not a specific percentage.
 
 Target cost nearly doubled as expected going from the 8B teacher to the 32B one, 48ms to 84ms per block. Draft cost did not move with it, 344ms with the 0.6B draft against 333ms with the 1.7B one, roughly flat. Making the teacher four times larger increased target latency substantially, but not enough to make it the dominant cost: draft share fell only from 88 to 80 percent.
+
+This evaluation harness runs one prompt at a time, which is exactly why the draft's cost shows up so plainly here. The draft's rollout runs sequentially, one small CUDA kernel launch per depth step, 8, 16, or 32 times depending on tree depth. Each of those launches likely costs more in dispatch overhead than the step's own compute, consistent with the flat compute and memory utilization numbers below.
 
 With an increase in tree depth, draft time increased far more than target time. Going from L=16 to L=32 doubles the number of sequential depth steps the draft has to construct, so draft time per block nearly doubling too, 575ms to 1122ms, is expected. The target still evaluates the whole finished tree in one batched pass, so its time barely moves, 56ms to 81ms. Doubling the tree depth makes the draft even more of the bottleneck. Model size was not predicting the bottleneck. Execution structure was.
 
@@ -22,23 +20,23 @@ Low activity on both counters is consistent with the GPU spending most of its ti
 
 ## How do I use block efficiency results to predict throughput?
 
-Hold tree depth fixed, only the checkpoint varies within one verifier at a time: block efficiency and throughput move together tightly, mean within-group correlation 0.96 across 33 groups (three checkpoints per group). Different verifiers do move block efficiency by different amounts and cost somewhat differently to run, but that cost difference is small next to the draft's own, which is most of a block's total time.
-
-![Block efficiency predicts throughput only when cost is held fixed](../../results/passK/linkedin_post3_be_tps_correlation_collapse.png)
-*Left: one configuration, three checkpoints, tree depth and verifier fixed. Right: the same verifier at two tree depths pooled together.*
+Hold tree depth fixed, only the eval dataset varies within one verifier at a time, same checkpoint throughout: block efficiency and throughput move together tightly, mean within-group correlation 0.96 across 33 groups (three eval datasets per group, gsm8k, math, and olympiad). Different verifiers do move block efficiency by different amounts and cost somewhat differently to run, but that cost difference is small next to the draft's own, which is most of a block's total time.
 
 Tree depth is what actually breaks the proxy, because it restructures the draft's cost directly: the L=16 to L=32 result above is the clearest case, block efficiency rose while throughput fell.
 
 This was not specific to traversal, the verifier used above. Across eleven verifiers at the same tree shape, throughput fell from L=8 to L=32 in every single case, and block efficiency rose in ten of eleven, specinfer was essentially flat past L=16.
 
-![Block efficiency and throughput move in opposite directions as tree depth grows, for every verifier](../../results/passK/linkedin_post3_be_tps_by_verifier_across_L.png)
-*Blue: block efficiency. Red: throughput. Same shape for every verifier tested.*
+![Every verifier: block efficiency rises, throughput falls, as tree depth grows](../../results/passK/linkedin_post3_be_tps_by_verifier_across_L.png)
+*Left: block efficiency vs tree depth. Right: throughput vs tree depth. Same verifier, same color, in both panels. The L=8 point comes from a different checkpoint than L=16 and L=32, same jsd loss family, not the same training run, so treat it as directional rather than a strict controlled comparison.*
+
+![Block efficiency predicts throughput only when cost is held fixed](../../results/passK/linkedin_post3_be_tps_correlation_collapse.png)
+*Left: one checkpoint, three eval datasets, tree depth and verifier fixed. Right: the same verifier and checkpoint at two tree depths pooled together.*
 
 Block efficiency is a reliable proxy for throughput within one fixed tree depth and verifier, the two things that set how much draft and target work a block actually costs. It stops being one across different tree depths, the clearest case here: going from L=16 to L=32, it points the opposite way from throughput.
 
 ## How production systems get around this
 
-This evaluation harness runs one prompt at a time, which is exactly why the draft's cost shows up so plainly here. A real serving stack does not eat that cost the way this harness does. [Continuous batching](https://blog.vllm.ai/2023/06/20/vllm.html), the technique behind vLLM, keeps many prompts in flight together, so each small draft step is shared across a batch of requests instead of paid one prompt at a time. [CUDA graphs](https://pytorch.org/docs/stable/notes/cuda.html#cuda-graphs) replay a captured sequence of GPU work instead of dispatching it fresh every step, cutting the repeated launch overhead that many small sequential draft calls add up to. Both are exactly the kind of thing that would let a system keep speculative decoding's algorithmic gain, more accepted tokens per expensive target call, without paying for it in draft-side wall clock the way this harness does. I have not measured how much either would recover here, that needs a CUDA timeline trace first, which I did not capture. I also only ever trained 0.6B and 1.7B drafts, two points, not a scaling curve on how draft size affects draft latency.
+A real serving stack does not eat that cost the way this harness does. [Continuous batching](https://blog.vllm.ai/2023/06/20/vllm.html), the technique behind vLLM, keeps many prompts in flight together, so each small draft step is shared across a batch of requests instead of paid one prompt at a time. [CUDA graphs](https://pytorch.org/docs/stable/notes/cuda.html#cuda-graphs) replay a captured sequence of GPU work instead of dispatching it fresh every step, cutting the repeated launch overhead that many small sequential draft calls add up to. Both are exactly the kind of thing that would let a system keep speculative decoding's algorithmic gain, more accepted tokens per expensive target call, without paying for it in draft-side wall clock the way this harness does. I have not measured how much either would recover here, that needs a CUDA timeline trace first, which I did not capture. I also only ever trained 0.6B and 1.7B drafts, two points, not a scaling curve on how draft size affects draft latency.
 
 ## The lesson
 
