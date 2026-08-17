@@ -1,6 +1,6 @@
 # Capacity planning: from a laptop GPU to an 80GB A100
 
-In my [first post](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I summarized the hardware climb behind this project: free GPUs, then a 40GB A100, then an 80GB one. What I skipped was why I kept moving. Each machine hit a different memory limit, and along the way I picked up three ways to make the runs fit: LoRA to train fewer draft parameters, 4 bit teacher quantization to shrink the teacher weights, and an 8 bit Adam optimizer to shrink the draft's optimizer state. As the hardware got larger, I could remove those compromises one by one. The model size and hardware progression taught me what was actually consuming the memory.
+In my [first post](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I summarized the hardware climb behind this project: free GPUs, then a 40GB A100, then an 80GB one. What I skipped was why I kept moving. Each machine hit a different memory limit, and along the way I picked up three ways to make the runs fit: LoRA to train fewer draft parameters, 4 bit teacher quantization to shrink the teacher weights, and an 8 bit Adam optimizer to shrink the draft's optimizer state. As the hardware got larger, I removed those compromises one by one. The progression taught me what was actually consuming the memory.
 
 ## Why I started with models too small to matter
 
@@ -32,11 +32,11 @@ Getting there taught me that memory is about the peak, not just the model size. 
 
 ## What happens when one GPU is no longer enough?
 
-The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher is about 140GB of weights in bf16, already past what a single 80GB card can hold before the draft or any training state exists.
+The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher is about 140GB of weights in bf16, already past what a single 80GB card can hold.
 
-At that point the problem changes. The model itself has to be split across GPUs. [Tensor parallelism](https://huggingface.co/docs/transformers/en/perf_train_gpu_many#tensor-parallelism) splits work within layers across GPUs, while [pipeline parallelism](https://huggingface.co/docs/transformers/en/perf_train_gpu_many#pipeline-parallelism) puts different groups of layers on different GPUs. Once GPUs have to cooperate on the same training step, communication matters too, using libraries such as NCCL for operations like all-reduce.
+At that point, the problem changes. The model itself has to be split across GPUs. [Tensor parallelism](https://huggingface.co/docs/transformers/en/perf_train_gpu_many#tensor-parallelism) partitions the weights and computation within each layer across multiple GPUs, allowing a model that is too large for a single GPU to fit across several. [Pipeline parallelism](https://huggingface.co/docs/transformers/en/perf_train_gpu_many#pipeline-parallelism) instead puts different groups of layers on different GPUs. Once GPUs cooperate on the same training step, communication matters too, through libraries like NCCL for all-reduce.
 
-I never had to do that here. I used several GPUs, but each run still lived on one card. The GPUs ran independent experiments in parallel, with smaller jobs packed together when memory allowed. That was multi-GPU orchestration, not distributed training.
+I never had to do that here. I used several GPUs, but each run lived on one card, running independent experiments in parallel with smaller jobs packed together when memory allowed. That was orchestration, not distributed training.
 
 ## The lesson
 
