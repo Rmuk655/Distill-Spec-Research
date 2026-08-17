@@ -28,7 +28,7 @@ The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB
 
 The 80GB A100 was the real fix: the bf16 teacher fit there without quantizing. Fitting the draft's training alongside it was tight, and one thing I tried, a [bitsandbytes 8 bit optimizer](https://huggingface.co/docs/bitsandbytes/explanations/optimizers) to shrink the optimizer state, backfired at first: it allocated that state at startup, before the model loading spike had cleared, and hit a GPU out of memory error on the first step. Once I let it allocate lazily, the 80GB had the headroom to run the pair as a plain full fine tune, no quantization at all.
 
-Getting there taught me that memory is about the peak, not just the model size. Two large allocations at the same time can be enough to OOM. The question changed from "does the model fit?" to **"what is using memory when it fails?"**
+Getting there changed the question from "does the model fit?" to **"what is using memory when it fails?"**
 
 ## What happens when one GPU is no longer enough?
 
@@ -40,9 +40,9 @@ I never had to do that here. I used several GPUs, but each run lived on one card
 
 ## The lesson
 
-The free tiers taught me a model can fit at the end while the loading path does not. The A100s taught me that shrinking a weight just moves the problem, and timing alone can decide a run.
+Capacity planning was two problems at once. The teacher and draft had to be far enough apart to give a useful research signal, but still fit on the hardware I could get. Parameter count gave me the starting estimate, not the answer. Loading, gradients, activations, optimizer state, KV cache, and temporary allocations all contributed to the peak.
 
-I started by asking how many parameters fit on a GPU. The better question was the worst instant, not the final total.
+Pick a model pair that makes the experiment meaningful, then size the hardware for the worst moment of the run, not just the weights.
 
 ---
 
