@@ -8,7 +8,7 @@ I started on my laptop GPU with a 0.6B draft and a 0.6B teacher.
 
 That pair is not very useful for the research, since a teacher the same size as the draft teaches it almost nothing. But it was great for debugging locally: to check the training ran, gradients existed, checkpoints saved, and every loss path was exercised.
 
-The next question was which pair to run given the hardware I could get. I found free [Colab](https://colab.research.google.com/) and [Kaggle](https://www.kaggle.com/) GPUs to catch bugs cheaply before spending A100 time. Colab gives one T4 with about 15GB; Kaggle gives two. But which pair fits, especially with a real capacity gap between teacher and student? My mentor wanted roughly a tenfold gap, which made a 0.6B draft against an 8B teacher the smallest serious pair in that family. Could it even fit?
+The next question was which pair to run given the hardware I could get. I found free [Colab](https://colab.research.google.com/) and [Kaggle](https://www.kaggle.com/) GPUs to catch bugs cheaply before spending A100 time. Colab gives one T4 with about 15GB; Kaggle gives two. But which pair fits, especially with a real capacity gap between teacher and student? My mentor wanted roughly a tenfold gap, which made a Qwen3 0.6B draft against a Qwen3 8B teacher the smallest serious pair in that family. Could it even fit?
 
 ## How I tried to fit an 8B model on free hardware
 
