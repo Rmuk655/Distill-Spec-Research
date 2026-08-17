@@ -28,13 +28,13 @@ The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB
 
 Getting there taught me that memory is about the peak, not just the model size. Two large allocations existing at the same time can be enough to OOM. The question changed from "does the model fit?" to **"what is using memory when it fails?"**
 
-## Multiple GPUs did not make this distributed training
+## What happens when one GPU is no longer enough?
 
-By this point I was using several GPUs, but each run lived on one card, running independent experiments in parallel with smaller jobs packed together when memory allowed. I never split a single training step across GPUs with tensor parallelism, pipeline parallelism, or NCCL collectives.
+The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher is about 140GB of weights in bf16, already past what a single 80GB card can hold before the draft or any training state exists.
 
-That is orchestration, not distributed training.
+At that point the problem changes. The model itself has to be [split across GPUs](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). Tensor parallelism splits work within layers across GPUs, while pipeline parallelism puts different groups of layers on different GPUs. Once GPUs have to cooperate on the same training step, communication matters too, using libraries such as NCCL for operations like all-reduce.
 
-The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher, paired with an 8B draft to keep roughly the same tenfold gap, is about 140GB in bf16, past what any single 80GB card holds. No memory trick closes that, the model itself has to be [split across GPUs](https://huggingface.co/docs/transformers/en/perf_train_gpu_many) with tensor or pipeline parallelism, and the bandwidth between them becomes the constraint. That is real distributed training, and I did not build it here.
+I never had to do that here. I used several GPUs, but each run still lived on one card. The GPUs ran independent experiments in parallel, with smaller jobs packed together when memory allowed. That was multi-GPU orchestration, not distributed training.
 
 ## The lesson
 
