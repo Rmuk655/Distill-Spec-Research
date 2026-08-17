@@ -1,44 +1,48 @@
-# Operating systems: two jobs fit on the GPU. They still could not share it.
+# Operating systems: making every GPU hour count
 
-This is post 5. I had a handful of GPUs and a long queue of runs, so I optimized for speed: pack a job onto any card with free memory, and launch everything unattended and in parallel. Both habits came from the same instinct, use every idle cycle, and both taught me something about running work on shared hardware.
+In [my first post](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I mentioned that I ran more than 500 experiments over six weeks. I had a much smaller number of GPUs than that number suggests, and a short window to get through all of it.
 
-## If it fits, schedule it
+The time consuming part was getting through dozens of configurations and finding out which ideas actually held up. With limited GPU time and six weeks to run them, I needed a way to keep experiments moving without managing every job by hand.
 
-I had written the scheduler to place jobs by free memory. It asked each GPU how much memory was free, through `torch.cuda.mem_get_info`, and sent the next job to the emptiest card. If two jobs fit, it ran both. For training that was obviously efficient, and it worked.
+## Where it started: watching the run
 
-Then I pointed the same policy at evaluation.
+At first I ran experiments the plain way: start a training job in a terminal, watch the validation number climb, and when it looked done or stuck, kill it and start the next one by hand. One depth weighted loss ablation needed a genuinely converged reference number, so I ran it this way for the full 40,000 steps, ten times the project's default of 4,000. That obviously does not scale to hundreds of runs.
 
-## The same checkpoint stopped giving the same answer
+## The first problem: jobs die
 
-I evaluated one saved checkpoint, the exact same file, more than once, and got different block efficiency scores. Not wildly different, but past my noise floor, and I could not explain them.
+The obvious fix was to stop watching: kick a run off from the terminal and walk away. A dropped SSH connection sends SIGHUP and kills every foreground child, so the job disappears with the terminal. A shared disk filling up mid run kills the process just as easily.
 
-I ruled out the obvious causes one at a time. Sampling randomness? The seed was fixed. Different GPUs with different setups? The device and specs matched. The attention backend, which I already knew could shift results? The logs showed the same backend on every run. Same model, same seed, same inputs, and the score still moved. That is the scary case, because it means you cannot trust any number the harness produces.
+`nohup` solved the disconnect problem. The harder part was recovering when a run actually crashed. My `--resume` path loads the training and optimizer state from `ckpt_latest` and continues from there, but it took a few failures before I trusted it.
 
-## Memory capacity was not resource isolation
+One problem was that failures were too quiet. `try_resume` could look for a checkpoint that did not exist, and [Weights and Biases](https://docs.wandb.ai/models) could start a new run instead of resuming the old one.
 
-The clue was a column in my telemetry: CPU utilization. While I was debugging, it read high on the shared runs, which pointed me at the cores rather than the GPU. Speculative decoding does real CPU work, building and checking the tree of proposed tokens, and each process spawns its own pool of PyTorch threads. Nothing in my scheduler stopped two of them from oversubscribing the same cores.
+The bigger test came when a shared disk filled up during a sweep and killed several runs at once. I needed a fix where restarting them took no extra work. This was the fix: store each run's exact launch command, hyperparameters, and Weights and Biases run name in a `state.json` file. Relaunching a killed run just meant pointing `--resume` at its checkpoint directory.
 
-Two honest boundaries here. First, that CPU reading was a live debugging observation, not a clean controlled measurement: I never logged a matched shared versus isolated pair for the same checkpoint, so I cannot point to a CSV that proves the spike. Second, CPU contention became my leading hypothesis for the instability, and it is easy to see how it changes wall clock time, but exactly how it changed the output of a fixed seed run, rather than just slowing it down, I did not trace to the bottom. The most likely path is that thread count changes the order of floating point reductions in the CPU math, and in bf16 a last bit difference can flip a speculative accept or reject and cascade, the same edge I hit with attention kernels earlier in this series. I could not prove that chain, so I will not claim it.
+## How I packed more work onto each GPU
 
-What I could reproduce was simpler. One evaluation per GPU, with each eval given its own CPU thread budget (physical cores divided by GPU count, so processes stop fighting for cores), made the scores stable and repeatable again. Shared evaluation was unstable. Isolated evaluation was not.
+Keeping runs alive was only half the problem. A 0.6B draft with an 8B teacher did not use all 80GB of an A100, so a lot of GPU memory was sitting unused.
 
-## The scheduler learned that training and evaluation are different workloads
+The scheduler picked the emptiest GPU automatically by checking `torch.cuda.mem_get_info`, but most of my sweeps pinned GPUs by hand instead. The 1.7B draft with the 32B teacher needed one full 80GB card to itself, so for that pair there was no packing decision to automate. A hyperparameter sweep of four variants became four launches, each with a different `CUDA_VISIBLE_DEVICES` index, all backgrounded with `nohup` at the same time instead of run one after another. Four training runs could be alive on four different cards at once, each testing a different point in the same sweep.
 
-So the placement policy became workload dependent. Training still packs: it wants throughput, and a little interference between runs does not change what a checkpoint learns. Evaluation runs exclusive, one process per GPU with a fixed thread budget, because its whole job is to produce a number I can trust twice.
+## Evaluation was the one place packing did not belong
 
-Fitting by memory was the right rule for one of these and the wrong rule for the other.
+I tried using every idle GPU for evaluation too. Rahul advised against it in one of our conversations: throughput would change from run to run if I shared a GPU across evals.
 
-## Fitting the work on was not the only way to lose it
+Speculative decoding does real CPU work, building and checking the tree of proposed tokens, and nothing stopped two evaluation processes from oversubscribing the same cores. Packing them onto one GPU also meant sharing the memory bus that moves data between CPU and GPU, so two evals were muddling each other's picture from more than one direction at once. One evaluation per GPU, with its own CPU thread budget, removed the interference.
 
-Packing was one habit from moving fast. Running jobs unattended was the other, and it had its own failure mode: they die. A dropped SSH connection sends SIGHUP and kills every foreground child, so a multi hour training run vanishes with the terminal. A shared disk fills up mid run and the process crashes. Babysitting was not the fix; surviving and resuming was. I launched runs under nohup so a disconnect could not kill them, had each run write its own exact command to disk so a crashed job could relaunch from its own record rather than flags I rebuilt by hand, and made the long sampling jobs skip work they had already finished so a restart cost minutes, not hours.
+Evaluation used the same pinning, but wrapped in a loop instead of separate commands, since one checkpoint measured across every combination of tree width, dataset, and branch point is a much bigger grid than four configs. A single `nohup` block would loop through all of it, tens of combinations deep, on one pinned GPU, while the other GPUs ran their own training or evaluation sweeps in parallel.
+
+## When a run was no longer worth the GPU time
+
+I had found a way to fit more work onto each GPU. Now I needed to stop wasting time on runs that had already plateaued.
+
+I added `--early_stop_patience`, which tracks smoothed validation block efficiency and stops a run after a fixed number of checks without improvement. Five checks turned out to be too aggressive for slower, noisier objectives, so I raised it to fifteen and added a warmup guard. I also added a divergence check so a run that was clearly collapsing could stop immediately.
+
+The GPU time started going to runs that were still worth continuing, not simply every run that had been launched.
 
 ## The lesson
 
-My scheduler originally knew one thing about a job: how much GPU memory it needed. That was enough to pack training runs, not enough to protect evaluation. Two jobs fitting on one GPU did not mean they could share it without moving the measurement.
-
-After this, "the evaluation finished" was no longer enough. A result was trustworthy only if it reproduced when I reran the same checkpoint, same seed, same configuration. Free memory told me the jobs fit. It said nothing about whether they could run independently.
-
-Moving fast on shared hardware was never just about fitting work onto it. It was about isolating what had to be reproducible, and making everything else survive being interrupted.
+Keeping the GPUs busy was only one part of resource efficiency. Packing improved training throughput, checkpointing and restart reduced compute lost to failures, and early stopping reclaimed compute from weak runs. Evaluation exposed the other side: oversubscription can increase utilization while making the measurement less reliable.
 
 ---
 
