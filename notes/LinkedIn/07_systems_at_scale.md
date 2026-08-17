@@ -34,7 +34,7 @@ Getting there taught me that memory is about the peak, not just the model size. 
 
 The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher is about 140GB of weights in bf16, already past what a single 80GB card can hold before the draft or any training state exists.
 
-At that point the problem changes. The model itself has to be [split across GPUs](https://huggingface.co/docs/transformers/en/perf_train_gpu_many). Tensor parallelism splits work within layers across GPUs, while pipeline parallelism puts different groups of layers on different GPUs. Once GPUs have to cooperate on the same training step, communication matters too, using libraries such as NCCL for operations like all-reduce.
+At that point the problem changes. The model itself has to be split across GPUs. [Tensor parallelism](https://huggingface.co/docs/transformers/en/perf_train_gpu_many#tensor-parallelism) splits work within layers across GPUs, while [pipeline parallelism](https://huggingface.co/docs/transformers/en/perf_train_gpu_many#pipeline-parallelism) puts different groups of layers on different GPUs. Once GPUs have to cooperate on the same training step, communication matters too, using libraries such as NCCL for operations like all-reduce.
 
 I never had to do that here. I used several GPUs, but each run still lived on one card. The GPUs ran independent experiments in parallel, with smaller jobs packed together when memory allowed. That was multi-GPU orchestration, not distributed training.
 
