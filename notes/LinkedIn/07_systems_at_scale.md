@@ -24,9 +24,11 @@ Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so 
 
 The 8B teacher ran in plain bf16 on a 40GB A100 with none of the tricks I had needed on a T4.
 
-The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion, which does not fit a 40GB card. On the 40GB card I loaded it in 4 bit, cutting the weights to roughly 16GB plus metadata, enough to fit. The catch: flat losses run the teacher token by token, and 4 bit weights are dequantized on every step, so those runs hit about 18.3 seconds a step against 1.0 for the tree loss path on the same pair, trading a memory problem for a wall clock one. I tried a [bitsandbytes 8 bit optimizer](https://huggingface.co/docs/bitsandbytes/explanations/optimizers) to dodge it, storing the optimizer state in 8 bit to keep the teacher in bf16, though my first version allocated that state too early and hit an out of memory error on the first step. The 80GB A100 ended all of it: enough headroom to drop every trick and run the pair as a plain full fine tune with a full precision teacher.
+The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion, which does not fit a 40GB card, so there I loaded it in 4 bit, cutting the weights to roughly 16GB plus metadata. The catch: flat losses run the teacher token by token, and 4 bit weights are dequantized on every forward pass, so those runs hit about 18.3 seconds a step against 1.0 for the tree loss path on the same pair, trading a memory problem for a wall clock one.
 
-Getting there taught me that memory is about the peak, not just the model size. Two large allocations existing at the same time can be enough to OOM. The question changed from "does the model fit?" to **"what is using memory when it fails?"**
+The 80GB A100 was the real fix: the bf16 teacher fit there without quantizing. Fitting the draft's training alongside it was tight, and one thing I tried, a [bitsandbytes 8 bit optimizer](https://huggingface.co/docs/bitsandbytes/explanations/optimizers) to shrink the optimizer state, backfired at first: it allocated that state at startup, before the model loading spike had cleared, and hit a GPU out of memory error on the first step. Once I let it allocate lazily, the 80GB had the headroom to run the pair as a plain full fine tune, no quantization at all.
+
+Getting there taught me that memory is about the peak, not just the model size. Two large allocations at the same time can be enough to OOM. The question changed from "does the model fit?" to **"what is using memory when it fails?"**
 
 ## What happens when one GPU is no longer enough?
 
@@ -38,9 +40,9 @@ I never had to do that here. I used several GPUs, but each run still lived on on
 
 ## The lesson
 
-The free tiers taught me a model can fit at the end while the loading path does not. The A100s taught me that shrinking a weight just moves the problem, and that timing alone can decide a run.
+The free tiers taught me a model can fit at the end while the loading path does not. The A100s taught me that shrinking a weight just moves the problem, and timing alone can decide a run.
 
-I started by asking how many parameters fit on a GPU. The better question was the single worst instant, not the final total.
+I started by asking how many parameters fit on a GPU. The better question was the worst instant, not the final total.
 
 ---
 
