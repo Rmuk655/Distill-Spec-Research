@@ -16,7 +16,7 @@ An 8B teacher in bf16 is about 16GB of raw weights. The T4 I got on free Colab h
 
 It still died, and this time GPU memory was not the problem. My Colab VM had only about 12.7GB of CPU RAM. In my Transformers and bitsandbytes loading path, quantizing the pretrained checkpoint needed substantially more temporary CPU memory than the final 4 bit model, and the VM ran out of system RAM before loading finished.
 
-**The model fit after quantization. The process of getting it there did not.**
+I thought I needed a bigger GPU. The first thing I actually ran out of was CPU RAM. My mistake was budgeting for the model after loading, not the memory needed while loading it.
 
 Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so the 8B teacher in 4 bit actually loaded there. On top of it I trained the draft with [LoRA](https://huggingface.co/docs/peft/main/conceptual_guides/lora), which freezes the draft's base weights and trains only a small set of adapter parameters. The 4 bit quantization reduced the teacher's weight memory; LoRA reduced the gradients and optimizer state needed to train the draft. But free tiers still capped how far I could go, so the real experiments moved to [A100s](https://www.nvidia.com/en-us/data-center/a100/).
 
