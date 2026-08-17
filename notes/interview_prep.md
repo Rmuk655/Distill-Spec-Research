@@ -405,9 +405,9 @@ models.
 Neither, in training. Confirmed zero `torch.distributed`/DDP/FSDP/NCCL usage anywhere in `train.py`
 or the rest of the repo. "Multi-GPU" here means **N independent single-GPU processes**, each pinned
 via `--device cuda:N` or `CUDA_VISIBLE_DEVICES`, running different configs in parallel — not one
-model sharded or replicated. Right call at this scale: drafts up to 1.7B fit comfortably on a single
-80GB A100 with a full fine-tune, so DDP/FSDP's complexity wasn't needed. Don't imply distributed
-training that didn't happen.
+model sharded or replicated. Right call at this scale: even the 1.7B draft with the 32B teacher fit
+on a single 80GB A100 (full fine-tune draft, bf16 teacher, with an 8-bit optimizer to make room), so
+DDP/FSDP's complexity wasn't needed. Don't imply distributed training that didn't happen.
 
 **Q: Why isolate vLLM in its own environment? Why separate environments in general?**
 
@@ -423,9 +423,11 @@ stack's pinned dependencies. A separate `venv-vllm` (`scripts/setup_vllm_env.sh`
 **Q: Walk me through the memory-accounting story. Why did you move through LoRA → quantization → full fine-tune?**
 
 Real hardware progression: 16GB Colab → Kaggle's 30GB → a 40GB A100 → a final 80GB A100. LoRA and
-quantization were shed one at a time as headroom grew, ending at a full fine-tune with a
-full-precision teacher and no quantization at all. Each swap had a specific, nameable memory reason,
-not habit — narrate it as that sequence, not a list of techniques.
+4-bit teacher quantization were shed as headroom grew, ending at a full fine-tune with a
+full-precision (bf16) teacher — but the largest pair (1.7B draft, 32B teacher) still needed the 8-bit
+optimizer on the 80GB card, since a bf16 32B teacher (~64GB) plus a full fp32 AdamW state runs ~84GB,
+over the card. Each swap had a specific, nameable memory reason, not habit — narrate it as that
+sequence, not a list of techniques.
 
 **Q: Why did LoRA help? Why not use it throughout?**
 
