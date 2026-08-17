@@ -24,13 +24,13 @@ Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so 
 
 The 8B teacher ran in plain bf16 on a 40GB A100 with none of the tricks I had needed on a T4; a 0.6B draft against a 16GB teacher fits that card easily.
 
-The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion, which does not fit a 40GB card at all. Even an 80GB card is tight: the teacher is frozen, but the draft is training, so add its gradients, activations, and full precision optimizer state, plus a KV cache, and a full fine tune of the pair comes to about 89GB, past what the 80GB card holds.
+The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion, which does not fit a 40GB card at all. On the 40GB card I had to load it in 4 bit just to get started. The 80GB card was the first with real headroom, and by that point I could run the teacher in bf16 and the draft in a plain full fine tune, no quantization at all.
 
-What decides whether it fits is not the sum of those sizes but which of them are alive at the same instant, the peak. Two large allocations coexisting can overflow a card that would have held either alone. The question changed from "does the model fit?" to **"what is alive when memory peaks?"**
+Getting there taught me the accounting. What decides whether a run fits is not the sum of the final sizes but which allocations are alive at the same instant, the peak. Two large things coexisting can overflow a card that would have held either alone, and shrinking one weight can just move the peak somewhere else. The question I ended up asking was not "does the model fit?" but **"what is alive when memory peaks?"**
 
 ## Every way I made it fit had a catch
 
-Three tools carried the fit, first on the T4 for the 8B teacher and again on the A100 for the 32B one.
+Three tools carried the fit on the tight machines, the T4 for the 8B teacher and the 40GB A100 for the 32B one.
 
 **LoRA** reduced how much of the draft I trained, which also reduced the optimizer state I had to keep.
 
@@ -38,7 +38,7 @@ Three tools carried the fit, first on the T4 for the 8B teacher and again on the
 
 The third tool was an **8 bit optimizer**, which shrank Adam's state and sometimes gave me enough room to keep the teacher in bf16. My first implementation made things worse: I allocated the optimizer state early, which overlapped with temporary startup allocations and hit an out of memory error on the very first step. I removed the warmup and let it allocate lazily. Same eventual state, different peak. One fit and one did not.
 
-The card decided which trick I needed. On the 40GB A100 the 32B teacher had to be 4 bit to fit at all. On the 80GB one I could run it in bf16 instead, but the full fine tune still ran over 80GB, so the 8 bit optimizer brought the peak back under the line. The bigger card did not make it trick free. It changed which trick I needed.
+These were rungs on the way up, not the final state. On the tight cards, the T4 and the 40GB A100, a teacher too big for the card had to be loaded in 4 bit, and LoRA and the 8 bit optimizer shaved the training that sat on top. As the cards grew I shed them one at a time. The 80GB A100 finally had the headroom to drop all three, a full fine tune with a full precision teacher and no quantization, which is the cleanest setup and the one I trusted most.
 
 ## Multiple GPUs did not make this distributed training
 
