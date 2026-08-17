@@ -24,17 +24,9 @@ Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so 
 
 The 8B teacher ran in plain bf16 on a 40GB A100 with none of the tricks I had needed on a T4.
 
-The 1.7B draft with the 32B teacher did not. The 40GB A100 could not load that teacher at all without help. The 80GB card was the first with real headroom, where I could run the teacher in bf16 and the draft in a plain full fine tune, no quantization.
+The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion, which does not fit a 40GB card. On the 40GB card I loaded it in 4 bit, cutting the weights to roughly 16GB plus metadata, enough to fit. The catch: flat losses run the teacher token by token, and 4 bit weights are dequantized on every step, so those runs hit about 18.3 seconds a step against 1.0 for the tree loss path on the same pair, trading a memory problem for a wall clock one. I tried a [bitsandbytes 8 bit optimizer](https://huggingface.co/docs/bitsandbytes/explanations/optimizers) to dodge it, storing the optimizer state in 8 bit to keep the teacher in bf16, though my first version allocated that state too early and hit an out of memory error on the first step. The 80GB A100 ended all of it: enough headroom to drop every trick and run the pair as a plain full fine tune with a full precision teacher.
 
 Getting there taught me that memory is about the peak, not just the model size. Two large allocations existing at the same time can be enough to OOM. The question changed from "does the model fit?" to **"what is using memory when it fails?"**
-
-## One trick I needed, one I tried
-
-On the A100s I dropped the adapters and ran a full fine tune, plain bf16, the cleanest setup and most capacity once I had the memory for it.
-
-The one memory trick I could not avoid was **4 bit teacher quantization** for the 32B pair. The 32B teacher could not fit in bf16 on a 40GB A100, since its raw weights alone were about 64GB. Quantizing it to 4 bits reduced the weight storage to roughly 16GB, plus quantization metadata and the parts kept at higher precision, which brought the teacher within the 40GB budget. The catch: flat losses run the teacher token by token, and 4 bit weights are dequantized on every step, so those runs hit about 18.3 seconds a step against 1.0 for the tree loss path on the same pair. Different execution paths, so not a clean 18x quantization cost, but either way a memory problem became a wall clock one.
-
-To dodge that, I tried a [bitsandbytes 8 bit optimizer](https://huggingface.co/docs/bitsandbytes/explanations/optimizers), which stores the optimizer statistics in 8 bit instead of the usual 32 bit, enough to keep the teacher in bf16 instead. My first version made it worse: I allocated the optimizer state early, it overlapped with startup allocations, and it hit an out of memory error on the first step. I let it allocate lazily instead. Then the 80GB A100 arrived with enough headroom that I needed none of this, the 32B pair fit in a plain full fine tune with a full precision teacher.
 
 ## Multiple GPUs did not make this distributed training
 
