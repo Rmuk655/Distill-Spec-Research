@@ -18,7 +18,7 @@ It still died, and not on GPU memory. In my Transformers and bitsandbytes loadin
 
 **The model fit after quantization. The process of getting it there did not.**
 
-Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so the 8B teacher in 4 bit actually loaded there. But free tiers cap your session, so it was hard to finish a real training run at all. The full experiments moved to A100s.
+Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so the 8B teacher in 4 bit actually loaded there. On top of the 4 bit teacher I trained the draft with [LoRA](https://huggingface.co/docs/peft/main/conceptual_guides/lora), which freezes the base weights and trains only a small set of adapter parameters, cutting memory from the training side rather than the teacher. But free tiers still capped how far I could go, so for the real experiments I moved to [A100s](https://www.nvidia.com/en-us/data-center/a100/).
 
 ## Why 8B was easy and 32B was not
 
@@ -30,11 +30,11 @@ Getting there taught me the accounting. Peak memory is not the sum of the final 
 
 ## One trick I needed, one I tried
 
-The runs used a full fine tune throughout, plain bf16, no adapters. That was the default in the code, and with enough memory it is the setup with the most capacity and the fewest moving parts.
+On the A100s I dropped the adapters and ran a full fine tune, plain bf16, the cleanest setup and most capacity once I had the memory for it.
 
 The one memory trick I could not avoid was **4 bit teacher quantization** for the 32B pair, since a 64GB teacher does not fit a 40GB card. Loading it in 4 bit dropped it to about 18GB. The catch: flat losses run the teacher token by token, and 4 bit weights are dequantized on every step, so those runs hit about 18.3 seconds a step against 1.0 for the tree loss path on the same pair. Different execution paths, so not a clean 18x quantization cost, but either way I had traded a memory problem for a wall clock one.
 
-To dodge that, I tried an **8 bit optimizer**, which shrinks Adam's state enough to keep the teacher in bf16 instead. My first version made it worse: I allocated the optimizer state early, it overlapped with startup allocations, and it hit an out of memory error on the first step. I let it allocate lazily instead. Then the 80GB A100 arrived with enough headroom that I needed none of this, the 32B pair fit in a plain full fine tune with a full precision teacher.
+To dodge that, I tried a [bitsandbytes 8 bit optimizer](https://huggingface.co/docs/bitsandbytes/explanations/optimizers), which stores the optimizer statistics in 8 bit instead of the usual 32 bit, enough to keep the teacher in bf16 instead. My first version made it worse: I allocated the optimizer state early, it overlapped with startup allocations, and it hit an out of memory error on the first step. I let it allocate lazily instead. Then the 80GB A100 arrived with enough headroom that I needed none of this, the 32B pair fit in a plain full fine tune with a full precision teacher.
 
 ## Multiple GPUs did not make this distributed training
 
