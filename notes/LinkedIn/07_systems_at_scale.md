@@ -12,9 +12,9 @@ The next question was which pair to run given the hardware I could get. I found 
 
 ## How I tried to fit an 8B model on free hardware
 
-An 8B teacher in bf16 is about 16GB of raw weights. A free T4 has about 15GB. So I reached for [4 bit quantization](https://huggingface.co/blog/4bit-transformers-bitsandbytes), which on raw weight arithmetic cuts roughly 16GB to 4GB. On paper it fit easily.
+An 8B teacher in bf16 is about 16GB of raw weights. The T4 I got on free Colab had about 15GB of GPU memory, so it could not fit there in bf16. I reached for [4 bit NF4 quantization](https://huggingface.co/docs/transformers/quantization/bitsandbytes), which on raw weight arithmetic cuts roughly 16GB to 4GB. On paper it fit easily.
 
-It still died, and not on GPU memory. In my Transformers and bitsandbytes loading path, quantizing the pretrained checkpoint needed far more temporary CPU memory than the final 4 bit model, and Colab's roughly 12GB of system RAM ran out before loading finished.
+It still died, and this time GPU memory was not the problem. My Colab VM had only about 12.7GB of CPU RAM. In my Transformers and bitsandbytes loading path, quantizing the pretrained checkpoint needed substantially more temporary CPU memory than the final 4 bit model, and the VM ran out of system RAM before loading finished.
 
 **The model fit after quantization. The process of getting it there did not.**
 
