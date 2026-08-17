@@ -1,6 +1,6 @@
 # Capacity planning: from a laptop GPU to an 80GB A100
 
-In my [first post](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I described the hardware climb behind this project: my laptop, free GPUs, then A100s. I made that progression sound cleaner than it was. Most of it was me finding the next thing that did not fit.
+In my [first post](https://medium.com/@rmukund16/engineering-an-llm-inference-research-platform-for-speculative-decoding-405d2f0bf53f), I summarized the hardware climb behind this project: free GPUs, then a 40GB A100, then an 80GB one. What I skipped was why I kept moving. Each machine hit a different memory limit, and along the way I picked up three ways to make the runs fit: LoRA to train fewer draft parameters, 4 bit teacher quantization to shrink the teacher weights, and an 8 bit Adam optimizer to shrink the draft's optimizer state. As the hardware got larger, I could remove those compromises one by one. The model size and hardware progression taught me what was actually consuming the memory.
 
 ## Why I started with models too small to matter
 
