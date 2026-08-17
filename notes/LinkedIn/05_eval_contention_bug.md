@@ -1,6 +1,6 @@
 # Operating systems: two jobs fit on the GPU. They still could not share it.
 
-This is post 5. It is about the bug that taught me capacity and isolation are not the same thing.
+This is post 5. I had a handful of GPUs and a long queue of runs, so I optimized for speed: pack a job onto any card with free memory, and launch everything unattended and in parallel. Both habits came from the same instinct, use every idle cycle, and both taught me something about running work on shared hardware.
 
 ## If it fits, schedule it
 
@@ -28,11 +28,17 @@ So the placement policy became workload dependent. Training still packs: it want
 
 Fitting by memory was the right rule for one of these and the wrong rule for the other.
 
+## Fitting the work on was not the only way to lose it
+
+Packing was one habit from moving fast. Running jobs unattended was the other, and it had its own failure mode: they die. A dropped SSH connection sends SIGHUP and kills every foreground child, so a multi hour training run vanishes with the terminal. A shared disk fills up mid run and the process crashes. Babysitting was not the fix; surviving and resuming was. I launched runs under nohup so a disconnect could not kill them, had each run write its own exact command to disk so a crashed job could relaunch from its own record rather than flags I rebuilt by hand, and made the long sampling jobs skip work they had already finished so a restart cost minutes, not hours.
+
 ## The lesson
 
 My scheduler originally knew one thing about a job: how much GPU memory it needed. That was enough to pack training runs, not enough to protect evaluation. Two jobs fitting on one GPU did not mean they could share it without moving the measurement.
 
-After this, "the evaluation finished" was no longer enough. A result was trustworthy only if it reproduced when I reran the same checkpoint, same seed, same configuration. Free memory told me the jobs fit. It said nothing about whether they could run independently, and reproducibility, not capacity, was the property I actually needed.
+After this, "the evaluation finished" was no longer enough. A result was trustworthy only if it reproduced when I reran the same checkpoint, same seed, same configuration. Free memory told me the jobs fit. It said nothing about whether they could run independently.
+
+Moving fast on shared hardware was never just about fitting work onto it. It was about isolating what had to be reproducible, and making everything else survive being interrupted.
 
 ---
 
