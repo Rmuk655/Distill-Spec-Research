@@ -18,15 +18,15 @@ It still died, and not on GPU memory. In my loading path, each weight tensor was
 
 That was my first memory mistake: **I calculated what had to fit at the end, not what had to fit along the way.**
 
-Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so the 8B teacher in 4 bit actually loaded there. I also reached for [LoRA](https://huggingface.co/docs/peft/main/en/conceptual_guides/lora), which trains only a small set of extra weights on the draft and freezes the rest, and an 8 bit optimizer, both to shrink what the training step itself had to hold. But on free tiers it was hard to complete a meaningful training run at all. The full experiments moved to A100s.
+Kaggle had about 29GB of system RAM, enough headroom for that loading spike, so the 8B teacher in 4 bit actually loaded there. I also leaned on [LoRA](https://huggingface.co/docs/peft/main/en/conceptual_guides/lora) and an 8 bit optimizer to shrink what the training step itself had to hold. But on free tiers it was hard to complete a meaningful training run at all. The full experiments moved to A100s.
 
 ## Why 8B was easy and 32B was not
 
-The 8B teacher ran in bf16 on the A100 with none of the tricks I had needed to squeeze it onto a T4. The 1.7B draft with the 32B teacher was where I needed them again, all at once.
+The 8B teacher ran in plain bf16 on a 40GB A100 with none of the tricks I had needed on a T4; a 0.6B draft against a 16GB teacher fits that card easily.
 
-A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion. On an 80GB A100 that leaves little room for anything else, and the teacher is only part of the bill. It is frozen, but the draft is training, so there are gradients, activations, and optimizer state, and generation needs a KV cache.
+The 1.7B draft with the 32B teacher did not. A 32B teacher in bf16 is about 64GB of weights alone, two bytes a parameter times 32 billion, which does not fit a 40GB card at all. Even an 80GB card is tight: the teacher is frozen, but the draft is training, so add its gradients, activations, and full precision optimizer state, plus a KV cache, and a full fine tune of the pair comes to about 89GB, past what the 80GB card holds.
 
-What decides whether the run fits is not the sum of those sizes. It is which of them are alive at the same instant, the peak. Two large allocations coexisting can overflow a card that would have held either one alone. The question changed from "does the model fit?" to **"what is alive when memory peaks?"**
+What decides whether it fits is not the sum of those sizes but which of them are alive at the same instant, the peak. Two large allocations coexisting can overflow a card that would have held either alone. The question changed from "does the model fit?" to **"what is alive when memory peaks?"**
 
 ## Every way I made it fit had a catch
 
@@ -34,11 +34,11 @@ Three tools carried the fit, first on the T4 for the 8B teacher and again on the
 
 **LoRA** reduced how much of the draft I trained, which also reduced the optimizer state I had to keep.
 
-**4 bit teacher quantization** was the bigger memory saving. In my setup the loaded 32B teacher fell from roughly 64GB in bf16 to about 18GB. But the flat losses used the teacher through a sequential generation path, one forward pass per token, and the quantized path made an already expensive loop worse. Those runs reached about 18.3 seconds per training step, against about 1.0 second for the tree loss path on the same model pair. Those are different execution paths, so that is not an 18 times quantization slowdown. But the point was simpler: I had solved the memory problem and created a wall clock problem instead.
+**4 bit teacher quantization** was the bigger memory saving. In my setup the loaded 32B teacher fell from roughly 64GB in bf16 to about 18GB. But the flat losses ran the teacher through a sequential generation path, and quantized weights get dequantized on every step, so those runs reached about 18.3 seconds per training step against about 1.0 for the tree loss path on the same pair. Those are different execution paths, so it is not a clean 18 times quantization cost. Either way, I had traded a memory problem for a wall clock one.
 
 The third tool was an **8 bit optimizer**, which shrank Adam's state and sometimes gave me enough room to keep the teacher in bf16. My first implementation made things worse: I allocated the optimizer state early, which overlapped with temporary startup allocations and hit an out of memory error on the very first step. I removed the warmup and let it allocate lazily. Same eventual state, different peak. One fit and one did not.
 
-Put together, these were what finally got the 32B pair onto a single 80GB A100.
+The card decided which trick I needed. On the 40GB A100 the 32B teacher had to be 4 bit to fit at all. On the 80GB one I could run it in bf16 instead, but the full fine tune still ran over 80GB, so the 8 bit optimizer brought the peak back under the line. The bigger card did not make it trick free. It changed which trick I needed.
 
 ## Multiple GPUs did not make this distributed training
 
@@ -46,13 +46,13 @@ By this point I was using several GPUs, but each run still lived on one card. I 
 
 That is orchestration, not distributed training.
 
-The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher, paired with an 8B draft to keep roughly the same tenfold gap, is about 140GB in bf16, past what any single 80GB card holds. No memory trick closes that, the model itself has to be split across GPUs, and then the [bandwidth between them](https://developer.nvidia.com/blog/nvidia-nvlink-and-nvidia-nvswitch-supercharge-large-language-model-inference/) becomes the constraint. That is real distributed training, and I did not build it here.
+The 32B teacher still fit on one 80GB A100. The next rung up would not. A 70B teacher, paired with an 8B draft to keep roughly the same tenfold gap, is about 140GB in bf16, past what any single 80GB card holds. No memory trick closes that, the model itself has to be [split across GPUs](https://huggingface.co/docs/transformers/en/perf_train_gpu_many) with tensor or pipeline parallelism, and the bandwidth between them becomes the constraint. That is real distributed training, and I did not build it here.
 
 ## The lesson
 
 The free tiers taught me the final model can fit while the loading path does not. The A100 taught me that shrinking the weights just moves the problem somewhere else, and that allocation timing alone can decide whether a run fits.
 
-I started the project asking how many parameters fit on a GPU. The better question was always about the single worst instant, not the final total: same parts, different peak, different answer.
+I started the project asking how many parameters fit on a GPU. The better question was about the single worst instant, not the final total.
 
 ---
 
