@@ -26,7 +26,7 @@ The 8B teacher ran in plain bf16 on a 40GB A100 with none of the tricks I had ne
 
 The 1.7B draft with the 32B teacher did not. The 40GB A100 could not load that teacher at all without help. The 80GB card was the first with real headroom, where I could run the teacher in bf16 and the draft in a plain full fine tune, no quantization.
 
-Getting there taught me the accounting. Peak memory is not the sum of the final sizes, it is which allocations are alive at the same instant. The question became not "does the model fit?" but **"what is alive when memory peaks?"**
+Getting there taught me that memory is about the peak, not just the model size. Two large allocations existing at the same time can be enough to OOM. The question changed from "does the model fit?" to **"what is using memory when it fails?"**
 
 ## One trick I needed, one I tried
 
