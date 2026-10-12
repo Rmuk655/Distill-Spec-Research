@@ -1,4 +1,33 @@
-# DistillSpec Pipeline — Qwen3 / A100
+# DistillSpec: Distilling Draft Models for Speculative Decoding
+
+A research pipeline for training small *draft* models so that a large *target* model accepts more of their tokens during speculative decoding, measured as **block efficiency** (generated tokens per target-model call). It studies which distillation objective works best, using Qwen3-0.6B / Qwen3-8B and Qwen3-1.7B / Qwen3-32B pairs on a single A100.
+
+## Findings in short
+
+This project is mostly a careful **negative result**:
+
+- **A strong baseline is hard to beat.** Plain flat Jensen-Shannon divergence (JSD) distillation is the reference. Tree-structured losses, prefix-overlap objectives, depth-weighting and acceptance-rate (LK-alpha) losses all land at the same ceiling (about 5.9 to 6.1 traversal block efficiency at K=3 for 0.6B/8B).
+- **One family consistently helped on 0.6B/8B:** training on fresh stochastic teacher rollouts ("enrichment", `jsd_flat_enrich`, K=4), the only one to beat JSD on both datasets.
+- **It did not replicate at the larger gap.** On 1.7B/32B (single seed) the enrichment gain changes sign across settings; no family was confirmed to beat JSD.
+- **A verifier-side result transfers:** delayed tree branching (DDTE) helps on *trained* drafts, not only untrained ones.
+
+The full experiment map, verdict per family and links to the research notes are in [`project_report.md`](project_report.md). Raw per-checkpoint results are under `results/`.
+
+## What is in the code
+
+| Path | Role |
+|---|---|
+| `train.py`, `eval.py`, `inference.py` | Train a draft, evaluate block efficiency, run speculative decoding on a prompt |
+| `losses/` | Flat divergences (forward/reverse KL, JSD, L1, LK-alpha) and tree losses |
+| `verifiers/` | Speculative-decoding verifiers used in evaluation |
+| `data_io/` | Dataset download and loading (GSM8K, MATH, OlympiadBench and others) |
+| `notes/` | One research note per experiment family, with tables and mechanism analysis |
+| `results/` | Committed per-checkpoint evaluation CSVs |
+
+---
+
+# CLI reference
+
 
 Simplified, single-GPU research pipeline for verifier-aligned distillation of
 speculative-decoding draft models.  Three scripts:
