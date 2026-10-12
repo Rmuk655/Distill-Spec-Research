@@ -4,14 +4,20 @@ A research pipeline for training small *draft* models so that a large *target* m
 
 ## Findings in short
 
-This project is mostly a careful **negative result**:
+Write-up: [Engineering an LLM inference research platform for speculative decoding](https://medium.com/p/405d2f0bf53f) (Medium, Aug 2026).
 
-- **A strong baseline is hard to beat.** Plain flat Jensen-Shannon divergence (JSD) distillation is the reference. Tree-structured losses, prefix-overlap objectives, depth-weighting and acceptance-rate (LK-alpha) losses all land at the same ceiling (about 5.9 to 6.1 traversal block efficiency at K=3 for 0.6B/8B).
-- **One family consistently helped on 0.6B/8B:** training on fresh stochastic teacher rollouts ("enrichment", `jsd_flat_enrich`, K=4), the only one to beat JSD on both datasets.
-- **It did not replicate at the larger gap.** On 1.7B/32B (single seed) the enrichment gain changes sign across settings; no family was confirmed to beat JSD.
-- **A verifier-side result transfers:** delayed tree branching (DDTE) helps on *trained* drafts, not only untrained ones.
+- **Scale:** 500+ tracked experiments (about 250 training runs), 71 trained checkpoints and 4,000+ measurements, run on a multi-GPU platform built with PyTorch, HuggingFace and vLLM.
+- **A strong baseline is hard to beat.** Flat Jensen-Shannon divergence (JSD) distillation is the reference. Tree-structured losses, prefix-overlap objectives, depth-weighting, REINFORCE-style rewards and acceptance-rate (LK-alpha) losses land at the same ceiling (about 5.9 to 6.1 traversal block efficiency at K=3 for 0.6B/8B), and some, such as the log-space tree losses and the loss targeting the deployment verifier directly, are actively worse.
+- **Multi-rollout distillation beat JSD.** Training on several stochastic teacher continuations instead of one (`jsd_flat_enrich`, K=4 sweet spot) was the one training-side change that won on 0.6B/8B, and the gain held on OlympiadBench, which was never trained on. It did not replicate cleanly at the larger 1.7B/32B gap (single seed).
+- **Verification-side gain transfers to trained drafts.** Delayed tree branching (DDTE, a verifier technique that had only been evaluated on untrained drafts) improved block efficiency on nearly all trained checkpoints, from a couple of percent to over 20%, and stacking it with multi-rollout distillation gave the best single result.
+- **Two metrics, different stories.** pass@k showed checkpoints that improved pass@1 while regressing at pass@64; block efficiency alone hides that.
+- **Noise matters.** After estimating run-to-run noise from near-duplicate configurations, most settings showed no significant signal. FlashAttention vs SDPA rounding alone moved block efficiency by about 0.2, so one backend is pinned throughout.
 
 The full experiment map, verdict per family and links to the research notes are in [`project_report.md`](project_report.md). Raw per-checkpoint results are under `results/`.
+
+## Credits
+
+Research guidance and the verifier implementations (`verifiers/`) are by Rahul, an ML researcher at Columbia University. The training infrastructure, experiment platform, evaluation pipeline, new distillation objectives, extensions of two of his techniques and the experimental analysis are by Krishnan R.
 
 ## What is in the code
 
