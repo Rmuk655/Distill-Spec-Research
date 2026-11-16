@@ -39,3 +39,8 @@ depth_jsd_investigation_report.md
 adaspec-main.zip
 results (1).csv
 paper_extract.txt
+
+# Local tool and editor state
+.graphify/
+graphify-out/
+.tools/
