@@ -628,7 +628,8 @@ def main():
     if not args.resume:
         _state_path = os.path.join(output_dir, "ckpt_latest", "state.json")
         if os.path.isfile(_state_path):
-            _s = json.load(open(_state_path))
+            with open(_state_path) as _fh:
+                _s = json.load(_fh)
             _step = _s.get("step", 0)
             _be   = _s.get("best_val_block_eff", 0.0)
             _cmd  = " ".join(_s["cmd"]) + " --resume" if "cmd" in _s else "(add --resume to this command)"
@@ -690,7 +691,8 @@ def main():
     if args.resume:
         _sp = os.path.join(output_dir, "ckpt_latest", "state.json")
         if os.path.isfile(_sp):
-            _saved = json.load(open(_sp, encoding="utf-8"))
+            with open(_sp, encoding="utf-8") as _fh:
+                _saved = json.load(_fh)
             sched_steps = _saved.get("sched_steps", args.steps)
             # Old checkpoints (pre-dating this flag) never saved "grad_accum" —
             # fall back to args.grad_accum, whose own default (GRAD_ACCUM=8)

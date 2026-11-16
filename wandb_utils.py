@@ -89,7 +89,8 @@ def setup_wandb(args, output_dir, resumed: bool, wandb_project: str):
     saved = None
     if resumed and os.path.isfile(meta_path) and not args.fresh_wandb:
         try:
-            saved = json.load(open(meta_path, encoding="utf-8"))
+            with open(meta_path, encoding="utf-8") as _fh:
+                saved = json.load(_fh)
         except Exception as e:
             print(f"[wandb] WARNING: could not read {meta_path} ({e}) — starting fresh W&B run")
             saved = None

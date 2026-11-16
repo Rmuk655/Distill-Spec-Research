@@ -56,7 +56,8 @@ def try_resume(model, optimizer, scheduler, output_dir, hidden_proj=None):
         else:
             print(f"[resume] no checkpoint found — starting from scratch")
         return 0, {}
-    state = json.load(open(state_path, encoding="utf-8"))
+    with open(state_path, encoding="utf-8") as f:
+        state = json.load(f)
     step = state.get("step", 0)
     best_be = state.get("best_val_block_eff", 0.0)
     print(f"[resume] found state: step={step}  best_be={best_be:.3f} — loading weights...")

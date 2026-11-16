@@ -528,7 +528,8 @@ def main():
             _state_file = os.path.join(args.checkpoint, "state.json")
             try:
                 import json as _json
-                _state = _json.load(open(_state_file))
+                with open(_state_file) as _fh:
+                    _state = _json.load(_fh)
                 # train_args (full vars(args)) written by train.py >= this commit;
                 # fall back to bare "loss" field from the previous commit.
                 _saved_loss = (_state.get("train_args") or {}).get("loss") \
