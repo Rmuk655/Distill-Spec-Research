@@ -50,6 +50,8 @@ See [`project_report.md`](project_report.md) for what's been tried and what beat
 
 ## Setup (A100, one time)
 
+Quick route on Ubuntu/WSL (needs sudo for apt; a CUDA GPU is needed to train or evaluate): `bash setup.sh` installs system packages, creates `./venv`, installs `requirements.txt` and downloads the GSM8K train split plus the evaluation datasets (`bash setup.sh --no-data` skips the download). Then `source venv/bin/activate`. Model weights come from Hugging Face on first use. Quick check: `PYTHONPATH=verifiers python -m pytest tests`. The manual steps below do the same.
+
 ```bash
 # 1. clone and step in
 git clone -b Pipeline https://github.com/Rmuk655/Distill-Spec-Research.git

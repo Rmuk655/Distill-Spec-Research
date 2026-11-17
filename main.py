@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from typing import List, Tuple, Dict, Mapping, Callable, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
 
+import verifiers  # noqa: F401 — side effect: adds verifiers/ to sys.path
 from util import *
 from inference_util import *
 from node import *

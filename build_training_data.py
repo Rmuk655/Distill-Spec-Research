@@ -8,6 +8,7 @@ import copy
 import torch
 from tqdm import tqdm
 
+import verifiers  # noqa: F401 — side effect: adds verifiers/ to sys.path
 from inference_util import target_tree_pass
 from util import load_models, set_seed
 from verifier import TreeVerifier

@@ -33,3 +33,14 @@ ninja                   # REQUIRED before the flash-attn source build in setup_a
                         # BEFORE flash-attn — pip installs requirements.txt in order,
                         # but flash-attn is a separate step in setup_a100.sh, so this
                         # is safe as long as it stays above that step in the script.
+
+# Also imported by analysis/eval scripts
+numpy
+pandas
+scikit-learn
+matplotlib
+pyyaml
+pytest                  # tests/ (run: PYTHONPATH=verifiers python -m pytest tests)
+shap
+# flash-attn is NOT pip-installable here: built from source by setup_a100.sh (needs ninja above)
+# vllm: see requirements-vllm.txt

@@ -42,3 +42,6 @@ paper_extract.txt
 
 # local W&B export snapshot (not for GitHub)
 wandb_export/
+.graphify/
+graphify-out/
+.tools/
