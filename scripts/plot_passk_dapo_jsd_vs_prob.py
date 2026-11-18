@@ -6,7 +6,7 @@ instead of the usual math_hard, against the same untrained-student/teacher
 reference lines used in plot_passk_curves_all.py.
 
 prob's checkpoint is po_prob_multiroot_N16_freshM1_ceanneal9000_auxw0.5_dapo17k --
-prob's established best-BE deployment pick on dapo (see hyperparam_sweep_research_report.md),
+prob's established best-BE deployment pick on dapo (see the hyperparameter-sweep section of project_report.md),
 not a best-of-sweep-after-seeing-pass@k cherry pick.
 
 USAGE:
