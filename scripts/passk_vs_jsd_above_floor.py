@@ -8,7 +8,7 @@ prefix_overlap/prob run and the jsd anchor, it reads each run's OWN best_val_
 block_eff checkpoint (the one actually deployed as ckpt_best) and the pass@k
 values logged nearest that same step -- NOT the run's final-logged pass@k,
 which could be a later, already-declined checkpoint. This matches the fairness
-discipline already used in notes/hyperparam_sweep_research_report.md ("the ONE
+discipline already used in project_report.md (hyperparameter-sweep section) ("the ONE
 config per family you'd actually deploy, chosen by block_eff before looking at
 pass@k") -- comparing every run's own peak-BE checkpoint's pass@k, not a
 cherry-picked later point.
